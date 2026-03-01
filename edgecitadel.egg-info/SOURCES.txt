@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+edgecitadel/__init__.py
+edgecitadel.egg-info/PKG-INFO
+edgecitadel.egg-info/SOURCES.txt
+edgecitadel.egg-info/dependency_links.txt
+edgecitadel.egg-info/requires.txt
+edgecitadel.egg-info/top_level.txt
+edgecitadel/memory/__init__.py
+edgecitadel/memory/coordinator.py
+edgecitadel/memory/store.py
+edgecitadel/memory/types.py
+tests/test_coordinator.py
+tests/test_store.py

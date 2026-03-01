@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: edgecitadel
+Version: 0.1.0
+Summary: Safe and effective memory coordination for edge AI agents
+License: MIT
+Keywords: edge,agentic-ai,memory,coordination,iot
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
+
+# EdgeCitadel
