@@ -1,0 +1,57 @@
+version: "3.8"
+
+services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "11883:1883"
+    volumes:
+      - ../mosquitto/config:/mosquitto/config:ro
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-u", "iot_agent", "-P", "openclaw_secret", "-W", "3"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+    ports:
+      - "18000:8000"
+    environment:
+      - MQTT_HOST=mqtt
+      - MQTT_PORT=1883
+      - MQTT_USER=iot_agent
+      - MQTT_PASS=openclaw_secret
+      - DATABASE_URL=sqlite+aiosqlite:///./data/openclaw.db
+      - LOG_LEVEL=DEBUG
+      - CORS_ORIGINS=http://localhost:13000
+      - HEARTBEAT_TIMEOUT=10
+      - HEALTH_CHECK_INTERVAL=3
+    volumes:
+      - test-data:/app/data
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+  frontend:
+    build:
+      context: ../frontend
+    ports:
+      - "13000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  test-data:
