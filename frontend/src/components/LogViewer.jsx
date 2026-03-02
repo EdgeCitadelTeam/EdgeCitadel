@@ -1,0 +1,188 @@
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Filter } from 'lucide-react'
+import clsx from 'clsx'
+import useAppStore from '../stores/appStore'
+import { logApi } from '../api/client'
+import { relativeTime, fullTimestamp } from '../utils/formatTime'
+
+const LEVEL_COLORS = {
+  INFO: 'text-blue-400',
+  WARN: 'text-yellow-400',
+  WARNING: 'text-yellow-400',
+  ERROR: 'text-red-400',
+  MQTT: 'text-purple-400',
+  DEBUG: 'text-gray-400',
+}
+
+const LEVEL_BG = {
+  ERROR: 'bg-red-500/5',
+  WARN: 'bg-yellow-500/5',
+  WARNING: 'bg-yellow-500/5',
+}
+
+const LEVELS = ['INFO', 'WARN', 'ERROR', 'DEBUG', 'MQTT']
+
+export default function LogViewer() {
+  const selectedAgent = useAppStore((s) => s.selectedAgent)
+  const [logs, setLogs] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [levelFilter, setLevelFilter] = useState(null)
+  const [sourceFilter, setSourceFilter] = useState('')
+  const [search, setSearch] = useState('')
+  const [expandedLog, setExpandedLog] = useState(null)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const scrollRef = useRef(null)
+  const bottomRef = useRef(null)
+
+  const fetchLogs = useCallback(async () => {
+    setLoading(true)
+    try {
+      const params = { limit: 200 }
+      if (levelFilter) params.level = levelFilter
+      if (selectedAgent) params.agent = selectedAgent
+      if (sourceFilter) params.source = sourceFilter
+      if (search) params.search = search
+
+      const { data } = await logApi.list(params)
+      setLogs((data.items || []).reverse())
+    } catch {
+      // ignore
+    }
+    setLoading(false)
+  }, [levelFilter, selectedAgent, sourceFilter, search])
+
+  useEffect(() => {
+    fetchLogs()
+    const interval = setInterval(fetchLogs, 5000)
+    return () => clearInterval(interval)
+  }, [fetchLogs])
+
+  useEffect(() => {
+    if (autoScroll && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [logs, autoScroll])
+
+  const handleScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    setAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 100)
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Filters */}
+      <div className="flex items-center gap-2 p-2 border-b border-surface-200 flex-wrap">
+        <Filter size={14} className="text-gray-500" />
+        {LEVELS.map((level) => (
+          <button
+            key={level}
+            onClick={() =>
+              setLevelFilter(levelFilter === level ? null : level)
+            }
+            className={clsx(
+              'px-2 py-0.5 text-xs rounded transition-colors',
+              levelFilter === level
+                ? 'bg-accent text-white'
+                : 'bg-surface-100 text-gray-400 hover:bg-surface-200'
+            )}
+          >
+            {level}
+          </button>
+        ))}
+        <input
+          value={sourceFilter}
+          onChange={(e) => setSourceFilter(e.target.value)}
+          placeholder="Source..."
+          className="bg-surface-100 border border-surface-200 rounded px-2 py-0.5 text-xs text-gray-300 w-24 focus:outline-none"
+        />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search logs..."
+          className="bg-surface-100 border border-surface-200 rounded px-2 py-0.5 text-xs text-gray-300 w-40 focus:outline-none"
+        />
+      </div>
+
+      {/* Log table */}
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto font-mono text-xs"
+      >
+        <table className="w-full">
+          <thead className="sticky top-0 bg-surface-50">
+            <tr className="text-left text-gray-500 border-b border-surface-200">
+              <th className="px-2 py-1.5 w-16">Level</th>
+              <th className="px-2 py-1.5 w-28">Time</th>
+              <th className="px-2 py-1.5 w-24">Agent</th>
+              <th className="px-2 py-1.5 w-20">Source</th>
+              <th className="px-2 py-1.5">Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs.map((log) => (
+              <tr
+                key={log.id}
+                onClick={() =>
+                  setExpandedLog(expandedLog === log.id ? null : log.id)
+                }
+                className={clsx(
+                  'border-b border-surface-200/50 cursor-pointer hover:bg-surface-100',
+                  LEVEL_BG[log.level]
+                )}
+              >
+                <td
+                  className={clsx(
+                    'px-2 py-1 font-medium',
+                    LEVEL_COLORS[log.level] || 'text-gray-400'
+                  )}
+                >
+                  {log.level}
+                </td>
+                <td
+                  className="px-2 py-1 text-gray-500"
+                  title={fullTimestamp(log.timestamp)}
+                >
+                  {relativeTime(log.timestamp)}
+                </td>
+                <td className="px-2 py-1 text-gray-300">
+                  {log.agent_id || '-'}
+                </td>
+                <td className="px-2 py-1 text-gray-400">{log.source || '-'}</td>
+                <td className="px-2 py-1 text-gray-300 truncate max-w-md">
+                  {log.message}
+                </td>
+              </tr>
+            ))}
+            {logs.length === 0 && !loading && (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="text-center py-8 text-gray-500"
+                >
+                  No logs found
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        {/* Expanded metadata */}
+        {expandedLog && (
+          <div className="bg-surface-100 border border-surface-200 m-2 p-2 rounded">
+            <pre className="text-xs text-gray-400 whitespace-pre-wrap">
+              {JSON.stringify(
+                logs.find((l) => l.id === expandedLog)?.metadata || {},
+                null,
+                2
+              )}
+            </pre>
+          </div>
+        )}
+
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  )
+}
