@@ -4,9 +4,9 @@ Real-time swarm control dashboard for [OpenClaw](https://github.com/openclaw) ed
 
 ## Demo
 
-<video src="docs/demo.mp4" controls width="100%" autoplay loop muted></video>
+![EdgeCitadel Dashboard Demo](docs/demo.gif)
 
-> Agent-to-agent communication between a MacMini coordinator and an OpenClaw edge node — system health checks, model deployment, and local inference — all streamed in real time via MQTT.
+> Agent-to-agent communication between a MacMini coordinator and an OpenClaw edge node — system health checks, model deployment, and local inference — all streamed in real time via MQTT. ([Full video](docs/demo.mp4))
 
 ## Features
 
