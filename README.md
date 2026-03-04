@@ -2,6 +2,12 @@
 
 Real-time swarm control dashboard for [OpenClaw](https://github.com/openclaw) edge-local LLM agent networks. Runs on the orchestrator node, subscribing to all MQTT traffic on `agents/#` to provide live visibility into multi-agent communication, task execution, and system health.
 
+## Demo
+
+<video src="docs/demo.mp4" controls width="100%" autoplay loop muted></video>
+
+> Agent-to-agent communication between a MacMini coordinator and an OpenClaw edge node — system health checks, model deployment, and local inference — all streamed in real time via MQTT.
+
 ## Features
 
 - **Agent Registry** — Auto-discovers agents via MQTT registration and heartbeat messages. Shows online/offline status, CPU/memory metrics, device type, and capabilities.
