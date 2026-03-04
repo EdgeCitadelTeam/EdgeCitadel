@@ -43,7 +43,11 @@ export default function useWebSocket(agentName = null) {
         const data = JSON.parse(event.data)
 
         if (data.event === 'message') {
-          addRealtimeMessage(data.data)
+          // Skip heartbeat/register messages from chat display
+          const msgType = data.data?.message_type
+          if (msgType !== 'heartbeat' && msgType !== 'register') {
+            addRealtimeMessage(data.data)
+          }
         } else if (data.event === 'agent_status_change') {
           updateAgentStatus(data.data.agent_id, data.data.status)
           if (data.data.status === 'offline') {

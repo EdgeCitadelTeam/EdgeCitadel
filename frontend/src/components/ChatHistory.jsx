@@ -11,8 +11,6 @@ const TYPE_OPTIONS = [
   'result',
   'alert',
   'info',
-  'heartbeat',
-  'register',
   'broadcast',
   'task_assign',
 ]
@@ -34,12 +32,20 @@ export default function ChatHistory() {
   const scrollRef = useRef(null)
   const bottomRef = useRef(null)
 
+  // Calculate how many messages fit the visible area (~90px per message bubble)
+  const getPageSize = () => {
+    const el = scrollRef.current
+    if (!el) return 20
+    return Math.max(10, Math.ceil(el.clientHeight / 90) + 5)
+  }
+
   const fetchMessages = useCallback(
     async (reset = false) => {
       setLoading(true)
       const newOffset = reset ? 0 : offset
+      const pageSize = getPageSize()
       try {
-        const params = { limit: 100, offset: newOffset }
+        const params = { limit: pageSize, offset: newOffset }
         if (selectedAgent) params.agent = selectedAgent
         if (messageTypeFilter) params.type = messageTypeFilter
         if (search) params.search = search
@@ -54,7 +60,7 @@ export default function ChatHistory() {
           setHistoricalMessages((prev) => [...items.reverse(), ...prev])
           setOffset(newOffset + items.length)
         }
-        setHasMore(items.length === 100)
+        setHasMore(items.length === pageSize)
       } catch {
         // ignore
       }

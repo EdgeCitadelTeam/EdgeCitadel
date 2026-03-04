@@ -17,6 +17,7 @@ async def get_messages(
     since: datetime | None = None,
     until: datetime | None = None,
     search: str | None = None,
+    exclude_types: list[str] | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[Message], int]:
@@ -24,6 +25,10 @@ async def get_messages(
     count_query = select(func.count()).select_from(Message)
     conditions = []
 
+    if exclude_types:
+        conditions.append(
+            Message.message_type.notin_(exclude_types)
+        )
     if agent:
         conditions.append(
             or_(Message.sender_id == agent, Message.receiver_id == agent)

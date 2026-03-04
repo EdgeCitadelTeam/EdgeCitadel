@@ -25,6 +25,11 @@ async def list_messages(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ):
+    # Hide heartbeat/register noise unless explicitly requested
+    exclude_types = None
+    if not message_type:
+        exclude_types = ["heartbeat", "register"]
+
     messages, total = await message_service.get_messages(
         session,
         agent=agent,
@@ -36,6 +41,7 @@ async def list_messages(
         since=since,
         until=until,
         search=search,
+        exclude_types=exclude_types,
         limit=limit,
         offset=offset,
     )
