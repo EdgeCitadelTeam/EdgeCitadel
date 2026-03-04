@@ -1,87 +1,123 @@
 import clsx from 'clsx'
+import { ArrowRight, Terminal, CheckCircle, AlertTriangle, Info, Radio, Zap } from 'lucide-react'
 import { getAgentColor } from '../utils/agentColors'
 import { relativeTime, fullTimestamp } from '../utils/formatTime'
 
-const typeBadgeColors = {
-  command: 'bg-blue-500/20 text-blue-400',
-  result: 'bg-green-500/20 text-green-400',
-  alert: 'bg-red-500/20 text-red-400',
-  error: 'bg-red-500/20 text-red-400',
-  info: 'bg-yellow-500/20 text-yellow-400',
-  heartbeat: 'bg-gray-500/20 text-gray-400',
-  register: 'bg-purple-500/20 text-purple-400',
-  task_assign: 'bg-indigo-500/20 text-indigo-400',
-  broadcast: 'bg-cyan-500/20 text-cyan-400',
+const typeConfig = {
+  command: { icon: Terminal, color: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/20' },
+  result: { icon: CheckCircle, color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
+  alert: { icon: AlertTriangle, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20' },
+  error: { icon: AlertTriangle, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20' },
+  info: { icon: Info, color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20' },
+  broadcast: { icon: Radio, color: 'text-cyan-400', bg: 'bg-cyan-500/10 border-cyan-500/20' },
+  task_assign: { icon: Zap, color: 'text-indigo-400', bg: 'bg-indigo-500/10 border-indigo-500/20' },
+}
+
+// Extract human-readable content from the message payload
+function extractContent(payload) {
+  if (!payload || typeof payload !== 'object') return null
+
+  // Direct message/response text
+  if (payload.message) return payload.message
+  if (payload.response) return payload.response
+
+  // Result object - format key details
+  if (payload.result) {
+    if (typeof payload.result === 'string') return payload.result
+    if (typeof payload.result === 'object') {
+      // Check for response text inside result
+      if (payload.result.response) return payload.result.response
+      return Object.entries(payload.result)
+        .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+        .join('\n')
+    }
+  }
+
+  // Command details
+  if (payload.command) {
+    const parts = [payload.command]
+    if (payload.payload) {
+      if (typeof payload.payload === 'string') {
+        parts.push(payload.payload)
+      } else if (payload.payload.message) {
+        parts.push(payload.payload.message)
+      } else {
+        const details = Object.entries(payload.payload)
+          .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join(', ')
+        if (details) parts.push(details)
+      }
+    }
+    return parts.join('\n')
+  }
+
+  // Status info
+  if (payload.status && payload.status !== 'success') return `Status: ${payload.status}`
+
+  return null
 }
 
 export default function MessageBubble({ message, highlighted, onClick }) {
-  const senderColor = getAgentColor(message.sender_id)
   const type = message.message_type || 'unknown'
-  const badgeColor = typeBadgeColors[type] || 'bg-gray-500/20 text-gray-400'
-
-  const payloadPreview = message.payload
-    ? typeof message.payload === 'string'
-      ? message.payload
-      : JSON.stringify(message.payload, null, 2)
-    : ''
+  const config = typeConfig[type] || { icon: Info, color: 'text-gray-400', bg: 'bg-surface-100 border-surface-200' }
+  const Icon = config.icon
+  const senderColor = getAgentColor(message.sender_id)
+  const content = extractContent(message.payload)
 
   return (
     <div
       onClick={onClick}
       className={clsx(
-        'px-3 py-2 rounded-lg border transition-colors cursor-pointer',
-        'hover:border-surface-300',
+        'rounded-lg border px-3 py-2 transition-all cursor-pointer',
         highlighted
-          ? 'border-accent/40 bg-accent/5'
-          : 'border-surface-200 bg-surface-50'
+          ? 'border-accent/50 bg-accent/5 shadow-sm shadow-accent/10'
+          : config.bg,
+        'hover:brightness-110'
       )}
     >
-      <div className="flex items-center gap-2 mb-1">
-        <span className="font-medium text-sm" style={{ color: senderColor }}>
+      {/* Header: sender -> receiver, type icon, timestamp */}
+      <div className="flex items-center gap-2 min-w-0">
+        <Icon size={13} className={clsx(config.color, 'shrink-0')} />
+        <span className="font-medium text-xs truncate" style={{ color: senderColor }}>
           {message.sender_id || 'unknown'}
         </span>
         {message.receiver_id && (
           <>
-            <span className="text-gray-500 text-xs">&rarr;</span>
+            <ArrowRight size={10} className="text-gray-600 shrink-0" />
             <span
-              className="text-sm"
+              className="text-xs truncate"
               style={{ color: getAgentColor(message.receiver_id) }}
             >
               {message.receiver_id}
             </span>
           </>
         )}
-        <span
-          className={clsx(
-            'px-1.5 py-0.5 rounded text-[10px] font-medium uppercase',
-            badgeColor
-          )}
-        >
+        <span className={clsx('text-[10px] font-medium uppercase shrink-0 ml-1', config.color)}>
           {type}
         </span>
-        <span className="ml-auto text-[10px] text-gray-500" title={fullTimestamp(message.timestamp)}>
+        <span
+          className="ml-auto text-[10px] text-gray-600 shrink-0"
+          title={fullTimestamp(message.timestamp)}
+        >
           {relativeTime(message.timestamp)}
         </span>
       </div>
 
-      {payloadPreview && (
-        <pre className="text-xs text-gray-400 whitespace-pre-wrap break-words max-h-32 overflow-hidden mt-1">
-          {payloadPreview.length > 500
-            ? payloadPreview.slice(0, 500) + '...'
-            : payloadPreview}
-        </pre>
+      {/* Content */}
+      {content && (
+        <div className="mt-1.5 text-[13px] text-gray-300 leading-relaxed whitespace-pre-wrap break-words max-h-24 overflow-hidden">
+          {content.length > 400 ? content.slice(0, 400) + '...' : content}
+        </div>
       )}
 
-      <div className="flex items-center gap-2 mt-1">
-        <span className="text-[10px] text-gray-600 truncate">
-          {message.mqtt_topic}
-        </span>
-        {message.correlation_id && (
-          <span className="text-[10px] text-gray-600 bg-surface-200 px-1 rounded">
+      {/* Correlation badge */}
+      {message.correlation_id && (
+        <div className="mt-1.5 flex items-center">
+          <span className="text-[10px] text-gray-600 bg-surface-200/50 px-1.5 py-0.5 rounded font-mono">
             {message.correlation_id.slice(0, 8)}
           </span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }

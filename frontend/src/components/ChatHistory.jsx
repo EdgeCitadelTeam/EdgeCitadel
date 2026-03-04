@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { ArrowDown, Filter } from 'lucide-react'
+import { ArrowDown, Filter, Search } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { messageApi } from '../api/client'
 import MessageBubble from './MessageBubble'
@@ -112,11 +112,12 @@ export default function ChatHistory() {
   }
 
   return (
-    <div className="flex flex-1 min-h-0">
-      <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-1 min-h-0 overflow-hidden">
+      {/* Main chat column */}
+      <div className="flex flex-col flex-1 min-w-0">
         {/* Filter bar */}
-        <div className="flex items-center gap-2 p-2 border-b border-surface-200">
-          <Filter size={14} className="text-gray-500" />
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-surface-200 bg-surface-50 shrink-0">
+          <Filter size={14} className="text-gray-500 shrink-0" />
           <select
             value={messageTypeFilter || ''}
             onChange={(e) => setMessageTypeFilter(e.target.value || null)}
@@ -129,70 +130,101 @@ export default function ChatHistory() {
               </option>
             ))}
           </select>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') fetchMessages(true)
-            }}
-            placeholder="Search messages..."
-            className="bg-surface-100 border border-surface-200 rounded px-2 py-1 text-xs text-gray-300 placeholder:text-gray-600 w-48 focus:outline-none focus:ring-1 focus:ring-accent/50"
-          />
-        </div>
-
-        {/* Messages */}
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="flex-1 overflow-y-auto p-3 space-y-2"
-        >
-          {loading && historicalMessages.length === 0 && (
-            <p className="text-xs text-gray-500 text-center py-4">
-              Loading messages...
-            </p>
-          )}
-          {allMessages.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              message={msg}
-              highlighted={
-                selectedCorrelation &&
-                msg.correlation_id === selectedCorrelation
-              }
-              onClick={() => {
-                if (msg.correlation_id) {
-                  setSelectedCorrelation(
-                    selectedCorrelation === msg.correlation_id
-                      ? null
-                      : msg.correlation_id
-                  )
-                }
+          <div className="relative">
+            <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') fetchMessages(true)
               }}
+              placeholder="Search..."
+              className="bg-surface-100 border border-surface-200 rounded pl-7 pr-2 py-1 text-xs text-gray-300 placeholder:text-gray-600 w-40 focus:outline-none focus:ring-1 focus:ring-accent/50"
             />
-          ))}
-          {allMessages.length === 0 && !loading && (
-            <p className="text-xs text-gray-500 text-center py-8">
-              No messages yet. Waiting for MQTT traffic...
-            </p>
+          </div>
+          {(messageTypeFilter || search) && (
+            <button
+              onClick={() => {
+                setMessageTypeFilter(null)
+                setSearch('')
+              }}
+              className="text-[10px] text-gray-500 hover:text-gray-300 ml-1"
+            >
+              Clear
+            </button>
           )}
-          <div ref={bottomRef} />
         </div>
 
-        {/* Jump to latest */}
-        {!autoScroll && (
-          <button
-            onClick={() => {
-              setAutoScroll(true)
-              bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-            }}
-            className="absolute bottom-20 right-8 bg-accent text-white px-3 py-1.5 rounded-full text-xs shadow-lg flex items-center gap-1"
+        {/* Messages area */}
+        <div className="relative flex-1 min-h-0">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="absolute inset-0 overflow-y-auto px-4 py-3 space-y-1.5"
           >
-            <ArrowDown size={12} />
-            Latest
-          </button>
-        )}
+            {loading && historicalMessages.length === 0 && (
+              <div className="flex items-center justify-center py-8">
+                <div className="text-xs text-gray-500">Loading messages...</div>
+              </div>
+            )}
+            {hasMore && historicalMessages.length > 0 && (
+              <div className="text-center py-2">
+                <button
+                  onClick={() => fetchMessages(false)}
+                  disabled={loading}
+                  className="text-[10px] text-gray-500 hover:text-accent transition-colors"
+                >
+                  {loading ? 'Loading...' : 'Load older messages'}
+                </button>
+              </div>
+            )}
+            {allMessages.map((msg) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                highlighted={
+                  selectedCorrelation &&
+                  msg.correlation_id === selectedCorrelation
+                }
+                onClick={() => {
+                  if (msg.correlation_id) {
+                    setSelectedCorrelation(
+                      selectedCorrelation === msg.correlation_id
+                        ? null
+                        : msg.correlation_id
+                    )
+                  }
+                }}
+              />
+            ))}
+            {allMessages.length === 0 && !loading && (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+                <div className="text-sm">No messages yet</div>
+                <div className="text-xs mt-1">Waiting for MQTT traffic...</div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
 
-        <CommandInput />
+          {/* Jump to latest */}
+          {!autoScroll && (
+            <button
+              onClick={() => {
+                setAutoScroll(true)
+                bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+              }}
+              className="absolute bottom-4 right-4 bg-accent hover:bg-accent-dark text-white px-3 py-1.5 rounded-full text-xs shadow-lg flex items-center gap-1 transition-colors z-10"
+            >
+              <ArrowDown size={12} />
+              Latest
+            </button>
+          )}
+        </div>
+
+        {/* Command input */}
+        <div className="shrink-0">
+          <CommandInput />
+        </div>
       </div>
 
       {/* Trace panel */}

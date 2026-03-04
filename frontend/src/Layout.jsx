@@ -79,7 +79,7 @@ export default function Layout() {
           </div>
 
           {/* Content */}
-          <div className="flex-1 min-h-0 relative">{renderContent()}</div>
+          <div className="flex-1 min-h-0 flex flex-col">{renderContent()}</div>
         </div>
       </div>
     </div>
