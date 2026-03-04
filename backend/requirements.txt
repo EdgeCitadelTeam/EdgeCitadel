@@ -5,3 +5,4 @@ sqlalchemy[asyncio]==2.0.36
 aiosqlite==0.20.0
 pydantic==2.10.3
 pydantic-settings==2.7.0
+psutil==6.1.1

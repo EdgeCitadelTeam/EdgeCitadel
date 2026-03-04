@@ -37,7 +37,11 @@ async def _check_agent_health(ws_manager):
             if agent.last_heartbeat is None:
                 continue
 
-            elapsed = now - agent.last_heartbeat
+            # SQLite strips tzinfo; ensure both sides match
+            last_hb = agent.last_heartbeat
+            if last_hb.tzinfo is None:
+                last_hb = last_hb.replace(tzinfo=now.tzinfo)
+            elapsed = now - last_hb
             if elapsed > timeout:
                 agent.status = "offline"
                 agent.updated_at = now

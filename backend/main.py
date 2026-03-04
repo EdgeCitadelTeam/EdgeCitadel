@@ -10,6 +10,7 @@ from database import init_db
 from mqtt_client import MQTTService
 from websocket_manager import WebSocketManager
 from services.health_monitor import health_monitor_loop
+from services.orchestrator_service import orchestrator_heartbeat_loop
 from routes import agents, messages, tasks, logs, commands, system, websocket
 
 logging.basicConfig(
@@ -40,7 +41,8 @@ async def lifespan(app: FastAPI):
     # Start background tasks
     mqtt_task = asyncio.create_task(mqtt_svc.start())
     health_task = asyncio.create_task(health_monitor_loop(ws_mgr))
-    _background_tasks.extend([mqtt_task, health_task])
+    orch_task = asyncio.create_task(orchestrator_heartbeat_loop(mqtt_svc))
+    _background_tasks.extend([mqtt_task, health_task, orch_task])
 
     logger.info("OpenClaw backend started")
 
