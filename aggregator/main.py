@@ -302,11 +302,12 @@ def send_command(agent_name: str, data: dict):
     payload_native = json.dumps(data)
 
     # OpenClaw listener format: {from, to, type, content, timestamp, correlationId}
-    content = ""
-    if isinstance(data.get("payload"), dict):
-        content = data["payload"].get("message", "")
-    elif isinstance(data.get("payload"), str):
-        content = data["payload"]
+    content = data.get("message", "")
+    if not content:
+        if isinstance(data.get("payload"), dict):
+            content = data["payload"].get("message", "")
+        elif isinstance(data.get("payload"), str):
+            content = data["payload"]
     payload_listener = json.dumps({
         "from": data.get("sender_id", "dashboard"),
         "to": agent_name,

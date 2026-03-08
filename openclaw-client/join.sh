@@ -65,15 +65,6 @@ else
     echo ""
 
     echo ""
-    # Gateway
-    read -rp "Local OpenClaw gateway URL [http://127.0.0.1:18789]: " GATEWAY_URL
-    GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:18789}"
-    read -rp "Gateway wake mode (api or webhook) [api]: " WAKE_MODE
-    WAKE_MODE="${WAKE_MODE:-api}"
-    read -rsp "Gateway token (GATEWAY_TOKEN or HOOKS_TOKEN): " GATEWAY_TOKEN
-    echo ""
-
-    echo ""
     read -rp "Heartbeat interval in seconds [30]: " HEARTBEAT_SEC
     HEARTBEAT_SEC="${HEARTBEAT_SEC:-30}"
 
@@ -93,11 +84,6 @@ CITADEL_PORT="${CITADEL_PORT}"
 MQTT_USER="${MQTT_USER}"
 MQTT_PASS="${MQTT_PASS}"
 
-# Local OpenClaw gateway
-GATEWAY_URL="${GATEWAY_URL}"
-WAKE_MODE="${WAKE_MODE}"
-GATEWAY_TOKEN="${GATEWAY_TOKEN}"
-
 HEARTBEAT_SEC="${HEARTBEAT_SEC}"
 ENVEOF
     chmod 600 "$CONFIG_FILE"
@@ -116,15 +102,11 @@ MQTT_USER="${MQTT_USER:-$AGENT_ID}"
 AGENT_DISPLAY="${AGENT_DISPLAY:-$(echo "$AGENT_ID" | sed 's/-/ /g; s/\b\w/\u&/g')}"
 AGENT_ROLE="${AGENT_ROLE:-Agent}"
 AGENT_DEVICE_TYPE="${AGENT_DEVICE_TYPE:-server}"
-GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:18789}"
-WAKE_MODE="${WAKE_MODE:-api}"
-GATEWAY_TOKEN="${GATEWAY_TOKEN:-}"
 HEARTBEAT_SEC="${HEARTBEAT_SEC:-30}"
 
 echo ""
 info "Agent:    $AGENT_ID ($AGENT_DISPLAY)"
 info "Broker:   $CITADEL_HOST:$CITADEL_PORT"
-info "Gateway:  $GATEWAY_URL (wake: $WAKE_MODE)"
 echo ""
 
 # ═══════════════════════════════════════════════════════════════════
@@ -196,13 +178,12 @@ cat > "$LISTENER_SCRIPT" <<'JSEOF'
  * Persistent connection to the EdgeCitadel MQTT broker.
  * - Publishes heartbeats (agents/heartbeat/{id}) + registration (agents/register/{id})
  * - Subscribes to agents/inbox/{id} and agents/broadcast for incoming commands
- * - Wakes the local OpenClaw gateway to process commands
- * - Forwards gateway responses back via MQTT
+ * - Invokes the local OpenClaw agent CLI to process commands
+ * - Forwards agent responses back via MQTT
  */
 
 const mqtt = require('mqtt');
-const http = require('http');
-const https = require('https');
+const { execFile } = require('child_process');
 const os = require('os');
 
 // --- Config from environment ---
@@ -216,12 +197,11 @@ const MQTT_HOST       = process.env.CITADEL_HOST     || process.env.MQTT_HOST ||
 const MQTT_PORT       = parseInt(process.env.CITADEL_PORT || process.env.MQTT_PORT || '1883');
 const MQTT_USER       = process.env.MQTT_USER        || AGENT_ID;
 const MQTT_PASS       = process.env.MQTT_PASS        || '';
-const GATEWAY_URL     = process.env.GATEWAY_URL      || 'http://127.0.0.1:18789';
-const GATEWAY_TOKEN   = process.env.GATEWAY_TOKEN    || process.env.HOOKS_TOKEN || '';
-const WAKE_MODE       = process.env.WAKE_MODE        || 'api';
 const HEARTBEAT_SEC   = parseInt(process.env.HEARTBEAT_SEC || '30');
+const OPENCLAW_BIN    = process.env.OPENCLAW_BIN     || 'openclaw';
+const AGENT_TIMEOUT   = parseInt(process.env.AGENT_TIMEOUT || '600');
 
-const TAG = `[${AGENT_ID}-mqtt]`;
+const TAG = `[${AGENT_ID}]`;
 
 // --- MQTT Client ---
 const client = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
@@ -238,6 +218,16 @@ const client = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
 
 let heartbeatTimer = null;
 
+function getLocalIP() {
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+        for (const iface of ifaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+        }
+    }
+    return '127.0.0.1';
+}
+
 // --- Heartbeat ---
 function publishHeartbeat() {
     try {
@@ -251,10 +241,10 @@ function publishHeartbeat() {
             role:           AGENT_ROLE,
             device_type:    AGENT_DEVICE,
             status:         'online',
-            cpu_percent:    Math.round((loadAvg / cpus) * 100 * 10) / 10,
-            memory_percent: Math.round(((totalMem - freeMem) / totalMem) * 100 * 10) / 10,
+            cpu_percent:    Math.round((loadAvg / cpus) * 1000) / 10,
+            memory_percent: Math.round(((totalMem - freeMem) / totalMem) * 1000) / 10,
             ip_address:     getLocalIP(),
-            capabilities:   ['chat', 'task_execution'],
+            capabilities:   ['chat', 'task_execution', 'mqtt_listener'],
             timestamp:      new Date().toISOString()
         }), { qos: 1 });
     } catch (e) {
@@ -262,7 +252,7 @@ function publishHeartbeat() {
     }
 }
 
-// --- Registration (richer than heartbeat, sent once on connect) ---
+// --- Registration ---
 function publishRegistration() {
     client.publish(`agents/register/${AGENT_ID}`, JSON.stringify({
         agent_id:     AGENT_ID,
@@ -276,147 +266,92 @@ function publishRegistration() {
     }), { qos: 1 });
 }
 
-function getLocalIP() {
-    const ifaces = os.networkInterfaces();
-    for (const name of Object.keys(ifaces)) {
-        for (const iface of ifaces[name]) {
-            if (iface.family === 'IPv4' && !iface.internal) return iface.address;
-        }
-    }
-    return '127.0.0.1';
-}
-
 // --- Connect ---
 client.on('connect', () => {
     console.log(TAG, `Connected to ${MQTT_HOST}:${MQTT_PORT}`);
-
-    // Subscribe to this agent's inbox + broadcast
     client.subscribe(`agents/inbox/${AGENT_ID}`, { qos: 1 });
     client.subscribe('agents/broadcast', { qos: 1 });
-
-    // Publish registration + initial heartbeat
     publishRegistration();
     publishHeartbeat();
-
-    // Periodic heartbeat
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(publishHeartbeat, HEARTBEAT_SEC * 1000);
-
-    console.log(TAG, `Subscribed to agents/inbox/${AGENT_ID} + agents/broadcast`);
-    console.log(TAG, `Heartbeat every ${HEARTBEAT_SEC}s. Online.`);
+    console.log(TAG, 'Online. Listening for commands.');
 });
 
 // --- Incoming message handler ---
 client.on('message', (topic, message) => {
     try {
         const msg = JSON.parse(message.toString());
-
-        // Normalize field names (EdgeCitadel uses from/to, also sender_id/receiver_id)
         const from    = msg.from    || msg.sender_id   || 'unknown';
         const type    = msg.type    || msg.message_type || 'unknown';
         const content = msg.content || msg.message      || '';
         const corrId  = msg.correlationId || msg.correlation_id || '';
 
-        // Skip own messages, acks, empty
         if (from === AGENT_ID) return;
         if (type === 'ack') return;
         if (!content.trim()) return;
 
-        console.log(TAG, `From ${from} (${type}): ${content.substring(0, 120)}`);
-
-        // Wake the local OpenClaw gateway
-        wakeGateway(from, content, corrId);
+        console.log(TAG, `${from}: ${content.substring(0, 120)}`);
+        callAgent(from, content, corrId);
     } catch (e) {
         console.error(TAG, 'Parse error:', e.message);
     }
 });
 
-// --- Wake gateway and send reply ---
-function wakeGateway(from, content, correlationId) {
-    if (WAKE_MODE === 'webhook') {
-        wakeViaWebhook(from, content, correlationId);
-    } else {
-        wakeViaAPI(from, content, correlationId);
-    }
-}
-
-function wakeViaAPI(from, content, correlationId) {
+// --- Invoke openclaw agent CLI ---
+function callAgent(from, content, corrId) {
     const prompt = `[MQTT from ${from}] ${content}`;
-    const payload = JSON.stringify({
-        messages: [{ role: 'user', content: prompt }],
-        stream: false
-    });
+    const sessionId = `mqtt-${from}-${AGENT_ID}`;
+    const args = [
+        'agent',
+        '-m', prompt,
+        '--session-id', sessionId,
+        '--json',
+        '--timeout', String(AGENT_TIMEOUT),
+    ];
 
-    const url = new URL(`${GATEWAY_URL}/v1/chat/completions`);
-    const isHTTPS = url.protocol === 'https:';
-    const headers = {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload)
-    };
-    if (GATEWAY_TOKEN) headers['Authorization'] = `Bearer ${GATEWAY_TOKEN}`;
+    console.log(TAG, `Calling openclaw agent (session: ${sessionId})...`);
 
-    const req = (isHTTPS ? https : http).request({
-        hostname: url.hostname,
-        port: url.port || (isHTTPS ? 443 : 80),
-        path: url.pathname,
-        method: 'POST',
-        headers,
-        timeout: 600000
-    }, (res) => {
-        let data = '';
-        res.on('data', (chunk) => data += chunk);
-        res.on('end', () => {
-            console.log(TAG, `Gateway API ${res.statusCode}`);
-            try {
-                const result = JSON.parse(data);
-                const responseContent = result.choices?.[0]?.message?.content;
-                if (responseContent?.trim()) {
-                    sendReply(from, responseContent, correlationId);
-                }
-            } catch (e) {
-                // Agent may have replied via other means
+    execFile(OPENCLAW_BIN, args, {
+        timeout: (AGENT_TIMEOUT + 30) * 1000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, NO_COLOR: '1' },
+    }, (err, stdout, stderr) => {
+        if (stderr) {
+            for (const line of stderr.split('\n').filter(l => l.trim())) {
+                console.log(TAG, `[openclaw] ${line}`);
             }
-        });
+        }
+        if (err) {
+            console.error(TAG, `Agent error: ${err.message}`);
+            reply(from, `[Error: agent failed to process message — ${err.message}]`, corrId);
+            return;
+        }
+        try {
+            const result = JSON.parse(stdout);
+            const texts = (result.payloads || [])
+                .map(p => p.text)
+                .filter(t => t && t.trim());
+            const responseText = texts.join('\n\n');
+            if (responseText.trim()) {
+                reply(from, responseText, corrId);
+            } else {
+                console.log(TAG, 'Agent returned empty response');
+            }
+        } catch(e) {
+            const text = stdout.trim();
+            if (text) {
+                reply(from, text, corrId);
+            } else {
+                console.error(TAG, 'Failed to parse agent output:', e.message);
+            }
+        }
     });
-
-    req.on('error', (e) => console.error(TAG, 'Gateway API error:', e.message));
-    req.on('timeout', () => { req.destroy(); console.error(TAG, 'Gateway API timeout'); });
-    req.write(payload);
-    req.end();
-}
-
-function wakeViaWebhook(from, content, correlationId) {
-    const wakeText = `[MQTT] Message from ${from}: ${content.substring(0, 500)}`;
-    const postData = JSON.stringify({ text: wakeText, mode: 'now' });
-
-    const url = new URL(`${GATEWAY_URL}/hooks/wake`);
-    const headers = {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-    };
-    if (GATEWAY_TOKEN) headers['Authorization'] = `Bearer ${GATEWAY_TOKEN}`;
-
-    const req = http.request({
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: 'POST',
-        headers,
-        timeout: 10000
-    }, (res) => {
-        let body = '';
-        res.on('data', d => body += d);
-        res.on('end', () => console.log(TAG, `Wake ${res.statusCode}: ${body.substring(0, 100)}`));
-    });
-
-    req.on('error', (e) => console.error(TAG, 'Wake failed:', e.message));
-    req.write(postData);
-    req.end();
 }
 
 // --- Send reply back via MQTT ---
-function sendReply(to, content, correlationId) {
-    const reply = {
+function reply(to, content, corrId) {
+    const msg = {
         from:          AGENT_ID,
         to:            to,
         sender_id:     AGENT_ID,
@@ -425,17 +360,13 @@ function sendReply(to, content, correlationId) {
         message_type:  'result',
         content:       content,
         message:       content,
-        correlationId: correlationId || '',
-        correlation_id: correlationId || '',
+        correlationId: corrId || '',
+        correlation_id: corrId || '',
         timestamp:     new Date().toISOString()
     };
-
-    // Send to the sender's inbox
-    client.publish(`agents/inbox/${to}`, JSON.stringify(reply), { qos: 1 });
-    // Mirror for other subscribers
-    client.publish('agents/mirror', JSON.stringify(reply), { qos: 1 });
-
-    console.log(TAG, `Replied to ${to}: ${content.substring(0, 80)}`);
+    client.publish(`agents/inbox/${to}`, JSON.stringify(msg), { qos: 1 });
+    client.publish('agents/mirror', JSON.stringify(msg), { qos: 1 });
+    console.log(TAG, `-> ${to}: ${content.substring(0, 80)}`);
 }
 
 // --- Error handling ---
@@ -455,14 +386,12 @@ function shutdown() {
         client.end();
         process.exit(0);
     });
-    // Force exit after 2s if publish hangs
     setTimeout(() => process.exit(0), 2000);
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-console.log(TAG, 'EdgeCitadel MQTT Listener starting...');
-console.log(TAG, `Agent: ${AGENT_DISPLAY} (${AGENT_ROLE}) | Broker: ${MQTT_HOST}:${MQTT_PORT} | Gateway: ${GATEWAY_URL} (${WAKE_MODE})`);
+console.log(TAG, `Listener starting | ${AGENT_DISPLAY} (${AGENT_ROLE}) | ${MQTT_HOST}:${MQTT_PORT} | openclaw agent CLI mode`);
 JSEOF
 
 chmod +x "$LISTENER_SCRIPT"
@@ -490,6 +419,8 @@ ExecStart=$(which node) ${LISTENER_SCRIPT}
 Restart=always
 RestartSec=5
 EnvironmentFile=${CONFIG_FILE}
+Environment=PATH=${PATH}
+Environment=HOME=${HOME}
 
 [Install]
 WantedBy=default.target
