@@ -65,197 +65,85 @@ Edge Citadel runs a Mosquitto MQTT broker. Agents (Rupert/Orchestrator, Jeeves/I
 | Proxy         | Nginx                                              |
 | Orchestration | Docker Compose                                     |
 
-## Installation
+## Quick Start
 
-### Prerequisites
-
-- Docker and Docker Compose
-- Git
-
-### 1. Clone and configure
+### 1. Start the server
 
 ```bash
-git clone <repo-url> EdgeCitadel
+git clone https://github.com/zhonghaozhan/EdgeCitadel.git
 cd EdgeCitadel
-cp .env.example .env
-```
-
-Edit `.env` and set a strong API key:
-
-```
-OPENCLAW_API_KEY=your-secret-key-here
-```
-
-### 2. Start the stack
-
-```bash
+cp .env.example .env          # edit to set OPENCLAW_API_KEY
 mkdir -p data
 docker compose up --build -d
 ```
 
-This starts four services:
+Open `http://localhost` -- the dashboard is live.
 
-| Service      | Port | Description                          |
-| ------------ | ---- | ------------------------------------ |
-| `mqtt`       | 1883 | Mosquitto MQTT broker                |
-| `aggregator` | 8000 | FastAPI aggregator (internal)        |
-| `dashboard`  | 80   | React Swarm Control UI (internal)    |
-| `nginx`      | 80   | Reverse proxy (public)               |
-
-### 3. Verify
+### 2. Add an agent (on the server)
 
 ```bash
-# Check all services are running
-docker compose ps
-
-# Check aggregator logs
-docker compose logs -f aggregator
-
-# Test the API
-curl http://localhost/api/deployments -H "api-key: your-secret-key-here"
+./add-agent.sh my-agent-name
 ```
 
-Open `http://localhost` in your browser. Click "Set API Key" in the header and enter your key.
+This creates MQTT credentials and prints a join command.
 
-## Registering an OpenClaw Deployment
-
-There are two ways to register a deployment: the client script (recommended) or a direct API call.
-
-### Option A: Client script (recommended)
-
-Copy the `openclaw-client/` folder to your OpenClaw machine:
+### 3. Join from the agent's machine
 
 ```bash
-scp -r openclaw-client/ user@openclaw-host:~/
+git clone https://github.com/zhonghaozhan/EdgeCitadel.git
+cd EdgeCitadel
+./join.sh <server-ip> <mqtt-password>
 ```
 
-On the OpenClaw machine:
+That's it. The agent auto-detects its hostname, device type, and local OpenClaw gateway. It appears on the dashboard within seconds.
+
+## What happens
+
+- `add-agent.sh` creates an MQTT user on the Mosquitto broker
+- `join.sh` installs a persistent MQTT listener as a systemd service that:
+  - Publishes heartbeats (CPU, memory, status) every 30s
+  - Subscribes to `agents/inbox/{agent-id}` for incoming commands
+  - Wakes the local OpenClaw gateway when a command arrives
+  - Sends the gateway's response back via MQTT
+  - Auto-restarts on crash or reboot
+
+## Services
+
+| Service      | Port | Description                       |
+| ------------ | ---- | --------------------------------- |
+| `mqtt`       | 1883 | Mosquitto MQTT broker             |
+| `aggregator` | 8000 | FastAPI aggregator (internal)     |
+| `dashboard`  | 80   | React Swarm Control UI (internal) |
+| `nginx`      | 80   | Reverse proxy (public)            |
+
+## Network requirements
+
+| Path                    | Port | Purpose                     |
+| ----------------------- | ---- | --------------------------- |
+| Browser -> EdgeCitadel  | 80   | Dashboard + API + WebSocket |
+| Agents -> Mosquitto     | 1883 | MQTT publish/subscribe      |
+
+## Managing agents
 
 ```bash
-cd ~/openclaw-client
-cp openclaw.conf.example openclaw.conf
+# On the agent machine:
+journalctl --user -u edgecitadel-my-agent.service -f   # logs
+systemctl --user restart edgecitadel-my-agent.service   # restart
+systemctl --user stop edgecitadel-my-agent.service      # stop
 ```
-
-Edit `openclaw.conf`:
-
-```bash
-DEPLOYMENT_NAME="home"                       # unique name for this deployment
-DEPLOYMENT_HOST="192.168.1.42"               # address Edge Citadel can reach this MQTT broker
-DEPLOYMENT_PORT=1883
-DEPLOYMENT_DESCRIPTION="Home lab rack"
-
-AGGREGATORS=(
-    "edge-citadel=http://your-citadel-ip"    # Edge Citadel address
-)
-
-API_KEY_EDGE_CITADEL="your-secret-key-here"  # must match OPENCLAW_API_KEY
-```
-
-Register:
-
-```bash
-chmod +x register.sh
-./register.sh
-```
-
-Other commands:
-
-```bash
-./register.sh --status       # check registration status
-./register.sh --list         # show configured aggregators
-./register.sh --deregister   # remove from all aggregators
-./register.sh --target edge-citadel  # register with one specific aggregator
-```
-
-### Option B: Direct API call
-
-```bash
-curl -X POST http://your-citadel-ip/api/deployments/register \
-  -H "Content-Type: application/json" \
-  -H "api-key: your-secret-key-here" \
-  -d '{
-    "name": "home",
-    "host": "192.168.1.42",
-    "port": 1883,
-    "description": "Home lab rack",
-    "network": "lan",
-    "mqtt_user": "iot_agent",
-    "mqtt_pass": "broker-password"
-  }'
-```
-
-The `mqtt_user` and `mqtt_pass` fields are optional -- only needed if the MQTT broker requires authentication.
-
-### Network requirements
-
-| Path                          | Port | Purpose                                 |
-| ----------------------------- | ---- | --------------------------------------- |
-| Browser -> Edge Citadel       | 80   | Dashboard + API + WebSocket             |
-| Agents -> Mosquitto           | 1883 | MQTT publish/subscribe                  |
-
-Agents connect to the Mosquitto broker on port 1883. The aggregator subscribes to all MQTT traffic on the same broker.
-
-## REST API
-
-All endpoints require an `api-key` header matching `OPENCLAW_API_KEY`.
-
-| Method | Endpoint                        | Description                        |
-| ------ | ------------------------------- | ---------------------------------- |
-| POST   | `/api/deployments/register`     | Register a new deployment          |
-| DELETE  | `/api/deployments/{name}`      | Deregister a deployment            |
-| GET    | `/api/deployments`              | List all active deployments        |
-| GET    | `/api/deployments/{name}/status`| Get deployment connection status   |
-| POST   | `/api/publish`                  | Publish a message to a deployment  |
-| GET    | `/api/history`                  | Query stored episodes              |
-
-### WebSocket
-
-Connect to `/ws` for real-time streaming. No auth required (nginx restricts to same origin). Events are JSON with `deployment`, `topic`, `payload`, and `ts` fields.
-
-## Dashboard Usage
-
-1. **Set API Key** -- Click the key icon in the header bar and enter your `OPENCLAW_API_KEY`
-2. **Deployments** -- Left panel shows registered deployments with connection status (green = connected), network badge, and message count
-3. **Agent Graph** -- Right panel SVG showing deployment nodes and auto-discovered agent nodes. Nodes flash yellow on new messages
-4. **Message Feed** -- Filterable real-time stream. Filter by deployment, agent, or free text. Click a row to expand the full JSON payload
-5. **Publish Message** -- Select a deployment, enter topic and payload, and send directly to that broker
 
 ## Project Structure
 
 ```
 EdgeCitadel/
+├── add-agent.sh             # Server: create MQTT user for a new agent
+├── join.sh                  # Client: auto-setup and join EdgeCitadel
 ├── aggregator/              # Python FastAPI + paho-mqtt aggregator
-│   ├── main.py              # FastAPI app, REST + WebSocket endpoints
-│   ├── aggregator.py        # MQTT subscriber/publisher, message parser
-│   ├── database.py          # SQLite persistence (agents, messages, logs, tasks)
-│   ├── models.py            # Pydantic request models
-│   ├── Dockerfile
-│   └── requirements.txt
 ├── frontend/                # React Swarm Control dashboard
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── Layout.jsx
-│   │   ├── stores/appStore.js
-│   │   ├── hooks/useWebSocket.js
-│   │   ├── api/client.js
-│   │   └── components/
-│   │       ├── AgentSidebar.jsx
-│   │       ├── ChatHistory.jsx
-│   │       ├── CommFlow.jsx
-│   │       ├── LogViewer.jsx
-│   │       ├── TaskBoard.jsx
-│   │       ├── CommandInput.jsx
-│   │       └── HeaderBar.jsx
-│   ├── Dockerfile
-│   └── nginx.conf
-├── mosquitto/
-│   └── config/mosquitto.conf
-├── nginx/
-│   └── default.conf         # Reverse proxy config
-├── openclaw-client/
-│   ├── register.sh
-│   └── openclaw.conf.example
-├── data/                    # SQLite database (gitignored)
+├── mosquitto/config/        # Mosquitto broker config + passwd
+├── nginx/                   # Reverse proxy config
+├── openclaw-client/         # Generated listener + config (gitignored)
+├── e2e/                     # Playwright E2E tests + demo recorder
 ├── docker-compose.yml
 └── .env.example
 ```
