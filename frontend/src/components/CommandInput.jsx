@@ -21,7 +21,7 @@ export default function CommandInput() {
         message_type: 'command',
         sender_id: 'dashboard',
         receiver_id: effectiveTarget,
-        correlation_id: crypto.randomUUID(),
+        correlation_id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         payload: { message: text.trim() },
       })
       setText('')
