@@ -5,8 +5,9 @@ set -e
 #
 # Usage: ./join.sh <server-host> <mqtt-password> [agent-id]
 #
-# Auto-detects: display name, role, device type, gateway URL,
-# gateway token. Agent ID defaults to hostname if not provided.
+# Auto-detects: display name, role, device type.
+# Agent ID defaults to hostname if not provided.
+# Requires: Node.js, openclaw CLI (with model auth configured).
 # ═══════════════════════════════════════════════════════════════
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -69,58 +70,6 @@ detect_device_type() {
 }
 AGENT_DEVICE_TYPE=$(detect_device_type)
 
-# ═══════════════════════════════════════════════════════════════
-# Auto-detect OpenClaw gateway
-# ═══════════════════════════════════════════════════════════════
-
-GATEWAY_URL=""
-GATEWAY_TOKEN=""
-WAKE_MODE="api"
-
-# Check common gateway ports
-for port in 18789 8789 3000; do
-    if curl -sf --max-time 2 "http://127.0.0.1:${port}/v1/models" &>/dev/null || \
-       curl -sf --max-time 2 "http://127.0.0.1:${port}/health" &>/dev/null; then
-        GATEWAY_URL="http://127.0.0.1:${port}"
-        break
-    fi
-done
-
-# Try to find gateway token from openclaw config
-find_gateway_token() {
-    # Check common openclaw config locations
-    for cfg in \
-        "$HOME/.openclaw/gateway.env" \
-        "$HOME/.openclaw/config.json" \
-        "$HOME/.openclaw/.env" \
-        "$HOME/.openclaw/workspace/.env" \
-        "/etc/openclaw/gateway.env"; do
-        if [[ -f "$cfg" ]]; then
-            # Look for token patterns
-            local token
-            token=$(grep -oP '(?:GATEWAY_TOKEN|HOOKS_TOKEN|API_KEY|AUTH_TOKEN|BEARER_TOKEN)\s*[=:]\s*["\x27]?\K[^"\x27\s]+' "$cfg" 2>/dev/null | head -1)
-            if [[ -n "$token" ]]; then
-                echo "$token"
-                return
-            fi
-        fi
-    done
-    # Check systemd service environment
-    for svc in openclaw-gateway openclaw openclaw-agent; do
-        local envfile
-        envfile=$(systemctl --user show "$svc" 2>/dev/null | grep -oP 'EnvironmentFile=\K.*' | head -1)
-        if [[ -n "$envfile" && -f "$envfile" ]]; then
-            local token
-            token=$(grep -oP '(?:GATEWAY_TOKEN|HOOKS_TOKEN)\s*=\s*["\x27]?\K[^"\x27\s]+' "$envfile" 2>/dev/null | head -1)
-            if [[ -n "$token" ]]; then
-                echo "$token"
-                return
-            fi
-        fi
-    done
-}
-GATEWAY_TOKEN=$(find_gateway_token)
-
 # Also detect role from openclaw config if available
 AGENT_ROLE="Agent"
 if [[ -f "$HOME/.openclaw/config.json" ]]; then
@@ -141,12 +90,6 @@ info "Agent ID:     $AGENT_ID"
 info "Display name: $AGENT_DISPLAY"
 info "Device type:  $AGENT_DEVICE_TYPE"
 info "Server:       $CITADEL_HOST:1883"
-if [[ -n "$GATEWAY_URL" ]]; then
-    info "Gateway:      $GATEWAY_URL"
-    [[ -n "$GATEWAY_TOKEN" ]] && info "Gateway auth: (found)" || warn "Gateway auth: (not found — agent won't process commands)"
-else
-    warn "Gateway:      not detected (agent will appear on dashboard but can't process commands)"
-fi
 echo ""
 
 # ═══════════════════════════════════════════════════════════════
@@ -160,6 +103,21 @@ if ! command -v node &>/dev/null; then
     exit 1
 fi
 ok "Node.js $(node -v)"
+
+if ! command -v openclaw &>/dev/null; then
+    err "openclaw CLI not found. Install it first: npm i -g openclaw"
+    exit 1
+fi
+ok "openclaw $(openclaw -V 2>/dev/null || echo '(installed)')"
+
+# Verify openclaw has model auth configured
+if ! openclaw models status --status-json 2>/dev/null | node -e "
+    let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
+        try { const j=JSON.parse(d); process.exit(j.configured ? 0 : 1); }
+        catch(e) { process.exit(1); }
+    });" 2>/dev/null; then
+    warn "openclaw model auth may not be configured. Run: openclaw models auth paste-token --provider anthropic"
+fi
 
 # Install mqtt module if needed
 cd "$SCRIPT_DIR/openclaw-client"
@@ -204,6 +162,7 @@ fi
 # ═══════════════════════════════════════════════════════════════
 
 CONFIG_FILE="$SCRIPT_DIR/openclaw-client/agent.env"
+OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "openclaw")
 cat > "$CONFIG_FILE" <<EOF
 AGENT_ID=${AGENT_ID}
 AGENT_DISPLAY=${AGENT_DISPLAY}
@@ -213,159 +172,24 @@ CITADEL_HOST=${CITADEL_HOST}
 CITADEL_PORT=1883
 MQTT_USER=${MQTT_USER}
 MQTT_PASS=${MQTT_PASS}
-GATEWAY_URL=${GATEWAY_URL}
-WAKE_MODE=${WAKE_MODE}
-GATEWAY_TOKEN=${GATEWAY_TOKEN}
+OPENCLAW_BIN=${OPENCLAW_BIN}
+AGENT_TIMEOUT=600
 HEARTBEAT_SEC=30
 EOF
 chmod 600 "$CONFIG_FILE"
 
 # ═══════════════════════════════════════════════════════════════
-# Generate the listener script
+# Verify listener script exists (shipped in repo, not generated)
 # ═══════════════════════════════════════════════════════════════
 
 LISTENER_SCRIPT="$SCRIPT_DIR/openclaw-client/mqtt-listener.js"
 
-cat > "$LISTENER_SCRIPT" <<'JSEOF'
-#!/usr/bin/env node
-const mqtt = require('mqtt');
-const http = require('http');
-const https = require('https');
-const os = require('os');
-
-const ID      = process.env.AGENT_ID;
-if (!ID) { console.error('AGENT_ID required'); process.exit(1); }
-
-const DISPLAY = process.env.AGENT_DISPLAY   || ID.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
-const ROLE    = process.env.AGENT_ROLE       || 'Agent';
-const DEVICE  = process.env.AGENT_DEVICE_TYPE|| 'server';
-const HOST    = process.env.CITADEL_HOST     || process.env.MQTT_HOST || '127.0.0.1';
-const PORT    = parseInt(process.env.CITADEL_PORT || process.env.MQTT_PORT || '1883');
-const USER    = process.env.MQTT_USER        || ID;
-const PASS    = process.env.MQTT_PASS        || '';
-const GW_URL  = process.env.GATEWAY_URL      || '';
-const GW_TOK  = process.env.GATEWAY_TOKEN    || process.env.HOOKS_TOKEN || '';
-const WAKE    = process.env.WAKE_MODE        || 'api';
-const HB_SEC  = parseInt(process.env.HEARTBEAT_SEC || '30');
-const T       = `[${ID}]`;
-
-function getIP() {
-    for (const ifs of Object.values(os.networkInterfaces()))
-        for (const i of ifs) if (i.family==='IPv4' && !i.internal) return i.address;
-    return '127.0.0.1';
-}
-
-const client = mqtt.connect(`mqtt://${HOST}:${PORT}`, {
-    username: USER, password: PASS,
-    clientId: `${ID}-${Date.now()}`,
-    reconnectPeriod: 5000,
-    will: { topic: `agents/status/${ID}`,
-            payload: JSON.stringify({status:'offline',timestamp:new Date().toISOString()}),
-            qos:1, retain:true }
-});
-
-let hbTimer = null;
-
-function heartbeat() {
-    const la = os.loadavg()[0], cpus = os.cpus().length||1;
-    const tm = os.totalmem(), fm = os.freemem();
-    client.publish(`agents/heartbeat/${ID}`, JSON.stringify({
-        agent_id:ID, display_name:DISPLAY, role:ROLE, device_type:DEVICE,
-        status:'online',
-        cpu_percent: Math.round((la/cpus)*1000)/10,
-        memory_percent: Math.round(((tm-fm)/tm)*1000)/10,
-        ip_address: getIP(),
-        capabilities: ['chat','task_execution','mqtt_listener'],
-        timestamp: new Date().toISOString()
-    }), {qos:1});
-}
-
-client.on('connect', () => {
-    console.log(T, `Connected to ${HOST}:${PORT}`);
-    client.subscribe(`agents/inbox/${ID}`, {qos:1});
-    client.subscribe('agents/broadcast', {qos:1});
-    // Register
-    client.publish(`agents/register/${ID}`, JSON.stringify({
-        agent_id:ID, display_name:DISPLAY, role:ROLE, device_type:DEVICE,
-        capabilities:['chat','task_execution','mqtt_listener'],
-        ip_address:getIP(), status:'online', timestamp:new Date().toISOString()
-    }), {qos:1});
-    heartbeat();
-    if (hbTimer) clearInterval(hbTimer);
-    hbTimer = setInterval(heartbeat, HB_SEC*1000);
-    console.log(T, 'Online. Listening for commands.');
-});
-
-client.on('message', (topic, message) => {
-    try {
-        const m = JSON.parse(message.toString());
-        const from = m.from||m.sender_id||'unknown';
-        const content = m.content||m.message||'';
-        const corrId = m.correlationId||m.correlation_id||'';
-        if (from===ID || !content.trim()) return;
-        console.log(T, `${from}: ${content.substring(0,120)}`);
-        if (!GW_URL) { console.log(T, 'No gateway configured, skipping'); return; }
-        callGateway(from, content, corrId);
-    } catch(e) { console.error(T, 'Parse:', e.message); }
-});
-
-function callGateway(from, content, corrId) {
-    const body = WAKE==='webhook'
-        ? JSON.stringify({text:`[MQTT] ${from}: ${content.substring(0,500)}`, mode:'now'})
-        : JSON.stringify({messages:[{role:'user',content:`[MQTT from ${from}] ${content}`}],stream:false});
-    const path = WAKE==='webhook' ? '/hooks/wake' : '/v1/chat/completions';
-    const url = new URL(GW_URL + path);
-    const isS = url.protocol==='https:';
-    const hdr = {'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)};
-    if (GW_TOK) hdr['Authorization'] = `Bearer ${GW_TOK}`;
-    const req = (isS?https:http).request({
-        hostname:url.hostname, port:url.port||(isS?443:80),
-        path:url.pathname, method:'POST', headers:hdr, timeout:600000
-    }, res => {
-        let d=''; res.on('data',c=>d+=c);
-        res.on('end', () => {
-            console.log(T, `Gateway ${res.statusCode}`);
-            if (WAKE==='webhook') return; // webhook agents reply themselves
-            try {
-                const r = JSON.parse(d);
-                const txt = r.choices?.[0]?.message?.content;
-                if (txt?.trim()) reply(from, txt, corrId);
-            } catch(e){}
-        });
-    });
-    req.on('error', e=>console.error(T,'Gateway error:',e.message));
-    req.on('timeout', ()=>{req.destroy();console.error(T,'Gateway timeout')});
-    req.write(body); req.end();
-}
-
-function reply(to, content, corrId) {
-    const msg = {
-        from:ID, to, sender_id:ID, receiver_id:to,
-        type:'response', message_type:'result',
-        content, message:content,
-        correlationId:corrId||'', correlation_id:corrId||'',
-        timestamp:new Date().toISOString()
-    };
-    client.publish(`agents/inbox/${to}`, JSON.stringify(msg), {qos:1});
-    client.publish('agents/mirror', JSON.stringify(msg), {qos:1});
-    console.log(T, `-> ${to}: ${content.substring(0,80)}`);
-}
-
-client.on('error', e=>console.error(T,'MQTT:',e.message));
-client.on('offline', ()=>{ if(hbTimer){clearInterval(hbTimer);hbTimer=null;} console.log(T,'Offline, reconnecting...'); });
-
-function shutdown() {
-    if(hbTimer) clearInterval(hbTimer);
-    client.publish(`agents/status/${ID}`,JSON.stringify({status:'offline',timestamp:new Date().toISOString()}),
-        {qos:1,retain:true}, ()=>{client.end();process.exit(0);});
-    setTimeout(()=>process.exit(0),2000);
-}
-process.on('SIGINT',shutdown); process.on('SIGTERM',shutdown);
-console.log(T, `Listener starting | ${DISPLAY} (${ROLE}) | ${HOST}:${PORT} | GW: ${GW_URL||'none'}`);
-JSEOF
-
+if [[ ! -f "$LISTENER_SCRIPT" ]]; then
+    err "mqtt-listener.js not found at $LISTENER_SCRIPT"
+    exit 1
+fi
 chmod +x "$LISTENER_SCRIPT"
-ok "Listener installed"
+ok "Listener ready"
 
 # ═══════════════════════════════════════════════════════════════
 # Install systemd service
