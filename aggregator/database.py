@@ -36,13 +36,11 @@ def _get_conn() -> sqlite3.Connection:
     if _conn is None:
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
-        _conn.create_function("is_test_id", 1, lambda v: 1 if _is_test_id(v or "") else 0)
     return _conn
 
 
 def init_db():
     conn = _get_conn()
-    conn.create_function("is_test_id", 1, lambda v: 1 if _is_test_id(v or "") else 0)
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS deployments (
             name            TEXT PRIMARY KEY,
@@ -240,13 +238,19 @@ def upsert_agent(agent_id: str, deployment: str = "", **kwargs):
     conn.commit()
 
 
+def _is_test_agent(d: dict) -> bool:
+    """Check if an agent dict represents test data."""
+    return _is_test_id(d.get("id", "")) or _is_test_id(d.get("display_name", ""))
+
+
 def get_all_agents(exclude_test: bool = False) -> list[dict]:
     conn = _get_conn()
-    where = "WHERE is_test_id(id) = 0 AND is_test_id(display_name) = 0" if exclude_test else ""
-    rows = conn.execute(f"SELECT * FROM agents {where} ORDER BY status DESC, id").fetchall()
+    rows = conn.execute("SELECT * FROM agents ORDER BY status DESC, id").fetchall()
     result = []
     for r in rows:
         d = dict(r)
+        if exclude_test and _is_test_agent(d):
+            continue
         if d.get("capabilities"):
             try:
                 d["capabilities"] = json.loads(d["capabilities"])
@@ -330,14 +334,17 @@ def insert_message(deployment: str, sender_id: str, receiver_id: str = "",
     return msg_id
 
 
+def _is_test_message(d: dict) -> bool:
+    """Check if a message dict involves test agents."""
+    return _is_test_id(d.get("sender_id", "")) or _is_test_id(d.get("receiver_id", ""))
+
+
 def get_messages(limit: int = 50, offset: int = 0, agent: str = "",
                  msg_type: str = "", search: str = "",
                  correlation_id: str = "", exclude_test: bool = False) -> list[dict]:
     conn = _get_conn()
     clauses = []
     params: list = []
-    if exclude_test:
-        clauses.append("is_test_id(sender_id) = 0 AND (receiver_id = '' OR is_test_id(receiver_id) = 0)")
     if agent:
         clauses.append("(sender_id = ? OR receiver_id = ?)")
         params.extend([agent, agent])
@@ -352,7 +359,9 @@ def get_messages(limit: int = 50, offset: int = 0, agent: str = "",
         params.append(correlation_id)
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    params.extend([limit, offset])
+    # Fetch extra rows when filtering test data to compensate for filtered-out rows
+    fetch_limit = limit * 3 if exclude_test else limit
+    params.extend([fetch_limit, offset])
     rows = conn.execute(
         f"SELECT * FROM messages {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
         params,
@@ -361,12 +370,16 @@ def get_messages(limit: int = 50, offset: int = 0, agent: str = "",
     result = []
     for r in rows:
         d = dict(r)
+        if exclude_test and _is_test_message(d):
+            continue
         if d.get("payload"):
             try:
                 d["payload"] = json.loads(d["payload"])
             except (json.JSONDecodeError, TypeError):
                 pass
         result.append(d)
+        if len(result) >= limit:
+            break
     return result
 
 
@@ -379,10 +392,9 @@ def get_message_flow(hours: int = 24, exclude_test: bool = False) -> dict:
         "%Y-%m-%dT%H:%M:%SZ",
         time.gmtime(time.time() - hours * 3600),
     )
-    test_clause = " AND is_test_id(sender_id) = 0 AND is_test_id(receiver_id) = 0" if exclude_test else ""
     rows = conn.execute(
-        f"""SELECT sender_id, receiver_id, COUNT(*) as count
-           FROM messages WHERE timestamp >= ? AND receiver_id != ''{test_clause}
+        """SELECT sender_id, receiver_id, COUNT(*) as count
+           FROM messages WHERE timestamp >= ? AND receiver_id != ''
            GROUP BY sender_id, receiver_id""",
         (cutoff,),
     ).fetchall()
@@ -395,6 +407,8 @@ def get_message_flow(hours: int = 24, exclude_test: bool = False) -> dict:
         receiver = d["receiver_id"]
         # Skip non-agent IDs from flow graph
         if sender in FLOW_SKIP_IDS or receiver in FLOW_SKIP_IDS:
+            continue
+        if exclude_test and (_is_test_id(sender) or _is_test_id(receiver)):
             continue
         node_ids.add(sender)
         node_ids.add(receiver)
@@ -424,8 +438,6 @@ def get_logs(limit: int = 200, level: str = "", agent: str = "",
     conn = _get_conn()
     clauses = []
     params: list = []
-    if exclude_test:
-        clauses.append("is_test_id(agent_id) = 0")
     if level:
         clauses.append("level = ?")
         params.append(level)
@@ -440,7 +452,8 @@ def get_logs(limit: int = 200, level: str = "", agent: str = "",
         params.append(f"%{search}%")
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    params.append(limit)
+    fetch_limit = limit * 3 if exclude_test else limit
+    params.append(fetch_limit)
     rows = conn.execute(
         f"SELECT * FROM logs {where} ORDER BY timestamp DESC LIMIT ?",
         params,
@@ -449,12 +462,16 @@ def get_logs(limit: int = 200, level: str = "", agent: str = "",
     result = []
     for r in rows:
         d = dict(r)
+        if exclude_test and _is_test_id(d.get("agent_id", "")):
+            continue
         if d.get("metadata"):
             try:
                 d["metadata"] = json.loads(d["metadata"])
             except (json.JSONDecodeError, TypeError):
                 pass
         result.append(d)
+        if len(result) >= limit:
+            break
     return result
 
 
@@ -497,8 +514,6 @@ def get_tasks(limit: int = 200, agent: str = "", status: str = "",
     conn = _get_conn()
     clauses = []
     params: list = []
-    if exclude_test:
-        clauses.append("is_test_id(assigned_agent) = 0")
     if agent:
         clauses.append("assigned_agent = ?")
         params.append(agent)
@@ -506,7 +521,8 @@ def get_tasks(limit: int = 200, agent: str = "", status: str = "",
         clauses.append("status = ?")
         params.append(status)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    params.append(limit)
+    fetch_limit = limit * 3 if exclude_test else limit
+    params.append(fetch_limit)
     rows = conn.execute(
         f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ?",
         params,
@@ -515,12 +531,16 @@ def get_tasks(limit: int = 200, agent: str = "", status: str = "",
     result = []
     for r in rows:
         d = dict(r)
+        if exclude_test and _is_test_id(d.get("assigned_agent", "")):
+            continue
         if d.get("result"):
             try:
                 d["result"] = json.loads(d["result"])
             except (json.JSONDecodeError, TypeError):
                 pass
         result.append(d)
+        if len(result) >= limit:
+            break
     return result
 
 
@@ -560,23 +580,23 @@ def get_task_trace(task_id: str) -> list[dict]:
 
 def get_system_status(exclude_test: bool = False) -> dict:
     conn = _get_conn()
-    test_filter = " AND is_test_id(id) = 0" if exclude_test else ""
-    agents_online = conn.execute(
-        f"SELECT COUNT(*) as c FROM agents WHERE status = 'online'{test_filter}"
-    ).fetchone()["c"]
-    agents_total = conn.execute(
-        f"SELECT COUNT(*) as c FROM agents WHERE 1=1{test_filter}"
-    ).fetchone()["c"]
-    msg_test = " WHERE is_test_id(sender_id) = 0" if exclude_test else ""
-    total_messages = conn.execute(f"SELECT COUNT(*) as c FROM messages{msg_test}").fetchone()["c"]
-    task_test = " AND is_test_id(assigned_agent) = 0" if exclude_test else ""
+    if exclude_test:
+        all_agents = conn.execute("SELECT id, status FROM agents").fetchall()
+        non_test = [r for r in all_agents if not _is_test_id(r["id"])]
+        agents_online = sum(1 for r in non_test if r["status"] == "online")
+        agents_total = len(non_test)
+    else:
+        agents_online = conn.execute(
+            "SELECT COUNT(*) as c FROM agents WHERE status = 'online'"
+        ).fetchone()["c"]
+        agents_total = conn.execute("SELECT COUNT(*) as c FROM agents").fetchone()["c"]
+    total_messages = conn.execute("SELECT COUNT(*) as c FROM messages").fetchone()["c"]
     active_tasks = conn.execute(
-        f"SELECT COUNT(*) as c FROM tasks WHERE status IN ('pending', 'assigned', 'running'){task_test}"
+        "SELECT COUNT(*) as c FROM tasks WHERE status IN ('pending', 'assigned', 'running')"
     ).fetchone()["c"]
     today_start = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime())
-    log_test = " AND is_test_id(agent_id) = 0" if exclude_test else ""
     errors_today = conn.execute(
-        f"SELECT COUNT(*) as c FROM logs WHERE level = 'ERROR' AND timestamp >= ?{log_test}",
+        "SELECT COUNT(*) as c FROM logs WHERE level = 'ERROR' AND timestamp >= ?",
         (today_start,),
     ).fetchone()["c"]
     return {
