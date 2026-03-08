@@ -155,6 +155,8 @@ class OpenClawAggregator:
         # Upsert agent record
         agent_kwargs = {"status": "online", "last_heartbeat": now}
         if isinstance(payload_obj, dict):
+            if payload_obj.get("status"):
+                agent_kwargs["status"] = payload_obj["status"]
             if payload_obj.get("display_name"):
                 agent_kwargs["display_name"] = payload_obj["display_name"]
             if payload_obj.get("role"):

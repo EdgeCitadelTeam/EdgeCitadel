@@ -26,7 +26,18 @@ async def lifespan(app: FastAPI):
     database.init_db()
     agg.loop = asyncio.get_event_loop()
 
+    # Auto-bootstrap local MQTT deployment from env vars if no deployments exist
+    mqtt_host = os.environ.get("MQTT_HOST", "mqtt")
+    mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
+    mqtt_user = os.environ.get("MQTT_USER", "")
+    mqtt_pass = os.environ.get("MQTT_PASS", "")
     deployments = database.get_all_active_deployments()
+    if not deployments:
+        logger.info("No deployments found, auto-creating 'local' from env vars")
+        database.upsert_deployment("local", mqtt_host, mqtt_port,
+                                   description="Local MQTT", mqtt_user=mqtt_user, mqtt_pass=mqtt_pass)
+        deployments = database.get_all_active_deployments()
+
     for dep in deployments:
         try:
             agg.connect_deployment(dep["name"], dep["host"], dep["port"],
@@ -52,6 +63,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok"}
 
 
 # ── Deployment endpoints (Edge Citadel specific) ──

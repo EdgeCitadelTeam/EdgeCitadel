@@ -36,8 +36,8 @@ echo -e "${CYAN}Creating MQTT user '${AGENT_ID}'...${NC}"
 # Create the MQTT user in the running mosquitto container
 docker compose exec -T mqtt mosquitto_passwd -b /mosquitto/config/passwd "$AGENT_ID" "$MQTT_PASS"
 
-# Reload mosquitto to pick up new credentials (SIGHUP)
-docker compose kill -s HUP mqtt 2>/dev/null || docker compose restart mqtt
+# Restart mosquitto to pick up new credentials
+docker compose restart mqtt
 
 echo -e "${GREEN}Done.${NC}"
 echo ""
@@ -46,7 +46,7 @@ echo " Run this on the agent's machine to join:"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 echo "  git clone https://github.com/zhonghaozhan/EdgeCitadel.git"
-echo "  cd EdgeCitadel && ./join.sh ${SERVER_HOST} ${MQTT_PASS}"
+echo "  cd EdgeCitadel && ./join.sh ${SERVER_HOST} ${MQTT_PASS} ${AGENT_ID}"
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo ""

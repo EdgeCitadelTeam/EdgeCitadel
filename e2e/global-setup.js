@@ -3,7 +3,7 @@ const axios = require('axios');
 const path = require('path');
 
 const COMPOSE_FILE = path.join(__dirname, 'docker-compose.test.yml');
-const API_URL = 'http://localhost:18000/api/health';
+const API_URL = 'http://localhost:18000/health';
 const FRONTEND_URL = 'http://localhost:13000';
 const MAX_WAIT_MS = 180_000;
 const POLL_INTERVAL_MS = 3_000;
