@@ -26,8 +26,8 @@ test.describe('Commands', () => {
     await sleep(2000);
 
     // Select agent in sidebar
-    await expect(page.locator(`text=${agentData.display_name}`)).toBeVisible({ timeout: 15_000 });
-    await page.locator(`text=${agentData.display_name}`).click();
+    await expect(page.locator(`text=${agentData.display_name}`).first()).toBeVisible({ timeout: 15_000 });
+    await page.locator(`text=${agentData.display_name}`).first().click();
     await sleep(500);
 
     // Find command input and send button
@@ -36,8 +36,8 @@ test.describe('Commands', () => {
 
     const msgPromise = mqttClient.waitForMessage(
       `agents/inbox/${agentName}`,
-      (msg) => msg.payload?.message === cmdText,
-      10_000
+      (msg) => (msg.message === cmdText || msg.content === cmdText || msg.payload?.message === cmdText),
+      15_000
     );
 
     await commandInput.fill(cmdText);
@@ -45,7 +45,7 @@ test.describe('Commands', () => {
     await commandInput.press('Enter');
 
     const received = await msgPromise;
-    expect(received.payload.message).toBe(cmdText);
+    expect(received.message || received.content || received.payload?.message).toBe(cmdText);
   });
 
   test('Send button disabled when no target or text', async ({ page }) => {
@@ -63,8 +63,8 @@ test.describe('Commands', () => {
     await page.goto('/');
     await sleep(2000);
 
-    await expect(page.locator(`text=${agentData.display_name}`)).toBeVisible({ timeout: 15_000 });
-    await page.locator(`text=${agentData.display_name}`).click();
+    await expect(page.locator(`text=${agentData.display_name}`).first()).toBeVisible({ timeout: 15_000 });
+    await page.locator(`text=${agentData.display_name}`).first().click();
     await sleep(500);
 
     const commandInput = page.locator('input[placeholder*="command"], input[placeholder*="message"], textarea').last();

@@ -48,6 +48,8 @@ Thumbs.db
 
 # Test artifacts
 test-artifacts/
+e2e/test-results/
+e2e/playwright-report/
 
 # Raw video (keep only final mp4/gif)
 docs/demo-raw.webm

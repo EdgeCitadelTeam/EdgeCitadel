@@ -60,8 +60,8 @@ test.describe('Messages Real-time Updates', () => {
     await sleep(2000);
 
     // Select sender agent in sidebar
-    await expect(page.locator(`text=${sender.display_name}`)).toBeVisible({ timeout: 15_000 });
-    await page.locator(`text=${sender.display_name}`).click();
+    await expect(page.locator(`text=${sender.display_name}`).first()).toBeVisible({ timeout: 15_000 });
+    await page.locator(`text=${sender.display_name}`).first().click();
     await sleep(500);
 
     // Send a message from the selected agent

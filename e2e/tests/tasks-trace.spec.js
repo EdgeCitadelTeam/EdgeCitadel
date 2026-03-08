@@ -59,7 +59,7 @@ test.describe('Task Trace', () => {
     await sleep(500);
 
     await page.goto('/');
-    const tasksTab = page.locator('text=Tasks').first();
+    const tasksTab = page.locator('button:has-text("Tasks")');
     await tasksTab.click();
     await sleep(2000);
 

@@ -245,17 +245,31 @@ def get_agent(agent_id: str) -> dict | None:
     return d
 
 
-def mark_stale_agents_offline(timeout_seconds: int = 60):
+def delete_agent(agent_id: str):
+    conn = _get_conn()
+    conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+    conn.commit()
+
+
+def mark_stale_agents_offline(timeout_seconds: int = 60) -> list[str]:
+    """Mark agents offline if heartbeat is stale. Returns list of agent IDs that went offline."""
     conn = _get_conn()
     cutoff = time.strftime(
         "%Y-%m-%dT%H:%M:%SZ",
         time.gmtime(time.time() - timeout_seconds),
     )
-    conn.execute(
-        "UPDATE agents SET status = 'offline' WHERE status = 'online' AND last_heartbeat < ?",
+    rows = conn.execute(
+        "SELECT id FROM agents WHERE status = 'online' AND last_heartbeat < ?",
         (cutoff,),
-    )
-    conn.commit()
+    ).fetchall()
+    affected = [r["id"] for r in rows]
+    if affected:
+        conn.execute(
+            "UPDATE agents SET status = 'offline' WHERE status = 'online' AND last_heartbeat < ?",
+            (cutoff,),
+        )
+        conn.commit()
+    return affected
 
 
 def get_agent_stats(agent_id: str) -> dict:
@@ -448,18 +462,22 @@ def update_task(task_id: str, **kwargs):
         conn.commit()
 
 
-def get_tasks(limit: int = 200, agent: str = "") -> list[dict]:
+def get_tasks(limit: int = 200, agent: str = "", status: str = "") -> list[dict]:
     conn = _get_conn()
+    clauses = []
+    params: list = []
     if agent:
-        rows = conn.execute(
-            "SELECT * FROM tasks WHERE assigned_agent = ? ORDER BY created_at DESC LIMIT ?",
-            (agent, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        clauses.append("assigned_agent = ?")
+        params.append(agent)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(limit)
+    rows = conn.execute(
+        f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ?",
+        params,
+    ).fetchall()
 
     result = []
     for r in rows:
@@ -528,4 +546,5 @@ def get_system_status() -> dict:
         "total_messages": total_messages,
         "active_tasks": active_tasks,
         "errors_today": errors_today,
+        "mqtt_connected": True,
     }

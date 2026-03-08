@@ -97,7 +97,7 @@ test.describe('Task Lifecycle', () => {
 
     // Navigate to tasks
     await page.goto('/');
-    const tasksTab = page.locator('text=Tasks').first();
+    const tasksTab = page.locator('button:has-text("Tasks")');
     await tasksTab.click();
     await sleep(2000);
 

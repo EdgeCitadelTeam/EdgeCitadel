@@ -26,9 +26,11 @@ test.describe('System Status', () => {
     const initial = await apiClient.getSystemStatus();
     const initialTotal = initial.data.total_messages;
 
-    // Send a message
+    // Send a message (not register/heartbeat, which are skipped for message storage)
     const agent = makeAgent();
     await mqttClient.registerAgent(agent.name, agent);
+    await sleep(500);
+    await mqttClient.sendMessage(agent.name, 'system', 'command', { message: 'status-test' });
     await sleep(1000);
 
     // Status should eventually update

@@ -23,6 +23,8 @@ services:
       - MQTT_PASS=openclaw_secret
       - DB_PATH=/data/openclaw.db
       - API_KEY=test-api-key
+      - HEARTBEAT_INTERVAL=2
+      - HEARTBEAT_TIMEOUT=6
     volumes:
       - test-data:/data
     depends_on:

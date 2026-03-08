@@ -20,7 +20,7 @@ test.describe('Task Board', () => {
 
   test('5 kanban columns visible', async ({ page }) => {
     await page.goto('/');
-    const tasksTab = page.locator('text=Tasks').first();
+    const tasksTab = page.locator('button:has-text("Tasks")');
     await tasksTab.click();
     await sleep(1000);
 
@@ -34,7 +34,7 @@ test.describe('Task Board', () => {
 
   test('Create Task button opens modal', async ({ page }) => {
     await page.goto('/');
-    const tasksTab = page.locator('text=Tasks').first();
+    const tasksTab = page.locator('button:has-text("Tasks")');
     await tasksTab.click();
     await sleep(1000);
 
@@ -57,7 +57,7 @@ test.describe('Task Board', () => {
     await sleep(500);
 
     await page.goto('/');
-    const tasksTab = page.locator('text=Tasks').first();
+    const tasksTab = page.locator('button:has-text("Tasks")');
     await tasksTab.click();
     await sleep(2000);
 
@@ -66,11 +66,12 @@ test.describe('Task Board', () => {
 
   test('Creating task with assigned agent publishes MQTT', async ({ mqttClient, apiClient }) => {
     await mqttClient.subscribe(`agents/task/${agentName}/assign`);
+    await sleep(1000);
 
     const task = makeTask({ title: `MQTT-Task-${uniqueId()}` });
     const msgPromise = mqttClient.waitForMessage(
       `agents/task/${agentName}/assign`,
-      (msg) => msg.payload?.title === task.title || msg.payload?.task_id,
+      (msg) => msg.title === task.title || msg.task_id,
       10_000
     );
 
@@ -122,7 +123,7 @@ test.describe('Task Board', () => {
     });
 
     await page.goto('/');
-    const tasksTab = page.locator('text=Tasks').first();
+    const tasksTab = page.locator('button:has-text("Tasks")');
     await tasksTab.click();
     await sleep(2000);
 

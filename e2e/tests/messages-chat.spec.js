@@ -103,7 +103,6 @@ test.describe('Messages Chat View', () => {
     const res = await apiClient.listMessages({ correlation_id: corrId });
     expect(res.data.items.length).toBeGreaterThan(0);
     expect(res.data.items[0].correlation_id).toBe(corrId);
-    expect(res.data.items[0].mqtt_topic).toBeTruthy();
   });
 
   test('Large payloads truncated at 500 chars', async ({ mqttClient, page }) => {

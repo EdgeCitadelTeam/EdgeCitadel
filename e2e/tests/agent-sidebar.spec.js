@@ -16,7 +16,7 @@ test.describe('Agent Sidebar', () => {
 
     await page.goto('/');
     // The sidebar header shows total agent count
-    await expect(page.locator(`text=${agent.display_name}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${agent.display_name}`).first()).toBeVisible({ timeout: 15_000 });
   });
 
   test('All Agents selected by default', async ({ page }) => {
@@ -33,14 +33,14 @@ test.describe('Agent Sidebar', () => {
     await sleep(1000);
 
     await page.goto('/');
-    await expect(page.locator(`text=${agent.display_name}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${agent.display_name}`).first()).toBeVisible({ timeout: 15_000 });
 
     // Click on the agent card
-    await page.locator(`text=${agent.display_name}`).click();
+    await page.locator(`text=${agent.display_name}`).first().click();
     await sleep(500);
 
     // The agent card should appear selected (highlighted styling)
-    const card = page.locator(`text=${agent.display_name}`).locator('..');
+    const card = page.locator(`text=${agent.display_name}`).first().locator('..');
     await expect(card).toBeVisible();
   });
 
@@ -50,14 +50,14 @@ test.describe('Agent Sidebar', () => {
     await sleep(1000);
 
     await page.goto('/');
-    await expect(page.locator(`text=${agent.display_name}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${agent.display_name}`).first()).toBeVisible({ timeout: 15_000 });
 
     // Click to select
-    await page.locator(`text=${agent.display_name}`).click();
+    await page.locator(`text=${agent.display_name}`).first().click();
     await sleep(300);
 
     // Click again to deselect
-    await page.locator(`text=${agent.display_name}`).click();
+    await page.locator(`text=${agent.display_name}`).first().click();
     await sleep(300);
 
     // "All Agents" should be re-selected
@@ -73,6 +73,6 @@ test.describe('Agent Sidebar', () => {
     await mqttClient.registerAgent(agent.name, agent);
 
     // Sidebar polls every 10s, so within 12s the agent should appear
-    await expect(page.locator(`text=${agent.display_name}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${agent.display_name}`).first()).toBeVisible({ timeout: 15_000 });
   });
 });

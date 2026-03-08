@@ -46,7 +46,9 @@ async def lifespan(app: FastAPI):
             logger.error(f"Failed to connect to {dep['name']}: {e}")
 
     # Start heartbeat monitor background task
-    heartbeat_task = asyncio.create_task(agg.heartbeat_monitor(interval=15, timeout=120))
+    hb_interval = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
+    hb_timeout = int(os.environ.get("HEARTBEAT_TIMEOUT", "120"))
+    heartbeat_task = asyncio.create_task(agg.heartbeat_monitor(interval=hb_interval, timeout=hb_timeout))
 
     yield
 
@@ -181,12 +183,38 @@ def list_agents():
     return database.get_all_agents()
 
 
+@app.post("/agents", status_code=201)
+def create_agent(data: dict):
+    agent_id = data.get("id", "")
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="Agent id required")
+    existing = database.get_agent(agent_id)
+    if existing:
+        raise HTTPException(status_code=409, detail="Agent already exists")
+    database.upsert_agent(agent_id, **{k: v for k, v in data.items() if k != "id"})
+    return database.get_agent(agent_id)
+
+
 @app.get("/agents/{agent_id}")
 def get_agent(agent_id: str):
     agent = database.get_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
+
+
+@app.patch("/agents/{agent_id}")
+def update_agent(agent_id: str, data: dict):
+    agent = database.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    database.upsert_agent(agent_id, **data)
+    return database.get_agent(agent_id)
+
+
+@app.delete("/agents/{agent_id}", status_code=204)
+def delete_agent(agent_id: str):
+    database.delete_agent(agent_id)
 
 
 @app.get("/agents/{agent_id}/stats")
@@ -215,8 +243,7 @@ def list_conversations(
     limit: int = Query(50),
     agent: str = Query(""),
 ):
-    items = database.get_messages(limit=limit, agent=agent)
-    return {"items": items}
+    return database.get_messages(limit=limit, agent=agent)
 
 
 @app.get("/messages/flow")
@@ -228,12 +255,13 @@ def get_message_flow(hours: int = Query(24)):
 def list_tasks(
     limit: int = Query(200),
     agent: str = Query(""),
+    status: str = Query(""),
 ):
-    items = database.get_tasks(limit=limit, agent=agent)
+    items = database.get_tasks(limit=limit, agent=agent, status=status)
     return {"items": items}
 
 
-@app.post("/tasks")
+@app.post("/tasks", status_code=201)
 def create_task(data: dict):
     task_id = database.insert_task(
         title=data.get("title", ""),
@@ -241,13 +269,31 @@ def create_task(data: dict):
         assigned_agent=data.get("assigned_agent", ""),
         priority=data.get("priority", "normal"),
     )
-    return {"id": task_id, "ok": True}
+    task = database.get_task(task_id)
+    # Publish MQTT assignment if agent is specified
+    assigned = data.get("assigned_agent", "")
+    if assigned:
+        for dep_name, client in agg.clients.items():
+            try:
+                payload = json.dumps({"task_id": task_id, "title": data.get("title", ""),
+                                       "description": data.get("description", ""),
+                                       "priority": data.get("priority", "normal"),
+                                       "assigned_agent": assigned})
+                client.publish(f"agents/task/{assigned}/assign", payload)
+            except Exception:
+                pass
+    return task
 
 
 @app.patch("/tasks/{task_id}")
 def update_task(task_id: str, data: dict):
+    # Auto-set timestamps based on status transitions
+    if data.get("status") == "running" and "started_at" not in data:
+        data["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if data.get("status") in ("completed", "failed") and "completed_at" not in data:
+        data["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     database.update_task(task_id, **data)
-    return {"ok": True}
+    return database.get_task(task_id)
 
 
 @app.get("/tasks/{task_id}/trace")
@@ -260,11 +306,13 @@ def list_logs(
     limit: int = Query(200),
     level: str = Query(""),
     agent: str = Query(""),
+    agent_id: str = Query(""),
     source: str = Query(""),
     search: str = Query(""),
 ):
+    agent_filter = agent or agent_id
     items = database.get_logs(
-        limit=limit, level=level, agent=agent, source=source, search=search,
+        limit=limit, level=level, agent=agent_filter, source=source, search=search,
     )
     return {"items": items}
 
@@ -333,8 +381,8 @@ def broadcast_message(data: dict):
     payload = json.dumps(data)
     for dep_name, client in agg.clients.items():
         try:
-            topic = f"openclaw/{dep_name}/broadcast"
-            client.publish(topic, payload)
+            client.publish(f"openclaw/{dep_name}/broadcast", payload)
+            client.publish("agents/broadcast", payload)
         except Exception as e:
             logger.error(f"Failed to broadcast to {dep_name}: {e}")
 

@@ -33,9 +33,9 @@ test.describe('Agent Registration', () => {
     await sleep(1000);
 
     await page.goto('/');
-    await expect(page.locator(`text=${agent.display_name}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${agent.display_name}`).first()).toBeVisible({ timeout: 15_000 });
     // Online badge should be a green indicator near the agent
-    const agentCard = page.locator(`text=${agent.display_name}`).locator('..');
+    const agentCard = page.locator(`text=${agent.display_name}`).first().locator('..');
     await expect(agentCard).toBeVisible();
   });
 
@@ -103,7 +103,7 @@ test.describe('Agent Registration', () => {
 
     await page.goto('/');
     for (const agent of agents) {
-      await expect(page.locator(`text=${agent.display_name}`)).toBeVisible({ timeout: 15_000 });
+      await expect(page.locator(`text=${agent.display_name}`).first()).toBeVisible({ timeout: 15_000 });
     }
   });
 });

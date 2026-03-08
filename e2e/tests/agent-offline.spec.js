@@ -21,7 +21,7 @@ test.describe('Agent Offline Detection', () => {
     const result = await pollUntil(async () => {
       const res = await apiClient.getAgent(agent.name);
       return res.data.status === 'offline' ? res.data : null;
-    }, { timeout: 25_000, interval: 1000, label: 'agent goes offline' });
+    }, { timeout: 15_000, interval: 1000, label: 'agent goes offline' });
 
     expect(result.status).toBe('offline');
   });
@@ -51,18 +51,18 @@ test.describe('Agent Offline Detection', () => {
     await mqttClient.sendHeartbeat(agent.name);
 
     await page.goto('/');
-    await expect(page.locator(`text=${agent.display_name}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${agent.display_name}`).first()).toBeVisible({ timeout: 15_000 });
 
     // Wait for agent to go offline (heartbeat timeout)
     await pollUntil(async () => {
       const res = await apiClient.getAgent(agent.name);
       return res.data.status === 'offline' ? res.data : null;
-    }, { timeout: 25_000, interval: 1000, label: 'agent offline' });
+    }, { timeout: 15_000, interval: 1000, label: 'agent offline' });
 
     // Sidebar should refresh and show offline styling (dimmed/opacity)
     // The AgentCard component dims offline agents
-    await page.waitForTimeout(12_000); // Wait for sidebar poll (10s interval)
-    const agentCard = page.locator(`text=${agent.display_name}`).locator('..');
+    await page.waitForTimeout(5_000); // Wait for sidebar poll
+    const agentCard = page.locator(`text=${agent.display_name}`).first().locator('..');
     await expect(agentCard).toBeVisible();
   });
 });

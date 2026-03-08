@@ -72,6 +72,21 @@ class OpenClawAggregator:
                 asyncio.run_coroutine_threadsafe(
                     self._broadcast_stream(stream_event), self.loop
                 )
+                # Broadcast agent lifecycle events
+                msg_type = parsed_msg.get("message_type", "")
+                agent_id = parsed_msg.get("sender_id", "")
+                if msg_type == "register" and agent_id:
+                    reg_event = {"type": "agent_registered", "event": "agent_registered",
+                                 "agent_id": agent_id, "status": "online",
+                                 "data": {"agent_id": agent_id, "status": "online"}}
+                    asyncio.run_coroutine_threadsafe(
+                        self._broadcast_stream(reg_event), self.loop)
+                elif msg_type == "heartbeat" and agent_id:
+                    hb_event = {"type": "agent_status_change", "event": "agent_status_change",
+                                "agent_id": agent_id, "status": "online",
+                                "data": {"agent_id": agent_id, "status": "online"}}
+                    asyncio.run_coroutine_threadsafe(
+                        self._broadcast_stream(hb_event), self.loop)
 
         return on_message
 
@@ -104,7 +119,10 @@ class OpenClawAggregator:
             # agents/status/{name}
             agent_id = parts[2]
         elif parts[0] == "agents" and len(parts) == 2:
-            # agents/mirror, agents/broadcast — agent extracted from payload
+            if parts[1] == "mirror":
+                # agents/mirror is a duplicate of inbox — skip to avoid double-storing
+                return None
+            # agents/broadcast — agent extracted from payload
             agent_id = ""
         elif len(parts) >= 2 and parts[0] == "swarm":
             agent_id = parts[1]
@@ -138,47 +156,68 @@ class OpenClawAggregator:
             message_type = payload_obj.get("message_type", payload_obj.get("type", "info"))
 
         # Extract fields from payload
+        sender_id = ""
         if isinstance(payload_obj, dict):
-            sender_from_payload = payload_obj.get("sender_id", payload_obj.get("from", ""))
+            sender_id = payload_obj.get("sender_id", payload_obj.get("from", payload_obj.get("sender", "")))
             receiver_from_payload = payload_obj.get("receiver_id", payload_obj.get("to", ""))
             correlation_id = payload_obj.get("correlation_id",
                                             payload_obj.get("correlationId",
                                             payload_obj.get("task_id", "")))
-            if sender_from_payload:
-                agent_id = sender_from_payload
+            # For inbox/task topics, agent_id is the target from the topic — don't override
+            # with sender. For other topics, sender from payload is more reliable.
+            if sender_id and "inbox" not in topic and not is_task:
+                agent_id = sender_id
             if receiver_from_payload:
                 receiver_id = receiver_from_payload
 
-        if not agent_id or agent_id in SKIP_AGENT_IDS:
-            return None
+        # Fill in sender/receiver for inbox topics
+        if "inbox" in topic and sender_id:
+            # agent_id stays as recipient from topic, sender_id is the sender
+            if not receiver_id:
+                receiver_id = agent_id
+            # For message storage, agent_id is the sender
+            stored_agent_id = sender_id
+        else:
+            stored_agent_id = agent_id
 
-        # Upsert agent record
+        # Skip messages with no identifiable agent (but allow dashboard-sent commands)
+        if not agent_id or (agent_id in SKIP_AGENT_IDS and not receiver_id):
+            return None
+        # For dashboard-sent messages, use receiver as the primary agent context
+        if agent_id in SKIP_AGENT_IDS and receiver_id and receiver_id not in SKIP_AGENT_IDS:
+            agent_id = receiver_id
+
+        # Upsert agent record (skip for dashboard/system senders)
         agent_kwargs = {"status": "online", "last_heartbeat": now}
         if isinstance(payload_obj, dict):
-            if payload_obj.get("status"):
-                agent_kwargs["status"] = payload_obj["status"]
-            if payload_obj.get("display_name"):
-                agent_kwargs["display_name"] = payload_obj["display_name"]
-            if payload_obj.get("role"):
-                agent_kwargs["role"] = payload_obj["role"]
-            if payload_obj.get("device_type"):
-                agent_kwargs["device_type"] = payload_obj["device_type"]
-            if payload_obj.get("capabilities"):
-                caps = payload_obj["capabilities"]
+            # Some agents nest metadata under a "payload" key; merge both levels
+            inner = payload_obj.get("payload", {}) if isinstance(payload_obj.get("payload"), dict) else {}
+            merged = {**inner, **{k: v for k, v in payload_obj.items() if k != "payload"}}
+            if merged.get("status"):
+                agent_kwargs["status"] = merged["status"]
+            if merged.get("display_name"):
+                agent_kwargs["display_name"] = merged["display_name"]
+            if merged.get("role"):
+                agent_kwargs["role"] = merged["role"]
+            if merged.get("device_type"):
+                agent_kwargs["device_type"] = merged["device_type"]
+            if merged.get("capabilities"):
+                caps = merged["capabilities"]
                 agent_kwargs["capabilities"] = json.dumps(caps) if isinstance(caps, (list, dict)) else caps
-            if payload_obj.get("ip_address"):
-                agent_kwargs["ip_address"] = payload_obj["ip_address"]
-            if payload_obj.get("model"):
-                agent_kwargs["model"] = payload_obj["model"]
-            if payload_obj.get("cpu_percent") is not None:
-                agent_kwargs["cpu_percent"] = payload_obj["cpu_percent"]
-            if payload_obj.get("memory_percent") is not None:
-                agent_kwargs["memory_percent"] = payload_obj["memory_percent"]
+            if merged.get("ip_address"):
+                agent_kwargs["ip_address"] = merged["ip_address"]
+            if merged.get("model"):
+                agent_kwargs["model"] = merged["model"]
+            if merged.get("cpu_percent") is not None:
+                agent_kwargs["cpu_percent"] = merged["cpu_percent"]
+            if merged.get("memory_percent") is not None:
+                agent_kwargs["memory_percent"] = merged["memory_percent"]
 
-        try:
-            database.upsert_agent(agent_id, deployment=deployment, **agent_kwargs)
-        except Exception as e:
-            logger.error(f"Failed to upsert agent: {e}")
+        if stored_agent_id not in SKIP_AGENT_IDS:
+            try:
+                database.upsert_agent(agent_id, deployment=deployment, **agent_kwargs)
+            except Exception as e:
+                logger.error(f"Failed to upsert agent: {e}")
 
         # Also register receiver as agent if present (skip blocklisted IDs)
         if receiver_id and receiver_id not in SKIP_AGENT_IDS:
@@ -204,7 +243,7 @@ class OpenClawAggregator:
             try:
                 msg_id = database.insert_message(
                     deployment=deployment,
-                    sender_id=agent_id,
+                    sender_id=stored_agent_id,
                     receiver_id=receiver_id,
                     message_type=message_type,
                     payload=stored_payload,
@@ -217,14 +256,20 @@ class OpenClawAggregator:
         # Insert log for all MQTT messages
         try:
             level = "MQTT"
+            log_message = payload[:500] if payload else ""
+            log_source = topic
             if is_log and isinstance(payload_obj, dict):
-                level = payload_obj.get("level", "INFO").upper()
+                # Extract from nested payload or top-level
+                log_inner = payload_obj.get("payload", {}) if isinstance(payload_obj.get("payload"), dict) else {}
+                level = log_inner.get("level", payload_obj.get("level", "INFO")).upper()
+                log_message = log_inner.get("message", payload_obj.get("message", log_message))
+                log_source = log_inner.get("source", payload_obj.get("source", topic))
             database.insert_log(
                 deployment=deployment,
                 level=level,
                 agent_id=agent_id,
-                source=topic,
-                message=payload[:500] if payload else "",
+                source=log_source,
+                message=log_message[:500] if log_message else "",
                 metadata=payload_obj if isinstance(payload_obj, dict) else {"raw": payload},
             )
         except Exception as e:
@@ -233,31 +278,62 @@ class OpenClawAggregator:
         # Handle explicit task messages
         if is_task and isinstance(payload_obj, dict):
             try:
-                task_id = payload_obj.get("task_id", "")
+                # Merge nested payload for task fields
+                task_inner = payload_obj.get("payload", {}) if isinstance(payload_obj.get("payload"), dict) else {}
+                task_data = {**task_inner, **{k: v for k, v in payload_obj.items() if k != "payload"}}
+                task_id = task_data.get("task_id", "") or correlation_id
+                # Determine task action from topic suffix
+                topic_action = parts[-1] if parts else ""
                 if task_id:
                     existing = database.get_task(task_id)
                     if existing:
                         updates = {}
-                        if payload_obj.get("status"):
-                            updates["status"] = payload_obj["status"]
-                            if payload_obj["status"] == "running":
+                        # Map topic action to status
+                        if topic_action == "assign":
+                            updates["status"] = "assigned"
+                            updates["assigned_agent"] = agent_id
+                        elif topic_action == "progress":
+                            updates["status"] = "running"
+                            updates["started_at"] = now
+                        elif topic_action == "complete":
+                            updates["status"] = "completed"
+                            updates["completed_at"] = now
+                            if task_data.get("result"):
+                                updates["result"] = task_data["result"]
+                        elif topic_action == "failed":
+                            updates["status"] = "failed"
+                            updates["completed_at"] = now
+                            if task_data.get("error_message") or task_data.get("error"):
+                                updates["error_message"] = task_data.get("error_message", task_data.get("error", ""))
+                        # Also handle explicit status field
+                        if task_data.get("status"):
+                            updates["status"] = task_data["status"]
+                            if task_data["status"] == "running":
                                 updates["started_at"] = now
-                            elif payload_obj["status"] in ("completed", "failed"):
+                            elif task_data["status"] in ("completed", "failed"):
                                 updates["completed_at"] = now
-                        if payload_obj.get("result"):
-                            updates["result"] = payload_obj["result"]
-                        if payload_obj.get("error"):
-                            updates["error_message"] = payload_obj["error"]
+                        if task_data.get("result") and "result" not in updates:
+                            updates["result"] = task_data["result"]
+                        if (task_data.get("error") or task_data.get("error_message")) and "error_message" not in updates:
+                            updates["error_message"] = task_data.get("error_message", task_data.get("error", ""))
                         if updates:
                             database.update_task(task_id, **updates)
                     else:
                         database.insert_task(
                             deployment=deployment,
-                            title=payload_obj.get("title", payload_obj.get("command", "Task")),
-                            description=payload_obj.get("description", ""),
-                            assigned_agent=payload_obj.get("assigned_agent", agent_id),
-                            priority=payload_obj.get("priority", "normal"),
+                            title=task_data.get("title", task_data.get("command", "Task")),
+                            description=task_data.get("description", ""),
+                            assigned_agent=task_data.get("assigned_agent", agent_id),
+                            priority=task_data.get("priority", "normal"),
+                            task_id=task_id,
                         )
+                        # If the action is beyond "assign", update status immediately
+                        if topic_action == "progress":
+                            database.update_task(task_id, status="running", started_at=now)
+                        elif topic_action == "complete":
+                            database.update_task(task_id, status="completed", completed_at=now)
+                        elif topic_action == "failed":
+                            database.update_task(task_id, status="failed", completed_at=now)
             except Exception as e:
                 logger.error(f"Failed to handle task: {e}")
 
@@ -298,7 +374,7 @@ class OpenClawAggregator:
         return {
             "id": msg_id or str(uuid.uuid4()),
             "deployment": deployment,
-            "sender_id": agent_id,
+            "sender_id": stored_agent_id,
             "receiver_id": receiver_id,
             "message_type": message_type,
             "payload": stored_payload,
@@ -347,7 +423,12 @@ class OpenClawAggregator:
         """Background task that marks agents offline if no heartbeat received."""
         while True:
             try:
-                database.mark_stale_agents_offline(timeout)
+                went_offline = database.mark_stale_agents_offline(timeout)
+                for agent_id in went_offline:
+                    event = {"type": "agent_status_change", "event": "agent_status_change",
+                             "agent_id": agent_id, "status": "offline",
+                             "data": {"agent_id": agent_id, "status": "offline"}}
+                    await self._broadcast_stream(event)
             except Exception as e:
                 logger.error(f"Heartbeat monitor error: {e}")
             await asyncio.sleep(interval)

@@ -21,17 +21,18 @@ test.describe('Agent Detail View', () => {
     await mqttClient.sendHeartbeat(agentName, { cpu_percent: 65.3, memory_percent: 82.1 });
     await pollUntil(async () => {
       try {
-        return (await apiClient.getAgent(agentName)).data;
+        const data = (await apiClient.getAgent(agentName)).data;
+        return data?.cpu_percent != null ? data : null;
       } catch {
         return null;
       }
-    }, { label: 'agent ready' });
+    }, { label: 'agent ready with metrics' });
   });
 
   test('Shows agent profile: name, role, device_type, model, IP', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator(`text=${agentData.display_name}`)).toBeVisible({ timeout: 15_000 });
-    await page.locator(`text=${agentData.display_name}`).click();
+    await expect(page.locator(`text=${agentData.display_name}`).first()).toBeVisible({ timeout: 15_000 });
+    await page.locator(`text=${agentData.display_name}`).first().click();
 
     // Switch to detail tab by clicking agent name or detail area
     // The Layout component shows AgentDetail when activeTab is 'detail'
@@ -71,8 +72,8 @@ test.describe('Agent Detail View', () => {
 
     const msgPromise = mqttClient.waitForMessage(
       `agents/inbox/${agentName}`,
-      (msg) => msg.payload?.message === 'run diagnostics',
-      10_000
+      (msg) => (msg.message === 'run diagnostics' || msg.content === 'run diagnostics' || msg.payload?.message === 'run diagnostics'),
+      15_000
     );
 
     await apiClient.sendCommand(agentName, {
@@ -81,7 +82,7 @@ test.describe('Agent Detail View', () => {
     });
 
     const received = await msgPromise;
-    expect(received.payload.message).toBe('run diagnostics');
+    expect(received.message || received.content || received.payload?.message).toBe('run diagnostics');
   });
 
   test('Recent messages list via API', async ({ mqttClient, apiClient }) => {
