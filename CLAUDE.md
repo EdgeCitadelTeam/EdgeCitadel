@@ -1,72 +1,85 @@
-# OpenClaw Swarm Control Dashboard
+# OpenClaw Edge Citadel
 
 ## Architecture Overview
 
-Full-stack agent-centric swarm control dashboard for an OpenClaw edge-local LLM agent swarm deployed on IoT hardware. The dashboard runs on the orchestrator node, subscribing to all MQTT traffic on `agents/#` to provide real-time visibility into multi-agent communication, chat history, task execution, and system logs.
-
-**Key constraint**: MQTT is the backbone. All inter-agent communication flows through MQTT pub/sub. The dashboard is the supervisor view.
+MQTT-based agent communication platform. Runs a Mosquitto MQTT broker with agents (Rupert/Orchestrator, Jeeves/IoT, Percy/Mobile) publishing and subscribing to topics. The aggregator subscribes to all MQTT traffic, parses it into structured records (agents, messages, logs, tasks), stores in SQLite, and streams to a React dashboard via WebSocket.
 
 ## Tech Stack
 
-- **Backend**: Python 3.12, FastAPI, aiomqtt, SQLAlchemy (async + aiosqlite), Pydantic
-- **Frontend**: React 18, Vite 5, Tailwind CSS 3, Zustand, react-force-graph-2d, Recharts, Axios
-- **Infrastructure**: Docker Compose, Eclipse Mosquitto 2, Nginx
-- **Database**: SQLite (async via aiosqlite)
+- **MQTT Broker**: Eclipse Mosquitto 2
+- **Aggregator**: Python 3.12, FastAPI, paho-mqtt 1.6.1, SQLite, Pydantic
+- **Dashboard**: React 18, Vite 5, Tailwind CSS (build-time), Zustand, recharts, react-force-graph-2d, lucide-react
+- **Infrastructure**: Docker Compose, Nginx (reverse proxy)
+- **Database**: SQLite (sync, module-level connection)
 
 ## Directory Structure
 
 ```
 EdgeCitadel/
-├── backend/
-│   ├── main.py              # FastAPI app entry with lifespan
-│   ├── config.py             # Pydantic settings from env vars
-│   ├── database.py           # Async SQLAlchemy models & engine
-│   ├── mqtt_client.py        # MQTT subscriber/publisher service
-│   ├── websocket_manager.py  # WebSocket connection pools
-│   ├── schemas.py            # Pydantic request/response models
-│   ├── services/             # Business logic layer
-│   │   ├── agent_service.py
-│   │   ├── message_service.py
-│   │   ├── task_service.py
-│   │   ├── log_service.py
-│   │   └── health_monitor.py
-│   └── routes/               # FastAPI route modules
-│       ├── agents.py
-│       ├── messages.py
-│       ├── tasks.py
-│       ├── logs.py
-│       ├── commands.py
-│       ├── system.py
-│       └── websocket.py
+├── aggregator/
+│   ├── main.py           # FastAPI app, REST + WebSocket endpoints
+│   ├── aggregator.py     # MQTT subscriber/publisher, message parser
+│   ├── database.py       # SQLite DB (agents, messages, logs, tasks, episodes)
+│   ├── models.py         # Pydantic request models
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── frontend/
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── Layout.jsx
-│   │   ├── components/       # UI components
-│   │   ├── stores/           # Zustand state
-│   │   ├── hooks/            # Custom React hooks
-│   │   ├── api/              # API client
-│   │   └── utils/            # Helpers
-│   └── ...config files
-├── mosquitto/config/         # Broker configuration
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── tailwind.config.js
+│   ├── index.html
+│   ├── nginx.conf
+│   ├── Dockerfile
+│   └── src/
+│       ├── main.jsx
+│       ├── App.jsx
+│       ├── Layout.jsx
+│       ├── stores/appStore.js
+│       ├── hooks/useWebSocket.js
+│       ├── api/client.js
+│       └── components/
+│           ├── AgentSidebar.jsx
+│           ├── AgentCard.jsx
+│           ├── AgentDetail.jsx
+│           ├── HeaderBar.jsx
+│           ├── ChatHistory.jsx
+│           ├── MessageBubble.jsx
+│           ├── CommandInput.jsx
+│           ├── ConversationThread.jsx
+│           ├── CommFlow.jsx
+│           ├── LogViewer.jsx
+│           ├── TaskBoard.jsx
+│           ├── TaskCard.jsx
+│           ├── StatusBadge.jsx
+│           └── Toast.jsx
+├── mosquitto/
+│   └── config/mosquitto.conf
+├── nginx/
+│   └── default.conf
+├── openclaw-client/
+│   ├── register.sh
+│   └── openclaw.conf.example
+├── data/
 ├── docker-compose.yml
-└── .env
+└── .env.example
 ```
 
 ## Key Patterns
 
-- **MQTT topic structure**: `agents/{action}` or `agents/{category}/{agent_name}/{action}`
-- **Message envelope**: JSON with sender, receiver, type, correlation_id, payload, timestamp
-- **WebSocket channels**: `/ws/stream` (all), `/ws/agent/{name}` (per-agent), `/ws/logs` (logs only)
-- **Real-time flow**: MQTT → Backend → DB + WebSocket → Frontend
-- **Agent discovery**: Dynamic via MQTT registration and heartbeat messages
-- **Health monitoring**: Background loop checks heartbeat freshness every 15s, marks agents offline after 60s timeout
+- **MQTT topic structure**: `openclaw/{deployment}/{agent}/...`, `agents/register/{agent}`, `agents/heartbeat/{agent}`
+- **Real-time flow**: Mosquitto -> paho-mqtt threads -> parse + DB + WebSocket broadcast -> React frontend
+- **WebSocket**: `/ws` (raw events), `/ws/stream` (structured events for frontend), `/ws/agent/{name}`
+- **API auth**: `api-key` header checked against `API_KEY` env var (deployment endpoints only)
+- **Frontend API**: `/api/agents`, `/api/messages`, `/api/logs`, `/api/tasks`, `/api/system/status`, `/api/command/{agent}` (no auth)
+- **Agent auto-discovery**: Agents are created/updated from MQTT topic parsing and payload fields
+- **paho-mqtt 1.6.1**: Use `mqtt.Client(client_id=...)` constructor, NOT 2.x API
 
 ## Conventions
 
-- Backend uses async/await throughout
-- All API routes prefixed with `/api/`
-- Frontend uses Zustand for state management (single store)
-- Dark theme by default, Tailwind CSS for styling
-- All timestamps stored as UTC, displayed as local time in frontend
-- SQLite database stored at `./data/openclaw.db`
+- Aggregator uses sync SQLite with module-level connection
+- paho-mqtt `loop_start()` runs in background threads; use `asyncio.run_coroutine_threadsafe()` to bridge to async
+- All API routes served behind nginx at `/api/` prefix (strips prefix via proxy_pass)
+- Dashboard uses Tailwind CSS with build-time PostCSS (not CDN)
+- Zustand for state management, no API key needed for frontend endpoints
+- Dark theme, Tailwind utility classes, custom color palette in tailwind.config.js
+- SQLite database at `/data/openclaw.db` (inside container)

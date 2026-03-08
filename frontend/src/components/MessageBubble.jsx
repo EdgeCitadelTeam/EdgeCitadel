@@ -17,8 +17,9 @@ const typeConfig = {
 function extractContent(payload) {
   if (!payload || typeof payload !== 'object') return null
 
-  // Direct message/response text
+  // Direct message/response/content text
   if (payload.message) return payload.message
+  if (payload.content) return payload.content
   if (payload.response) return payload.response
 
   // Result object - format key details

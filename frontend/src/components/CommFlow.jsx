@@ -44,6 +44,20 @@ export default function CommFlow() {
         value: e.count || 1,
       }))
 
+      // Add synthetic edges from each agent to the MQTT broker hub
+      if (hasNodes) {
+        for (const node of nodes) {
+          if (!node.isBroker) {
+            links.push({
+              source: node.id,
+              target: 'mqtt-broker',
+              value: 1,
+              isSynthetic: true,
+            })
+          }
+        }
+      }
+
       // Scale node size by message volume
       const volumes = {}
       for (const link of links) {

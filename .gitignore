@@ -13,18 +13,26 @@ build/
 
 # Node
 node_modules/
+dashboard/dist/
 frontend/dist/
 .vite/
 
 # Data
-data/
-*.db
-*.sqlite
+data/*.db
+data/*.sqlite
+!data/.gitkeep
+mosquitto/data/
+
+# Old dashboard (replaced by frontend/)
+dashboard/
 
 # Environment
 .env
 .env.local
 .env.production
+
+# OpenClaw client config (contains secrets)
+openclaw-client/openclaw.conf
 
 # IDE
 .vscode/
@@ -35,6 +43,12 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+test-artifacts/
+
+# Raw video (keep only final mp4/gif)
+docs/demo-raw.webm
 
 # Docker
 *.log

@@ -19,6 +19,9 @@ export default function CommandInput() {
     try {
       await commandApi.send(effectiveTarget, {
         message_type: 'command',
+        sender_id: 'dashboard',
+        receiver_id: effectiveTarget,
+        correlation_id: crypto.randomUUID(),
         payload: { message: text.trim() },
       })
       setText('')

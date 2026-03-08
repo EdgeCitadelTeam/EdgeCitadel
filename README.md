@@ -1,51 +1,69 @@
-# EdgeCitadel
+# Edge Citadel
 
-Real-time swarm control dashboard for [OpenClaw](https://github.com/openclaw) edge-local LLM agent networks. Runs on the orchestrator node, subscribing to all MQTT traffic on `agents/#` to provide live visibility into multi-agent communication, task execution, and system health.
+Central aggregation hub for multiple remote [OpenClaw](https://github.com/openclaw) deployments. Subscribes to MQTT brokers across all your OpenClaw instances simultaneously and presents a single real-time dashboard. New deployments register themselves with a single command.
 
 ## Demo
 
 ![EdgeCitadel Dashboard Demo](docs/demo.gif)
 
-> Agent-to-agent communication between a MacMini coordinator and an OpenClaw edge node — system health checks, model deployment, and local inference — all streamed in real time via MQTT. ([Full video](docs/demo.mp4))
+> Multi-deployment agent monitoring with real-time MQTT aggregation. ([Full video](docs/demo.mp4))
 
 ## Features
 
-- **Agent Registry** — Auto-discovers agents via MQTT registration and heartbeat messages. Shows online/offline status, CPU/memory metrics, device type, and capabilities.
-- **Chat History** — Full message timeline across all agents with sender/receiver tracking, filterable by agent or message type.
-- **Communication Flow** — Interactive force-directed graph visualizing agent-to-agent message patterns.
-- **Task Board** — Track task lifecycle (pending, assigned, running, completed, failed) across the swarm.
-- **System Logs** — Aggregated log viewer with level filtering (INFO, WARN, ERROR).
-- **Live Updates** — WebSocket streaming pushes all MQTT events to the browser in real time.
-- **Command Dispatch** — Send commands to individual agents or broadcast to the entire swarm from the dashboard.
-- **Health Monitoring** — Background loop checks heartbeat freshness every 15s, marks agents offline after 60s timeout.
+- **Multi-Deployment Aggregation** -- Connects to MQTT brokers on multiple remote OpenClaw instances simultaneously
+- **Real-Time Dashboard** -- WebSocket-driven feed of all MQTT messages across every deployment
+- **Agent Graph** -- SVG visualization of deployments and their agents, with flash-on-message animation
+- **Message Composer** -- Publish messages to any connected deployment directly from the dashboard
+- **Deployment Registry** -- REST API for registering/deregistering OpenClaw deployments
+- **Message Persistence** -- All MQTT episodes stored in SQLite for history queries
+- **Client Script** -- One-command registration from any OpenClaw box via `register.sh`
 
 ## Architecture
 
 ```
-  Agents ──MQTT──> Mosquitto Broker
-                        │
-                   EdgeCitadel Backend
-                   ├── subscribes to agents/#
-                   ├── persists to SQLite
-                   └── pushes via WebSocket
-                        │
-                   Nginx (frontend)
-                        │
-                   React Dashboard
+                        ┌─────────────────────────┐
+                        │  Mosquitto MQTT Broker   │
+                        │      (port 1883)         │
+                        └────────┬────────────────┘
+                                 │
+                     ┌───────────┼───────────┐
+                     │           │           │
+                  Rupert      Jeeves      Percy
+               (Orchestrator) (IoT)     (Mobile)
+                     │           │           │
+                     └───────────┼───────────┘
+                                 │
+                          paho-mqtt subscribe
+                                 │
+                        ┌────────┴────────────┐
+                        │     Aggregator      │
+                        │  (FastAPI + SQLite)  │
+                        └────────┬────────────┘
+                                 │
+                            WebSocket
+                                 │
+                        ┌────────┴────────────┐
+                        │   Nginx (reverse    │
+                        │      proxy)         │
+                        └────────┬────────────┘
+                                 │
+                        ┌────────┴────────────┐
+                        │   React Dashboard   │
+                        └─────────────────────┘
 ```
 
-All inter-agent communication flows through MQTT pub/sub. The backend subscribes to `agents/#`, stores everything in SQLite, and forwards events over WebSocket to the React frontend.
+Edge Citadel runs a Mosquitto MQTT broker. Agents (Rupert/Orchestrator, Jeeves/IoT, Percy/Mobile) connect to the broker and communicate via MQTT topics. The aggregator subscribes to all traffic, stores it in SQLite, and streams it to the React dashboard via WebSocket.
 
 ## Tech Stack
 
-| Layer        | Technology                                      |
-| ------------ | ----------------------------------------------- |
-| Backend      | Python 3.12, FastAPI, aiomqtt, SQLAlchemy async |
-| Frontend     | React 18, Vite 5, Tailwind CSS, Zustand        |
-| Broker       | Eclipse Mosquitto 2                             |
-| Database     | SQLite (via aiosqlite)                          |
-| Proxy        | Nginx                                           |
-| Orchestration| Docker Compose                                  |
+| Layer         | Technology                                        |
+| ------------- | ------------------------------------------------- |
+| MQTT Broker   | Eclipse Mosquitto 2                               |
+| Aggregator    | Python 3.12, FastAPI, paho-mqtt 1.6.1              |
+| Dashboard     | React 18, Vite 5, Tailwind CSS, Zustand, recharts |
+| Database      | SQLite                                             |
+| Proxy         | Nginx                                              |
+| Orchestration | Docker Compose                                     |
 
 ## Installation
 
@@ -54,256 +72,193 @@ All inter-agent communication flows through MQTT pub/sub. The backend subscribes
 - Docker and Docker Compose
 - Git
 
-### Setup
+### 1. Clone and configure
 
 ```bash
 git clone <repo-url> EdgeCitadel
 cd EdgeCitadel
+cp .env.example .env
 ```
 
-Create a `.env` file (or use the provided defaults):
+Edit `.env` and set a strong API key:
+
+```
+OPENCLAW_API_KEY=your-secret-key-here
+```
+
+### 2. Start the stack
 
 ```bash
-MQTT_HOST=mqtt
-MQTT_PORT=1883
-MQTT_USER=iot_agent
-MQTT_PASS=openclaw_secret
-DATABASE_URL=sqlite+aiosqlite:///./data/openclaw.db
-LOG_LEVEL=INFO
-CORS_ORIGINS=http://localhost:3000
+mkdir -p data
+docker compose up --build -d
 ```
 
-Start the stack:
+This starts four services:
+
+| Service      | Port | Description                          |
+| ------------ | ---- | ------------------------------------ |
+| `mqtt`       | 1883 | Mosquitto MQTT broker                |
+| `aggregator` | 8000 | FastAPI aggregator (internal)        |
+| `dashboard`  | 80   | React Swarm Control UI (internal)    |
+| `nginx`      | 80   | Reverse proxy (public)               |
+
+### 3. Verify
 
 ```bash
-docker compose up -d --build
+# Check all services are running
+docker compose ps
+
+# Check aggregator logs
+docker compose logs -f aggregator
+
+# Test the API
+curl http://localhost/api/deployments -H "api-key: your-secret-key-here"
 ```
 
-This starts three containers:
+Open `http://localhost` in your browser. Click "Set API Key" in the header and enter your key.
 
-| Service    | Port | Description           |
-| ---------- | ---- | --------------------- |
-| `mqtt`     | 1883 | Mosquitto MQTT broker |
-| `backend`  | 8000 | FastAPI backend       |
-| `frontend` | 3000 | Nginx + React app     |
+## Registering an OpenClaw Deployment
 
-Open `http://localhost:3000` in your browser.
+There are two ways to register a deployment: the client script (recommended) or a direct API call.
 
-### Adding MQTT users
+### Option A: Client script (recommended)
 
-The broker requires authentication. Add credentials with:
+Copy the `openclaw-client/` folder to your OpenClaw machine:
 
 ```bash
-docker exec edgecitadel-mqtt-1 mosquitto_passwd -b /mosquitto/config/passwd <username> <password>
-docker compose restart mqtt
+scp -r openclaw-client/ user@openclaw-host:~/
 ```
 
-The default backend user is `iot_agent` / `openclaw_secret`.
+On the OpenClaw machine:
 
-## Connecting an Agent
-
-Agents connect to the MQTT broker and follow a simple topic convention to appear in the dashboard automatically.
-
-### 1. MQTT credentials
-
-First, create a broker user for your agent (see "Adding MQTT users" above).
-
-### 2. Register on connect
-
-When your agent connects, publish a registration message:
-
-**Topic:** `agents/register/<agent_id>`
-
-```json
-{
-  "agent_id": "my-agent",
-  "display_name": "My Agent",
-  "role": "assistant",
-  "device_type": "raspberry_pi",
-  "capabilities": ["chat", "vision", "sensor_reading"],
-  "ip_address": "192.168.0.50",
-  "status": "online"
-}
+```bash
+cd ~/openclaw-client
+cp openclaw.conf.example openclaw.conf
 ```
 
-The dashboard will create the agent entry and show it in the sidebar.
+Edit `openclaw.conf`:
 
-### 3. Send heartbeats
+```bash
+DEPLOYMENT_NAME="home"                       # unique name for this deployment
+DEPLOYMENT_HOST="192.168.1.42"               # address Edge Citadel can reach this MQTT broker
+DEPLOYMENT_PORT=1883
+DEPLOYMENT_DESCRIPTION="Home lab rack"
 
-Publish a heartbeat every 30 seconds to stay online (agents are marked offline after 60s of silence):
+AGGREGATORS=(
+    "edge-citadel=http://your-citadel-ip"    # Edge Citadel address
+)
 
-**Topic:** `agents/heartbeat/<agent_id>`
-
-```json
-{
-  "agent_id": "my-agent",
-  "status": "online",
-  "cpu_percent": 42.5,
-  "memory_percent": 67.1,
-  "ip_address": "192.168.0.50"
-}
+API_KEY_EDGE_CITADEL="your-secret-key-here"  # must match OPENCLAW_API_KEY
 ```
 
-### 4. Topic reference
+Register:
 
-| Topic Pattern                          | Purpose                  | Direction       |
-| -------------------------------------- | ------------------------ | --------------- |
-| `agents/register/<agent_id>`           | Agent registration       | Agent -> Broker |
-| `agents/heartbeat/<agent_id>`          | Heartbeat with metrics   | Agent -> Broker |
-| `agents/status/<agent_id>`             | Status changes           | Agent -> Broker |
-| `agents/inbox/<agent_id>`              | Direct messages to agent | Broker -> Agent |
-| `agents/broadcast`                     | Broadcast to all agents  | Broker -> Agent |
-| `agents/task/assign`                   | Task assignment          | Broker -> Agent |
-| `agents/task/progress`                 | Task progress update     | Agent -> Broker |
-| `agents/task/complete`                 | Task completion          | Agent -> Broker |
-| `agents/task/failed`                   | Task failure             | Agent -> Broker |
-| `agents/logs/<agent_id>` or `agents/log/<agent_id>` | Log entries | Agent -> Broker |
-
-### 5. Message envelope
-
-All payloads are JSON. The standard envelope fields are:
-
-```json
-{
-  "sender": "my-agent",
-  "receiver": "other-agent",
-  "type": "chat",
-  "correlation_id": "uuid-for-request-tracking",
-  "payload": { ... },
-  "timestamp": "2026-03-04T12:00:00Z"
-}
+```bash
+chmod +x register.sh
+./register.sh
 ```
 
-Fields are optional — the backend infers `sender`, `receiver`, and `type` from the topic when not present in the payload.
+Other commands:
 
-### 6. Minimal client example (Python)
-
-```python
-import json, time
-import paho.mqtt.client as mqtt
-
-AGENT_ID = "my-agent"
-BROKER = "192.168.0.102"   # EdgeCitadel host
-PORT = 1883
-USERNAME = "my-agent"
-PASSWORD = "my-secret"
-
-client = mqtt.Client(client_id=AGENT_ID)
-client.username_pw_set(USERNAME, PASSWORD)
-
-def on_connect(client, userdata, flags, rc, properties=None):
-    # Subscribe to direct messages and broadcasts
-    client.subscribe(f"agents/inbox/{AGENT_ID}", qos=1)
-    client.subscribe("agents/broadcast", qos=1)
-
-    # Register with the dashboard
-    client.publish(f"agents/register/{AGENT_ID}", json.dumps({
-        "agent_id": AGENT_ID,
-        "display_name": "My Agent",
-        "role": "worker",
-        "device_type": "raspberry_pi",
-        "capabilities": ["sensor_reading"],
-        "status": "online",
-    }))
-
-def on_message(client, userdata, msg):
-    data = json.loads(msg.payload)
-    print(f"[{msg.topic}] {data}")
-
-client.on_connect = on_connect
-client.on_message = on_message
-client.will_set(f"agents/status/{AGENT_ID}",
-                json.dumps({"status": "offline"}), qos=1, retain=True)
-client.connect(BROKER, PORT)
-client.loop_start()
-
-# Heartbeat loop
-while True:
-    client.publish(f"agents/heartbeat/{AGENT_ID}", json.dumps({
-        "agent_id": AGENT_ID,
-        "status": "online",
-        "cpu_percent": 25.0,
-        "memory_percent": 60.0,
-    }))
-    time.sleep(30)
+```bash
+./register.sh --status       # check registration status
+./register.sh --list         # show configured aggregators
+./register.sh --deregister   # remove from all aggregators
+./register.sh --target edge-citadel  # register with one specific aggregator
 ```
 
-### 7. Minimal client example (Node.js)
+### Option B: Direct API call
 
-```javascript
-const mqtt = require("mqtt");
-
-const AGENT_ID = "my-agent";
-const client = mqtt.connect("mqtt://192.168.0.102:1883", {
-  username: "my-agent",
-  password: "my-secret",
-  clientId: AGENT_ID,
-  will: {
-    topic: `agents/status/${AGENT_ID}`,
-    payload: JSON.stringify({ status: "offline" }),
-    qos: 1, retain: true,
-  },
-});
-
-client.on("connect", () => {
-  client.subscribe(`agents/inbox/${AGENT_ID}`);
-  client.subscribe("agents/broadcast");
-
-  client.publish(`agents/register/${AGENT_ID}`, JSON.stringify({
-    agent_id: AGENT_ID,
-    display_name: "My Agent",
-    role: "worker",
-    device_type: "raspberry_pi",
-    capabilities: ["sensor_reading"],
-    status: "online",
-  }));
-
-  // Heartbeat every 30s
-  setInterval(() => {
-    client.publish(`agents/heartbeat/${AGENT_ID}`, JSON.stringify({
-      agent_id: AGENT_ID,
-      status: "online",
-      cpu_percent: 25.0,
-      memory_percent: 60.0,
-    }));
-  }, 30000);
-});
-
-client.on("message", (topic, message) => {
-  console.log(`[${topic}]`, JSON.parse(message.toString()));
-});
+```bash
+curl -X POST http://your-citadel-ip/api/deployments/register \
+  -H "Content-Type: application/json" \
+  -H "api-key: your-secret-key-here" \
+  -d '{
+    "name": "home",
+    "host": "192.168.1.42",
+    "port": 1883,
+    "description": "Home lab rack",
+    "network": "lan",
+    "mqtt_user": "iot_agent",
+    "mqtt_pass": "broker-password"
+  }'
 ```
+
+The `mqtt_user` and `mqtt_pass` fields are optional -- only needed if the MQTT broker requires authentication.
+
+### Network requirements
+
+| Path                          | Port | Purpose                                 |
+| ----------------------------- | ---- | --------------------------------------- |
+| Browser -> Edge Citadel       | 80   | Dashboard + API + WebSocket             |
+| Agents -> Mosquitto           | 1883 | MQTT publish/subscribe                  |
+
+Agents connect to the Mosquitto broker on port 1883. The aggregator subscribes to all MQTT traffic on the same broker.
 
 ## REST API
 
-The backend exposes a REST API at `/api/`. Key endpoints:
+All endpoints require an `api-key` header matching `OPENCLAW_API_KEY`.
 
-| Method | Endpoint                    | Description              |
-| ------ | --------------------------- | ------------------------ |
-| GET    | `/api/health`               | Health check             |
-| GET    | `/api/agents`               | List all agents          |
-| GET    | `/api/agents/:id`           | Get agent details        |
-| GET    | `/api/messages`             | List messages (paginated)|
-| GET    | `/api/messages/flow`        | Message flow graph data  |
-| GET    | `/api/tasks`                | List tasks (paginated)   |
-| POST   | `/api/tasks`                | Create a task            |
-| GET    | `/api/logs`                 | List logs (paginated)    |
-| POST   | `/api/command/:agent`       | Send command to agent    |
-| POST   | `/api/broadcast`            | Broadcast to all agents  |
-| GET    | `/api/system/status`        | System overview metrics  |
-| GET    | `/api/system/topology`      | Network topology data    |
+| Method | Endpoint                        | Description                        |
+| ------ | ------------------------------- | ---------------------------------- |
+| POST   | `/api/deployments/register`     | Register a new deployment          |
+| DELETE  | `/api/deployments/{name}`      | Deregister a deployment            |
+| GET    | `/api/deployments`              | List all active deployments        |
+| GET    | `/api/deployments/{name}/status`| Get deployment connection status   |
+| POST   | `/api/publish`                  | Publish a message to a deployment  |
+| GET    | `/api/history`                  | Query stored episodes              |
 
-## WebSocket Channels
+### WebSocket
 
-Connect to these endpoints for real-time streaming:
+Connect to `/ws` for real-time streaming. No auth required (nginx restricts to same origin). Events are JSON with `deployment`, `topic`, `payload`, and `ts` fields.
 
-| Path                  | Description                     |
-| --------------------- | ------------------------------- |
-| `/ws/stream`          | All events (messages, status changes, logs) |
-| `/ws/agent/<agent_id>`| Events for a specific agent     |
-| `/ws/logs`            | Log entries only                |
+## Dashboard Usage
 
-Events are JSON with an `event` field (`message`, `agent_status_change`, `agent_registered`, `log`).
+1. **Set API Key** -- Click the key icon in the header bar and enter your `OPENCLAW_API_KEY`
+2. **Deployments** -- Left panel shows registered deployments with connection status (green = connected), network badge, and message count
+3. **Agent Graph** -- Right panel SVG showing deployment nodes and auto-discovered agent nodes. Nodes flash yellow on new messages
+4. **Message Feed** -- Filterable real-time stream. Filter by deployment, agent, or free text. Click a row to expand the full JSON payload
+5. **Publish Message** -- Select a deployment, enter topic and payload, and send directly to that broker
+
+## Project Structure
+
+```
+EdgeCitadel/
+├── aggregator/              # Python FastAPI + paho-mqtt aggregator
+│   ├── main.py              # FastAPI app, REST + WebSocket endpoints
+│   ├── aggregator.py        # MQTT subscriber/publisher, message parser
+│   ├── database.py          # SQLite persistence (agents, messages, logs, tasks)
+│   ├── models.py            # Pydantic request models
+│   ├── Dockerfile
+│   └── requirements.txt
+├── frontend/                # React Swarm Control dashboard
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── Layout.jsx
+│   │   ├── stores/appStore.js
+│   │   ├── hooks/useWebSocket.js
+│   │   ├── api/client.js
+│   │   └── components/
+│   │       ├── AgentSidebar.jsx
+│   │       ├── ChatHistory.jsx
+│   │       ├── CommFlow.jsx
+│   │       ├── LogViewer.jsx
+│   │       ├── TaskBoard.jsx
+│   │       ├── CommandInput.jsx
+│   │       └── HeaderBar.jsx
+│   ├── Dockerfile
+│   └── nginx.conf
+├── mosquitto/
+│   └── config/mosquitto.conf
+├── nginx/
+│   └── default.conf         # Reverse proxy config
+├── openclaw-client/
+│   ├── register.sh
+│   └── openclaw.conf.example
+├── data/                    # SQLite database (gitignored)
+├── docker-compose.yml
+└── .env.example
+```
 
 ## License
 

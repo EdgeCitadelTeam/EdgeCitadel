@@ -98,7 +98,24 @@ export default function useWebSocket(agentName = null) {
 
   useEffect(() => {
     connect()
+
+    // Reconnect on tab visibility change and network recovery
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && wsRef.current?.readyState !== WebSocket.OPEN) {
+        connect()
+      }
+    }
+    const handleOnline = () => {
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        connect()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('online', handleOnline)
+
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('online', handleOnline)
       clearInterval(pingTimer.current)
       clearTimeout(reconnectTimer.current)
       if (wsRef.current) {
