@@ -110,8 +110,11 @@ function callAgent(from, content, corrId) {
 
         try {
             const result = JSON.parse(stdout);
-            // openclaw agent --json returns { payloads: [{ text, mediaUrl }], meta: {...} }
-            const texts = (result.payloads || [])
+            // openclaw agent --json may return either:
+            //   { payloads: [...] }                          (embedded/old)
+            //   { runId, status, result: { payloads: [...] } } (gateway)
+            const inner = result.result || result;
+            const texts = (inner.payloads || [])
                 .map(p => p.text)
                 .filter(t => t && t.trim());
             const responseText = texts.join('\n\n');
