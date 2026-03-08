@@ -94,7 +94,7 @@ export default function TaskBoard() {
           {COLUMNS.map((col) => (
             <div
               key={col.key}
-              className="w-56 shrink-0 bg-surface/50 rounded-lg"
+              className="w-44 md:w-56 shrink-0 bg-surface/50 rounded-lg"
             >
               <div className="flex items-center gap-2 p-2 border-b border-surface-200">
                 <span className={clsx('text-xs font-medium', col.color)}>
@@ -120,8 +120,8 @@ export default function TaskBoard() {
 
       {/* Create modal */}
       {showCreate && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-surface-50 border border-surface-200 rounded-lg p-4 w-96">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-surface-50 border border-surface-200 rounded-lg p-4 w-full max-w-sm">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-medium text-gray-200">Create Task</h3>
               <button onClick={() => setShowCreate(false)}>
@@ -183,18 +183,18 @@ export default function TaskBoard() {
 
       {/* Task detail panel */}
       {selectedTask && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-surface-50 border border-surface-200 rounded-lg p-4 w-[500px] max-h-[80vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-surface-50 border border-surface-200 rounded-lg p-4 w-full max-w-lg max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-gray-200">
+              <h3 className="text-sm font-medium text-gray-200 truncate mr-2">
                 {selectedTask.title}
               </h3>
-              <button onClick={() => setSelectedTask(null)}>
+              <button onClick={() => setSelectedTask(null)} className="shrink-0">
                 <X size={16} className="text-gray-500" />
               </button>
             </div>
             <div className="space-y-2 text-xs">
-              <div className="flex gap-4">
+              <div className="flex flex-wrap gap-3">
                 <div>
                   <span className="text-gray-500">Status:</span>{' '}
                   <span className="text-gray-300">{selectedTask.status}</span>
@@ -213,7 +213,7 @@ export default function TaskBoard() {
               {selectedTask.description && (
                 <p className="text-gray-400">{selectedTask.description}</p>
               )}
-              <div className="flex gap-4 text-gray-500">
+              <div className="flex flex-wrap gap-3 text-gray-500">
                 <span title={fullTimestamp(selectedTask.created_at)}>
                   Created: {relativeTime(selectedTask.created_at)}
                 </span>
@@ -229,7 +229,7 @@ export default function TaskBoard() {
               {selectedTask.result && (
                 <div>
                   <span className="text-gray-500">Result:</span>
-                  <pre className="text-gray-400 mt-1 bg-surface-100 p-2 rounded whitespace-pre-wrap">
+                  <pre className="text-gray-400 mt-1 bg-surface-100 p-2 rounded whitespace-pre-wrap break-all">
                     {JSON.stringify(selectedTask.result, null, 2)}
                   </pre>
                 </div>

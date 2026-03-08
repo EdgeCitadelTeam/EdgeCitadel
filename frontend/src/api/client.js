@@ -1,7 +1,16 @@
 import axios from 'axios'
+import useAppStore from '../stores/appStore'
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
+})
+
+// Automatically add exclude_test param when test data is hidden
+api.interceptors.request.use((config) => {
+  if (!useAppStore.getState().showTestAgents) {
+    config.params = { ...config.params, exclude_test: true }
+  }
+  return config
 })
 
 export const agentApi = {

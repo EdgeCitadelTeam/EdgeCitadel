@@ -1,13 +1,5 @@
 import { useState, useEffect } from 'react'
 import { ArrowLeft, Send } from 'lucide-react'
-import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-} from 'recharts'
 import useAppStore from '../stores/appStore'
 import { agentApi, messageApi, taskApi, commandApi } from '../api/client'
 import { getAgentColor } from '../utils/agentColors'
@@ -66,13 +58,8 @@ export default function AgentDetail({ agentId, onBack }) {
 
   const color = getAgentColor(agent.id)
 
-  // Mock metric data for chart (CPU/memory over time)
-  const metricData = [
-    { t: 'now', cpu: agent.cpu_percent || 0, mem: agent.memory_percent || 0 },
-  ]
-
   return (
-    <div className="h-full overflow-y-auto p-4">
+    <div className="h-full overflow-y-auto p-3 md:p-4">
       {/* Back button */}
       <button
         onClick={onBack}
@@ -83,16 +70,16 @@ export default function AgentDetail({ agentId, onBack }) {
       </button>
 
       {/* Profile header */}
-      <div className="flex items-start gap-4 mb-6">
+      <div className="flex items-start gap-3 md:gap-4 mb-6">
         <div
-          className="w-14 h-14 rounded-full flex items-center justify-center text-lg font-bold text-white shrink-0"
+          className="w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center text-sm md:text-lg font-bold text-white shrink-0"
           style={{ backgroundColor: color }}
         >
           {agent.id.slice(0, 2).toUpperCase()}
         </div>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-gray-100">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base md:text-lg font-semibold text-gray-100 truncate">
               {agent.display_name || agent.id}
             </h2>
             <StatusBadge status={agent.status} size="md" />
@@ -102,7 +89,7 @@ export default function AgentDetail({ agentId, onBack }) {
             {agent.device_type && <span> &middot; {agent.device_type}</span>}
             {agent.model && <span> &middot; {agent.model}</span>}
           </div>
-          <div className="text-xs text-gray-500 mt-1">
+          <div className="text-xs text-gray-500 mt-1 break-all">
             {agent.ip_address && <span>IP: {agent.ip_address}</span>}
             {agent.last_heartbeat && (
               <span
@@ -139,10 +126,10 @@ export default function AgentDetail({ agentId, onBack }) {
       )}
 
       {/* Metrics */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-4">
         <div className="bg-surface-50 border border-surface-200 rounded-lg p-3">
           <div className="text-xs text-gray-500 mb-1">CPU</div>
-          <div className="text-2xl font-mono text-gray-200">
+          <div className="text-xl md:text-2xl font-mono text-gray-200">
             {agent.cpu_percent != null
               ? `${agent.cpu_percent.toFixed(1)}%`
               : 'N/A'}
@@ -158,7 +145,7 @@ export default function AgentDetail({ agentId, onBack }) {
         </div>
         <div className="bg-surface-50 border border-surface-200 rounded-lg p-3">
           <div className="text-xs text-gray-500 mb-1">Memory</div>
-          <div className="text-2xl font-mono text-gray-200">
+          <div className="text-xl md:text-2xl font-mono text-gray-200">
             {agent.memory_percent != null
               ? `${agent.memory_percent.toFixed(1)}%`
               : 'N/A'}
@@ -176,7 +163,7 @@ export default function AgentDetail({ agentId, onBack }) {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="grid grid-cols-2 gap-2 md:gap-3 mb-4">
           <div className="bg-surface-50 border border-surface-200 rounded-lg p-3">
             <div className="text-xs text-gray-500">Messages</div>
             <div className="text-lg font-mono text-gray-200">
@@ -203,12 +190,12 @@ export default function AgentDetail({ agentId, onBack }) {
             onChange={(e) => setCommand(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSendCommand()}
             placeholder="Enter command..."
-            className="flex-1 bg-surface-100 border border-surface-200 rounded px-3 py-1.5 text-sm text-gray-200"
+            className="flex-1 min-w-0 bg-surface-100 border border-surface-200 rounded px-3 py-1.5 text-sm text-gray-200"
           />
           <button
             onClick={handleSendCommand}
             disabled={!command.trim()}
-            className="bg-accent hover:bg-accent-dark disabled:opacity-40 text-white px-3 py-1.5 rounded"
+            className="bg-accent hover:bg-accent-dark disabled:opacity-40 text-white px-3 py-1.5 rounded shrink-0"
           >
             <Send size={14} />
           </button>
@@ -257,7 +244,7 @@ export default function AgentDetail({ agentId, onBack }) {
                 {task.title}
               </span>
               <span
-                className={`px-1.5 py-0.5 rounded text-[10px] ${
+                className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
                   task.status === 'completed'
                     ? 'bg-green-500/20 text-green-400'
                     : task.status === 'failed'

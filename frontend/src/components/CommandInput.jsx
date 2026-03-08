@@ -40,11 +40,11 @@ export default function CommandInput() {
   }
 
   return (
-    <div className="border-t border-surface-200 p-3 flex gap-2">
+    <div className="border-t border-surface-200 p-2 md:p-3 flex gap-2">
       <select
         value={effectiveTarget}
         onChange={(e) => setTarget(e.target.value)}
-        className="bg-surface-100 border border-surface-200 rounded px-2 py-1.5 text-sm text-gray-300 w-36"
+        className="bg-surface-100 border border-surface-200 rounded px-2 py-1.5 text-sm text-gray-300 w-24 md:w-36 shrink-0"
       >
         <option value="">Target...</option>
         {agents.map((a) => (
@@ -58,12 +58,12 @@ export default function CommandInput() {
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Send command..."
-        className="flex-1 bg-surface-100 border border-surface-200 rounded px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-600 focus:outline-none focus:ring-1 focus:ring-accent/50"
+        className="flex-1 min-w-0 bg-surface-100 border border-surface-200 rounded px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-600 focus:outline-none focus:ring-1 focus:ring-accent/50"
       />
       <button
         onClick={handleSend}
         disabled={sending || !effectiveTarget || !text.trim()}
-        className="bg-accent hover:bg-accent-dark disabled:opacity-40 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1 transition-colors"
+        className="bg-accent hover:bg-accent-dark disabled:opacity-40 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1 transition-colors shrink-0"
       >
         <Send size={14} />
       </button>

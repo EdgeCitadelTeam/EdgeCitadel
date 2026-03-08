@@ -19,6 +19,7 @@ class OpenClawAggregator:
         self.ws_connections: list = []
         self.stream_connections: list = []  # /ws/stream connections
         self.loop: asyncio.AbstractEventLoop | None = None
+        self._seen_msg_keys: dict[str, float] = {}  # dedup: key -> timestamp
 
     def connect_deployment(self, name: str, host: str, port: int,
                            mqtt_user: str = "", mqtt_pass: str = ""):
@@ -226,6 +227,19 @@ class OpenClawAggregator:
                                       last_heartbeat=now)
             except Exception:
                 pass
+
+        # Deduplicate: skip if same correlation_id + sender + receiver + type seen recently
+        # (prevents double-storing when aggregator publishes to multiple MQTT topics)
+        if correlation_id:
+            dedup_key = f"{correlation_id}:{stored_agent_id}:{receiver_id}:{message_type}"
+            now_ts = time.time()
+            if dedup_key in self._seen_msg_keys and (now_ts - self._seen_msg_keys[dedup_key]) < 5:
+                return None
+            self._seen_msg_keys[dedup_key] = now_ts
+            # Periodic cleanup
+            if len(self._seen_msg_keys) > 1000:
+                cutoff = now_ts - 10
+                self._seen_msg_keys = {k: v for k, v in self._seen_msg_keys.items() if v > cutoff}
 
         # Unwrap nested payload: if the MQTT JSON has a "payload" field, use that
         # as the stored message payload (the frontend expects payload.message, not payload.payload.message)

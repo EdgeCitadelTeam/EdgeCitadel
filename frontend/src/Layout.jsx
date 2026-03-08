@@ -1,4 +1,4 @@
-import { MessageSquare, GitBranch, FileText, ListTodo, User } from 'lucide-react'
+import { MessageSquare, GitBranch, FileText, ListTodo } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from './stores/appStore'
 import HeaderBar from './components/HeaderBar'
@@ -21,6 +21,8 @@ export default function Layout() {
   const setActiveTab = useAppStore((s) => s.setActiveTab)
   const selectedAgent = useAppStore((s) => s.selectedAgent)
   const setSelectedAgent = useAppStore((s) => s.setSelectedAgent)
+  const sidebarOpen = useAppStore((s) => s.sidebarOpen)
+  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen)
 
   const showDetail = activeTab === 'detail' && selectedAgent
 
@@ -51,10 +53,29 @@ export default function Layout() {
     <div className="h-screen flex flex-col bg-surface">
       <HeaderBar />
       <div className="flex flex-1 min-h-0">
-        <AgentSidebar />
-        <div className="flex-1 flex flex-col min-h-0">
+        {/* Mobile sidebar backdrop */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 z-30 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
+        {/* Sidebar: fixed overlay on mobile, static in flex on desktop */}
+        <div
+          className={clsx(
+            'fixed top-12 bottom-0 left-0 z-40 w-64 transition-transform duration-200 ease-in-out',
+            'md:static md:w-60 md:translate-x-0 md:transition-none',
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          )}
+        >
+          <AgentSidebar />
+        </div>
+
+        {/* Main content */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
           {/* Tab bar */}
-          <div className="flex items-center border-b border-surface-200 bg-surface-50">
+          <div className="flex items-center border-b border-surface-200 bg-surface-50 overflow-x-auto">
             {TABS.map((tab) => {
               const Icon = tab.icon
               return (
@@ -62,7 +83,8 @@ export default function Layout() {
                   key={tab.key}
                   onClick={() => setActiveTab(tab.key)}
                   className={clsx(
-                    'flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-colors border-b-2',
+                    'flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors border-b-2 whitespace-nowrap',
+                    'md:px-4',
                     activeTab === tab.key
                       ? 'text-accent-light border-accent'
                       : 'text-gray-500 border-transparent hover:text-gray-300'

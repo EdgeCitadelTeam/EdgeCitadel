@@ -1,10 +1,32 @@
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
 
 DB_PATH = os.environ.get("DB_PATH", "/data/openclaw.db")
+
+# Patterns matching test agent IDs:
+#   1. e2e timestamp: prefix-{13+digit timestamp}-{counter}-{random}
+#   2. starts with "test-" or "test_"
+#   3. ends with "-test" or "_test"
+#   4. contains "-test-" or "_test_" (word-bounded)
+#   5. exactly "test"
+_TEST_ID_PATTERN = re.compile(
+    r"(?:"
+    r"-\d{13,}-\d{1,3}-[a-z0-9]{3,6}$"
+    r"|^test[-_]"
+    r"|[-_]test$"
+    r"|[-_]test[-_]"
+    r"|^test$"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_test_id(value: str) -> bool:
+    return bool(_TEST_ID_PATTERN.search(value)) if value else False
 
 _conn: sqlite3.Connection | None = None
 
@@ -14,11 +36,13 @@ def _get_conn() -> sqlite3.Connection:
     if _conn is None:
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
+        _conn.create_function("is_test_id", 1, lambda v: 1 if _is_test_id(v or "") else 0)
     return _conn
 
 
 def init_db():
     conn = _get_conn()
+    conn.create_function("is_test_id", 1, lambda v: 1 if _is_test_id(v or "") else 0)
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS deployments (
             name            TEXT PRIMARY KEY,
@@ -216,9 +240,10 @@ def upsert_agent(agent_id: str, deployment: str = "", **kwargs):
     conn.commit()
 
 
-def get_all_agents() -> list[dict]:
+def get_all_agents(exclude_test: bool = False) -> list[dict]:
     conn = _get_conn()
-    rows = conn.execute("SELECT * FROM agents ORDER BY status DESC, id").fetchall()
+    where = "WHERE is_test_id(id) = 0 AND is_test_id(display_name) = 0" if exclude_test else ""
+    rows = conn.execute(f"SELECT * FROM agents {where} ORDER BY status DESC, id").fetchall()
     result = []
     for r in rows:
         d = dict(r)
@@ -307,10 +332,12 @@ def insert_message(deployment: str, sender_id: str, receiver_id: str = "",
 
 def get_messages(limit: int = 50, offset: int = 0, agent: str = "",
                  msg_type: str = "", search: str = "",
-                 correlation_id: str = "") -> list[dict]:
+                 correlation_id: str = "", exclude_test: bool = False) -> list[dict]:
     conn = _get_conn()
     clauses = []
     params: list = []
+    if exclude_test:
+        clauses.append("is_test_id(sender_id) = 0 AND (receiver_id = '' OR is_test_id(receiver_id) = 0)")
     if agent:
         clauses.append("(sender_id = ? OR receiver_id = ?)")
         params.extend([agent, agent])
@@ -346,15 +373,16 @@ def get_messages(limit: int = 50, offset: int = 0, agent: str = "",
 FLOW_SKIP_IDS = {"dashboard", "system", "mqtt-broker", "broadcast"}
 
 
-def get_message_flow(hours: int = 24) -> dict:
+def get_message_flow(hours: int = 24, exclude_test: bool = False) -> dict:
     conn = _get_conn()
     cutoff = time.strftime(
         "%Y-%m-%dT%H:%M:%SZ",
         time.gmtime(time.time() - hours * 3600),
     )
+    test_clause = " AND is_test_id(sender_id) = 0 AND is_test_id(receiver_id) = 0" if exclude_test else ""
     rows = conn.execute(
-        """SELECT sender_id, receiver_id, COUNT(*) as count
-           FROM messages WHERE timestamp >= ? AND receiver_id != ''
+        f"""SELECT sender_id, receiver_id, COUNT(*) as count
+           FROM messages WHERE timestamp >= ? AND receiver_id != ''{test_clause}
            GROUP BY sender_id, receiver_id""",
         (cutoff,),
     ).fetchall()
@@ -392,10 +420,12 @@ def insert_log(deployment: str, level: str, agent_id: str = "", source: str = ""
 
 
 def get_logs(limit: int = 200, level: str = "", agent: str = "",
-             source: str = "", search: str = "") -> list[dict]:
+             source: str = "", search: str = "", exclude_test: bool = False) -> list[dict]:
     conn = _get_conn()
     clauses = []
     params: list = []
+    if exclude_test:
+        clauses.append("is_test_id(agent_id) = 0")
     if level:
         clauses.append("level = ?")
         params.append(level)
@@ -462,10 +492,13 @@ def update_task(task_id: str, **kwargs):
         conn.commit()
 
 
-def get_tasks(limit: int = 200, agent: str = "", status: str = "") -> list[dict]:
+def get_tasks(limit: int = 200, agent: str = "", status: str = "",
+              exclude_test: bool = False) -> list[dict]:
     conn = _get_conn()
     clauses = []
     params: list = []
+    if exclude_test:
+        clauses.append("is_test_id(assigned_agent) = 0")
     if agent:
         clauses.append("assigned_agent = ?")
         params.append(agent)
@@ -525,19 +558,25 @@ def get_task_trace(task_id: str) -> list[dict]:
 
 # ── System Status ──
 
-def get_system_status() -> dict:
+def get_system_status(exclude_test: bool = False) -> dict:
     conn = _get_conn()
+    test_filter = " AND is_test_id(id) = 0" if exclude_test else ""
     agents_online = conn.execute(
-        "SELECT COUNT(*) as c FROM agents WHERE status = 'online'"
+        f"SELECT COUNT(*) as c FROM agents WHERE status = 'online'{test_filter}"
     ).fetchone()["c"]
-    agents_total = conn.execute("SELECT COUNT(*) as c FROM agents").fetchone()["c"]
-    total_messages = conn.execute("SELECT COUNT(*) as c FROM messages").fetchone()["c"]
+    agents_total = conn.execute(
+        f"SELECT COUNT(*) as c FROM agents WHERE 1=1{test_filter}"
+    ).fetchone()["c"]
+    msg_test = " WHERE is_test_id(sender_id) = 0" if exclude_test else ""
+    total_messages = conn.execute(f"SELECT COUNT(*) as c FROM messages{msg_test}").fetchone()["c"]
+    task_test = " AND is_test_id(assigned_agent) = 0" if exclude_test else ""
     active_tasks = conn.execute(
-        "SELECT COUNT(*) as c FROM tasks WHERE status IN ('pending', 'assigned', 'running')"
+        f"SELECT COUNT(*) as c FROM tasks WHERE status IN ('pending', 'assigned', 'running'){task_test}"
     ).fetchone()["c"]
     today_start = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime())
+    log_test = " AND is_test_id(agent_id) = 0" if exclude_test else ""
     errors_today = conn.execute(
-        "SELECT COUNT(*) as c FROM logs WHERE level = 'ERROR' AND timestamp >= ?",
+        f"SELECT COUNT(*) as c FROM logs WHERE level = 'ERROR' AND timestamp >= ?{log_test}",
         (today_start,),
     ).fetchone()["c"]
     return {

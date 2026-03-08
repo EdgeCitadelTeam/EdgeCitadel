@@ -20,6 +20,7 @@ export default function ChatHistory() {
   const realtimeMessages = useAppStore((s) => s.realtimeMessages)
   const messageTypeFilter = useAppStore((s) => s.messageTypeFilter)
   const setMessageTypeFilter = useAppStore((s) => s.setMessageTypeFilter)
+  const showTestAgents = useAppStore((s) => s.showTestAgents)
 
   const [historicalMessages, setHistoricalMessages] = useState([])
   const [loading, setLoading] = useState(false)
@@ -73,7 +74,7 @@ export default function ChatHistory() {
     setOffset(0)
     setHistoricalMessages([])
     fetchMessages(true)
-  }, [selectedAgent, messageTypeFilter])
+  }, [selectedAgent, messageTypeFilter, showTestAgents])
 
   // Auto-scroll
   useEffect(() => {
@@ -116,7 +117,7 @@ export default function ChatHistory() {
       {/* Main chat column */}
       <div className="flex flex-col flex-1 min-w-0">
         {/* Filter bar */}
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-surface-200 bg-surface-50 shrink-0">
+        <div className="flex items-center gap-2 px-3 md:px-4 py-2 border-b border-surface-200 bg-surface-50 shrink-0 flex-wrap">
           <Filter size={14} className="text-gray-500 shrink-0" />
           <select
             value={messageTypeFilter || ''}
@@ -130,7 +131,7 @@ export default function ChatHistory() {
               </option>
             ))}
           </select>
-          <div className="relative">
+          <div className="relative flex-1 min-w-[120px] max-w-[200px]">
             <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
             <input
               value={search}
@@ -139,7 +140,7 @@ export default function ChatHistory() {
                 if (e.key === 'Enter') fetchMessages(true)
               }}
               placeholder="Search..."
-              className="bg-surface-100 border border-surface-200 rounded pl-7 pr-2 py-1 text-xs text-gray-300 placeholder:text-gray-600 w-40 focus:outline-none focus:ring-1 focus:ring-accent/50"
+              className="w-full bg-surface-100 border border-surface-200 rounded pl-7 pr-2 py-1 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:ring-1 focus:ring-accent/50"
             />
           </div>
           {(messageTypeFilter || search) && (
@@ -160,7 +161,7 @@ export default function ChatHistory() {
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="absolute inset-0 overflow-y-auto px-4 py-3 space-y-1.5"
+            className="absolute inset-0 overflow-y-auto px-3 md:px-4 py-3 space-y-1.5"
           >
             {loading && historicalMessages.length === 0 && (
               <div className="flex items-center justify-center py-8">
@@ -227,7 +228,7 @@ export default function ChatHistory() {
         </div>
       </div>
 
-      {/* Trace panel */}
+      {/* Trace panel - hidden on mobile, shown as overlay */}
       {selectedCorrelation && (
         <ConversationThread
           correlationId={selectedCorrelation}

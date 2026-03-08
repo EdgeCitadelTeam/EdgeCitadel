@@ -26,6 +26,12 @@ const useAppStore = create((set, get) => ({
   // Theme
   darkMode: true,
 
+  // Test data toggle (persisted)
+  showTestAgents: JSON.parse(localStorage.getItem('showTestAgents') || 'false'),
+
+  // Mobile sidebar
+  sidebarOpen: false,
+
   // Actions
   setAgents: (agents) => set({ agents }),
 
@@ -51,6 +57,13 @@ const useAppStore = create((set, get) => ({
   setSystemStatus: (status) => set({ systemStatus: status }),
   setWsConnected: (connected) => set({ wsConnected: connected }),
   setDarkMode: (dark) => set({ darkMode: dark }),
+
+  setShowTestAgents: (show) => {
+    localStorage.setItem('showTestAgents', JSON.stringify(show))
+    set({ showTestAgents: show })
+  },
+
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
   addNotification: (notification) =>
     set((state) => ({

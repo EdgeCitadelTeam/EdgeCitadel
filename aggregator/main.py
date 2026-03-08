@@ -179,8 +179,8 @@ def get_history(
 # ── Frontend-compatible endpoints ──
 
 @app.get("/agents")
-def list_agents():
-    return database.get_all_agents()
+def list_agents(exclude_test: bool = Query(False)):
+    return database.get_all_agents(exclude_test=exclude_test)
 
 
 @app.post("/agents", status_code=201)
@@ -230,10 +230,11 @@ def list_messages(
     type: str = Query(""),
     search: str = Query(""),
     correlation_id: str = Query(""),
+    exclude_test: bool = Query(False),
 ):
     items = database.get_messages(
         limit=limit, offset=offset, agent=agent, msg_type=type,
-        search=search, correlation_id=correlation_id,
+        search=search, correlation_id=correlation_id, exclude_test=exclude_test,
     )
     return {"items": items}
 
@@ -247,8 +248,8 @@ def list_conversations(
 
 
 @app.get("/messages/flow")
-def get_message_flow(hours: int = Query(24)):
-    return database.get_message_flow(hours=hours)
+def get_message_flow(hours: int = Query(24), exclude_test: bool = Query(False)):
+    return database.get_message_flow(hours=hours, exclude_test=exclude_test)
 
 
 @app.get("/tasks")
@@ -256,8 +257,9 @@ def list_tasks(
     limit: int = Query(200),
     agent: str = Query(""),
     status: str = Query(""),
+    exclude_test: bool = Query(False),
 ):
-    items = database.get_tasks(limit=limit, agent=agent, status=status)
+    items = database.get_tasks(limit=limit, agent=agent, status=status, exclude_test=exclude_test)
     return {"items": items}
 
 
@@ -309,10 +311,12 @@ def list_logs(
     agent_id: str = Query(""),
     source: str = Query(""),
     search: str = Query(""),
+    exclude_test: bool = Query(False),
 ):
     agent_filter = agent or agent_id
     items = database.get_logs(
         limit=limit, level=level, agent=agent_filter, source=source, search=search,
+        exclude_test=exclude_test,
     )
     return {"items": items}
 
@@ -390,13 +394,13 @@ def broadcast_message(data: dict):
 
 
 @app.get("/system/status")
-def system_status():
-    return database.get_system_status()
+def system_status(exclude_test: bool = Query(False)):
+    return database.get_system_status(exclude_test=exclude_test)
 
 
 @app.get("/system/topology")
-def system_topology(hours: int = Query(24)):
-    return database.get_message_flow(hours=hours)
+def system_topology(hours: int = Query(24), exclude_test: bool = Query(False)):
+    return database.get_message_flow(hours=hours, exclude_test=exclude_test)
 
 
 # ── WebSocket endpoints ──
