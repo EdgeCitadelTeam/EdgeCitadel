@@ -33,6 +33,8 @@ dashboard/
 
 # OpenClaw client config (contains secrets)
 openclaw-client/openclaw.conf
+openclaw-client/agent.env
+openclaw-client/node_modules/
 
 # IDE
 .vscode/
