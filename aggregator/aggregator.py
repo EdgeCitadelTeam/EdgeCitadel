@@ -276,6 +276,13 @@ class OpenClawAggregator:
         }
         message_type = action_type_map.get(action, "info")
 
+        # For inbox messages that are actually routed replies (type=response/result),
+        # use "result" message_type and deduplicate against the outbox copy
+        if isinstance(payload_obj, dict):
+            payload_msg_type = payload_obj.get("type", payload_obj.get("message_type", ""))
+            if action == "inbox" and payload_msg_type in ("response", "result"):
+                message_type = "result"
+
         # Extract fields from payload
         sender_id = ""
         receiver_id = ""
@@ -345,15 +352,28 @@ class OpenClawAggregator:
                 pass
 
         # Deduplication with bounded cache
+        # When a reply is routed to both outbox and sender's inbox, deduplicate
+        # so only the outbox copy (canonical) gets stored as a message record.
         if correlation_id:
             dedup_key = f"{correlation_id}:{stored_agent_id}:{receiver_id}:{message_type}"
             now_ts = time.time()
             if dedup_key in self._seen_msg_keys and (now_ts - self._seen_msg_keys[dedup_key]) < 5:
+                # Still broadcast to WebSocket so the receiver's dashboard updates
                 return None
             self._seen_msg_keys[dedup_key] = now_ts
             if len(self._seen_msg_keys) > self._dedup_max_size:
                 cutoff = now_ts - self._dedup_ttl
                 self._seen_msg_keys = {k: v for k, v in self._seen_msg_keys.items() if v > cutoff}
+        elif message_type == "result" and stored_agent_id and receiver_id:
+            # Deduplicate replies even without correlation_id using content hash
+            content_str = ""
+            if isinstance(payload_obj, dict):
+                content_str = payload_obj.get("content", payload_obj.get("message", ""))
+            dedup_key = f"reply:{stored_agent_id}:{receiver_id}:{hash(content_str[:200])}"
+            now_ts = time.time()
+            if dedup_key in self._seen_msg_keys and (now_ts - self._seen_msg_keys[dedup_key]) < 5:
+                return None
+            self._seen_msg_keys[dedup_key] = now_ts
 
         # Unwrap nested payload
         stored_payload = payload_obj

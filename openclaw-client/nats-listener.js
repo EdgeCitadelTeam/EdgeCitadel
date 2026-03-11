@@ -82,9 +82,12 @@ async function start() {
                 const from = m.from||m.sender_id||'unknown';
                 const content = m.content||m.message||'';
                 const corrId = m.correlationId||m.correlation_id||'';
+                const msgType = m.type||m.message_type||'';
+                // Skip own messages and responses (prevent reply loops)
                 if (from===ID || !content.trim()) continue;
+                if (msgType==='response' || msgType==='result') continue;
                 console.log(T, `${from}: ${content.substring(0,120)}`);
-                callAgent(from, content, corrId);
+                callAgent(from, content, corrId, msg.reply || null);
             } catch(e) { console.error(T, 'Parse:', e.message); }
         }
     })();
@@ -107,7 +110,7 @@ async function start() {
     console.log(T, 'NATS connection closed');
 }
 
-function callAgent(from, content, corrId) {
+function callAgent(from, content, corrId, natsReplySubject) {
     const prompt = `[NATS from ${from}] ${content}`;
     const sessionId = `nats-${from}-${ID}`;
     const args = [
@@ -132,7 +135,7 @@ function callAgent(from, content, corrId) {
         }
         if (err) {
             console.error(T, `Agent error: ${err.message}`);
-            reply(from, `[Error: agent failed to process message — ${err.message}]`, corrId);
+            reply(from, `[Error: agent failed to process message — ${err.message}]`, corrId, natsReplySubject);
             return;
         }
 
@@ -144,14 +147,14 @@ function callAgent(from, content, corrId) {
                 .filter(t => t && t.trim());
             const responseText = texts.join('\n\n');
             if (responseText.trim()) {
-                reply(from, responseText, corrId);
+                reply(from, responseText, corrId, natsReplySubject);
             } else {
                 console.log(T, 'Agent returned empty response');
             }
         } catch(e) {
             const text = stdout.trim();
             if (text) {
-                reply(from, text, corrId);
+                reply(from, text, corrId, natsReplySubject);
             } else {
                 console.error(T, 'Failed to parse agent output:', e.message);
             }
@@ -159,7 +162,7 @@ function callAgent(from, content, corrId) {
     });
 }
 
-function reply(to, content, corrId) {
+function reply(to, content, corrId, natsReplySubject) {
     if (!nc) return;
     const msg = {
         from:ID, to, sender_id:ID, receiver_id:to,
@@ -168,9 +171,24 @@ function reply(to, content, corrId) {
         correlationId:corrId||'', correlation_id:corrId||'',
         timestamp:new Date().toISOString()
     };
-    // Publish on own outbox (aggregator picks this up for chat history)
-    nc.publish(`agents.${ID}.outbox`, sc.encode(JSON.stringify(msg)));
-    console.log(T, `-> ${to}: ${content.substring(0,120)}`);
+    const encoded = sc.encode(JSON.stringify(msg));
+
+    // 1. Publish on own outbox (aggregator picks this up for chat history)
+    nc.publish(`agents.${ID}.outbox`, encoded);
+
+    // 2. Deliver reply to sender's inbox so they actually receive it
+    if (to && to !== ID && to !== 'dashboard' && to !== 'system') {
+        nc.publish(`agents.${to}.inbox`, encoded);
+        console.log(T, `-> ${to} (inbox + outbox): ${content.substring(0,120)}`);
+    } else {
+        console.log(T, `-> ${to} (outbox): ${content.substring(0,120)}`);
+    }
+
+    // 3. Support NATS request-reply pattern (if sender used nc.request())
+    if (natsReplySubject) {
+        nc.publish(natsReplySubject, encoded);
+        console.log(T, `-> ${to} (request-reply): responded`);
+    }
 }
 
 async function shutdown() {
