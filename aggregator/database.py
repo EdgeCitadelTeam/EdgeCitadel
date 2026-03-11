@@ -605,5 +605,5 @@ def get_system_status(exclude_test: bool = False) -> dict:
         "total_messages": total_messages,
         "active_tasks": active_tasks,
         "errors_today": errors_today,
-        "mqtt_connected": True,
+        "nats_connected": True,
     }

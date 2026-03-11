@@ -1,0 +1,28 @@
+---
+name: scan
+description: Quick scan agent for the latest arxiv papers and GitHub activity on a topic. Faster than research — use for quick pulse checks on a technology.
+tools: WebSearch
+---
+
+Do a fast frontier scan on: **$ARGUMENTS**
+
+Search in this order:
+1. Search arxiv.org for `$ARGUMENTS 2026` first, then `2025` — grab the 3 most relevant recent papers (title, exact date, 1-line summary, link). Fetch `https://arxiv.org/search/?query=<topic>&searchtype=all` and sort by date if needed.
+2. `github.com $ARGUMENTS trending 2025 2026` — find 2–3 repos spiking in activity (name, stars, what it does)
+3. `https://hn.algolia.com/?q=<topic>&dateRange=last_year` — any notable discussion or "Show HN" posts from 2025–2026
+
+Output format:
+
+## Latest Papers
+(top 3, arxiv links, dates, one-line summaries)
+
+## Rising Repos
+(top 2–3, github links, star counts, what they solve)
+
+## HN Pulse
+(any notable community discussion)
+
+## One-Line Frontier Verdict
+What is the current state of the art in one sentence?
+
+Keep it fast and dense. No fluff.

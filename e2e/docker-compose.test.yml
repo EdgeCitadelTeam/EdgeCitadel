@@ -1,12 +1,11 @@
 services:
-  mqtt:
-    image: eclipse-mosquitto:2
+  nats:
+    image: nats:2.10-alpine
+    command: ["--jetstream", "--store_dir", "/data", "-p", "4222", "--http_port", "8222"]
     ports:
-      - "11883:1883"
-    volumes:
-      - ../mosquitto/config:/mosquitto/config:ro
+      - "14222:4222"
     healthcheck:
-      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-u", "iot_agent", "-P", "openclaw_secret", "-W", "3"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz"]
       interval: 3s
       timeout: 5s
       retries: 10
@@ -17,10 +16,7 @@ services:
     ports:
       - "18000:8000"
     environment:
-      - MQTT_HOST=mqtt
-      - MQTT_PORT=1883
-      - MQTT_USER=iot_agent
-      - MQTT_PASS=openclaw_secret
+      - NATS_URL=nats://nats:4222
       - DB_PATH=/data/openclaw.db
       - API_KEY=test-api-key
       - HEARTBEAT_INTERVAL=2
@@ -28,7 +24,7 @@ services:
     volumes:
       - test-data:/data
     depends_on:
-      mqtt:
+      nats:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

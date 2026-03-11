@@ -2,12 +2,12 @@
 
 ## Architecture Overview
 
-MQTT-based agent communication platform. Runs a Mosquitto MQTT broker with agents (Rupert/Orchestrator, Jeeves/IoT, Percy/Mobile) publishing and subscribing to topics. The aggregator subscribes to all MQTT traffic, parses it into structured records (agents, messages, logs, tasks), stores in SQLite, and streams to a React dashboard via WebSocket.
+NATS-based agent communication platform. Runs a NATS server with JetStream for persistence. Agents (Rupert/Orchestrator, Jeeves/IoT, Percy/Mobile) publish and subscribe to NATS subjects. The aggregator subscribes to all agent/task/system subjects, parses messages into structured records (agents, messages, logs, tasks), stores in SQLite, and streams to a React dashboard via WebSocket.
 
 ## Tech Stack
 
-- **MQTT Broker**: Eclipse Mosquitto 2
-- **Aggregator**: Python 3.12, FastAPI, paho-mqtt 1.6.1, SQLite, Pydantic
+- **Messaging**: NATS 2.10+ with JetStream (pub/sub, request-reply, persistent streams, K/V store)
+- **Aggregator**: Python 3.12, FastAPI, nats-py, SQLite, Pydantic
 - **Dashboard**: React 18, Vite 5, Tailwind CSS (build-time), Zustand, recharts, react-force-graph-2d, lucide-react
 - **Infrastructure**: Docker Compose, Nginx (reverse proxy)
 - **Database**: SQLite (sync, module-level connection)
@@ -18,7 +18,7 @@ MQTT-based agent communication platform. Runs a Mosquitto MQTT broker with agent
 EdgeCitadel/
 ├── aggregator/
 │   ├── main.py           # FastAPI app, REST + WebSocket endpoints
-│   ├── aggregator.py     # MQTT subscriber/publisher, message parser
+│   ├── aggregator.py     # NATS subscriber/publisher, message parser
 │   ├── database.py       # SQLite DB (agents, messages, logs, tasks, episodes)
 │   ├── models.py         # Pydantic request models
 │   ├── requirements.txt
@@ -52,11 +52,12 @@ EdgeCitadel/
 │           ├── TaskCard.jsx
 │           ├── StatusBadge.jsx
 │           └── Toast.jsx
-├── mosquitto/
-│   └── config/mosquitto.conf
+├── nats/
+│   └── data/             # JetStream storage
 ├── nginx/
 │   └── default.conf
 ├── openclaw-client/
+│   ├── nats-listener.js  # Agent listener (NATS)
 │   ├── register.sh
 │   └── openclaw.conf.example
 ├── data/
@@ -66,20 +67,21 @@ EdgeCitadel/
 
 ## Key Patterns
 
-- **MQTT topic structure**: `openclaw/{deployment}/{agent}/...`, `agents/register/{agent}`, `agents/heartbeat/{agent}`
-- **Real-time flow**: Mosquitto -> paho-mqtt threads -> parse + DB + WebSocket broadcast -> React frontend
+- **NATS subject structure**: `agents.{name}.{action}` (heartbeat, register, inbox, outbox, status, log), `tasks.{id}.{action}` (assign, stream, complete, failed), `system.broadcast`
+- **Real-time flow**: NATS server -> async nats-py subscriptions -> parse + DB + WebSocket broadcast -> React frontend
 - **WebSocket**: `/ws` (raw events), `/ws/stream` (structured events for frontend), `/ws/agent/{name}`
 - **API auth**: `api-key` header checked against `API_KEY` env var (deployment endpoints only)
 - **Frontend API**: `/api/agents`, `/api/messages`, `/api/logs`, `/api/tasks`, `/api/system/status`, `/api/command/{agent}` (no auth)
-- **Agent auto-discovery**: Agents are created/updated from MQTT topic parsing and payload fields
-- **paho-mqtt 1.6.1**: Use `mqtt.Client(client_id=...)` constructor, NOT 2.x API
+- **Agent auto-discovery**: Agents are created/updated from NATS subject parsing and payload fields
+- **JetStream**: `CONVERSATIONS` stream for persistent message history, `AGENT_STATE` K/V bucket for live state
 
 ## Conventions
 
 - Aggregator uses sync SQLite with module-level connection
-- paho-mqtt `loop_start()` runs in background threads; use `asyncio.run_coroutine_threadsafe()` to bridge to async
+- nats-py async subscriptions run natively in the FastAPI event loop (no thread bridging needed)
 - All API routes served behind nginx at `/api/` prefix (strips prefix via proxy_pass)
 - Dashboard uses Tailwind CSS with build-time PostCSS (not CDN)
 - Zustand for state management, no API key needed for frontend endpoints
 - Dark theme, Tailwind utility classes, custom color palette in tailwind.config.js
 - SQLite database at `/data/openclaw.db` (inside container)
+- NATS server at port 4222 (client), 8222 (monitoring HTTP)

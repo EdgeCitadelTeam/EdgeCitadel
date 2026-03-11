@@ -24,26 +24,12 @@ agg = OpenClawAggregator()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     database.init_db()
-    agg.loop = asyncio.get_event_loop()
 
-    # Auto-bootstrap local MQTT deployment from env vars if no deployments exist
-    mqtt_host = os.environ.get("MQTT_HOST", "mqtt")
-    mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
-    mqtt_user = os.environ.get("MQTT_USER", "")
-    mqtt_pass = os.environ.get("MQTT_PASS", "")
-    deployments = database.get_all_active_deployments()
-    if not deployments:
-        logger.info("No deployments found, auto-creating 'local' from env vars")
-        database.upsert_deployment("local", mqtt_host, mqtt_port,
-                                   description="Local MQTT", mqtt_user=mqtt_user, mqtt_pass=mqtt_pass)
-        deployments = database.get_all_active_deployments()
-
-    for dep in deployments:
-        try:
-            agg.connect_deployment(dep["name"], dep["host"], dep["port"],
-                                       dep.get("mqtt_user", ""), dep.get("mqtt_pass", ""))
-        except Exception as e:
-            logger.error(f"Failed to connect to {dep['name']}: {e}")
+    # Connect to NATS (replaces MQTT bootstrap)
+    try:
+        await agg.connect()
+    except Exception as e:
+        logger.error(f"Failed to connect to NATS: {e}")
 
     # Start heartbeat monitor background task
     hb_interval = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
@@ -53,7 +39,7 @@ async def lifespan(app: FastAPI):
     yield
 
     heartbeat_task.cancel()
-    agg.disconnect_all()
+    await agg.disconnect()
 
 
 app = FastAPI(title="OpenClaw Edge Citadel", lifespan=lifespan)
@@ -73,7 +59,7 @@ def health_check():
     return {"status": "ok"}
 
 
-# ── Deployment endpoints (Edge Citadel specific) ──
+# ── Deployment endpoints (kept for backward compat, simplified for NATS) ──
 
 @app.post("/deployments/register")
 def register_deployment(config: DeploymentConfig, api_key: str = Header(..., alias="api-key")):
@@ -85,19 +71,7 @@ def register_deployment(config: DeploymentConfig, api_key: str = Header(..., ali
         config.mqtt_user, config.mqtt_pass
     )
 
-    try:
-        agg.connect_deployment(config.name, config.host, config.port,
-                               config.mqtt_user, config.mqtt_pass)
-    except Exception as e:
-        logger.error(f"Failed to connect to {config.name}: {e}")
-
-    if agg.loop:
-        asyncio.run_coroutine_threadsafe(
-            agg._broadcast({"event": "deployment_added", "deployment": config.name}),
-            agg.loop,
-        )
-
-    return {"ok": True, "message": f"{config.name} registered and connected"}
+    return {"ok": True, "message": f"{config.name} registered (NATS handles connectivity)"}
 
 
 @app.delete("/deployments/{name}")
@@ -106,18 +80,6 @@ def remove_deployment(name: str, api_key: str = Header(..., alias="api-key")):
         raise HTTPException(status_code=403, detail="Invalid API key")
 
     database.deactivate_deployment(name)
-
-    try:
-        agg.disconnect_deployment(name)
-    except KeyError:
-        pass
-
-    if agg.loop:
-        asyncio.run_coroutine_threadsafe(
-            agg._broadcast({"event": "deployment_removed", "deployment": name}),
-            agg.loop,
-        )
-
     return {"ok": True, "message": f"{name} deregistered"}
 
 
@@ -128,7 +90,7 @@ def list_deployments(api_key: str = Header(..., alias="api-key")):
 
     deployments = database.get_all_active_deployments()
     for dep in deployments:
-        dep["connected"] = dep["name"] in agg.clients
+        dep["connected"] = agg.nc is not None and agg.nc.is_connected
     return deployments
 
 
@@ -141,7 +103,7 @@ def deployment_status(name: str, api_key: str = Header(..., alias="api-key")):
     if not dep:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    connected = name in agg.clients
+    connected = agg.nc is not None and agg.nc.is_connected
     return {
         "name": dep["name"],
         "host": dep["host"],
@@ -152,14 +114,14 @@ def deployment_status(name: str, api_key: str = Header(..., alias="api-key")):
 
 
 @app.post("/publish")
-def publish_message(req: PublishRequest, api_key: str = Header(..., alias="api-key")):
+async def publish_message(req: PublishRequest, api_key: str = Header(..., alias="api-key")):
     if api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API key")
 
     try:
-        agg.publish(req.deployment, req.topic, req.payload)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Deployment '{req.deployment}' not connected")
+        await agg.publish(req.topic, req.payload)
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="Not connected to NATS")
 
     return {"ok": True}
 
@@ -264,7 +226,7 @@ def list_tasks(
 
 
 @app.post("/tasks", status_code=201)
-def create_task(data: dict):
+async def create_task(data: dict):
     task_id = database.insert_task(
         title=data.get("title", ""),
         description=data.get("description", ""),
@@ -272,18 +234,20 @@ def create_task(data: dict):
         priority=data.get("priority", "normal"),
     )
     task = database.get_task(task_id)
-    # Publish MQTT assignment if agent is specified
+    # Publish task assignment via NATS
     assigned = data.get("assigned_agent", "")
     if assigned:
-        for dep_name, client in agg.clients.items():
-            try:
-                payload = json.dumps({"task_id": task_id, "title": data.get("title", ""),
-                                       "description": data.get("description", ""),
-                                       "priority": data.get("priority", "normal"),
-                                       "assigned_agent": assigned})
-                client.publish(f"agents/task/{assigned}/assign", payload)
-            except Exception:
-                pass
+        try:
+            payload = json.dumps({
+                "task_id": task_id,
+                "title": data.get("title", ""),
+                "description": data.get("description", ""),
+                "priority": data.get("priority", "normal"),
+                "assigned_agent": assigned,
+            })
+            await agg.publish(f"tasks.{task_id}.assign", payload)
+        except Exception:
+            pass
     return task
 
 
@@ -322,23 +286,8 @@ def list_logs(
 
 
 @app.post("/command/{agent_name}")
-def send_command(agent_name: str, data: dict):
-    """Send a command to an agent via MQTT."""
-    # Find which deployment this agent belongs to
-    agent = database.get_agent(agent_name)
-    deployment = agent["deployment"] if agent else ""
-
-    # Verify the deployment is actually connected, otherwise fall back
-    if not deployment or deployment not in agg.clients:
-        deployment = ""
-        for dep in database.get_all_active_deployments():
-            if dep["name"] in agg.clients:
-                deployment = dep["name"]
-                break
-
-    if not deployment:
-        raise HTTPException(status_code=404, detail="No connected deployment found")
-
+async def send_command(agent_name: str, data: dict):
+    """Send a command to an agent via NATS."""
     # Inject sender/receiver/correlation if not already present
     if "sender_id" not in data:
         data["sender_id"] = "dashboard"
@@ -347,55 +296,34 @@ def send_command(agent_name: str, data: dict):
     if "correlation_id" not in data:
         data["correlation_id"] = str(uuid.uuid4())
 
-    # Publish the command to MQTT on both topic conventions:
-    # 1. openclaw/{deployment}/{agent}/cmd  — EdgeCitadel native format
-    # 2. agents/inbox/{agent}               — OpenClaw listener format
     correlation_id = data["correlation_id"]
-    payload_native = json.dumps(data)
-
-    # OpenClaw listener format: {from, to, type, content, timestamp, correlationId}
-    content = data.get("message", "")
-    if not content:
-        if isinstance(data.get("payload"), dict):
-            content = data["payload"].get("message", "")
-        elif isinstance(data.get("payload"), str):
-            content = data["payload"]
-    payload_listener = json.dumps({
-        "from": data.get("sender_id", "dashboard"),
-        "to": agent_name,
-        "type": data.get("message_type", "command"),
-        "content": content,
-        "message": content,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "correlationId": correlation_id,
-    })
+    payload = json.dumps(data)
 
     try:
-        agg.publish(deployment, f"openclaw/{deployment}/{agent_name}/cmd", payload_native)
-        agg.publish(deployment, f"agents/inbox/{agent_name}", payload_listener)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Deployment '{deployment}' not connected")
+        await agg.publish(f"agents.{agent_name}.inbox", payload)
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="Not connected to NATS")
 
     return {"ok": True, "correlation_id": correlation_id}
 
 
 @app.post("/broadcast")
-def broadcast_message(data: dict):
-    """Broadcast a message to all connected deployments."""
+async def broadcast_message(data: dict):
+    """Broadcast a message to all agents via NATS."""
     payload = json.dumps(data)
-    for dep_name, client in agg.clients.items():
-        try:
-            client.publish(f"openclaw/{dep_name}/broadcast", payload)
-            client.publish("agents/broadcast", payload)
-        except Exception as e:
-            logger.error(f"Failed to broadcast to {dep_name}: {e}")
+    try:
+        await agg.publish("system.broadcast", payload)
+    except ConnectionError:
+        raise HTTPException(status_code=503, detail="Not connected to NATS")
 
     return {"ok": True}
 
 
 @app.get("/system/status")
 def system_status(exclude_test: bool = Query(False)):
-    return database.get_system_status(exclude_test=exclude_test)
+    status = database.get_system_status(exclude_test=exclude_test)
+    status["nats_connected"] = agg.nc is not None and agg.nc.is_connected
+    return status
 
 
 @app.get("/system/topology")

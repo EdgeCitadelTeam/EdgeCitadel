@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
-"""Simulate a conversation between macmini-backend and openclaw agents via MQTT."""
+"""Simulate a conversation between macmini-backend and openclaw agents via NATS."""
 
+import asyncio
 import json
 import time
 import uuid
 import argparse
 
-import paho.mqtt.client as mqtt
-
-BROKER_HOST = "localhost"
-BROKER_PORT = 1883
-BROKER_USER = "iot_agent"
-BROKER_PASS = "openclaw_secret"
+import nats
 
 
-def publish(client: mqtt.Client, topic: str, payload: dict):
-    client.publish(topic, json.dumps(payload))
-    print(f"  -> {topic}: {payload.get('type', '?')} from {payload.get('sender', '?')}")
-    time.sleep(0.3)
+NATS_URL = "nats://localhost:4222"
 
 
-def register_agents(client: mqtt.Client):
+async def publish(nc, subject: str, payload: dict):
+    await nc.publish(subject, json.dumps(payload).encode())
+    print(f"  -> {subject}: {payload.get('type', '?')} from {payload.get('sender', '?')}")
+    await asyncio.sleep(0.3)
+
+
+async def register_agents(nc):
     """Register both agents so they appear in the dashboard."""
-    publish(client, "agents/register/macmini-backend", {
+    await publish(nc, "agents.macmini-backend.register", {
         "agent_id": "macmini-backend",
+        "sender_id": "macmini-backend",
         "display_name": "MacMini Backend",
         "type": "register",
         "role": "coordinator",
@@ -33,8 +33,9 @@ def register_agents(client: mqtt.Client):
         "capabilities": ["task_routing", "code_review", "orchestration"],
     })
 
-    publish(client, "agents/register/openclaw", {
+    await publish(nc, "agents.openclaw.register", {
         "agent_id": "openclaw",
+        "sender_id": "openclaw",
         "display_name": "OpenClaw Edge Agent",
         "type": "register",
         "role": "executor",
@@ -45,10 +46,11 @@ def register_agents(client: mqtt.Client):
     })
 
 
-def send_heartbeats(client: mqtt.Client):
+async def send_heartbeats(nc):
     """Send heartbeats so agents show as online."""
-    publish(client, "agents/heartbeat/macmini-backend", {
+    await publish(nc, "agents.macmini-backend.heartbeat", {
         "agent_id": "macmini-backend",
+        "sender_id": "macmini-backend",
         "type": "heartbeat",
         "status": "online",
         "cpu_percent": 23.5,
@@ -56,8 +58,9 @@ def send_heartbeats(client: mqtt.Client):
         "ip_address": "192.168.1.10",
     })
 
-    publish(client, "agents/heartbeat/openclaw", {
+    await publish(nc, "agents.openclaw.heartbeat", {
         "agent_id": "openclaw",
+        "sender_id": "openclaw",
         "type": "heartbeat",
         "status": "online",
         "cpu_percent": 55.8,
@@ -66,34 +69,38 @@ def send_heartbeats(client: mqtt.Client):
     })
 
 
-def simulate_conversation(client: mqtt.Client):
+async def simulate_conversation(nc):
     """Simulate a multi-turn conversation between the two agents."""
 
     # Conversation 1: System health check
     corr1 = str(uuid.uuid4())
     print("\n--- Conversation 1: System Health Check ---")
 
-    publish(client, "agents/inbox/openclaw", {
+    await publish(nc, "agents.openclaw.inbox", {
         "sender": "macmini-backend",
+        "sender_id": "macmini-backend",
         "receiver": "openclaw",
+        "receiver_id": "openclaw",
         "type": "command",
+        "message_type": "command",
         "correlation_id": corr1,
         "command": "system_health_check",
-        "payload": {
-            "check_targets": ["disk", "cpu", "memory", "network"],
-            "verbose": True,
-        },
+        "message": "Run system health check on disk, cpu, memory, network",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
-    time.sleep(1)
+    await asyncio.sleep(1)
 
-    publish(client, "agents/inbox/macmini-backend", {
+    await publish(nc, "agents.openclaw.outbox", {
         "sender": "openclaw",
+        "sender_id": "openclaw",
         "receiver": "macmini-backend",
+        "receiver_id": "macmini-backend",
         "type": "result",
+        "message_type": "result",
         "correlation_id": corr1,
         "status": "success",
+        "message": "Health check complete",
         "result": {
             "disk_usage": "42% (128GB / 300GB)",
             "cpu_load": "55.8% (4 cores)",
@@ -104,57 +111,65 @@ def simulate_conversation(client: mqtt.Client):
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
-    time.sleep(1.5)
+    await asyncio.sleep(1.5)
 
     # Conversation 2: Code deployment task
     corr2 = str(uuid.uuid4())
     print("\n--- Conversation 2: Deploy Updated Model ---")
 
-    publish(client, "agents/inbox/openclaw", {
+    await publish(nc, "agents.openclaw.inbox", {
         "sender": "macmini-backend",
+        "sender_id": "macmini-backend",
         "receiver": "openclaw",
+        "receiver_id": "openclaw",
         "type": "command",
+        "message_type": "command",
         "correlation_id": corr2,
         "command": "deploy_model",
-        "payload": {
-            "model_name": "llama-3.1-8b-instruct-q4",
-            "source": "s3://openclaw-models/llama-3.1-8b-instruct-q4.gguf",
-            "target_path": "/opt/models/active/",
-            "restart_inference": True,
-        },
+        "message": "Deploy llama-3.1-8b-instruct-q4 model",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
-    time.sleep(1)
+    await asyncio.sleep(1)
 
-    publish(client, "agents/inbox/macmini-backend", {
+    await publish(nc, "agents.openclaw.outbox", {
         "sender": "openclaw",
+        "sender_id": "openclaw",
         "receiver": "macmini-backend",
+        "receiver_id": "macmini-backend",
         "type": "info",
+        "message_type": "info",
         "correlation_id": corr2,
         "message": "Downloading model llama-3.1-8b-instruct-q4.gguf (4.3GB)... 45% complete",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
-    time.sleep(2)
+    await asyncio.sleep(2)
 
-    publish(client, "agents/inbox/macmini-backend", {
+    await publish(nc, "agents.openclaw.outbox", {
         "sender": "openclaw",
+        "sender_id": "openclaw",
         "receiver": "macmini-backend",
+        "receiver_id": "macmini-backend",
         "type": "info",
+        "message_type": "info",
         "correlation_id": corr2,
         "message": "Download complete. Stopping inference server for hot-swap...",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
-    time.sleep(1.5)
+    await asyncio.sleep(1.5)
 
-    publish(client, "agents/inbox/macmini-backend", {
+    await publish(nc, "agents.openclaw.outbox", {
         "sender": "openclaw",
+        "sender_id": "openclaw",
         "receiver": "macmini-backend",
+        "receiver_id": "macmini-backend",
         "type": "result",
+        "message_type": "result",
         "correlation_id": corr2,
         "status": "success",
+        "message": "Model deployed successfully",
         "result": {
             "model_deployed": "llama-3.1-8b-instruct-q4.gguf",
             "size": "4.3GB",
@@ -165,93 +180,89 @@ def simulate_conversation(client: mqtt.Client):
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
-    time.sleep(1.5)
+    await asyncio.sleep(1.5)
 
     # Conversation 3: Run a local inference task
     corr3 = str(uuid.uuid4())
     print("\n--- Conversation 3: Local Inference Request ---")
 
-    publish(client, "agents/inbox/openclaw", {
+    await publish(nc, "agents.openclaw.inbox", {
         "sender": "macmini-backend",
+        "sender_id": "macmini-backend",
         "receiver": "openclaw",
+        "receiver_id": "openclaw",
         "type": "command",
+        "message_type": "command",
         "correlation_id": corr3,
         "command": "run_inference",
-        "payload": {
-            "prompt": "Summarize the system logs from the last hour and flag any anomalies.",
-            "max_tokens": 512,
-            "temperature": 0.3,
-        },
+        "message": "Summarize the system logs from the last hour and flag any anomalies.",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
-    time.sleep(2)
+    await asyncio.sleep(2)
 
-    publish(client, "agents/inbox/macmini-backend", {
+    await publish(nc, "agents.openclaw.outbox", {
         "sender": "openclaw",
+        "sender_id": "openclaw",
         "receiver": "macmini-backend",
+        "receiver_id": "macmini-backend",
         "type": "result",
+        "message_type": "result",
         "correlation_id": corr3,
         "status": "success",
+        "message": (
+            "System log summary (last hour):\n"
+            "- 142 INFO entries, 3 WARN, 0 ERROR\n"
+            "- WARN: Memory usage peaked at 89% at 14:23 UTC (GC resolved)\n"
+            "- WARN: NATS reconnect at 14:31 UTC (server restart detected)\n"
+            "- WARN: Disk I/O spike at 14:45 UTC during model download\n"
+            "No critical anomalies detected. All warnings are transient."
+        ),
         "result": {
-            "response": (
-                "System log summary (last hour):\n"
-                "- 142 INFO entries, 3 WARN, 0 ERROR\n"
-                "- WARN: Memory usage peaked at 89% at 14:23 UTC (GC resolved)\n"
-                "- WARN: MQTT reconnect at 14:31 UTC (broker restart detected)\n"
-                "- WARN: Disk I/O spike at 14:45 UTC during model download\n"
-                "No critical anomalies detected. All warnings are transient."
-            ),
             "tokens_used": 127,
             "latency_ms": 1840,
         },
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
-    time.sleep(1)
+    await asyncio.sleep(1)
 
     # Conversation 4: macmini-backend acknowledges
-    publish(client, "agents/inbox/openclaw", {
+    await publish(nc, "agents.openclaw.inbox", {
         "sender": "macmini-backend",
+        "sender_id": "macmini-backend",
         "receiver": "openclaw",
+        "receiver_id": "openclaw",
         "type": "command",
+        "message_type": "command",
         "correlation_id": corr3,
         "command": "ack",
-        "payload": {
-            "message": "Inference result received. Storing in central log. No action needed.",
-        },
+        "message": "Inference result received. Storing in central log. No action needed.",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Simulate agent conversation via MQTT")
-    parser.add_argument("--host", default=BROKER_HOST)
-    parser.add_argument("--port", type=int, default=BROKER_PORT)
-    parser.add_argument("--user", default=BROKER_USER)
-    parser.add_argument("--password", default=BROKER_PASS)
+async def main():
+    parser = argparse.ArgumentParser(description="Simulate agent conversation via NATS")
+    parser.add_argument("--url", default=NATS_URL, help="NATS server URL")
     parser.add_argument("--loop", action="store_true", help="Keep sending heartbeats after conversation")
     args = parser.parse_args()
 
-    client = mqtt.Client(client_id="conversation-simulator")
-    client.username_pw_set(args.user, args.password)
-    client.connect(args.host, args.port)
-    client.loop_start()
-
-    print("Connected to MQTT broker")
+    nc = await nats.connect(args.url)
+    print(f"Connected to NATS at {args.url}")
 
     print("\n=== Registering agents ===")
-    register_agents(client)
+    await register_agents(nc)
 
-    time.sleep(1)
+    await asyncio.sleep(1)
 
     print("\n=== Sending initial heartbeats ===")
-    send_heartbeats(client)
+    await send_heartbeats(nc)
 
-    time.sleep(1)
+    await asyncio.sleep(1)
 
     print("\n=== Starting conversation simulation ===")
-    simulate_conversation(client)
+    await simulate_conversation(nc)
 
     print("\n=== Conversation simulation complete ===")
 
@@ -259,14 +270,13 @@ def main():
         print("\nSending heartbeats every 30s (Ctrl+C to stop)...")
         try:
             while True:
-                send_heartbeats(client)
-                time.sleep(30)
+                await send_heartbeats(nc)
+                await asyncio.sleep(30)
         except KeyboardInterrupt:
             print("\nStopped.")
 
-    client.loop_stop()
-    client.disconnect()
+    await nc.drain()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

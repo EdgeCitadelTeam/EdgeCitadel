@@ -4,11 +4,11 @@
 
 # -- Identity ---------------------------------------------------------------
 DEPLOYMENT_NAME=""          # unique name e.g. "home", "office", "pi-rack"
-DEPLOYMENT_HOST=""          # the address aggregators use to reach THIS MQTT broker
+DEPLOYMENT_HOST=""          # the address aggregators use to reach THIS NATS server
                             # e.g. Tailscale: oc-home.your-tailnet.ts.net
                             #      LAN:       192.168.1.42
                             #      Public:    203.0.113.10
-DEPLOYMENT_PORT=1883
+DEPLOYMENT_PORT=4222
 DEPLOYMENT_DESCRIPTION=""
 
 # -- Aggregators -------------------------------------------------------------

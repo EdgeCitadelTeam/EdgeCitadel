@@ -3,12 +3,13 @@ const { execSync } = require('child_process');
 const path = require('path');
 
 const DOCS_DIR = path.join(__dirname, '..', 'docs');
-const MQTT_OPTS = '-h localhost -u iot_agent -P openclaw_secret';
+const API_KEY = 'openclaw-citadel-secret-2026';
 
-function mqtt(topic, payload) {
+function publish(subject, payload) {
+  const natsSubject = subject.replace(/\//g, '.');
   const msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
   execSync(
-    `docker compose exec -T mqtt mosquitto_pub ${MQTT_OPTS} -t "${topic}" -m '${msg.replace(/'/g, "'\\''")}'`,
+    `curl -s -X POST http://localhost:8000/publish -H "api-key: ${API_KEY}" -H "Content-Type: application/json" -d '${JSON.stringify({ topic: natsSubject, payload: msg }).replace(/'/g, "'\\''")}'`,
     { cwd: path.join(__dirname, '..') }
   );
 }
@@ -20,19 +21,19 @@ function sleep(ms) {
 (async () => {
   // Register agents first
   console.log('Registering agents...');
-  mqtt('agents/register/rupert', {
+  publish('agents/register/rupert', {
     display_name: 'Rupert', role: 'Orchestrator', device_type: 'server',
     capabilities: ['orchestration', 'planning', 'delegation', 'task_management'],
     ip_address: '192.168.1.10', status: 'online',
     cpu_percent: 23.5, memory_percent: 41.2
   });
-  mqtt('agents/register/jeeves', {
+  publish('agents/register/jeeves', {
     display_name: 'Jeeves', role: 'IoT Controller', device_type: 'raspberry_pi',
-    capabilities: ['sensors', 'actuators', 'mqtt', 'home_automation'],
+    capabilities: ['sensors', 'actuators', 'messaging', 'home_automation'],
     ip_address: '192.168.1.20', status: 'online',
     cpu_percent: 12.1, memory_percent: 28.7
   });
-  mqtt('agents/register/percy', {
+  publish('agents/register/percy', {
     display_name: 'Percy', role: 'Mobile Agent', device_type: 'smartphone',
     capabilities: ['gps', 'camera', 'notifications', 'geofencing'],
     ip_address: '192.168.1.50', status: 'online',
@@ -56,7 +57,7 @@ function sleep(ms) {
   console.log('Scene 1: Agent conversation streaming in...');
 
   // Rupert starts a task - asks Jeeves to check sensors
-  mqtt('openclaw/local/rupert/cmd', {
+  publish('openclaw/local/rupert/cmd', {
     sender_id: 'rupert', receiver_id: 'jeeves', message_type: 'command',
     correlation_id: 'task-sensor-001',
     payload: { message: 'Run full sensor diagnostic on all rooms' }
@@ -64,7 +65,7 @@ function sleep(ms) {
   await sleep(2000);
 
   // Jeeves acknowledges
-  mqtt('openclaw/local/jeeves/result', {
+  publish('openclaw/local/jeeves/result', {
     sender_id: 'jeeves', receiver_id: 'rupert', message_type: 'info',
     correlation_id: 'task-sensor-001',
     payload: { message: 'Starting sensor sweep across 4 rooms...' }
@@ -72,7 +73,7 @@ function sleep(ms) {
   await sleep(2000);
 
   // Jeeves reports result
-  mqtt('openclaw/local/jeeves/result', {
+  publish('openclaw/local/jeeves/result', {
     sender_id: 'jeeves', receiver_id: 'rupert', message_type: 'result',
     correlation_id: 'task-sensor-001',
     payload: {
@@ -83,7 +84,7 @@ function sleep(ms) {
   await sleep(2000);
 
   // Rupert delegates to Percy
-  mqtt('openclaw/local/rupert/cmd', {
+  publish('openclaw/local/rupert/cmd', {
     sender_id: 'rupert', receiver_id: 'percy', message_type: 'command',
     correlation_id: 'task-notify-002',
     payload: { message: 'Send daily summary to all mobile devices' }
@@ -91,7 +92,7 @@ function sleep(ms) {
   await sleep(2000);
 
   // Percy responds
-  mqtt('openclaw/local/percy/result', {
+  publish('openclaw/local/percy/result', {
     sender_id: 'percy', receiver_id: 'rupert', message_type: 'result',
     correlation_id: 'task-notify-002',
     payload: { message: 'Daily summary pushed to 3 devices successfully' }
@@ -99,21 +100,21 @@ function sleep(ms) {
   await sleep(2000);
 
   // Jeeves detects anomaly
-  mqtt('openclaw/local/jeeves/alert', {
+  publish('openclaw/local/jeeves/alert', {
     sender_id: 'jeeves', receiver_id: 'rupert', message_type: 'alert',
     payload: { message: 'Motion detected in garage - camera activated' }
   });
   await sleep(2000);
 
   // Rupert broadcasts to all
-  mqtt('openclaw/local/rupert/broadcast', {
+  publish('openclaw/local/rupert/broadcast', {
     sender_id: 'rupert', message_type: 'broadcast',
     payload: { message: 'Security alert acknowledged. Monitoring garage camera feed.' }
   });
   await sleep(2000);
 
   // Percy reports geofence
-  mqtt('openclaw/local/percy/info', {
+  publish('openclaw/local/percy/info', {
     sender_id: 'percy', receiver_id: 'rupert', message_type: 'info',
     payload: { message: 'All registered devices within home geofence. No unauthorized movement.' }
   });
@@ -153,7 +154,7 @@ function sleep(ms) {
   }
 
   // Simulate Rupert's reply via MQTT
-  mqtt('openclaw/local/rupert/result', {
+  publish('openclaw/local/rupert/result', {
     sender_id: 'rupert', receiver_id: 'dashboard', message_type: 'result',
     payload: {
       message: 'System Status Report:\n- Agents online: 3/3 (Rupert, Jeeves, Percy)\n- Temperature: all nominal\n- Tasks completed today: 5\n- Errors: 0\n- Uptime: 12h 45m'

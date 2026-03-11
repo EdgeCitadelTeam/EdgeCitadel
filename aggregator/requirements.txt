@@ -1,5 +1,5 @@
 fastapi
 uvicorn[standard]
-paho-mqtt==1.6.1
+nats-py>=2.9.0
 pydantic
 pydantic-settings

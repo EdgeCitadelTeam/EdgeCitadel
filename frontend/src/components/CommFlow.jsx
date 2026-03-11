@@ -27,11 +27,11 @@ export default function CommFlow() {
         val: 1,
       }))
 
-      // Add MQTT broker hub node
+      // Add NATS hub node for visualization
       const hasNodes = nodes.length > 0
       if (hasNodes) {
         nodes.push({
-          id: 'mqtt-broker',
+          id: 'nats-hub',
           color: '#6366f1',
           val: 3,
           isBroker: true,
@@ -44,13 +44,13 @@ export default function CommFlow() {
         value: e.count || 1,
       }))
 
-      // Add synthetic edges from each agent to the MQTT broker hub
+      // Add synthetic edges from each agent to the NATS hub
       if (hasNodes) {
         for (const node of nodes) {
           if (!node.isBroker) {
             links.push({
               source: node.id,
-              target: 'mqtt-broker',
+              target: 'nats-hub',
               value: 1,
               isSynthetic: true,
             })
@@ -98,7 +98,7 @@ export default function CommFlow() {
     ctx.textAlign = 'center'
     ctx.fillStyle = '#e5e7eb'
     ctx.fillText(
-      node.isBroker ? 'MQTT Broker' : node.id,
+      node.isBroker ? 'NATS' : node.id,
       node.x,
       node.y + size + 5
     )

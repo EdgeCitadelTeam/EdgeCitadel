@@ -12,6 +12,6 @@ class DeploymentConfig(BaseModel):
 
 
 class PublishRequest(BaseModel):
-    deployment: str
-    topic: str
+    deployment: str = ""
+    topic: str  # NATS subject
     payload: str

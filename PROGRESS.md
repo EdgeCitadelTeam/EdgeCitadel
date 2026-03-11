@@ -8,14 +8,9 @@
 ## Phase 0: Project Scaffolding
 - [x] .gitignore
 - [x] .env
-- [x] docker-compose.yml
-- [x] mosquitto/config/mosquitto.conf
-- [x] mosquitto/config/passwd
-- [x] backend/requirements.txt
-- [x] backend/Dockerfile
-- [x] backend/config.py
-- [x] backend/services/__init__.py
-- [x] backend/routes/__init__.py
+- [x] docker-compose.yml (NATS + JetStream)
+- [x] aggregator/requirements.txt
+- [x] aggregator/Dockerfile
 - [x] frontend/package.json
 - [x] frontend/vite.config.js
 - [x] frontend/tailwind.config.js
@@ -27,40 +22,26 @@
 - [x] frontend/nginx.conf
 
 ## Phase 1: Database Layer
-- [x] backend/database.py
+- [x] aggregator/database.py
 
-## Phase 2: MQTT Client
-- [x] backend/mqtt_client.py
+## Phase 2: NATS Client (migrated from MQTT)
+- [x] aggregator/aggregator.py (nats-py async subscriptions)
 
 ## Phase 3: WebSocket Manager
-- [x] backend/websocket_manager.py
+- [x] Integrated into aggregator.py (_broadcast, _broadcast_stream)
 
-## Phase 4: Service Layer
-- [x] backend/services/agent_service.py
-- [x] backend/services/message_service.py
-- [x] backend/services/task_service.py
-- [x] backend/services/log_service.py
-- [x] backend/services/health_monitor.py
+## Phase 4: FastAPI App
+- [x] aggregator/main.py
+- [x] aggregator/models.py
 
-## Phase 5: REST API & App Entry
-- [x] backend/schemas.py
-- [x] backend/routes/agents.py
-- [x] backend/routes/messages.py
-- [x] backend/routes/tasks.py
-- [x] backend/routes/logs.py
-- [x] backend/routes/commands.py
-- [x] backend/routes/system.py
-- [x] backend/routes/websocket.py
-- [x] backend/main.py
-
-## Phase 6: Frontend Infrastructure
+## Phase 5: Frontend Infrastructure
 - [x] frontend/src/stores/appStore.js
 - [x] frontend/src/api/client.js
 - [x] frontend/src/hooks/useWebSocket.js
 - [x] frontend/src/utils/agentColors.js
 - [x] frontend/src/utils/formatTime.js
 
-## Phase 7: Frontend UI Components
+## Phase 6: Frontend UI Components
 - [x] frontend/src/App.jsx
 - [x] frontend/src/Layout.jsx
 - [x] frontend/src/components/HeaderBar.jsx
@@ -78,8 +59,26 @@
 - [x] frontend/src/components/StatusBadge.jsx
 - [x] frontend/src/components/Toast.jsx
 
-## Phase 8: Polish & Integration
+## Phase 7: Polish & Integration
 - [x] Keyboard shortcuts (1-4 for tab switching)
 - [x] Toast notifications (agent offline, errors, agent registered)
 - [x] Dark/light mode toggle
 - [x] Responsive scrollbar styling
+
+## Phase 8: Agent Client & Onboarding
+- [x] openclaw-client/nats-listener.js
+- [x] add-agent.sh
+- [x] join.sh
+- [x] E2E test infrastructure (NATS)
+
+## Phase 9: NATS Migration (from MQTT/Mosquitto)
+- [x] Replace Mosquitto with NATS 2.10 + JetStream
+- [x] Migrate aggregator from paho-mqtt to nats-py (native async)
+- [x] JetStream CONVERSATIONS stream + AGENT_STATE K/V bucket
+- [x] Update openclaw-client listener from mqtt to nats
+- [x] Update shell scripts (add-agent.sh, join.sh)
+- [x] Update e2e test infrastructure
+- [x] Remove old backend/, mosquitto/ directories
+- [x] Update all documentation (README, CLAUDE.md)
+- [x] Architecture doc: docs/NATS_ARCHITECTURE.md
+- [x] Test plan: tests/tasks.py

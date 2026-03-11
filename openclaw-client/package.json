@@ -1,15 +1,16 @@
 {
   "name": "openclaw-client",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "EdgeCitadel agent listener (NATS)",
+  "main": "nats-listener.js",
   "scripts": {
+    "start": "node nats-listener.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "mqtt": "^5.15.0"
+    "nats": "^2.28.0"
   }
 }

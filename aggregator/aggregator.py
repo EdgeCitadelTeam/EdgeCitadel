@@ -1,10 +1,12 @@
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 
-import paho.mqtt.client as mqtt
+import nats
+from nats.js.api import StreamConfig, RetentionPolicy
 
 import database
 
@@ -12,186 +14,288 @@ logger = logging.getLogger(__name__)
 
 SKIP_AGENT_IDS = {"dashboard", "system", "mqtt-broker", "broadcast", ""}
 
+NATS_URL = os.environ.get("NATS_URL", "nats://localhost:4222")
+
+# Subject mapping (replaces MQTT topic conventions):
+#   agents.{name}.heartbeat   <- agents/heartbeat/{name}
+#   agents.{name}.register    <- agents/register/{name}
+#   agents.{name}.inbox       <- agents/inbox/{name}, openclaw/{d}/{a}/cmd
+#   agents.{name}.outbox      <- openclaw/{d}/{a}/result
+#   tasks.{id}.assign         <- task assignment
+#   tasks.{id}.stream         <- LLM token streaming (new)
+#   tasks.{id}.complete       <- task completion
+#   system.broadcast           <- agents/broadcast
+
 
 class OpenClawAggregator:
     def __init__(self):
-        self.clients: dict[str, mqtt.Client] = {}
+        self.nc: nats.NATS | None = None
+        self.js = None  # JetStream context
         self.ws_connections: list = []
-        self.stream_connections: list = []  # /ws/stream connections
-        self.loop: asyncio.AbstractEventLoop | None = None
-        self._seen_msg_keys: dict[str, float] = {}  # dedup: key -> timestamp
+        self.stream_connections: list = []
+        self._seen_msg_keys: dict[str, float] = {}
+        self._subscriptions: list = []
 
-    def connect_deployment(self, name: str, host: str, port: int,
-                           mqtt_user: str = "", mqtt_pass: str = ""):
-        if name in self.clients:
-            self.disconnect_deployment(name)
-
-        client = mqtt.Client(client_id=f"edge-citadel-{name}")
-        client.reconnect_delay_set(min_delay=1, max_delay=30)
-        if mqtt_user:
-            client.username_pw_set(mqtt_user, mqtt_pass)
-        client.on_message = self._make_handler(name)
-        client.on_connect = lambda c, ud, flags, rc: c.subscribe("#")
-        client.on_disconnect = lambda c, ud, rc: logger.warning(
-            f"Disconnected from {name} (rc={rc}), will reconnect"
+    async def connect(self):
+        """Connect to NATS server and set up subscriptions."""
+        self.nc = await nats.connect(
+            NATS_URL,
+            reconnected_cb=self._reconnected,
+            disconnected_cb=self._disconnected,
+            error_cb=self._error,
+            max_reconnect_attempts=-1,  # reconnect forever
+            reconnect_time_wait=1,
         )
+        logger.info(f"Connected to NATS at {NATS_URL}")
 
-        client.connect(host, port, keepalive=60)
-        client.loop_start()
-        self.clients[name] = client
-        logger.info(f"Connected to deployment '{name}' at {host}:{port}")
+        # Initialize JetStream
+        self.js = self.nc.jetstream()
+        await self._setup_streams()
 
-    def _make_handler(self, deployment: str):
-        def on_message(client, userdata, msg):
-            try:
-                payload = msg.payload.decode("utf-8", errors="replace")
-            except Exception:
-                payload = str(msg.payload)
+        # Subscribe to all agent subjects (replaces MQTT # wildcard)
+        sub_agents = await self.nc.subscribe("agents.>", cb=self._on_agent_message)
+        sub_tasks = await self.nc.subscribe("tasks.>", cb=self._on_task_message)
+        sub_system = await self.nc.subscribe("system.>", cb=self._on_system_message)
+        self._subscriptions = [sub_agents, sub_tasks, sub_system]
 
-            event = {
-                "deployment": deployment,
-                "topic": msg.topic,
-                "payload": payload,
-                "ts": int(time.time()),
-            }
+    async def _setup_streams(self):
+        """Create JetStream streams for conversation persistence."""
+        try:
+            await self.js.add_stream(
+                config=StreamConfig(
+                    name="CONVERSATIONS",
+                    subjects=["conversations.>"],
+                    retention=RetentionPolicy.LIMITS,
+                    max_bytes=1024 * 1024 * 512,  # 512MB
+                ),
+            )
+            logger.info("JetStream stream CONVERSATIONS ready")
+        except Exception as e:
+            if "already in use" in str(e).lower():
+                logger.info("JetStream stream CONVERSATIONS already exists")
+            else:
+                logger.error(f"Failed to create CONVERSATIONS stream: {e}")
 
-            try:
-                database.insert_episode(deployment, msg.topic, payload, event["ts"])
-            except Exception as e:
-                logger.error(f"Failed to insert episode: {e}")
+        try:
+            await self.js.create_key_value(bucket="AGENT_STATE")
+            logger.info("JetStream K/V bucket AGENT_STATE ready")
+        except Exception as e:
+            if "already in use" in str(e).lower():
+                logger.info("JetStream K/V bucket AGENT_STATE already exists")
+            else:
+                logger.error(f"Failed to create AGENT_STATE bucket: {e}")
 
-            # Parse MQTT message into structured records
-            parsed_msg = self._parse_mqtt_message(deployment, msg.topic, payload)
+    async def _reconnected(self):
+        logger.info(f"Reconnected to NATS at {self.nc.connected_url.netloc}")
 
-            # Broadcast raw event to /ws connections
-            if self.loop:
-                asyncio.run_coroutine_threadsafe(self._broadcast(event), self.loop)
+    async def _disconnected(self):
+        logger.warning("Disconnected from NATS, will reconnect")
 
-            # Broadcast structured event to /ws/stream connections
-            if self.loop and parsed_msg:
-                stream_event = {"event": "message", "data": parsed_msg}
-                asyncio.run_coroutine_threadsafe(
-                    self._broadcast_stream(stream_event), self.loop
-                )
-                # Broadcast agent lifecycle events
-                msg_type = parsed_msg.get("message_type", "")
-                agent_id = parsed_msg.get("sender_id", "")
-                if msg_type == "register" and agent_id:
-                    reg_event = {"type": "agent_registered", "event": "agent_registered",
-                                 "agent_id": agent_id, "status": "online",
-                                 "data": {"agent_id": agent_id, "status": "online"}}
-                    asyncio.run_coroutine_threadsafe(
-                        self._broadcast_stream(reg_event), self.loop)
-                elif msg_type == "heartbeat" and agent_id:
-                    hb_event = {"type": "agent_status_change", "event": "agent_status_change",
-                                "agent_id": agent_id, "status": "online",
-                                "data": {"agent_id": agent_id, "status": "online"}}
-                    asyncio.run_coroutine_threadsafe(
-                        self._broadcast_stream(hb_event), self.loop)
+    async def _error(self, e):
+        logger.error(f"NATS error: {e}")
 
-        return on_message
+    async def _on_agent_message(self, msg):
+        """Handle messages on agents.{name}.{action} subjects."""
+        subject = msg.subject
+        parts = subject.split(".")
+        if len(parts) < 3:
+            return
 
-    def _parse_mqtt_message(self, deployment: str, topic: str, payload: str) -> dict | None:
-        """Parse an MQTT message and store structured records (agent, message, log, task)."""
-        parts = topic.split("/")
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        agent_id = parts[1]
+        action = parts[2]  # heartbeat, register, inbox, outbox, status
 
-        # Try to parse payload as JSON
+        try:
+            payload = msg.data.decode("utf-8", errors="replace")
+        except Exception:
+            payload = str(msg.data)
+
+        # Store raw episode
+        deployment = "local"
+        ts = int(time.time())
+        try:
+            database.insert_episode(deployment, subject, payload, ts)
+        except Exception as e:
+            logger.error(f"Failed to insert episode: {e}")
+
+        # Parse into structured records
+        parsed_msg = self._parse_nats_message(deployment, subject, agent_id, action, payload)
+
+        # Broadcast raw event to /ws
+        event = {"deployment": deployment, "topic": subject, "payload": payload, "ts": ts}
+        await self._broadcast(event)
+
+        # Broadcast structured event to /ws/stream
+        if parsed_msg:
+            stream_event = {"event": "message", "data": parsed_msg}
+            await self._broadcast_stream(stream_event)
+
+            msg_type = parsed_msg.get("message_type", "")
+            evt_agent_id = parsed_msg.get("sender_id", "")
+            if msg_type == "register" and evt_agent_id:
+                await self._broadcast_stream({
+                    "type": "agent_registered", "event": "agent_registered",
+                    "agent_id": evt_agent_id, "status": "online",
+                    "data": {"agent_id": evt_agent_id, "status": "online"},
+                })
+            elif msg_type == "heartbeat" and evt_agent_id:
+                await self._broadcast_stream({
+                    "type": "agent_status_change", "event": "agent_status_change",
+                    "agent_id": evt_agent_id, "status": "online",
+                    "data": {"agent_id": evt_agent_id, "status": "online"},
+                })
+
+    async def _on_task_message(self, msg):
+        """Handle messages on tasks.{id}.{action} subjects."""
+        subject = msg.subject
+        parts = subject.split(".")
+        if len(parts) < 3:
+            return
+
+        task_id = parts[1]
+        action = parts[2]  # assign, stream, complete, failed, progress
+
+        try:
+            payload = msg.data.decode("utf-8", errors="replace")
+        except Exception:
+            payload = str(msg.data)
+
+        deployment = "local"
+        ts = int(time.time())
+        try:
+            database.insert_episode(deployment, subject, payload, ts)
+        except Exception as e:
+            logger.error(f"Failed to insert episode: {e}")
+
         payload_obj = {}
         try:
             payload_obj = json.loads(payload) if payload else {}
         except (json.JSONDecodeError, TypeError):
             payload_obj = {"raw": payload}
 
-        # Skip system topics ($SYS/...)
-        if topic.startswith("$"):
-            return None
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-        # Extract agent from topic: openclaw/{deployment}/{agent}/...
-        agent_id = ""
-        message_type = "info"
-        receiver_id = ""
-        correlation_id = ""
+        # Handle task lifecycle
+        try:
+            existing = database.get_task(task_id)
+            if action == "assign":
+                agent = payload_obj.get("assigned_agent", "")
+                if existing:
+                    database.update_task(task_id, status="assigned", assigned_agent=agent)
+                else:
+                    database.insert_task(
+                        deployment=deployment,
+                        title=payload_obj.get("title", payload_obj.get("prompt", "Task")),
+                        description=payload_obj.get("description", ""),
+                        assigned_agent=agent,
+                        priority=payload_obj.get("priority", "normal"),
+                        task_id=task_id,
+                    )
+            elif action == "progress":
+                if existing:
+                    database.update_task(task_id, status="running", started_at=now)
+            elif action == "complete":
+                if existing:
+                    database.update_task(task_id, status="completed", completed_at=now,
+                                         result=payload_obj.get("result", ""))
+            elif action == "failed":
+                if existing:
+                    database.update_task(task_id, status="failed", completed_at=now,
+                                         error_message=payload_obj.get("error", ""))
+            elif action == "stream":
+                # Token streaming — broadcast to WebSocket for dashboard
+                pass
+        except Exception as e:
+            logger.error(f"Failed to handle task: {e}")
 
-        if len(parts) >= 3 and parts[0] == "openclaw":
-            agent_id = parts[2]
-        elif len(parts) >= 3 and parts[0] == "agents":
-            # agents/register/{name}, agents/heartbeat/{name}, agents/inbox/{name},
-            # agents/status/{name}
-            agent_id = parts[2]
-        elif parts[0] == "agents" and len(parts) == 2:
-            if parts[1] == "mirror":
-                # agents/mirror is a duplicate of inbox — skip to avoid double-storing
-                return None
-            # agents/broadcast — agent extracted from payload
-            agent_id = ""
-        elif len(parts) >= 2 and parts[0] == "swarm":
-            agent_id = parts[1]
-        else:
-            # Unknown topic prefix — skip to avoid phantom agents
-            return None
+        # Broadcast to WebSocket
+        event = {"deployment": deployment, "topic": subject, "payload": payload, "ts": ts}
+        await self._broadcast(event)
 
-        # Detect special topics
-        is_heartbeat = "heartbeat" in topic
-        is_register = "register" in topic
-        is_status = "status" in parts  # agents/status/{agent}
-        is_log = "log" in topic or "logs" in topic
-        is_task = "task" in topic
-        is_command = "cmd" in topic or "command" in topic
-        is_result = ("result" in topic or "response" in topic) and not is_status
+        stream_event = {
+            "event": "task_update" if action != "stream" else "token_stream",
+            "data": {
+                "task_id": task_id,
+                "action": action,
+                **payload_obj,
+            },
+        }
+        await self._broadcast_stream(stream_event)
 
-        # Determine message type
-        if is_command:
-            message_type = "command"
-        elif is_result:
-            message_type = "result"
-        elif is_task:
-            message_type = "task_assign"
-        elif is_log:
-            message_type = "info"
-        elif is_heartbeat or is_status:
-            message_type = "heartbeat"
-        elif is_register:
-            message_type = "register"
-        else:
-            message_type = payload_obj.get("message_type", payload_obj.get("type", "info"))
+    async def _on_system_message(self, msg):
+        """Handle messages on system.> subjects."""
+        try:
+            payload = msg.data.decode("utf-8", errors="replace")
+        except Exception:
+            payload = str(msg.data)
+
+        deployment = "local"
+        ts = int(time.time())
+        try:
+            database.insert_episode(deployment, msg.subject, payload, ts)
+        except Exception as e:
+            logger.error(f"Failed to insert episode: {e}")
+
+        event = {"deployment": deployment, "topic": msg.subject, "payload": payload, "ts": ts}
+        await self._broadcast(event)
+
+    def _parse_nats_message(self, deployment: str, subject: str, agent_id: str,
+                            action: str, payload: str) -> dict | None:
+        """Parse a NATS message and store structured records."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        payload_obj = {}
+        try:
+            payload_obj = json.loads(payload) if payload else {}
+        except (json.JSONDecodeError, TypeError):
+            payload_obj = {"raw": payload}
+
+        # Map action to message type
+        action_type_map = {
+            "heartbeat": "heartbeat",
+            "register": "register",
+            "inbox": "command",
+            "outbox": "result",
+            "status": "heartbeat",
+            "cmd": "command",
+            "result": "result",
+            "log": "info",
+            "logs": "info",
+        }
+        message_type = action_type_map.get(action, "info")
 
         # Extract fields from payload
         sender_id = ""
+        receiver_id = ""
+        correlation_id = ""
+
         if isinstance(payload_obj, dict):
             sender_id = payload_obj.get("sender_id", payload_obj.get("from", payload_obj.get("sender", "")))
-            receiver_from_payload = payload_obj.get("receiver_id", payload_obj.get("to", ""))
+            receiver_id = payload_obj.get("receiver_id", payload_obj.get("to", ""))
             correlation_id = payload_obj.get("correlation_id",
-                                            payload_obj.get("correlationId",
-                                            payload_obj.get("task_id", "")))
-            # For inbox/task topics, agent_id is the target from the topic — don't override
-            # with sender. For other topics, sender from payload is more reliable.
-            if sender_id and "inbox" not in topic and not is_task:
-                agent_id = sender_id
-            if receiver_from_payload:
-                receiver_id = receiver_from_payload
+                                             payload_obj.get("correlationId",
+                                             payload_obj.get("task_id", "")))
 
-        # Fill in sender/receiver for inbox topics
-        if "inbox" in topic and sender_id:
-            # agent_id stays as recipient from topic, sender_id is the sender
+        # Determine the stored agent_id
+        if action == "inbox" and sender_id:
+            stored_agent_id = sender_id
             if not receiver_id:
                 receiver_id = agent_id
-            # For message storage, agent_id is the sender
+        elif sender_id and action not in ("inbox",):
             stored_agent_id = sender_id
+            if not stored_agent_id or stored_agent_id in SKIP_AGENT_IDS:
+                stored_agent_id = agent_id
         else:
             stored_agent_id = agent_id
 
-        # Skip messages with no identifiable agent (but allow dashboard-sent commands)
+        # Skip messages with no identifiable agent
         if not agent_id or (agent_id in SKIP_AGENT_IDS and not receiver_id):
             return None
-        # For dashboard-sent messages, use receiver as the primary agent context
         if agent_id in SKIP_AGENT_IDS and receiver_id and receiver_id not in SKIP_AGENT_IDS:
             agent_id = receiver_id
 
-        # Upsert agent record (skip for dashboard/system senders)
+        # Upsert agent record
         agent_kwargs = {"status": "online", "last_heartbeat": now}
         if isinstance(payload_obj, dict):
-            # Some agents nest metadata under a "payload" key; merge both levels
             inner = payload_obj.get("payload", {}) if isinstance(payload_obj.get("payload"), dict) else {}
             merged = {**inner, **{k: v for k, v in payload_obj.items() if k != "payload"}}
             if merged.get("status"):
@@ -220,7 +324,6 @@ class OpenClawAggregator:
             except Exception as e:
                 logger.error(f"Failed to upsert agent: {e}")
 
-        # Also register receiver as agent if present (skip blocklisted IDs)
         if receiver_id and receiver_id not in SKIP_AGENT_IDS:
             try:
                 database.upsert_agent(receiver_id, deployment=deployment, status="online",
@@ -228,21 +331,18 @@ class OpenClawAggregator:
             except Exception:
                 pass
 
-        # Deduplicate: skip if same correlation_id + sender + receiver + type seen recently
-        # (prevents double-storing when aggregator publishes to multiple MQTT topics)
+        # Deduplication
         if correlation_id:
             dedup_key = f"{correlation_id}:{stored_agent_id}:{receiver_id}:{message_type}"
             now_ts = time.time()
             if dedup_key in self._seen_msg_keys and (now_ts - self._seen_msg_keys[dedup_key]) < 5:
                 return None
             self._seen_msg_keys[dedup_key] = now_ts
-            # Periodic cleanup
             if len(self._seen_msg_keys) > 1000:
                 cutoff = now_ts - 10
                 self._seen_msg_keys = {k: v for k, v in self._seen_msg_keys.items() if v > cutoff}
 
-        # Unwrap nested payload: if the MQTT JSON has a "payload" field, use that
-        # as the stored message payload (the frontend expects payload.message, not payload.payload.message)
+        # Unwrap nested payload
         stored_payload = payload_obj
         if isinstance(payload_obj, dict) and "payload" in payload_obj:
             inner = payload_obj["payload"]
@@ -251,7 +351,7 @@ class OpenClawAggregator:
             elif isinstance(inner, str):
                 stored_payload = {"message": inner}
 
-        # Insert structured message (skip heartbeat/register for chat)
+        # Insert structured message (skip heartbeat/register)
         msg_id = None
         if message_type not in ("heartbeat", "register"):
             try:
@@ -267,17 +367,16 @@ class OpenClawAggregator:
             except Exception as e:
                 logger.error(f"Failed to insert message: {e}")
 
-        # Insert log for all MQTT messages
+        # Insert log
         try:
-            level = "MQTT"
+            level = "NATS"
             log_message = payload[:500] if payload else ""
-            log_source = topic
-            if is_log and isinstance(payload_obj, dict):
-                # Extract from nested payload or top-level
+            log_source = subject
+            if action in ("log", "logs") and isinstance(payload_obj, dict):
                 log_inner = payload_obj.get("payload", {}) if isinstance(payload_obj.get("payload"), dict) else {}
                 level = log_inner.get("level", payload_obj.get("level", "INFO")).upper()
                 log_message = log_inner.get("message", payload_obj.get("message", log_message))
-                log_source = log_inner.get("source", payload_obj.get("source", topic))
+                log_source = log_inner.get("source", payload_obj.get("source", subject))
             database.insert_log(
                 deployment=deployment,
                 level=level,
@@ -289,70 +388,8 @@ class OpenClawAggregator:
         except Exception as e:
             logger.error(f"Failed to insert log: {e}")
 
-        # Handle explicit task messages
-        if is_task and isinstance(payload_obj, dict):
-            try:
-                # Merge nested payload for task fields
-                task_inner = payload_obj.get("payload", {}) if isinstance(payload_obj.get("payload"), dict) else {}
-                task_data = {**task_inner, **{k: v for k, v in payload_obj.items() if k != "payload"}}
-                task_id = task_data.get("task_id", "") or correlation_id
-                # Determine task action from topic suffix
-                topic_action = parts[-1] if parts else ""
-                if task_id:
-                    existing = database.get_task(task_id)
-                    if existing:
-                        updates = {}
-                        # Map topic action to status
-                        if topic_action == "assign":
-                            updates["status"] = "assigned"
-                            updates["assigned_agent"] = agent_id
-                        elif topic_action == "progress":
-                            updates["status"] = "running"
-                            updates["started_at"] = now
-                        elif topic_action == "complete":
-                            updates["status"] = "completed"
-                            updates["completed_at"] = now
-                            if task_data.get("result"):
-                                updates["result"] = task_data["result"]
-                        elif topic_action == "failed":
-                            updates["status"] = "failed"
-                            updates["completed_at"] = now
-                            if task_data.get("error_message") or task_data.get("error"):
-                                updates["error_message"] = task_data.get("error_message", task_data.get("error", ""))
-                        # Also handle explicit status field
-                        if task_data.get("status"):
-                            updates["status"] = task_data["status"]
-                            if task_data["status"] == "running":
-                                updates["started_at"] = now
-                            elif task_data["status"] in ("completed", "failed"):
-                                updates["completed_at"] = now
-                        if task_data.get("result") and "result" not in updates:
-                            updates["result"] = task_data["result"]
-                        if (task_data.get("error") or task_data.get("error_message")) and "error_message" not in updates:
-                            updates["error_message"] = task_data.get("error_message", task_data.get("error", ""))
-                        if updates:
-                            database.update_task(task_id, **updates)
-                    else:
-                        database.insert_task(
-                            deployment=deployment,
-                            title=task_data.get("title", task_data.get("command", "Task")),
-                            description=task_data.get("description", ""),
-                            assigned_agent=task_data.get("assigned_agent", agent_id),
-                            priority=task_data.get("priority", "normal"),
-                            task_id=task_id,
-                        )
-                        # If the action is beyond "assign", update status immediately
-                        if topic_action == "progress":
-                            database.update_task(task_id, status="running", started_at=now)
-                        elif topic_action == "complete":
-                            database.update_task(task_id, status="completed", completed_at=now)
-                        elif topic_action == "failed":
-                            database.update_task(task_id, status="failed", completed_at=now)
-            except Exception as e:
-                logger.error(f"Failed to handle task: {e}")
-
-        # Auto-create tasks from COMMAND messages with correlation_id
-        if message_type == "command" and correlation_id and not is_task:
+        # Auto-create tasks from command messages with correlation_id
+        if message_type == "command" and correlation_id:
             try:
                 existing = database.get_task(correlation_id)
                 if not existing:
@@ -371,7 +408,7 @@ class OpenClawAggregator:
             except Exception as e:
                 logger.error(f"Failed to auto-create task from command: {e}")
 
-        # Auto-complete tasks from RESULT messages with correlation_id
+        # Auto-complete tasks from result messages with correlation_id
         if message_type == "result" and correlation_id:
             try:
                 existing = database.get_task(correlation_id)
@@ -384,7 +421,6 @@ class OpenClawAggregator:
             except Exception as e:
                 logger.error(f"Failed to auto-complete task from result: {e}")
 
-        # Return structured message for WebSocket
         return {
             "id": msg_id or str(uuid.uuid4()),
             "deployment": deployment,
@@ -422,16 +458,21 @@ class OpenClawAggregator:
             except ValueError:
                 pass
 
-    def disconnect_deployment(self, name: str):
-        client = self.clients.pop(name, None)
-        if client:
-            client.loop_stop()
-            client.disconnect()
-            logger.info(f"Disconnected from deployment '{name}'")
+    async def publish(self, subject: str, payload: str):
+        """Publish a message to a NATS subject."""
+        if self.nc is None or not self.nc.is_connected:
+            raise ConnectionError("Not connected to NATS")
+        await self.nc.publish(subject, payload.encode())
 
-    def disconnect_all(self):
-        for name in list(self.clients.keys()):
-            self.disconnect_deployment(name)
+    async def disconnect(self):
+        for sub in self._subscriptions:
+            try:
+                await sub.unsubscribe()
+            except Exception:
+                pass
+        if self.nc:
+            await self.nc.drain()
+            logger.info("Disconnected from NATS")
 
     async def heartbeat_monitor(self, interval: int = 15, timeout: int = 120):
         """Background task that marks agents offline if no heartbeat received."""
@@ -446,9 +487,3 @@ class OpenClawAggregator:
             except Exception as e:
                 logger.error(f"Heartbeat monitor error: {e}")
             await asyncio.sleep(interval)
-
-    def publish(self, deployment: str, topic: str, payload: str):
-        client = self.clients.get(deployment)
-        if client is None:
-            raise KeyError(f"Deployment '{deployment}' not connected")
-        client.publish(topic, payload)
