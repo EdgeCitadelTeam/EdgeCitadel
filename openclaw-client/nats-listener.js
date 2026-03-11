@@ -13,6 +13,7 @@ const ROLE    = process.env.AGENT_ROLE       || 'Agent';
 const DEVICE  = process.env.AGENT_DEVICE_TYPE|| 'server';
 const HOST    = process.env.CITADEL_HOST     || process.env.NATS_HOST || '127.0.0.1';
 const PORT    = parseInt(process.env.CITADEL_PORT || process.env.NATS_PORT || '4222');
+const NATS_TK = process.env.NATS_TOKEN       || '';
 const HB_SEC  = parseInt(process.env.HEARTBEAT_SEC || '30');
 const OPENCLAW_BIN = process.env.OPENCLAW_BIN || 'openclaw';
 const AGENT_TIMEOUT = parseInt(process.env.AGENT_TIMEOUT || '600');
@@ -45,12 +46,14 @@ function heartbeat() {
 async function start() {
     console.log(T, `Connecting to NATS at ${HOST}:${PORT}...`);
 
-    nc = await connect({
+    const opts = {
         servers: `${HOST}:${PORT}`,
         reconnect: true,
         maxReconnectAttempts: -1,
         reconnectTimeWait: 5000,
-    });
+    };
+    if (NATS_TK) opts.token = NATS_TK;
+    nc = await connect(opts);
 
     console.log(T, `Connected to ${HOST}:${PORT}`);
 
@@ -165,8 +168,9 @@ function reply(to, content, corrId) {
         correlationId:corrId||'', correlation_id:corrId||'',
         timestamp:new Date().toISOString()
     };
-    nc.publish(`agents.${to}.inbox`, sc.encode(JSON.stringify(msg)));
-    console.log(T, `-> ${to}: ${content.substring(0,80)}`);
+    // Publish on own outbox (aggregator picks this up for chat history)
+    nc.publish(`agents.${ID}.outbox`, sc.encode(JSON.stringify(msg)));
+    console.log(T, `-> ${to}: ${content.substring(0,120)}`);
 }
 
 async function shutdown() {

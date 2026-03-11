@@ -12,7 +12,7 @@ import database
 
 logger = logging.getLogger(__name__)
 
-SKIP_AGENT_IDS = {"dashboard", "system", "mqtt-broker", "broadcast", ""}
+SKIP_AGENT_IDS = {"dashboard", "system", "nats-server", "broadcast", ""}
 
 NATS_URL = os.environ.get("NATS_URL", "nats://localhost:4222")
 
@@ -29,11 +29,13 @@ NATS_URL = os.environ.get("NATS_URL", "nats://localhost:4222")
 
 class OpenClawAggregator:
     def __init__(self):
-        self.nc: nats.NATS | None = None
+        self.nc: nats.aio.client.Client | None = None
         self.js = None  # JetStream context
         self.ws_connections: list = []
         self.stream_connections: list = []
         self._seen_msg_keys: dict[str, float] = {}
+        self._dedup_max_size = 500
+        self._dedup_ttl = 10  # seconds
         self._subscriptions: list = []
 
     async def connect(self):
@@ -173,6 +175,13 @@ class OpenClawAggregator:
             payload_obj = {"raw": payload}
 
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        # Extract agent from payload for structured record storage
+        agent_id = ""
+        if isinstance(payload_obj, dict):
+            agent_id = payload_obj.get("sender_id", payload_obj.get("sender", payload_obj.get("assigned_agent", "")))
+        if agent_id and agent_id not in SKIP_AGENT_IDS:
+            self._parse_nats_message(deployment, subject, agent_id, action, payload)
 
         # Handle task lifecycle
         try:
@@ -331,15 +340,15 @@ class OpenClawAggregator:
             except Exception:
                 pass
 
-        # Deduplication
+        # Deduplication with bounded cache
         if correlation_id:
             dedup_key = f"{correlation_id}:{stored_agent_id}:{receiver_id}:{message_type}"
             now_ts = time.time()
             if dedup_key in self._seen_msg_keys and (now_ts - self._seen_msg_keys[dedup_key]) < 5:
                 return None
             self._seen_msg_keys[dedup_key] = now_ts
-            if len(self._seen_msg_keys) > 1000:
-                cutoff = now_ts - 10
+            if len(self._seen_msg_keys) > self._dedup_max_size:
+                cutoff = now_ts - self._dedup_ttl
                 self._seen_msg_keys = {k: v for k, v in self._seen_msg_keys.items() if v > cutoff}
 
         # Unwrap nested payload

@@ -21,7 +21,10 @@ frontend/dist/
 data/*.db
 data/*.sqlite
 !data/.gitkeep
-mosquitto/data/
+nats/data/
+
+# Claude Code local settings
+.claude/.claude/
 
 # Old dashboard (replaced by frontend/)
 dashboard/

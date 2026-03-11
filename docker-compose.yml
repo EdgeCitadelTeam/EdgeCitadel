@@ -1,7 +1,7 @@
 services:
   nats:
     image: nats:2.10-alpine
-    command: ["--jetstream", "--store_dir", "/data", "-p", "4222", "--http_port", "8222"]
+    command: ["--jetstream", "--store_dir", "/data", "-p", "4222", "--http_port", "8222", "--auth", "${NATS_TOKEN:-changeme}"]
     ports:
       - "4222:4222"
       - "8222:8222"  # monitoring
@@ -17,7 +17,7 @@ services:
     environment:
       - DB_PATH=/data/openclaw.db
       - API_KEY=${OPENCLAW_API_KEY}
-      - NATS_URL=nats://nats:4222
+      - NATS_URL=nats://${NATS_TOKEN:-changeme}@nats:4222
     expose:
       - "8000"
     depends_on:

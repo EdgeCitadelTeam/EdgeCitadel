@@ -25,11 +25,18 @@ agg = OpenClawAggregator()
 async def lifespan(app: FastAPI):
     database.init_db()
 
-    # Connect to NATS (replaces MQTT bootstrap)
-    try:
-        await agg.connect()
-    except Exception as e:
-        logger.error(f"Failed to connect to NATS: {e}")
+    # Connect to NATS with retry loop
+    max_retries = 10
+    for attempt in range(1, max_retries + 1):
+        try:
+            await agg.connect()
+            break
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"Failed to connect to NATS after {max_retries} attempts: {e}")
+                raise RuntimeError(f"Cannot start without NATS: {e}")
+            logger.warning(f"NATS connection attempt {attempt}/{max_retries} failed: {e}, retrying in 2s...")
+            await asyncio.sleep(2)
 
     # Start heartbeat monitor background task
     hb_interval = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))

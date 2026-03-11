@@ -3,7 +3,7 @@ set -e
 # ═══════════════════════════════════════════════════════════════
 # EdgeCitadel: Join as an agent (run on the agent's machine)
 #
-# Usage: ./join.sh <server-host> [agent-id]
+# Usage: ./join.sh <server-host> <nats-token> [agent-id]
 #
 # Auto-detects: display name, role, device type.
 # Agent ID defaults to hostname if not provided.
@@ -20,15 +20,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Parse args ──
 CITADEL_HOST="${1:-}"
-AGENT_ID_ARG="${2:-}"
+NATS_TOKEN="${2:-}"
+AGENT_ID_ARG="${3:-}"
 
-if [[ -z "$CITADEL_HOST" ]]; then
-    echo "Usage: ./join.sh <server-host> [agent-id]"
+if [[ -z "$CITADEL_HOST" || -z "$NATS_TOKEN" ]]; then
+    echo "Usage: ./join.sh <server-host> <nats-token> [agent-id]"
     echo ""
     echo "  server-host   IP or hostname of the EdgeCitadel server"
+    echo "  nats-token    NATS auth token (from server's NATS_TOKEN env var)"
     echo "  agent-id      Agent ID (default: auto-detect from hostname)"
     echo ""
-    echo "Example: ./join.sh 100.97.29.74 us-claw-remote"
+    echo "Example: ./join.sh 100.97.29.74 changeme us-claw-remote"
     exit 1
 fi
 
@@ -128,11 +130,11 @@ ok "nats module ready"
 
 info "Testing NATS connection..."
 
-NATS_TEST=$(node -e "
+NATS_TEST=$(timeout 15 node -e "
 const { connect } = require('nats');
 (async () => {
     try {
-        const nc = await connect({ servers: '${CITADEL_HOST}:4222', timeout: 10000 });
+        const nc = await connect({ servers: '${CITADEL_HOST}:4222', token: '${NATS_TOKEN}', timeout: 10000 });
         console.log('OK');
         await nc.close();
     } catch(e) {
@@ -140,7 +142,7 @@ const { connect } = require('nats');
         process.exit(1);
     }
 })();
-" 2>&1)
+" 2>&1 || echo "ERROR:connection timed out")
 
 if [[ "$NATS_TEST" == "OK" ]]; then
     ok "NATS connected"
@@ -167,6 +169,7 @@ AGENT_ROLE=${AGENT_ROLE}
 AGENT_DEVICE_TYPE=${AGENT_DEVICE_TYPE}
 CITADEL_HOST=${CITADEL_HOST}
 CITADEL_PORT=4222
+NATS_TOKEN=${NATS_TOKEN}
 OPENCLAW_BIN=${OPENCLAW_BIN}
 AGENT_TIMEOUT=600
 HEARTBEAT_SEC=30
