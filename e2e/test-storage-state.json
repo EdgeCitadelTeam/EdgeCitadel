@@ -1,0 +1,14 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "http://localhost:13000",
+      "localStorage": [
+        {
+          "name": "showTestAgents",
+          "value": "true"
+        }
+      ]
+    }
+  ]
+}

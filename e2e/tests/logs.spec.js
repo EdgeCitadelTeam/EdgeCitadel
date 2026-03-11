@@ -44,7 +44,7 @@ test.describe('Log Viewer', () => {
     await sleep(2000);
 
     // Log entry should appear in the table
-    await expect(page.locator(`text=${logMsg}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${logMsg}`).first()).toBeVisible({ timeout: 15_000 });
   });
 
   test('Level filter buttons work', async ({ mqttClient, page }) => {
@@ -96,7 +96,7 @@ test.describe('Log Viewer', () => {
     if (await searchInput.isVisible()) {
       await searchInput.fill(searchTerm);
       await sleep(500);
-      await expect(page.locator(`text=${searchTerm}`)).toBeVisible({ timeout: 10_000 });
+      await expect(page.locator(`text=${searchTerm}`).first()).toBeVisible({ timeout: 10_000 });
     }
   });
 
@@ -113,7 +113,7 @@ test.describe('Log Viewer', () => {
     await sleep(2000);
 
     // Click on the log row to expand it
-    const row = page.locator(`text=${logMsg}`);
+    const row = page.locator(`text=${logMsg}`).first();
     await expect(row).toBeVisible({ timeout: 15_000 });
     await row.click();
     await sleep(500);
@@ -129,7 +129,7 @@ test.describe('Log Viewer', () => {
     await logsTab.click();
     await sleep(2000);
 
-    const logRow = page.locator(`text=${logMsg}`).locator('..');
+    const logRow = page.locator(`text=${logMsg}`).first().locator('..');
     await expect(logRow).toBeVisible({ timeout: 15_000 });
     // ERROR rows should have red background tinting
   });

@@ -8,11 +8,9 @@ const API_KEY = 'openclaw-citadel-secret-2026';
 
 // Publish to NATS via the aggregator REST API (no direct NATS CLI needed)
 function publish(subject, payload) {
-  // Convert slash-separated topic to dot-separated NATS subject
-  const natsSubject = subject.replace(/\//g, '.');
   const msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
   execSync(
-    `curl -s -X POST http://localhost:8000/publish -H "api-key: ${API_KEY}" -H "Content-Type: application/json" -d '${JSON.stringify({ topic: natsSubject, payload: msg }).replace(/'/g, "'\\''")}'`,
+    `curl -s -X POST http://localhost/api/publish -H "api-key: ${API_KEY}" -H "Content-Type: application/json" -d '${JSON.stringify({ topic: subject, payload: msg }).replace(/'/g, "'\\''")}'`,
     { cwd: path.join(__dirname, '..') }
   );
 }
@@ -53,21 +51,21 @@ function check(name, ok) {
   // ═══════════════════════════════════════════════════
 
   // Register agents via NATS heartbeat/register subjects
-  publish('agents/register/rupert', {
+  publish('agents.rupert.register', {
     display_name: 'Rupert', role: 'Orchestrator', device_type: 'server',
     capabilities: ['orchestration', 'planning', 'delegation', 'task_management'],
     ip_address: '192.168.1.10', status: 'online',
     cpu_percent: 23.5, memory_percent: 41.2
   });
 
-  publish('agents/register/jeeves', {
+  publish('agents.jeeves.register', {
     display_name: 'Jeeves', role: 'IoT Controller', device_type: 'raspberry_pi',
     capabilities: ['sensors', 'actuators', 'messaging', 'home_automation'],
     ip_address: '192.168.1.20', status: 'online',
     cpu_percent: 12.1, memory_percent: 28.7
   });
 
-  publish('agents/register/percy', {
+  publish('agents.percy.register', {
     display_name: 'Percy', role: 'Mobile Agent', device_type: 'smartphone',
     capabilities: ['gps', 'camera', 'notifications', 'geofencing'],
     ip_address: '192.168.1.50', status: 'online',
@@ -114,7 +112,7 @@ function check(name, ok) {
   // ═══════════════════════════════════════════════════
 
   // Rupert assigns task to Jeeves
-  publish('openclaw/local/rupert/cmd', {
+  publish('agents.jeeves.inbox', {
     sender_id: 'rupert', receiver_id: 'jeeves', message_type: 'command',
     correlation_id: 'task-temp-001',
     payload: { message: 'Check all temperature sensors and report readings' }
@@ -122,7 +120,7 @@ function check(name, ok) {
   await sleep(500);
 
   // Jeeves responds with results
-  publish('openclaw/local/jeeves/result', {
+  publish('agents.jeeves.outbox', {
     sender_id: 'jeeves', receiver_id: 'rupert', message_type: 'result',
     correlation_id: 'task-temp-001',
     payload: {
@@ -133,21 +131,21 @@ function check(name, ok) {
   await sleep(500);
 
   // Rupert broadcasts status
-  publish('openclaw/local/rupert/broadcast', {
+  publish('system.broadcast', {
     sender_id: 'rupert', message_type: 'broadcast',
     payload: { message: 'All temperature sensors nominal. No anomalies detected.' }
   });
   await sleep(500);
 
   // Percy reports location alert
-  publish('openclaw/local/percy/alert', {
+  publish('agents.percy.outbox', {
     sender_id: 'percy', receiver_id: 'rupert', message_type: 'alert',
     payload: { message: 'Geofence breach detected: device left home zone at 14:23' }
   });
   await sleep(500);
 
   // Rupert assigns task to Percy
-  publish('openclaw/local/rupert/cmd', {
+  publish('agents.percy.inbox', {
     sender_id: 'rupert', receiver_id: 'percy', message_type: 'command',
     correlation_id: 'task-photo-002',
     payload: { message: 'Take photo of front entrance and send notification' }
@@ -155,7 +153,7 @@ function check(name, ok) {
   await sleep(500);
 
   // Percy responds
-  publish('openclaw/local/percy/result', {
+  publish('agents.percy.outbox', {
     sender_id: 'percy', receiver_id: 'rupert', message_type: 'result',
     correlation_id: 'task-photo-002',
     payload: { message: 'Photo captured and notification sent to all devices', result: { photo_id: 'IMG_20260308_1423', notification_sent: true } }
@@ -263,7 +261,7 @@ function check(name, ok) {
 
   // Simulate Rupert's reply
   await sleep(500);
-  publish('openclaw/local/rupert/result', {
+  publish('agents.rupert.outbox', {
     sender_id: 'rupert', receiver_id: 'dashboard', message_type: 'result',
     payload: {
       message: 'System Status Report:\n- Agents online: 3/3\n- Temperature: nominal\n- Tasks completed: 2\n- Errors: 0\n- Uptime: 10h 23m'
@@ -384,20 +382,20 @@ function check(name, ok) {
   await sleep(500);
 
   // More realistic agent chatter
-  publish('openclaw/local/jeeves/info', {
+  publish('agents.jeeves.outbox', {
     sender_id: 'jeeves', receiver_id: 'rupert', message_type: 'info',
     payload: { message: 'Motion detected in garage. Camera activated.' }
   });
   await sleep(800);
 
-  publish('openclaw/local/rupert/cmd', {
+  publish('agents.percy.inbox', {
     sender_id: 'rupert', receiver_id: 'percy', message_type: 'command',
     correlation_id: 'task-notify-003',
     payload: { message: 'Send push notification: Motion detected in garage' }
   });
   await sleep(800);
 
-  publish('openclaw/local/percy/result', {
+  publish('agents.percy.outbox', {
     sender_id: 'percy', receiver_id: 'rupert', message_type: 'result',
     correlation_id: 'task-notify-003',
     payload: { message: 'Push notification delivered to 2 devices' }

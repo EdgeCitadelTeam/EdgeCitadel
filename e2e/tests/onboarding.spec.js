@@ -1,8 +1,8 @@
 /**
- * Onboarding E2E tests — validates the exact MQTT protocol that
+ * Onboarding E2E tests — validates the exact NATS protocol that
  * add-agent.sh + join.sh (mqtt-listener.js) implement.
  *
- * Any change to join.sh payloads, topics, or the aggregator's
+ * Any change to join.sh payloads, subjects, or the aggregator's
  * command routing must pass these tests.
  */
 const { test, expect } = require('../helpers/fixtures');
@@ -11,7 +11,7 @@ const { pollUntil, sleep } = require('../helpers/wait-utils');
 
 /**
  * Publish a registration message in the exact format mqtt-listener.js uses.
- * (See join.sh → client.publish(`agents/register/${ID}`, ...))
+ * (See join.sh → nc.publish(`agents.${ID}.register`, ...))
  */
 async function publishJoinRegister(mqttClient, agentId, opts = {}) {
   const payload = {
@@ -24,7 +24,7 @@ async function publishJoinRegister(mqttClient, agentId, opts = {}) {
     status: 'online',
     timestamp: new Date().toISOString(),
   };
-  await mqttClient.publish(`agents/register/${agentId}`, payload);
+  await mqttClient.publish(`agents.${agentId}.register`, payload);
 }
 
 /**
@@ -44,7 +44,7 @@ async function publishJoinHeartbeat(mqttClient, agentId, opts = {}) {
     capabilities: opts.capabilities || ['chat', 'task_execution', 'mqtt_listener'],
     timestamp: new Date().toISOString(),
   };
-  await mqttClient.publish(`agents/heartbeat/${agentId}`, payload);
+  await mqttClient.publish(`agents.${agentId}.heartbeat`, payload);
 }
 
 /**
@@ -64,8 +64,7 @@ async function publishJoinReply(mqttClient, fromAgent, toAgent, content, corrId)
     correlation_id: corrId || '',
     timestamp: new Date().toISOString(),
   };
-  await mqttClient.publish(`agents/inbox/${toAgent}`, msg);
-  await mqttClient.publish('agents/mirror', msg);
+  await mqttClient.publish(`agents.${fromAgent}.outbox`, msg);
 }
 
 
@@ -113,7 +112,7 @@ test.describe('Agent Onboarding (add-agent + join)', () => {
     expect(agent.memory_percent).toBeCloseTo(64.1, 0);
   });
 
-  test('Dashboard command arrives on agents/inbox/{id}', async ({ mqttClient, apiClient }) => {
+  test('Dashboard command arrives on agents.{id}.inbox', async ({ mqttClient, apiClient }) => {
     // Register agent first
     await publishJoinRegister(mqttClient, agentId);
     await pollUntil(async () => {
@@ -122,14 +121,14 @@ test.describe('Agent Onboarding (add-agent + join)', () => {
     }, { label: 'agent ready' });
 
     // Subscribe to the agent's inbox (simulating mqtt-listener.js)
-    await mqttClient.subscribe(`agents/inbox/${agentId}`);
+    await mqttClient.subscribe(`agents.${agentId}.inbox`);
 
     const commandText = `test-command-${uniqueId()}`;
 
     const msgPromise = mqttClient.waitForMessage(
-      `agents/inbox/${agentId}`,
+      `agents.${agentId}.inbox`,
       (msg) => {
-        const content = msg.content || msg.message || '';
+        const content = msg.content || msg.message || msg.payload?.message || '';
         return content === commandText;
       },
       10_000,
@@ -145,7 +144,7 @@ test.describe('Agent Onboarding (add-agent + join)', () => {
     });
 
     const received = await msgPromise;
-    const content = received.content || received.message || '';
+    const content = received.content || received.message || received.payload?.message || '';
     expect(content).toBe(commandText);
   });
 
@@ -190,12 +189,12 @@ test.describe('Agent Onboarding (add-agent + join)', () => {
     }, { label: 'agent online' });
 
     // 2. Subscribe to inbox (simulating mqtt-listener.js)
-    await mqttClient.subscribe(`agents/inbox/${agentId}`);
+    await mqttClient.subscribe(`agents.${agentId}.inbox`);
 
     const cmdText = `roundtrip-${uniqueId()}`;
     const cmdPromise = mqttClient.waitForMessage(
-      `agents/inbox/${agentId}`,
-      (msg) => (msg.content || msg.message || '') === cmdText,
+      `agents.${agentId}.inbox`,
+      (msg) => (msg.content || msg.message || msg.payload?.message || '') === cmdText,
       10_000,
     );
 
@@ -247,7 +246,7 @@ test.describe('Agent Onboarding (add-agent + join)', () => {
       catch { return null; }
     }, { label: 'agent ready' });
 
-    await mqttClient.subscribe(`agents/inbox/${agentId}`);
+    await mqttClient.subscribe(`agents.${agentId}.inbox`);
 
     await page.goto('/');
     await sleep(2000);
@@ -259,7 +258,7 @@ test.describe('Agent Onboarding (add-agent + join)', () => {
 
     const cmdText = `ui-cmd-${uniqueId()}`;
     const msgPromise = mqttClient.waitForMessage(
-      `agents/inbox/${agentId}`,
+      `agents.${agentId}.inbox`,
       (msg) => (msg.content || msg.message || msg.payload?.message || '') === cmdText,
       10_000,
     );
@@ -281,7 +280,7 @@ test.describe('Agent Onboarding (add-agent + join)', () => {
     }, { label: 'agent registered' });
 
     // Simulate offline status message (mqtt-listener.js will message)
-    await mqttClient.publish(`agents/status/${agentId}`, {
+    await mqttClient.publish(`agents.${agentId}.status`, {
       status: 'offline',
       timestamp: new Date().toISOString(),
     });

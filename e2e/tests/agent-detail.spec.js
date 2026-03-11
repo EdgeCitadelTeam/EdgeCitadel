@@ -67,11 +67,11 @@ test.describe('Agent Detail View', () => {
     expect(res.data).toHaveProperty('task_count');
   });
 
-  test('Send command via API triggers MQTT publish', async ({ mqttClient, apiClient }) => {
-    await mqttClient.subscribe(`agents/inbox/${agentName}`);
+  test('Send command via API triggers NATS publish', async ({ mqttClient, apiClient }) => {
+    await mqttClient.subscribe(`agents.${agentName}.inbox`);
 
     const msgPromise = mqttClient.waitForMessage(
-      `agents/inbox/${agentName}`,
+      `agents.${agentName}.inbox`,
       (msg) => (msg.message === 'run diagnostics' || msg.content === 'run diagnostics' || msg.payload?.message === 'run diagnostics'),
       15_000
     );

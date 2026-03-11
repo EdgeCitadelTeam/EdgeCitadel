@@ -22,6 +22,7 @@ module.exports = defineConfig({
     screenshot: 'only-on-failure',
     actionTimeout: 10_000,
     navigationTimeout: 30_000,
+    storageState: './test-storage-state.json',
   },
   projects: [
     {
