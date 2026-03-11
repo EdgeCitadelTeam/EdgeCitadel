@@ -80,7 +80,8 @@ async function start() {
             try {
                 const m = JSON.parse(sc.decode(msg.data));
                 const from = m.from||m.sender_id||'unknown';
-                const content = m.content||m.message||'';
+                const inner = (typeof m.payload === 'object' && m.payload) ? m.payload : {};
+                const content = m.content||m.message||inner.message||inner.content||inner.command||'';
                 const corrId = m.correlationId||m.correlation_id||'';
                 const msgType = m.type||m.message_type||'';
                 // Skip own messages and responses (prevent reply loops)
