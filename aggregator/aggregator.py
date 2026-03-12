@@ -313,6 +313,7 @@ class OpenClawAggregator:
             "complete": "task_complete",
             "failed": "task_failed",
             "broadcast": "broadcast",
+            "delegation": "delegation",
         }
         message_type = action_type_map.get(action, "info")
 
