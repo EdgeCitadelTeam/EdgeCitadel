@@ -139,7 +139,7 @@ const client = mqtt.connect('mqtt://${CITADEL_HOST}:1883', {
 });
 client.on('connect', () => {
     console.log('OK');
-    client.end(() => process.exit(0));
+    process.exit(0);
 });
 client.on('error', (e) => {
     console.log('ERROR:' + e.message);
@@ -152,7 +152,7 @@ setTimeout(() => {
 }, 12000);
 " 2>&1 || echo "ERROR:connection timed out")
 
-if [[ "$MQTT_TEST" == "OK" ]]; then
+if echo "$MQTT_TEST" | grep -q "^OK"; then
     ok "Broker connected"
 else
     err "Broker connection failed: $MQTT_TEST"
