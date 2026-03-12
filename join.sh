@@ -139,7 +139,7 @@ const client = mqtt.connect('mqtt://${CITADEL_HOST}:1883', {
 });
 client.on('connect', () => {
     console.log('OK');
-    client.end();
+    client.end(() => process.exit(0));
 });
 client.on('error', (e) => {
     console.log('ERROR:' + e.message);
