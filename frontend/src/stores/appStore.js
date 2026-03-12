@@ -19,6 +19,9 @@ const useAppStore = create((set, get) => ({
   logLevelFilter: null,
   taskStatusFilter: null,
 
+  // Pending commands awaiting reply (correlation_id -> { target, text, sentAt })
+  pendingCommands: {},
+
   // System
   systemStatus: null,
   notifications: [],
@@ -44,10 +47,27 @@ const useAppStore = create((set, get) => ({
       ),
     })),
 
+  addPendingCommand: (correlationId, target) =>
+    set((state) => ({
+      pendingCommands: { ...state.pendingCommands, [correlationId]: { target, sentAt: Date.now() } },
+    })),
+
+  removePendingCommand: (correlationId) =>
+    set((state) => {
+      const next = { ...state.pendingCommands }
+      delete next[correlationId]
+      return { pendingCommands: next }
+    }),
+
   addRealtimeMessage: (message) =>
     set((state) => {
       const msgs = [message, ...state.realtimeMessages]
-      return { realtimeMessages: msgs.slice(0, MAX_REALTIME_MESSAGES) }
+      // Clear pending if this is a reply
+      const pending = { ...state.pendingCommands }
+      if (message.correlation_id && pending[message.correlation_id] && message.message_type !== 'command') {
+        delete pending[message.correlation_id]
+      }
+      return { realtimeMessages: msgs.slice(0, MAX_REALTIME_MESSAGES), pendingCommands: pending }
     }),
 
   setActiveTab: (tab) => set({ activeTab: tab }),

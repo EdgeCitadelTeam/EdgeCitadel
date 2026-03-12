@@ -1,12 +1,21 @@
 services:
   nats:
     image: nats:2.10-alpine
-    command: ["--jetstream", "--store_dir", "/data", "-p", "4222", "--http_port", "8222", "--auth", "${NATS_TOKEN:-changeme}"]
+    command: ["-c", "/etc/nats/nats.conf"]
     ports:
       - "4222:4222"
-      - "8222:8222"  # monitoring
+      - "1883:1883"
+      - "8222:8222"
     volumes:
+      - ./nats/nats.conf:/etc/nats/nats.conf:ro
       - ./nats/data:/data
+    environment:
+      - NATS_TOKEN=${NATS_TOKEN}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
   aggregator:
@@ -17,11 +26,13 @@ services:
     environment:
       - DB_PATH=/data/openclaw.db
       - API_KEY=${OPENCLAW_API_KEY}
-      - NATS_URL=nats://${NATS_TOKEN:-changeme}@nats:4222
+      - NATS_URL=nats://nats:4222
+      - NATS_TOKEN=${NATS_TOKEN}
     expose:
       - "8000"
     depends_on:
-      - nats
+      nats:
+        condition: service_healthy
 
   dashboard:
     build: ./frontend

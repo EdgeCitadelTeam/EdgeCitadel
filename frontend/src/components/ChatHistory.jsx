@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { ArrowDown, Filter, Search } from 'lucide-react'
+import { ArrowDown, Filter, Search, Loader2 } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { messageApi } from '../api/client'
 import MessageBubble from './MessageBubble'
@@ -21,6 +21,7 @@ export default function ChatHistory() {
   const messageTypeFilter = useAppStore((s) => s.messageTypeFilter)
   const setMessageTypeFilter = useAppStore((s) => s.setMessageTypeFilter)
   const showTestAgents = useAppStore((s) => s.showTestAgents)
+  const pendingCommands = useAppStore((s) => s.pendingCommands)
 
   const [historicalMessages, setHistoricalMessages] = useState([])
   const [loading, setLoading] = useState(false)
@@ -81,7 +82,7 @@ export default function ChatHistory() {
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [realtimeMessages, autoScroll])
+  }, [realtimeMessages, pendingCommands, autoScroll])
 
   const handleScroll = () => {
     const el = scrollRef.current
@@ -96,21 +97,56 @@ export default function ChatHistory() {
   }
 
   // Combine historical + realtime, filter for selected agent
-  const allMessages = [...historicalMessages]
+  const merged = [...historicalMessages]
   const realtimeFiltered = realtimeMessages.filter((m) => {
     if (selectedAgent) {
       return m.sender_id === selectedAgent || m.receiver_id === selectedAgent
     }
     return true
   })
-  // Dedupe by id
-  const seen = new Set(allMessages.map((m) => m.id))
+  // Dedupe by id, and also dedupe optimistic commands vs server-confirmed ones
+  const seen = new Set(merged.map((m) => m.id))
+  const seenCorrCmd = new Set(
+    merged
+      .filter((m) => m.message_type === 'command' && m.correlation_id)
+      .map((m) => m.correlation_id)
+  )
   for (const m of realtimeFiltered) {
-    if (!seen.has(m.id)) {
-      allMessages.push(m)
-      seen.add(m.id)
+    if (seen.has(m.id)) continue
+    // Skip if we already have a command with this correlation (optimistic vs server)
+    if (m.message_type === 'command' && m.correlation_id && seenCorrCmd.has(m.correlation_id)) continue
+    merged.push(m)
+    seen.add(m.id)
+    if (m.message_type === 'command' && m.correlation_id) seenCorrCmd.add(m.correlation_id)
+  }
+
+  // Group by correlation_id so command-reply pairs stay together,
+  // then sort groups by the command (earliest) timestamp.
+  const grouped = new Map()
+  const ungrouped = []
+  for (const m of merged) {
+    if (m.correlation_id) {
+      if (!grouped.has(m.correlation_id)) grouped.set(m.correlation_id, [])
+      grouped.get(m.correlation_id).push(m)
+    } else {
+      ungrouped.push(m)
     }
   }
+  // Sort within each group: commands first, then by timestamp
+  for (const msgs of grouped.values()) {
+    msgs.sort((a, b) => {
+      if (a.message_type === 'command' && b.message_type !== 'command') return -1
+      if (a.message_type !== 'command' && b.message_type === 'command') return 1
+      return new Date(a.timestamp) - new Date(b.timestamp)
+    })
+  }
+  // Build final list: sort groups by their first message timestamp, interleave ungrouped
+  const allEntries = [
+    ...Array.from(grouped.values()).map((msgs) => ({ ts: new Date(msgs[0].timestamp), msgs })),
+    ...ungrouped.map((m) => ({ ts: new Date(m.timestamp), msgs: [m] })),
+  ]
+  allEntries.sort((a, b) => a.ts - b.ts)
+  const allMessages = allEntries.flatMap((e) => e.msgs)
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -201,9 +237,24 @@ export default function ChatHistory() {
             {allMessages.length === 0 && !loading && (
               <div className="flex flex-col items-center justify-center py-16 text-gray-500">
                 <div className="text-sm">No messages yet</div>
-                <div className="text-xs mt-1">Waiting for MQTT traffic...</div>
+                <div className="text-xs mt-1">Waiting for agent traffic...</div>
               </div>
             )}
+            {/* Thinking indicators for pending commands */}
+            {Object.entries(pendingCommands).map(([corrId, { target }]) => (
+              <div
+                key={`pending-${corrId}`}
+                className="rounded-lg border border-surface-200 bg-surface-100/50 px-3 py-2.5 flex items-center gap-2.5 animate-pulse"
+              >
+                <Loader2 size={14} className="text-accent animate-spin" />
+                <span className="text-xs text-gray-400">
+                  <span className="text-gray-300 font-medium">{target}</span> is thinking...
+                </span>
+                <span className="text-[10px] text-gray-600 ml-auto">
+                  {corrId.slice(0, 8)}
+                </span>
+              </div>
+            ))}
             <div ref={bottomRef} />
           </div>
 

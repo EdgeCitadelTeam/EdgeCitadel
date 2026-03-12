@@ -64,13 +64,13 @@ test.describe('Task Board', () => {
     await expect(page.locator(`text=${task.title}`)).toBeVisible({ timeout: 15_000 });
   });
 
-  test('Creating task with assigned agent publishes NATS', async ({ mqttClient, apiClient }) => {
-    await mqttClient.subscribe('tasks.*.assign');
+  test('Creating task with assigned agent publishes MQTT', async ({ mqttClient, apiClient }) => {
+    await mqttClient.subscribe('tasks/+/assign');
     await sleep(1000);
 
-    const task = makeTask({ title: `NATS-Task-${uniqueId()}` });
+    const task = makeTask({ title: `MQTT-Task-${uniqueId()}` });
     const msgPromise = mqttClient.waitForMessage(
-      'tasks.*.assign',
+      'tasks/+/assign',
       (msg) => msg.title === task.title || msg.task_id,
       10_000
     );

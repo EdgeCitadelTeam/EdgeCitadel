@@ -1,8 +1,8 @@
 /**
  * Dashboard Command Pipeline E2E tests
  *
- * Tests the CRITICAL path: Dashboard sends command via API → aggregator stores
- * in message history → agent receives via NATS → agent replies → reply stored.
+ * Tests the CRITICAL path: Dashboard sends command via API -> aggregator stores
+ * in message history -> agent receives via MQTT -> agent replies -> reply stored.
  *
  * This test suite was created to catch the bug where dashboard-sent commands
  * were silently dropped by the aggregator (sender "dashboard" in SKIP_AGENT_IDS
@@ -55,12 +55,12 @@ test.describe('Dashboard Command Pipeline', () => {
     expect(msg.correlation_id).toBe(corrId);
   });
 
-  test('Dashboard command reaches agent NATS inbox', async ({ mqttClient, apiClient }) => {
-    await mqttClient.subscribe(`agents.${agentName}.inbox`);
+  test('Dashboard command reaches agent MQTT inbox', async ({ mqttClient, apiClient }) => {
+    await mqttClient.subscribe(`agents/${agentName}/inbox`);
 
     const cmdText = `inbox-delivery-${uniqueId()}`;
     const msgPromise = mqttClient.waitForMessage(
-      `agents.${agentName}.inbox`,
+      `agents/${agentName}/inbox`,
       (msg) => (msg.content || msg.message || msg.payload?.message || '') === cmdText,
       10_000,
     );
@@ -104,7 +104,7 @@ test.describe('Dashboard Command Pipeline', () => {
     const replyText = `reply-from-agent-${uniqueId()}`;
 
     // Simulate agent reply (as mqtt-listener.js would do)
-    await mqttClient.publish(`agents.${agentName}.outbox`, {
+    await mqttClient.publish(`agents/${agentName}/outbox`, {
       from: agentName,
       to: 'dashboard',
       sender_id: agentName,
@@ -134,7 +134,7 @@ test.describe('Dashboard Command Pipeline', () => {
     expect(msg.correlation_id).toBe(corrId);
   });
 
-  test('Full round-trip: command → stored → reply → stored → task completed', async ({ mqttClient, apiClient }) => {
+  test('Full round-trip: command -> stored -> reply -> stored -> task completed', async ({ mqttClient, apiClient }) => {
     const cmdText = `roundtrip-${uniqueId()}`;
     const corrId = `corr-rt-${Date.now()}`;
 
@@ -159,7 +159,7 @@ test.describe('Dashboard Command Pipeline', () => {
 
     // 3. Agent replies (simulating mqtt-listener.js reply())
     const replyText = `Processed: ${cmdText}`;
-    await mqttClient.publish(`agents.${agentName}.outbox`, {
+    await mqttClient.publish(`agents/${agentName}/outbox`, {
       from: agentName,
       to: 'dashboard',
       sender_id: agentName,

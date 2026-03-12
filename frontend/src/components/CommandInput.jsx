@@ -13,19 +13,34 @@ export default function CommandInput() {
 
   const effectiveTarget = target || selectedAgent || ''
 
+  const addPendingCommand = useAppStore((s) => s.addPendingCommand)
+  const addRealtimeMessage = useAppStore((s) => s.addRealtimeMessage)
+
   const handleSend = async () => {
     if (!effectiveTarget || !text.trim()) return
     setSending(true)
+    const correlationId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    const message = text.trim()
     try {
       await commandApi.send(effectiveTarget, {
         message_type: 'command',
         sender_id: 'dashboard',
         receiver_id: effectiveTarget,
-        correlation_id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-        payload: { message: text.trim() },
+        correlation_id: correlationId,
+        payload: { message },
       })
+      // Optimistically add message to chat and mark as pending
+      addRealtimeMessage({
+        id: `optimistic-${correlationId}`,
+        sender_id: 'dashboard',
+        receiver_id: effectiveTarget,
+        message_type: 'command',
+        correlation_id: correlationId,
+        payload: { message },
+        timestamp: new Date().toISOString(),
+      })
+      addPendingCommand(correlationId, effectiveTarget)
       setText('')
-      toast.success(`Sent to ${effectiveTarget}`)
     } catch {
       toast.error('Failed to send command')
     }

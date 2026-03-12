@@ -1,18 +1,15 @@
 const base = require('@playwright/test');
-const { TestNATSClient } = require('./nats-client');
+const { TestMQTTClient } = require('./mqtt-client');
 const { TestAPIClient } = require('./api-client');
 const { TestWSClient } = require('./ws-client');
 
 /**
- * Extended Playwright test with custom fixtures for NATS, API, and WebSocket clients.
+ * Extended Playwright test with custom fixtures for MQTT, API, and WebSocket clients.
  * Each fixture auto-connects before the test and disconnects after.
- *
- * The `mqttClient` fixture name is kept for backward compatibility with existing test files.
- * It uses NATS (TestNATSClient) under the hood.
  */
 const test = base.test.extend({
   mqttClient: async ({}, use) => {
-    const client = new TestNATSClient();
+    const client = new TestMQTTClient();
     await client.connect();
     await use(client);
     await client.disconnect();

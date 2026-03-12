@@ -19,8 +19,8 @@ test.describe('Commands', () => {
     }, { label: 'agent ready' });
   });
 
-  test('UI command sends NATS message to agents.{name}.inbox', async ({ mqttClient, page }) => {
-    await mqttClient.subscribe(`agents.${agentName}.inbox`);
+  test('UI command sends MQTT message to agents/{name}/inbox', async ({ mqttClient, page }) => {
+    await mqttClient.subscribe(`agents/${agentName}/inbox`);
 
     await page.goto('/');
     await sleep(2000);
@@ -35,7 +35,7 @@ test.describe('Commands', () => {
     const cmdText = `do-task-${uniqueId()}`;
 
     const msgPromise = mqttClient.waitForMessage(
-      `agents.${agentName}.inbox`,
+      `agents/${agentName}/inbox`,
       (msg) => (msg.message === cmdText || msg.content === cmdText || msg.payload?.message === cmdText),
       15_000
     );
@@ -75,11 +75,11 @@ test.describe('Commands', () => {
     await expect(page.locator('[role="status"]').first()).toBeVisible({ timeout: 10_000 });
   });
 
-  test('POST /api/broadcast publishes to system.broadcast topic', async ({ mqttClient, apiClient }) => {
-    await mqttClient.subscribe('system.broadcast');
+  test('POST /api/broadcast publishes to system/broadcast topic', async ({ mqttClient, apiClient }) => {
+    await mqttClient.subscribe('system/broadcast');
 
     const msgPromise = mqttClient.waitForMessage(
-      'system.broadcast',
+      'system/broadcast',
       (msg) => msg.payload?.message === 'attention all agents',
       10_000
     );
@@ -95,13 +95,13 @@ test.describe('Commands', () => {
 
   test('Error handling for command to nonexistent agent', async ({ apiClient }) => {
     // The command endpoint should still publish even if agent doesn't exist in DB
-    // (NATS is fire-and-forget), or return an error if it validates
+    // (MQTT is fire-and-forget), or return an error if it validates
     try {
       const res = await apiClient.sendCommand(`nonexistent-${uniqueId()}`, {
         message_type: 'command',
         payload: { message: 'hello' },
       });
-      // If it succeeds, that's acceptable (NATS publish doesn't require recipient)
+      // If it succeeds, that's acceptable (MQTT publish doesn't require recipient)
       expect(res.status).toBe(200);
     } catch (err) {
       // If it validates agent existence first, a 404 is acceptable

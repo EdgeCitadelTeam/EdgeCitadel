@@ -13,11 +13,20 @@ const PALETTE = [
   '#84cc16', // lime
 ]
 
+// Fixed colors for well-known senders to guarantee contrast
+const FIXED_COLORS = {
+  dashboard: '#3b82f6', // blue
+  system: '#6366f1',    // indigo
+}
+
 export function getAgentColor(agentName) {
   if (!agentName) return PALETTE[0]
+  if (FIXED_COLORS[agentName]) return FIXED_COLORS[agentName]
   let hash = 0
   for (let i = 0; i < agentName.length; i++) {
     hash = agentName.charCodeAt(i) + ((hash << 5) - hash)
   }
-  return PALETTE[Math.abs(hash) % PALETTE.length]
+  // Skip blue/indigo slots (0,9) since those are reserved for dashboard/system
+  const agentPalette = PALETTE.filter((_, i) => i !== 0 && i !== 9)
+  return agentPalette[Math.abs(hash) % agentPalette.length]
 }

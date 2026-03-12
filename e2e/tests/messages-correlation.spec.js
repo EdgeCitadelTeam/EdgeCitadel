@@ -31,7 +31,7 @@ test.describe('Messages Correlation & Thread View', () => {
       timestamp: new Date().toISOString(),
       payload: { message: `corr-msg-1-${correlationId}` },
     };
-    await mqttClient.publish(`agents.${receiver.name}.inbox`, baseMsg);
+    await mqttClient.publish(`agents/${receiver.name}/inbox`, baseMsg);
     await sleep(300);
 
     const replyMsg = {
@@ -42,7 +42,7 @@ test.describe('Messages Correlation & Thread View', () => {
       timestamp: new Date().toISOString(),
       payload: { message: `corr-msg-2-${correlationId}` },
     };
-    await mqttClient.publish(`agents.${sender.name}.inbox`, replyMsg);
+    await mqttClient.publish(`agents/${sender.name}/inbox`, replyMsg);
     await sleep(500);
   });
 

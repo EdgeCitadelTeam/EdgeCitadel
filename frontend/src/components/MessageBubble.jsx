@@ -4,13 +4,13 @@ import { getAgentColor } from '../utils/agentColors'
 import { relativeTime, fullTimestamp } from '../utils/formatTime'
 
 const typeConfig = {
-  command: { icon: Terminal, color: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/20' },
-  result: { icon: CheckCircle, color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
-  alert: { icon: AlertTriangle, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20' },
-  error: { icon: AlertTriangle, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20' },
-  info: { icon: Info, color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20' },
-  broadcast: { icon: Radio, color: 'text-cyan-400', bg: 'bg-cyan-500/10 border-cyan-500/20' },
-  task_assign: { icon: Zap, color: 'text-indigo-400', bg: 'bg-indigo-500/10 border-indigo-500/20' },
+  command: { icon: Terminal, color: 'text-blue-400' },
+  result: { icon: CheckCircle, color: 'text-emerald-400' },
+  alert: { icon: AlertTriangle, color: 'text-red-400' },
+  error: { icon: AlertTriangle, color: 'text-red-400' },
+  info: { icon: Info, color: 'text-amber-400' },
+  broadcast: { icon: Radio, color: 'text-cyan-400' },
+  task_assign: { icon: Zap, color: 'text-indigo-400' },
 }
 
 // Extract human-readable content from the message payload
@@ -60,7 +60,7 @@ function extractContent(payload) {
 
 export default function MessageBubble({ message, highlighted, onClick }) {
   const type = message.message_type || 'unknown'
-  const config = typeConfig[type] || { icon: Info, color: 'text-gray-400', bg: 'bg-surface-100 border-surface-200' }
+  const config = typeConfig[type] || { icon: Info, color: 'text-gray-400' }
   const Icon = config.icon
   const senderColor = getAgentColor(message.sender_id)
   const content = extractContent(message.payload)
@@ -69,12 +69,15 @@ export default function MessageBubble({ message, highlighted, onClick }) {
     <div
       onClick={onClick}
       className={clsx(
-        'rounded-lg border px-3 py-2 transition-all cursor-pointer',
-        highlighted
-          ? 'border-accent/50 bg-accent/5 shadow-sm shadow-accent/10'
-          : config.bg,
-        'hover:brightness-110'
+        'rounded-lg border px-3 py-2 transition-all cursor-pointer border-l-[3px]',
+        highlighted && 'ring-1 ring-accent/40 shadow-sm shadow-accent/10',
+        'hover:brightness-125'
       )}
+      style={{
+        borderLeftColor: senderColor,
+        backgroundColor: `${senderColor}18`,
+        borderColor: highlighted ? undefined : `${senderColor}35`,
+      }}
     >
       {/* Header: sender -> receiver, type icon, timestamp */}
       <div className="flex items-center gap-2 min-w-0">

@@ -20,19 +20,19 @@ function sleep(ms) {
 (async () => {
   // Register agents first
   console.log('Registering agents...');
-  publish('agents.rupert.register', {
+  publish('agents/rupert/register', {
     display_name: 'Rupert', role: 'Orchestrator', device_type: 'server',
     capabilities: ['orchestration', 'planning', 'delegation', 'task_management'],
     ip_address: '192.168.1.10', status: 'online',
     cpu_percent: 23.5, memory_percent: 41.2
   });
-  publish('agents.jeeves.register', {
+  publish('agents/jeeves/register', {
     display_name: 'Jeeves', role: 'IoT Controller', device_type: 'raspberry_pi',
     capabilities: ['sensors', 'actuators', 'messaging', 'home_automation'],
     ip_address: '192.168.1.20', status: 'online',
     cpu_percent: 12.1, memory_percent: 28.7
   });
-  publish('agents.percy.register', {
+  publish('agents/percy/register', {
     display_name: 'Percy', role: 'Mobile Agent', device_type: 'smartphone',
     capabilities: ['gps', 'camera', 'notifications', 'geofencing'],
     ip_address: '192.168.1.50', status: 'online',
@@ -56,7 +56,7 @@ function sleep(ms) {
   console.log('Scene 1: Agent conversation streaming in...');
 
   // Rupert starts a task - asks Jeeves to check sensors
-  publish('agents.jeeves.inbox', {
+  publish('agents/jeeves/inbox', {
     sender_id: 'rupert', receiver_id: 'jeeves', message_type: 'command',
     correlation_id: 'task-sensor-001',
     payload: { message: 'Run full sensor diagnostic on all rooms' }
@@ -64,7 +64,7 @@ function sleep(ms) {
   await sleep(2000);
 
   // Jeeves acknowledges
-  publish('agents.jeeves.outbox', {
+  publish('agents/jeeves/outbox', {
     sender_id: 'jeeves', receiver_id: 'rupert', message_type: 'info',
     correlation_id: 'task-sensor-001',
     payload: { message: 'Starting sensor sweep across 4 rooms...' }
@@ -72,7 +72,7 @@ function sleep(ms) {
   await sleep(2000);
 
   // Jeeves reports result
-  publish('agents.jeeves.outbox', {
+  publish('agents/jeeves/outbox', {
     sender_id: 'jeeves', receiver_id: 'rupert', message_type: 'result',
     correlation_id: 'task-sensor-001',
     payload: {
@@ -83,7 +83,7 @@ function sleep(ms) {
   await sleep(2000);
 
   // Rupert delegates to Percy
-  publish('agents.percy.inbox', {
+  publish('agents/percy/inbox', {
     sender_id: 'rupert', receiver_id: 'percy', message_type: 'command',
     correlation_id: 'task-notify-002',
     payload: { message: 'Send daily summary to all mobile devices' }
@@ -91,7 +91,7 @@ function sleep(ms) {
   await sleep(2000);
 
   // Percy responds
-  publish('agents.percy.outbox', {
+  publish('agents/percy/outbox', {
     sender_id: 'percy', receiver_id: 'rupert', message_type: 'result',
     correlation_id: 'task-notify-002',
     payload: { message: 'Daily summary pushed to 3 devices successfully' }
@@ -99,21 +99,21 @@ function sleep(ms) {
   await sleep(2000);
 
   // Jeeves detects anomaly
-  publish('agents.jeeves.outbox', {
+  publish('agents/jeeves/outbox', {
     sender_id: 'jeeves', receiver_id: 'rupert', message_type: 'alert',
     payload: { message: 'Motion detected in garage - camera activated' }
   });
   await sleep(2000);
 
   // Rupert broadcasts to all
-  publish('system.broadcast', {
+  publish('system/broadcast', {
     sender_id: 'rupert', message_type: 'broadcast',
     payload: { message: 'Security alert acknowledged. Monitoring garage camera feed.' }
   });
   await sleep(2000);
 
   // Percy reports geofence
-  publish('agents.percy.outbox', {
+  publish('agents/percy/outbox', {
     sender_id: 'percy', receiver_id: 'rupert', message_type: 'info',
     payload: { message: 'All registered devices within home geofence. No unauthorized movement.' }
   });
@@ -152,8 +152,8 @@ function sleep(ms) {
     }
   }
 
-  // Simulate Rupert's reply via NATS
-  publish('agents.rupert.outbox', {
+  // Simulate Rupert's reply via MQTT
+  publish('agents/rupert/outbox', {
     sender_id: 'rupert', receiver_id: 'dashboard', message_type: 'result',
     payload: {
       message: 'System Status Report:\n- Agents online: 3/3 (Rupert, Jeeves, Percy)\n- Temperature: all nominal\n- Tasks completed today: 5\n- Errors: 0\n- Uptime: 12h 45m'

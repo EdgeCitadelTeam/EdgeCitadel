@@ -6,7 +6,7 @@ import time
 import uuid
 
 import nats
-from nats.js.api import StreamConfig, RetentionPolicy
+from nats.js.api import RetentionPolicy, StorageType
 
 import database
 
@@ -15,101 +15,128 @@ logger = logging.getLogger(__name__)
 SKIP_AGENT_IDS = {"dashboard", "system", "nats-server", "broadcast", ""}
 
 NATS_URL = os.environ.get("NATS_URL", "nats://localhost:4222")
+NATS_TOKEN = os.environ.get("NATS_TOKEN", "")
 
-# Subject mapping (replaces MQTT topic conventions):
-#   agents.{name}.heartbeat   <- agents/heartbeat/{name}
-#   agents.{name}.register    <- agents/register/{name}
-#   agents.{name}.inbox       <- agents/inbox/{name}, openclaw/{d}/{a}/cmd
-#   agents.{name}.outbox      <- openclaw/{d}/{a}/result
-#   tasks.{id}.assign         <- task assignment
-#   tasks.{id}.stream         <- LLM token streaming (new)
-#   tasks.{id}.complete       <- task completion
-#   system.broadcast           <- agents/broadcast
+# Subject mapping (NATS dot-separated):
+#   agents.{name}.heartbeat
+#   agents.{name}.register
+#   agents.{name}.inbox       <- commands TO agent
+#   agents.{name}.outbox      <- results FROM agent
+#   agents.{name}.status
+#   agents.{name}.log
+#   tasks.{id}.assign
+#   tasks.{id}.stream
+#   tasks.{id}.complete
+#   tasks.{id}.failed
+#   system.broadcast
 
 
 class OpenClawAggregator:
     def __init__(self):
-        self.nc: nats.aio.client.Client | None = None
+        self.nc: nats.NATS | None = None
         self.js = None  # JetStream context
+        self.kv = None  # AGENT_STATE K/V bucket
         self.ws_connections: list = []
         self.stream_connections: list = []
         self._seen_msg_keys: dict[str, float] = {}
         self._dedup_max_size = 500
         self._dedup_ttl = 10  # seconds
-        self._subscriptions: list = []
+        self._listener_tasks: list[asyncio.Task] = []
 
     async def connect(self):
-        """Connect to NATS server and set up subscriptions."""
-        self.nc = await nats.connect(
-            NATS_URL,
-            reconnected_cb=self._reconnected,
-            disconnected_cb=self._disconnected,
-            error_cb=self._error,
-            max_reconnect_attempts=-1,  # reconnect forever
-            reconnect_time_wait=1,
-        )
+        """Connect to NATS server and start message listeners."""
+        connect_opts = {"servers": NATS_URL}
+        if NATS_TOKEN:
+            connect_opts["token"] = NATS_TOKEN
+
+        self.nc = await nats.connect(**connect_opts)
         logger.info(f"Connected to NATS at {NATS_URL}")
 
-        # Initialize JetStream
+        # Set up JetStream
         self.js = self.nc.jetstream()
-        await self._setup_streams()
 
-        # Subscribe to all agent subjects (replaces MQTT # wildcard)
-        sub_agents = await self.nc.subscribe("agents.>", cb=self._on_agent_message)
-        sub_tasks = await self.nc.subscribe("tasks.>", cb=self._on_task_message)
-        sub_system = await self.nc.subscribe("system.>", cb=self._on_system_message)
-        self._subscriptions = [sub_agents, sub_tasks, sub_system]
-
-    async def _setup_streams(self):
-        """Create JetStream streams for conversation persistence."""
+        # Create CONVERSATIONS stream for persistent message history
         try:
             await self.js.add_stream(
-                config=StreamConfig(
-                    name="CONVERSATIONS",
-                    subjects=["conversations.>"],
-                    retention=RetentionPolicy.LIMITS,
-                    max_bytes=1024 * 1024 * 512,  # 512MB
-                ),
+                name="CONVERSATIONS",
+                subjects=["agents.>", "tasks.>", "system.>"],
+                retention=RetentionPolicy.LIMITS,
+                max_msgs=10000,
+                storage=StorageType.FILE,
             )
             logger.info("JetStream stream CONVERSATIONS ready")
         except Exception as e:
-            if "already in use" in str(e).lower():
-                logger.info("JetStream stream CONVERSATIONS already exists")
-            else:
-                logger.error(f"Failed to create CONVERSATIONS stream: {e}")
+            logger.warning(f"JetStream stream setup: {e}")
 
+        # Create AGENT_STATE K/V bucket for live state
         try:
-            await self.js.create_key_value(bucket="AGENT_STATE")
+            self.kv = await self.js.create_key_value(bucket="AGENT_STATE")
             logger.info("JetStream K/V bucket AGENT_STATE ready")
         except Exception as e:
-            if "already in use" in str(e).lower():
-                logger.info("JetStream K/V bucket AGENT_STATE already exists")
-            else:
-                logger.error(f"Failed to create AGENT_STATE bucket: {e}")
+            logger.warning(f"JetStream K/V setup: {e}")
 
-    async def _reconnected(self):
-        logger.info(f"Reconnected to NATS at {self.nc.connected_url.netloc}")
+        # Subscribe to wildcard subjects and start listener tasks
+        sub_agents = await self.nc.subscribe("agents.>")
+        sub_tasks = await self.nc.subscribe("tasks.>")
+        sub_system = await self.nc.subscribe("system.>")
 
-    async def _disconnected(self):
-        logger.warning("Disconnected from NATS, will reconnect")
+        self._listener_tasks.append(asyncio.create_task(self._agent_loop(sub_agents)))
+        self._listener_tasks.append(asyncio.create_task(self._task_loop(sub_tasks)))
+        self._listener_tasks.append(asyncio.create_task(self._system_loop(sub_system)))
 
-    async def _error(self, e):
-        logger.error(f"NATS error: {e}")
+    async def _agent_loop(self, sub):
+        """Process messages on agents.> subjects."""
+        try:
+            async for msg in sub.messages:
+                subject = msg.subject
+                payload = msg.data.decode("utf-8", errors="replace") if msg.data else ""
+                try:
+                    await self._on_agent_message(subject, payload)
+                except Exception as e:
+                    logger.error(f"Error processing {subject}: {e}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(f"NATS agent message loop error: {e}")
 
-    async def _on_agent_message(self, msg):
+    async def _task_loop(self, sub):
+        """Process messages on tasks.> subjects."""
+        try:
+            async for msg in sub.messages:
+                subject = msg.subject
+                payload = msg.data.decode("utf-8", errors="replace") if msg.data else ""
+                try:
+                    await self._on_task_message(subject, payload)
+                except Exception as e:
+                    logger.error(f"Error processing {subject}: {e}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(f"NATS task message loop error: {e}")
+
+    async def _system_loop(self, sub):
+        """Process messages on system.> subjects."""
+        try:
+            async for msg in sub.messages:
+                subject = msg.subject
+                payload = msg.data.decode("utf-8", errors="replace") if msg.data else ""
+                try:
+                    await self._on_system_message(subject, payload)
+                except Exception as e:
+                    logger.error(f"Error processing {subject}: {e}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(f"NATS system message loop error: {e}")
+
+    async def _on_agent_message(self, subject: str, payload: str):
         """Handle messages on agents.{name}.{action} subjects."""
-        subject = msg.subject
         parts = subject.split(".")
         if len(parts) < 3:
             return
 
         agent_id = parts[1]
-        action = parts[2]  # heartbeat, register, inbox, outbox, status
-
-        try:
-            payload = msg.data.decode("utf-8", errors="replace")
-        except Exception:
-            payload = str(msg.data)
+        action = parts[2]  # heartbeat, register, inbox, outbox, status, log
 
         # Store raw episode
         deployment = "local"
@@ -120,7 +147,7 @@ class OpenClawAggregator:
             logger.error(f"Failed to insert episode: {e}")
 
         # Parse into structured records
-        parsed_msg = self._parse_nats_message(deployment, subject, agent_id, action, payload)
+        parsed_msg = self._parse_message(deployment, subject, agent_id, action, payload)
 
         # Broadcast raw event to /ws
         event = {"deployment": deployment, "topic": subject, "payload": payload, "ts": ts}
@@ -146,20 +173,26 @@ class OpenClawAggregator:
                     "data": {"agent_id": evt_agent_id, "status": "online"},
                 })
 
-    async def _on_task_message(self, msg):
+        # Update K/V state for agent
+        if self.kv and agent_id and agent_id not in SKIP_AGENT_IDS:
+            try:
+                state = json.dumps({
+                    "agent_id": agent_id,
+                    "action": action,
+                    "last_seen": ts,
+                })
+                await self.kv.put(agent_id, state.encode())
+            except Exception:
+                pass
+
+    async def _on_task_message(self, subject: str, payload: str):
         """Handle messages on tasks.{id}.{action} subjects."""
-        subject = msg.subject
         parts = subject.split(".")
         if len(parts) < 3:
             return
 
         task_id = parts[1]
         action = parts[2]  # assign, stream, complete, failed, progress
-
-        try:
-            payload = msg.data.decode("utf-8", errors="replace")
-        except Exception:
-            payload = str(msg.data)
 
         deployment = "local"
         ts = int(time.time())
@@ -181,7 +214,7 @@ class OpenClawAggregator:
         if isinstance(payload_obj, dict):
             agent_id = payload_obj.get("sender_id", payload_obj.get("sender", payload_obj.get("assigned_agent", "")))
         if agent_id and agent_id not in SKIP_AGENT_IDS:
-            self._parse_nats_message(deployment, subject, agent_id, action, payload)
+            self._parse_message(deployment, subject, agent_id, action, payload)
 
         # Handle task lifecycle
         try:
@@ -211,7 +244,6 @@ class OpenClawAggregator:
                     database.update_task(task_id, status="failed", completed_at=now,
                                          error_message=payload_obj.get("error", ""))
             elif action == "stream":
-                # Token streaming — broadcast to WebSocket for dashboard
                 pass
         except Exception as e:
             logger.error(f"Failed to handle task: {e}")
@@ -230,26 +262,33 @@ class OpenClawAggregator:
         }
         await self._broadcast_stream(stream_event)
 
-    async def _on_system_message(self, msg):
+    async def _on_system_message(self, subject: str, payload: str):
         """Handle messages on system.> subjects."""
-        try:
-            payload = msg.data.decode("utf-8", errors="replace")
-        except Exception:
-            payload = str(msg.data)
-
         deployment = "local"
         ts = int(time.time())
         try:
-            database.insert_episode(deployment, msg.subject, payload, ts)
+            database.insert_episode(deployment, subject, payload, ts)
         except Exception as e:
             logger.error(f"Failed to insert episode: {e}")
 
-        event = {"deployment": deployment, "topic": msg.subject, "payload": payload, "ts": ts}
+        # Also parse as a message so broadcasts appear in chat
+        try:
+            payload_obj = json.loads(payload) if payload else {}
+        except (json.JSONDecodeError, TypeError):
+            payload_obj = {"raw": payload}
+
+        if isinstance(payload_obj, dict):
+            sender_id = payload_obj.get("sender_id", payload_obj.get("from", "system"))
+            content = payload_obj.get("message", payload_obj.get("content", ""))
+            if content and sender_id not in SKIP_AGENT_IDS:
+                self._parse_message("local", subject, sender_id, "broadcast", payload)
+
+        event = {"deployment": deployment, "topic": subject, "payload": payload, "ts": ts}
         await self._broadcast(event)
 
-    def _parse_nats_message(self, deployment: str, subject: str, agent_id: str,
-                            action: str, payload: str) -> dict | None:
-        """Parse a NATS message and store structured records."""
+    def _parse_message(self, deployment: str, subject: str, agent_id: str,
+                       action: str, payload: str) -> dict | None:
+        """Parse a message and store structured records."""
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         payload_obj = {}
@@ -273,6 +312,7 @@ class OpenClawAggregator:
             "progress": "task_progress",
             "complete": "task_complete",
             "failed": "task_failed",
+            "broadcast": "broadcast",
         }
         message_type = action_type_map.get(action, "info")
 
@@ -352,20 +392,16 @@ class OpenClawAggregator:
                 pass
 
         # Deduplication with bounded cache
-        # When a reply is routed to both outbox and sender's inbox, deduplicate
-        # so only the outbox copy (canonical) gets stored as a message record.
         if correlation_id:
             dedup_key = f"{correlation_id}:{stored_agent_id}:{receiver_id}:{message_type}"
             now_ts = time.time()
             if dedup_key in self._seen_msg_keys and (now_ts - self._seen_msg_keys[dedup_key]) < 5:
-                # Still broadcast to WebSocket so the receiver's dashboard updates
                 return None
             self._seen_msg_keys[dedup_key] = now_ts
             if len(self._seen_msg_keys) > self._dedup_max_size:
                 cutoff = now_ts - self._dedup_ttl
                 self._seen_msg_keys = {k: v for k, v in self._seen_msg_keys.items() if v > cutoff}
         elif message_type == "result" and stored_agent_id and receiver_id:
-            # Deduplicate replies even without correlation_id using content hash
             content_str = ""
             if isinstance(payload_obj, dict):
                 content_str = payload_obj.get("content", payload_obj.get("message", ""))
@@ -492,17 +528,23 @@ class OpenClawAggregator:
                 pass
 
     async def publish(self, subject: str, payload: str):
-        """Publish a message to a NATS subject."""
+        """Publish a message to a NATS subject.
+        Converts slash-separated topics to dot-separated NATS subjects for backward compat.
+        """
         if self.nc is None or not self.nc.is_connected:
             raise ConnectionError("Not connected to NATS")
-        await self.nc.publish(subject, payload.encode())
+        # Convert MQTT-style slash topics to NATS dot subjects
+        nats_subject = subject.replace("/", ".")
+        await self.nc.publish(nats_subject, payload.encode())
 
     async def disconnect(self):
-        for sub in self._subscriptions:
+        for task in self._listener_tasks:
+            task.cancel()
             try:
-                await sub.unsubscribe()
-            except Exception:
+                await task
+            except asyncio.CancelledError:
                 pass
+        self._listener_tasks.clear()
         if self.nc:
             await self.nc.drain()
             logger.info("Disconnected from NATS")

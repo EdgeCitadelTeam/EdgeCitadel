@@ -30,16 +30,16 @@ async function pollUntil(fn, { timeout = 15_000, interval = 500, label = 'condit
 }
 
 /**
- * Wait for a NATS-published event to propagate through the pipeline:
- * NATS -> Aggregator -> DB -> API
+ * Wait for an MQTT-published event to propagate through the pipeline:
+ * MQTT -> Aggregator -> DB -> API
  *
- * @param {Function} publishFn - Async function that publishes the NATS message
+ * @param {Function} publishFn - Async function that publishes the MQTT message
  * @param {Function} verifyFn - Async function that checks the API/DB result; should return truthy on success
  * @param {object} opts
  */
 async function waitForPipeline(publishFn, verifyFn, { timeout = 15_000, interval = 500, label = 'pipeline' } = {}) {
   await publishFn();
-  // Small delay for NATS -> aggregator processing
+  // Small delay for MQTT -> aggregator processing
   await sleep(300);
   return pollUntil(verifyFn, { timeout, interval, label });
 }

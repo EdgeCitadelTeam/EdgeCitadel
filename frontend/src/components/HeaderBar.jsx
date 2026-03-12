@@ -54,7 +54,7 @@ export default function HeaderBar() {
         </h1>
         <StatusBadge
           status={wsConnected ? 'online' : 'error'}
-          label={wsConnected ? 'MQTT Connected' : 'Disconnected'}
+          label={wsConnected ? 'Connected' : 'Disconnected'}
         />
       </div>
 

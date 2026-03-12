@@ -38,7 +38,7 @@ module.exports = async function globalSetup() {
   await waitForService(API_URL, 'Backend API');
   await waitForService(FRONTEND_URL, 'Frontend');
 
-  // Brief additional wait for NATS subscription to establish
+  // Brief additional wait for NATS/MQTT subscription to establish
   await new Promise((r) => setTimeout(r, 2000));
   console.log('--- E2E Global Setup Complete ---\n');
 };

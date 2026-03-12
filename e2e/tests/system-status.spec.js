@@ -42,15 +42,15 @@ test.describe('System Status', () => {
     expect(updated.total_messages).toBeGreaterThan(initialTotal);
   });
 
-  test('NATS connection badge shows connected status', async ({ page }) => {
+  test('MQTT connection badge shows connected status', async ({ page }) => {
     await page.goto('/');
     await sleep(2000);
 
-    // The header should show NATS connection status
+    // The header should show MQTT connection status
     // Look for "Connected" or green indicator
     const connBadge = page.locator('text=Connected').first();
-    // It might show "NATS Connected" or just the green dot
-    await expect(connBadge.or(page.locator('text=NATS'))).toBeVisible({ timeout: 10_000 });
+    // It might show "MQTT Connected" or just the green dot
+    await expect(connBadge.or(page.locator('text=MQTT'))).toBeVisible({ timeout: 10_000 });
   });
 
   test('GET /api/system/status returns all fields', async ({ apiClient }) => {
@@ -62,6 +62,7 @@ test.describe('System Status', () => {
     expect(res.data).toHaveProperty('active_tasks');
     expect(res.data).toHaveProperty('errors_today');
     expect(res.data).toHaveProperty('nats_connected');
+    expect(res.data).toHaveProperty('mqtt_connected');
     expect(typeof res.data.agents_online).toBe('number');
     expect(typeof res.data.agents_total).toBe('number');
     expect(typeof res.data.total_messages).toBe('number');

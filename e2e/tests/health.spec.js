@@ -13,9 +13,9 @@ test.describe('Health Checks', () => {
     await expect(page.locator('text=OpenClaw Swarm Control')).toBeVisible();
   });
 
-  test('NATS server accepts connections', async ({ mqttClient }) => {
+  test('MQTT broker accepts connections', async ({ mqttClient }) => {
     // mqttClient fixture auto-connects; if we reach here, the connection succeeded
-    expect(mqttClient.nc).toBeTruthy();
-    expect(mqttClient.nc.isClosed()).toBe(false);
+    expect(mqttClient.client).toBeTruthy();
+    expect(mqttClient.client.connected).toBe(true);
   });
 });

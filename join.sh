@@ -26,9 +26,9 @@ AGENT_ID_ARG="${3:-}"
 if [[ -z "$CITADEL_HOST" || -z "$NATS_TOKEN" ]]; then
     echo "Usage: ./join.sh <server-host> <nats-token> [agent-id]"
     echo ""
-    echo "  server-host   IP or hostname of the EdgeCitadel server"
-    echo "  nats-token    NATS auth token (from server's NATS_TOKEN env var)"
-    echo "  agent-id      Agent ID (default: auto-detect from hostname)"
+    echo "  server-host    IP or hostname of the EdgeCitadel server"
+    echo "  nats-token     NATS auth token (from server's NATS_TOKEN env var)"
+    echo "  agent-id       Agent ID (default: auto-detect from hostname)"
     echo ""
     echo "Example: ./join.sh 100.97.29.74 changeme us-claw-remote"
     exit 1
@@ -83,10 +83,10 @@ echo "════════════════════════�
 echo -e " ${CYAN}EdgeCitadel Agent Setup${NC}"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
-info "Agent ID:     $AGENT_ID"
-info "Display name: $AGENT_DISPLAY"
-info "Device type:  $AGENT_DEVICE_TYPE"
-info "NATS server:  $CITADEL_HOST:4222"
+info "Agent ID:      $AGENT_ID"
+info "Display name:  $AGENT_DISPLAY"
+info "Device type:   $AGENT_DEVICE_TYPE"
+info "Broker:        $CITADEL_HOST:1883"
 echo ""
 
 # ═══════════════════════════════════════════════════════════════
@@ -116,43 +116,51 @@ if ! openclaw models status --status-json 2>/dev/null | node -e "
     warn "openclaw model auth may not be configured. Run: openclaw models auth paste-token --provider anthropic"
 fi
 
-# Install nats module if needed
+# Install mqtt module if needed
 cd "$SCRIPT_DIR/openclaw-client"
-if ! node -e "require('nats')" 2>/dev/null; then
-    info "Installing nats module..."
+if ! node -e "require('mqtt')" 2>/dev/null; then
+    info "Installing mqtt module..."
     npm install --silent 2>/dev/null
 fi
-ok "nats module ready"
+ok "mqtt module ready"
 
 # ═══════════════════════════════════════════════════════════════
-# Test NATS connection
+# Test MQTT connection
 # ═══════════════════════════════════════════════════════════════
 
-info "Testing NATS connection..."
+info "Testing EdgeCitadel broker connection..."
 
-NATS_TEST=$(timeout 15 node -e "
-const { connect } = require('nats');
-(async () => {
-    try {
-        const nc = await connect({ servers: '${CITADEL_HOST}:4222', token: '${NATS_TOKEN}', timeout: 10000 });
-        console.log('OK');
-        await nc.close();
-    } catch(e) {
-        console.log('ERROR:' + e.message);
-        process.exit(1);
-    }
-})();
+MQTT_TEST=$(timeout 15 node -e "
+const mqtt = require('mqtt');
+const client = mqtt.connect('mqtt://${CITADEL_HOST}:1883', {
+    username: 'mqtt-agent',
+    password: '${NATS_TOKEN}',
+    connectTimeout: 10000,
+});
+client.on('connect', () => {
+    console.log('OK');
+    client.end();
+});
+client.on('error', (e) => {
+    console.log('ERROR:' + e.message);
+    client.end();
+    process.exit(1);
+});
+setTimeout(() => {
+    console.log('ERROR:connection timed out');
+    process.exit(1);
+}, 12000);
 " 2>&1 || echo "ERROR:connection timed out")
 
-if [[ "$NATS_TEST" == "OK" ]]; then
-    ok "NATS connected"
+if [[ "$MQTT_TEST" == "OK" ]]; then
+    ok "Broker connected"
 else
-    err "NATS connection failed: $NATS_TEST"
+    err "Broker connection failed: $MQTT_TEST"
     echo ""
     echo "  Check that:"
     echo "    1. EdgeCitadel is running on $CITADEL_HOST"
-    echo "    2. Port 4222 is reachable (firewall / Tailscale)"
-    echo "    3. NATS server is healthy"
+    echo "    2. Port 1883 is reachable (firewall / Tailscale)"
+    echo "    3. NATS server MQTT port is healthy"
     exit 1
 fi
 
@@ -168,7 +176,7 @@ AGENT_DISPLAY=${AGENT_DISPLAY}
 AGENT_ROLE=${AGENT_ROLE}
 AGENT_DEVICE_TYPE=${AGENT_DEVICE_TYPE}
 CITADEL_HOST=${CITADEL_HOST}
-CITADEL_PORT=4222
+CITADEL_PORT=1883
 NATS_TOKEN=${NATS_TOKEN}
 OPENCLAW_BIN=${OPENCLAW_BIN}
 AGENT_TIMEOUT=600
@@ -180,10 +188,10 @@ chmod 600 "$CONFIG_FILE"
 # Verify listener script exists
 # ═══════════════════════════════════════════════════════════════
 
-LISTENER_SCRIPT="$SCRIPT_DIR/openclaw-client/nats-listener.js"
+LISTENER_SCRIPT="$SCRIPT_DIR/openclaw-client/mqtt-listener.js"
 
 if [[ ! -f "$LISTENER_SCRIPT" ]]; then
-    err "nats-listener.js not found at $LISTENER_SCRIPT"
+    err "mqtt-listener.js not found at $LISTENER_SCRIPT"
     exit 1
 fi
 chmod +x "$LISTENER_SCRIPT"

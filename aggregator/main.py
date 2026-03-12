@@ -66,7 +66,7 @@ def health_check():
     return {"status": "ok"}
 
 
-# ── Deployment endpoints (kept for backward compat, simplified for NATS) ──
+# ── Deployment endpoints (kept for backward compat) ──
 
 @app.post("/deployments/register")
 def register_deployment(config: DeploymentConfig, api_key: str = Header(..., alias="api-key")):
@@ -78,7 +78,7 @@ def register_deployment(config: DeploymentConfig, api_key: str = Header(..., ali
         config.mqtt_user, config.mqtt_pass
     )
 
-    return {"ok": True, "message": f"{config.name} registered (NATS handles connectivity)"}
+    return {"ok": True, "message": f"{config.name} registered (MQTT handles connectivity)"}
 
 
 @app.delete("/deployments/{name}")
@@ -330,6 +330,7 @@ async def broadcast_message(data: dict):
 def system_status(exclude_test: bool = Query(False)):
     status = database.get_system_status(exclude_test=exclude_test)
     status["nats_connected"] = agg.nc is not None and agg.nc.is_connected
+    status["mqtt_connected"] = status["nats_connected"]
     return status
 
 

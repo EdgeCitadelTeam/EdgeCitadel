@@ -7,13 +7,22 @@ set -e
 # Example: ./add-agent.sh us-claw-remote
 #
 # Prints the join command to run on the agent's machine.
-# NATS does not require per-agent credentials by default.
 # ═══════════════════════════════════════════════════════════════
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 AGENT_ID="${1:?Usage: ./add-agent.sh <agent-id>}"
 AGENT_ID=$(echo "$AGENT_ID" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+
+# Read NATS token from .env
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NATS_TOKEN=""
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    NATS_TOKEN=$(grep -E '^NATS_TOKEN=' "$SCRIPT_DIR/.env" | cut -d= -f2- | tr -d '"' | tr -d "'")
+fi
+if [[ -z "$NATS_TOKEN" ]]; then
+    NATS_TOKEN="changeme"
+fi
 
 # Detect this machine's reachable address
 # Priority: Tailscale IP > first non-loopback IPv4
@@ -35,10 +44,11 @@ echo " Run this on the agent's machine to join:"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 echo "  git clone https://github.com/zhonghaozhan/EdgeCitadel.git"
-echo "  cd EdgeCitadel && ./join.sh ${SERVER_HOST} ${AGENT_ID}"
+echo "  cd EdgeCitadel && ./join.sh ${SERVER_HOST} ${NATS_TOKEN} ${AGENT_ID}"
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo ""
-echo -e " Agent ID:      ${AGENT_ID}"
-echo -e " NATS server:   ${SERVER_HOST}:4222"
+echo -e " Agent ID:       ${AGENT_ID}"
+echo -e " Broker:         ${SERVER_HOST}:1883"
+echo -e " NATS token:     ${NATS_TOKEN}"
 echo ""

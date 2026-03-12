@@ -1,61 +1,85 @@
-const { connect, StringCodec } = require('nats');
+const mqtt = require('mqtt');
 
-const NATS_URL = process.env.NATS_URL || 'localhost:14222';
-const sc = StringCodec();
+const MQTT_URL = process.env.MQTT_URL || 'mqtt://localhost:11883';
 
-class TestNATSClient {
+class TestMQTTClient {
   constructor() {
-    this.nc = null;
-    this._subscriptions = [];
+    this.client = null;
+    this._messageHandlers = [];
   }
 
   async connect() {
-    this.nc = await connect({ servers: NATS_URL });
+    return new Promise((resolve, reject) => {
+      this.client = mqtt.connect(MQTT_URL, {
+        reconnectPeriod: 1000,
+        connectTimeout: 10_000,
+      });
+      this.client.on('connect', () => resolve());
+      this.client.on('error', (err) => reject(err));
+
+      // Central message dispatcher for waitForMessage
+      this.client.on('message', (topic, message) => {
+        let parsed;
+        try {
+          parsed = JSON.parse(message.toString());
+        } catch {
+          parsed = message.toString();
+        }
+        for (const handler of this._messageHandlers) {
+          handler(topic, parsed);
+        }
+      });
+    });
   }
 
   async disconnect() {
-    if (this.nc) {
-      await this.nc.drain();
+    if (this.client) {
+      return new Promise((resolve) => {
+        this.client.end(false, {}, () => resolve());
+      });
     }
   }
 
-  async publish(subject, payload) {
+  async publish(topic, payload) {
     const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
-    this.nc.publish(subject, sc.encode(data));
-    await this.nc.flush();
+    return new Promise((resolve, reject) => {
+      this.client.publish(topic, data, { qos: 1 }, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   }
 
-  async subscribe(subject) {
-    const sub = this.nc.subscribe(subject);
-    this._subscriptions.push(sub);
-    return sub;
+  async subscribe(topic) {
+    return new Promise((resolve, reject) => {
+      this.client.subscribe(topic, { qos: 1 }, (err, granted) => {
+        if (err) reject(err);
+        else resolve(granted);
+      });
+    });
   }
 
-  waitForMessage(subject, predicate = () => true, timeout = 10_000) {
-    return new Promise(async (resolve, reject) => {
+  waitForMessage(topic, predicate = () => true, timeout = 10_000) {
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error(`Timed out waiting for message on ${subject}`));
+        // Clean up handler
+        const idx = this._messageHandlers.indexOf(handler);
+        if (idx !== -1) this._messageHandlers.splice(idx, 1);
+        reject(new Error(`Timed out waiting for message on ${topic}`));
       }, timeout);
 
-      const sub = this.nc.subscribe(subject);
-      this._subscriptions.push(sub);
-
-      (async () => {
-        for await (const msg of sub) {
-          let parsed;
-          try {
-            parsed = JSON.parse(sc.decode(msg.data));
-          } catch {
-            parsed = sc.decode(msg.data);
-          }
-          if (predicate(parsed, msg.subject)) {
-            clearTimeout(timer);
-            sub.unsubscribe();
-            resolve(parsed);
-            return;
-          }
+      const handler = (receivedTopic, parsed) => {
+        // Match topic: support MQTT wildcards + and #
+        if (!topicMatches(topic, receivedTopic)) return;
+        if (predicate(parsed, receivedTopic)) {
+          clearTimeout(timer);
+          const idx = this._messageHandlers.indexOf(handler);
+          if (idx !== -1) this._messageHandlers.splice(idx, 1);
+          resolve(parsed);
         }
-      })();
+      };
+
+      this._messageHandlers.push(handler);
     });
   }
 
@@ -82,7 +106,7 @@ class TestNATSClient {
         ip_address: opts.ip_address || '192.168.1.100',
       },
     };
-    await this.publish(`agents.${name}.register`, payload);
+    await this.publish(`agents/${name}/register`, payload);
   }
 
   async sendHeartbeat(name, opts = {}) {
@@ -100,7 +124,7 @@ class TestNATSClient {
         status: 'online',
       },
     };
-    await this.publish(`agents.${name}.heartbeat`, payload);
+    await this.publish(`agents/${name}/heartbeat`, payload);
   }
 
   async changeAgentStatus(name, status) {
@@ -112,7 +136,7 @@ class TestNATSClient {
       status,
       payload: { status },
     };
-    await this.publish(`agents.${name}.status`, payload);
+    await this.publish(`agents/${name}/status`, payload);
   }
 
   async sendLog(name, level, message, opts = {}) {
@@ -131,7 +155,7 @@ class TestNATSClient {
         metadata: opts.metadata || {},
       },
     };
-    await this.publish(`agents.${name}.log`, payload);
+    await this.publish(`agents/${name}/log`, payload);
   }
 
   async assignTask(agentName, taskId, opts = {}) {
@@ -149,7 +173,7 @@ class TestNATSClient {
       priority: opts.priority || 'normal',
       assigned_agent: agentName,
     };
-    await this.publish(`tasks.${taskId}.assign`, payload);
+    await this.publish(`tasks/${taskId}/assign`, payload);
   }
 
   async reportTaskProgress(agentName, taskId, opts = {}) {
@@ -163,7 +187,7 @@ class TestNATSClient {
       progress: opts.progress || 50,
       message: opts.message || 'In progress',
     };
-    await this.publish(`tasks.${taskId}.progress`, payload);
+    await this.publish(`tasks/${taskId}/progress`, payload);
   }
 
   async completeTask(agentName, taskId, result = {}) {
@@ -176,7 +200,7 @@ class TestNATSClient {
       task_id: taskId,
       result: result,
     };
-    await this.publish(`tasks.${taskId}.complete`, payload);
+    await this.publish(`tasks/${taskId}/complete`, payload);
   }
 
   async failTask(agentName, taskId, error = 'Task failed') {
@@ -190,7 +214,7 @@ class TestNATSClient {
       error_message: error,
       error: error,
     };
-    await this.publish(`tasks.${taskId}.failed`, payload);
+    await this.publish(`tasks/${taskId}/failed`, payload);
   }
 
   async sendMessage(sender, receiver, type, payload = {}) {
@@ -207,7 +231,7 @@ class TestNATSClient {
       ...payload,
       payload,
     };
-    await this.publish(`agents.${receiver}.inbox`, msg);
+    await this.publish(`agents/${receiver}/inbox`, msg);
     return correlationId;
   }
 
@@ -220,8 +244,31 @@ class TestNATSClient {
       ...payload,
       payload,
     };
-    await this.publish('system.broadcast', msg);
+    await this.publish('system/broadcast', msg);
   }
 }
 
-module.exports = { TestNATSClient };
+/**
+ * Check if an MQTT topic matches a subscription pattern.
+ * Supports + (single-level) and # (multi-level) wildcards.
+ */
+function topicMatches(pattern, topic) {
+  const patternParts = pattern.split('/');
+  const topicParts = topic.split('/');
+
+  for (let i = 0; i < patternParts.length; i++) {
+    if (patternParts[i] === '#') {
+      return true; // # matches everything from here on
+    }
+    if (patternParts[i] === '+') {
+      if (i >= topicParts.length) return false;
+      continue; // + matches any single level
+    }
+    if (i >= topicParts.length || patternParts[i] !== topicParts[i]) {
+      return false;
+    }
+  }
+  return patternParts.length === topicParts.length;
+}
+
+module.exports = { TestMQTTClient };
