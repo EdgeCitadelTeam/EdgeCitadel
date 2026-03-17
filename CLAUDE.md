@@ -105,6 +105,65 @@ docs/           Architecture docs, API reference, ADRs
 .claude/        Agents, rules, skills, hooks for Claude Code
 ```
 
+## Worktree Workflow
+
+Every task uses a worktree for isolation. Multiple sessions (human or AI) work in parallel without conflicts.
+
+### Starting a New Task
+
+```bash
+scripts/worktree-create.sh <type> <short-description>
+# Example: scripts/worktree-create.sh feat jetstream-consumers
+# Creates: .claude/worktrees/jetstream-consumers/ on branch feat/jetstream-consumers
+```
+
+The script auto-copies `.env` files and installs dependencies (`npm ci`, `pip install`).
+
+### Submitting Work
+
+```bash
+cd .claude/worktrees/<name>
+git push -u origin <type>/<short-description>
+gh pr create --base main
+```
+
+### After PR Merge — Cleanup
+
+```bash
+scripts/worktree-cleanup.sh <name>        # single worktree
+scripts/worktree-cleanup.sh --all         # all merged worktrees
+scripts/worktree-cleanup.sh --list        # show status of all worktrees
+```
+
+The cleanup script removes the worktree, deletes the local branch, and deletes the remote branch. It warns if the branch is not yet merged.
+
+### PR Feedback After Worktree Removal
+
+When a PR receives review feedback after the worktree was already cleaned up, the branch still exists on the remote. Recreate the worktree from it:
+
+```bash
+scripts/worktree-resume.sh feat/jetstream-consumers   # by branch name
+scripts/worktree-resume.sh 42                          # by PR number
+```
+
+This fetches the branch, recreates the worktree, copies env files, and installs dependencies. You pick up exactly where you left off — make changes, commit, push.
+
+### Multi-Session Parallel Work
+
+- Each session gets its own worktree and branch — git enforces one branch per worktree
+- **Never use `git stash`** — stash is shared across all worktrees and causes cross-session contamination
+- Always commit work-in-progress to the branch instead
+- Each worktree has its own `node_modules`, `.env`, and build artifacts — fully isolated
+- Use `--force-with-lease` (not `--force`) when pushing rebased branches
+
+### Worktree Gotchas
+
+- **Shared across worktrees**: object database, refs, git config, stash, hooks
+- **Isolated per worktree**: HEAD, index (staging), working directory, bisect/rebase state
+- **Branch lock**: a branch checked out in one worktree cannot be checked out in another — use `git worktree prune` if you get stale lock errors
+- **Dependency install required**: each worktree is a fresh directory with no `node_modules` — the scripts handle this automatically
+- **Port conflicts**: if running dev servers in multiple worktrees, assign different ports
+
 ## Critical Gotchas
 
 - SQLite is sync with module-level connection — never use from multiple threads
