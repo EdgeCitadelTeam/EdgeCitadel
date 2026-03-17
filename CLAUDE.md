@@ -1,93 +1,115 @@
-# OpenClaw Edge Citadel
+# EdgeCitadel
 
-## Architecture Overview
+Hybrid NATS+MQTT agent communication platform. NATS 2.10+ with JetStream for persistence, built-in MQTT adapter for IoT devices. Aggregator (Python/FastAPI) connects via native NATS. IoT agents connect via MQTT on port 1883. React dashboard via WebSocket.
 
-Hybrid NATS+MQTT agent communication platform. Runs a single NATS 2.10+ server with JetStream for persistence and a built-in MQTT adapter for IoT device compatibility. The aggregator connects via native NATS for full JetStream features (streams, K/V store). Constrained IoT agents (Raspberry Pi, ESP32) connect via MQTT to the same server on port 1883. MQTT topics auto-translate to NATS subjects (slashes become dots). The aggregator subscribes to all agent/task/system subjects, parses messages into structured records, stores in SQLite, and streams to a React dashboard via WebSocket.
+## Key Commands
 
-## Tech Stack
+```bash
+# Full stack
+docker compose up --build
+docker compose down -v          # teardown (destroys data)
 
-- **Messaging**: NATS 2.10+ with JetStream + built-in MQTT 3.1.1 adapter
-- **Aggregator**: Python 3.12, FastAPI, nats-py (native NATS), SQLite, Pydantic
-- **Agent Listener**: Node.js, mqtt.js (connects via MQTT to NATS's MQTT port)
-- **Dashboard**: React 18, Vite 5, Tailwind CSS (build-time), Zustand, recharts, react-force-graph-2d, lucide-react
-- **Infrastructure**: Docker Compose, Nginx (reverse proxy)
-- **Database**: SQLite (sync, module-level connection)
+# Aggregator (Python 3.12)
+cd aggregator && pip install -r requirements.txt
+ruff check aggregator/ --fix    # lint
+ruff format aggregator/         # format
+mypy aggregator/ --strict       # type check
+pytest tests/ -x --tb=short     # run tests (prefer single file)
 
-## Directory Structure
+# Frontend (React 18 + Vite 5)
+cd frontend && npm ci
+npm run lint                    # eslint
+npm run build                   # production build
+npm run dev                     # dev server :3000
 
-```
-EdgeCitadel/
-├── aggregator/
-│   ├── main.py           # FastAPI app, REST + WebSocket endpoints
-│   ├── aggregator.py     # NATS subscriber/publisher, message parser
-│   ├── database.py       # SQLite DB (agents, messages, logs, tasks, episodes)
-│   ├── models.py         # Pydantic request models
-│   ├── requirements.txt
-│   └── Dockerfile
-├── frontend/
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── tailwind.config.js
-│   ├── index.html
-│   ├── nginx.conf
-│   ├── Dockerfile
-│   └── src/
-│       ├── main.jsx
-│       ├── App.jsx
-│       ├── Layout.jsx
-│       ├── stores/appStore.js
-│       ├── hooks/useWebSocket.js
-│       ├── api/client.js
-│       └── components/
-│           ├── AgentSidebar.jsx
-│           ├── AgentCard.jsx
-│           ├── AgentDetail.jsx
-│           ├── HeaderBar.jsx
-│           ├── ChatHistory.jsx
-│           ├── MessageBubble.jsx
-│           ├── CommandInput.jsx
-│           ├── ConversationThread.jsx
-│           ├── CommFlow.jsx
-│           ├── LogViewer.jsx
-│           ├── TaskBoard.jsx
-│           ├── TaskCard.jsx
-│           ├── StatusBadge.jsx
-│           └── Toast.jsx
-├── nats/
-│   ├── nats.conf         # NATS server config (JetStream + MQTT)
-│   └── data/             # JetStream storage
-├── nginx/
-│   └── default.conf
-├── openclaw-client/
-│   ├── mqtt-listener.js  # Agent listener (connects via MQTT to NATS)
-│   ├── register.sh
-│   └── openclaw.conf.example
-├── data/
-├── docker-compose.yml
-└── .env.example
+# E2E tests
+cd e2e && npm ci && npx playwright test
 ```
 
-## Key Patterns
+## Commit Convention
 
-- **NATS subject structure**: `agents.{name}.{action}` (heartbeat, register, inbox, outbox, status, log), `tasks.{id}.{action}` (assign, stream, complete, failed), `system.broadcast`
-- **MQTT topic equivalents**: `agents/{name}/{action}` — auto-translated by NATS server (slashes ↔ dots)
-- **Hybrid protocol flow**: NATS server ← native nats-py (aggregator) | MQTT adapter ← mqtt.js (IoT agents)
-- **Real-time flow**: NATS/MQTT → async nats-py subscriptions → parse + DB + WebSocket broadcast → React frontend
-- **JetStream streams**: `CONVERSATIONS` stream for persistent message history
-- **WebSocket**: `/ws` (raw events), `/ws/stream` (structured events for frontend), `/ws/agent/{name}`
-- **API auth**: `api-key` header checked against `API_KEY` env var (deployment endpoints only)
-- **Frontend API**: `/api/agents`, `/api/messages`, `/api/logs`, `/api/tasks`, `/api/system/status`, `/api/command/{agent}` (no auth)
-- **Agent auto-discovery**: Agents are created/updated from NATS subject parsing and payload fields
-- **Auth**: Single `NATS_TOKEN` — NATS clients use it as token, MQTT clients use it as password
+Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
 
-## Conventions
+```
+<type>(<scope>): <description>
 
-- Aggregator uses sync SQLite with module-level connection
-- nats-py async subscriptions run natively in the FastAPI event loop (no thread bridging needed)
-- All API routes served behind nginx at `/api/` prefix (strips prefix via proxy_pass)
-- Dashboard uses Tailwind CSS with build-time PostCSS (not CDN)
-- Zustand for state management, no API key needed for frontend endpoints
-- Dark theme, Tailwind utility classes, custom color palette in tailwind.config.js
-- SQLite database at `/data/openclaw.db` (inside container)
-- NATS server at port 4222 (native), 1883 (MQTT adapter), 8222 (monitoring HTTP)
-- IoT agents connect via MQTT to port 1883 with NATS_TOKEN as password
+Types: feat|fix|docs|style|refactor|perf|test|chore|ci|build
+Scopes: aggregator|frontend|nats|mqtt|dashboard|e2e|client|infra
+```
+
+Branch naming: `<type>/<short-description>` (e.g., `feat/jetstream-consumers`)
+
+## Architecture Rules
+
+- **NATS subjects**: `agents.{name}.{action}`, `tasks.{id}.{action}`, `system.broadcast`
+- **MQTT topics**: `agents/{name}/{action}` (auto-translated by NATS, slashes become dots)
+- **Auth**: Single `NATS_TOKEN` — NATS clients use as token, MQTT clients use as password
+- **Ports**: 4222 (NATS native), 1883 (MQTT adapter), 8222 (NATS monitoring HTTP)
+- **Database**: SQLite at `/data/openclaw.db`, sync with module-level connection
+- **Aggregator**: nats-py async subscriptions run natively in FastAPI event loop — no thread bridging
+- **Nginx**: Strips `/api/` prefix before forwarding to aggregator
+- **Frontend**: Tailwind CSS (build-time PostCSS), Zustand state, dark theme default
+
+## Quality Gates (Enforced Before Every Commit)
+
+1. **Lint passes** — `ruff check` (Python), `npm run lint` (JS)
+2. **Types check** — `mypy --strict` for any modified Python files
+3. **Tests pass** — run relevant test file, not full suite
+4. **No secrets** — no tokens, passwords, or API keys in committed code
+5. **No direct commits to main** — use feature branches + PR
+6. **Commit message format** — must follow Conventional Commits
+
+## Code Standards
+
+### Python (aggregator/)
+- Pydantic models for all request/response schemas
+- Consistent error format: `{"error": str, "detail": str, "status": int}`
+- OpenAPI docstrings on every endpoint
+- No blocking calls in async handlers
+- Type annotations on all function signatures
+
+### JavaScript (frontend/)
+- ES modules only (import/export, not require)
+- Functional components with hooks (no class components)
+- Zustand for state (not Redux, not Context)
+- lucide-react for icons
+- Tailwind utility classes only (no custom CSS files)
+- `axios` for HTTP, native WebSocket for real-time
+
+### NATS/MQTT (messaging)
+- All new subjects must be documented in `docs/05-messaging.md`
+- JetStream streams must have explicit retention and limits
+- MQTT QoS 1 for agent communication (at-least-once)
+- Include `correlation_id` for request-reply patterns
+
+## Documentation Requirements
+
+Every PR must include:
+- **Feature**: Update relevant `docs/` file, CHANGELOG entry, test coverage
+- **Bug fix**: CHANGELOG entry, regression test
+- **Architecture change**: ADR in `docs/adr/`, update this file if conventions change
+- **API change**: Update `docs/08-api-reference.md`, update Pydantic models
+- **Config change**: Update `.env.example`, update `docs/02-server-setup.md`
+
+## Directory Map
+
+```
+aggregator/     Python FastAPI aggregator (NATS subscriber, REST API, WebSocket)
+frontend/       React 18 dashboard (Vite, Tailwind, Zustand)
+openclaw-client/ Node.js MQTT agent listener
+nats/           NATS server config (JetStream + MQTT adapter)
+nginx/          Reverse proxy config
+e2e/            Playwright end-to-end tests
+scripts/        Utility scripts (simulation, demo recording)
+docs/           Architecture docs, API reference, ADRs
+.claude/        Agents, rules, skills, hooks for Claude Code
+```
+
+## Critical Gotchas
+
+- SQLite is sync with module-level connection — never use from multiple threads
+- nginx strips `/api/` prefix — aggregator routes don't include it
+- NATS MQTT adapter translates `/` to `.` — subject and topic must match
+- WebSocket timeout is 86400s (24h) — long-lived connections are expected
+- Frontend deduplicates messages by key with 10s TTL, max 500 cached
+- Test data uses `test-` prefix — filtered in UI via `showTestAgents` toggle
