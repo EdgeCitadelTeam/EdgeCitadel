@@ -97,6 +97,24 @@ The agent auto-detects its hostname, device type, and local OpenClaw installatio
 
 ---
 
+## Coding Agent Compatibility
+
+This repo is structured to work with both Codex and Claude Code.
+
+- Shared coding-agent instructions live in `AGENTS.md`.
+- `CLAUDE.md` is a thin Claude compatibility wrapper that imports the shared instructions.
+- Subproject-specific guidance lives in nested `AGENTS.md` files under active paths such as `aggregator/`, `frontend/`, `openclaw-client/`, and `e2e/`.
+- Shared Claude project settings live in `.claude/settings.json`; local-only Claude overrides belong in `.claude/settings.local.json`.
+
+For setup and verification details, see `docs/agent-setup.md`.
+
+### Verification Expectations
+
+- UI, browser-flow, and operator-workflow changes must include actual Playwright verification from `e2e/`; curl-only smoke checks are not sufficient.
+- Shared workflow, repo-structure, Docker, or agent-config changes should restart the stack and then run smoke checks plus the narrowest relevant Playwright coverage.
+
+---
+
 ## Setup Details
 
 ### NATS Server (Broker)

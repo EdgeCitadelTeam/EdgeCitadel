@@ -13,7 +13,6 @@ build/
 
 # Node
 node_modules/
-dashboard/dist/
 frontend/dist/
 .vite/
 
@@ -25,9 +24,7 @@ nats/data/
 
 # Claude Code local settings
 .claude/.claude/
-
-# Old dashboard (replaced by frontend/)
-dashboard/
+.claude/settings.local.json
 
 # Environment
 .env

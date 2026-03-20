@@ -18,6 +18,7 @@
       "Bash(mypy *)",
       "Bash(git status *)",
       "Bash(git diff *)",
+      "Bash(git show *)",
       "Bash(git log *)",
       "Bash(git add *)",
       "Bash(git commit *)",
@@ -31,7 +32,11 @@
       "Bash(pip install *)",
       "Bash(mkdir *)",
       "Bash(ls *)",
-      "Bash(cat *)"
+      "Bash(cat *)",
+      "Bash(find *)",
+      "Bash(rg *)",
+      "Bash(sed *)",
+      "Bash(curl *)"
     ]
   }
 }
