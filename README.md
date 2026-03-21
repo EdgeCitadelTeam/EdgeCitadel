@@ -1,10 +1,21 @@
 # EdgeCitadel
 
-Hybrid NATS + MQTT agent communication platform. Connects edge devices (Raspberry Pis, Mac Minis, cloud VMs) through a single NATS server with built-in MQTT adapter, JetStream persistence, and a real-time dashboard.
+Monitor, command, and orchestrate AI agents across edge devices from a single dashboard. Built on NATS 2.10 with MQTT adapter for IoT, JetStream for persistence, and P2P delegation for autonomous agent collaboration.
 
 ## Demo
 
 ![EdgeCitadel Dashboard Demo](docs/demo.gif)
+
+## Features
+
+- **Real-Time Dashboard** — live WebSocket feed of all agent activity, system health, and connection status
+- **P2P Agent Delegation** — agents delegate tasks to peers autonomously with loop detection and depth limits
+- **Communication Flow Graph** — force-directed topology visualization of agent-to-agent message patterns
+- **Task Board** — Kanban-style tracking (Pending → Assigned → Running → Completed/Failed) with priority levels
+- **Message History** — full-text search, correlation ID grouping, and conversation replay via JetStream
+- **LLM Token Streaming** — stream agent responses token-by-token through NATS subjects to the dashboard
+- **Hybrid NATS + MQTT** — native NATS for the backend, built-in MQTT adapter on port 1883 for IoT agents
+- **Single-Token Auth** — one `NATS_TOKEN` secures both NATS and MQTT connections
 
 ## Quick Start
 
@@ -47,32 +58,37 @@ systemctl --user stop edgecitadel-my-agent           # stop
 ## Architecture
 
 ```mermaid
-graph TB
+graph LR
+    subgraph Agents["Edge Agents"]
+        direction TB
+        A1["Mac Mini"]
+        A2["Raspberry Pi"]
+        A3["EC2 Instance"]
+        A1 -.->|P2P| A2
+        A2 -.->|P2P| A3
+        A1 -.->|P2P| A3
+    end
+
     subgraph Server["EdgeCitadel Server"]
+        direction TB
         NATS["NATS 2.10<br/>JetStream + MQTT Adapter"]
-        AGG["Aggregator<br/>(FastAPI + nats-py)"]
+        AGG["Aggregator<br/>FastAPI + nats-py"]
         DB[(SQLite)]
         NG["Nginx"]
         UI["React Dashboard"]
 
-        NATS -->|native NATS :4222| AGG
+        NATS -->|":4222"| AGG
         AGG --> DB
         AGG <-->|WebSocket| NG
         UI --- NG
     end
 
-    subgraph Edge["Edge Agents"]
-        A1["Mac Mini"]
-        A2["Raspberry Pi"]
-        A3["EC2 Instance"]
-    end
-
-    A1 <-->|"MQTT :1883"| NATS
-    A2 <-->|"MQTT :1883"| NATS
-    A3 <-->|"MQTT :1883"| NATS
-
-    Browser["Browser"] <-->|":80"| NG
+    Agents ==>|"MQTT :1883"| NATS
+    Browser(("Browser")) -->|":80"| NG
 ```
+
+> P2P delegation routes through NATS — agents publish to each other's inbox topics.
+> The aggregator observes all traffic (including P2P) via its `agents.>` wildcard subscription.
 
 There is **no separate MQTT broker**. NATS 2.10 has a built-in MQTT adapter that translates MQTT topics (`agents/name/action`) to NATS subjects (`agents.name.action`) automatically.
 
@@ -84,31 +100,38 @@ There is **no separate MQTT broker**. NATS 2.10 has a built-in MQTT adapter that
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Edge Agent (MQTT)
-    participant NATS as NATS Server
-    participant Agg as Aggregator
+    participant Agent as Agent
+    participant Hub as NATS Hub
+    participant Server as Server
     participant UI as Dashboard
 
-    Agent->>NATS: PUB agents/{id}/register (retained)
-    NATS-->>Agg: agents.{id}.register
-    Agg->>Agg: Store in SQLite
-    Agg-->>UI: WebSocket push
-
-    loop Every 30s
-        Agent->>NATS: PUB agents/{id}/heartbeat
-        NATS-->>Agg: agents.{id}.heartbeat
+    rect rgb(240, 248, 255)
+        Note over Agent,UI: 1. Agent comes online
+        Agent->>Hub: Register + heartbeat
+        Hub->>Server: Forward
+        Server->>UI: Show on dashboard
     end
 
-    UI->>Agg: POST /api/agents/{id}/command
-    Agg->>NATS: PUB agents.{id}.inbox
-    NATS-->>Agent: agents/{id}/inbox
-    Agent->>Agent: Execute (openclaw CLI)
-    Agent->>NATS: PUB agents/{id}/outbox
-    NATS-->>Agg: agents.{id}.outbox
-    Agg-->>UI: WebSocket push
+    rect rgb(240, 255, 240)
+        Note over Agent,UI: 2. User sends a command
+        UI->>Server: Send command
+        Server->>Hub: Route to agent
+        Hub->>Agent: Deliver
+        Agent->>Hub: Send response
+        Hub->>Server: Forward
+        Server->>UI: Show response
+    end
+
+    rect rgb(255, 248, 240)
+        Note over Agent,Hub: 3. Agent delegates to another agent
+        Agent->>Hub: Ask Agent B for help
+        Hub->>Agent: Agent B replies
+        Agent->>Agent: Combine results
+        Note over Server: Server monitors all traffic
+    end
 ```
 
-Agents can also delegate tasks peer-to-peer by publishing to another agent's inbox topic, up to 3 levels deep with loop detection.
+P2P delegation has built-in guardrails: max 3 rounds, 90s timeout, loop detection, and depth limits. See [docs/06-p2p-delegation.md](docs/06-p2p-delegation.md).
 
 ## Subjects & Topics
 
@@ -116,8 +139,8 @@ Agents can also delegate tasks peer-to-peer by publishing to another agent's inb
 |---|---|---|
 | `agents/{id}/register` | `agents.{id}.register` | Agent registration |
 | `agents/{id}/heartbeat` | `agents.{id}.heartbeat` | Health metrics |
-| `agents/{id}/inbox` | `agents.{id}.inbox` | Commands to agent |
-| `agents/{id}/outbox` | `agents.{id}.outbox` | Responses from agent |
+| `agents/{id}/inbox` | `agents.{id}.inbox` | Commands to agent (from dashboard or P2P) |
+| `agents/{id}/outbox` | `agents.{id}.outbox` | Responses from agent (+ P2P delegation requests) |
 | `agents/{id}/status` | `agents.{id}.status` | Online/offline |
 | `agents/{id}/log` | `agents.{id}.log` | Log entries |
 | `tasks/{id}/assign` | `tasks.{id}.assign` | Task assignment |
