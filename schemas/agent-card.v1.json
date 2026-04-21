@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/agent-card.v1.json",
+  "title": "EdgeCitadel Agent Card",
+  "description": "Payload of the register message. Self-description of an agent. See docs/agent-contract.md §3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "agent_id",
+    "display_name",
+    "runtime",
+    "capabilities",
+    "endpoints",
+    "heartbeat_interval_sec",
+    "timestamp"
+  ],
+  "properties": {
+    "v": { "const": 1 },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+    },
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "role": { "type": "string", "maxLength": 128 },
+    "device_type": {
+      "type": "string",
+      "enum": ["raspberry_pi", "laptop", "smartphone", "cloud_vm", "server", "mac_mini", "esp32", "jetson", "unknown"]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["framework"],
+      "properties": {
+        "framework": {
+          "type": "string",
+          "description": "How this agent is built. Examples: shell, ag2, langgraph, openclaw, custom.",
+          "minLength": 1
+        },
+        "framework_version": { "type": "string" },
+        "model": { "type": ["string", "null"] },
+        "model_host": { "type": "string", "enum": ["local", "remote", "none"] },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Contract-defined roles. Reserved: worker, watchdog, planner."
+        },
+        "conformance": { "type": "string", "enum": ["L1", "L2", "L3"] }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "maxLength": 64
+      },
+      "uniqueItems": true,
+      "description": "Lowercase hyphenated labels. Advisory only — not for authorization."
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "description"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9_]+$", "maxLength": 64 },
+          "description": { "type": "string", "maxLength": 512 },
+          "modalities": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["text", "image", "audio", "video", "binary"] }
+          },
+          "tool_schema_ref": {
+            "type": "string",
+            "description": "Optional pointer to an MCP tool schema. If present, this capability is invocable as a typed tool."
+          }
+        }
+      }
+    },
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inbox"],
+      "properties": {
+        "inbox": {
+          "type": "string",
+          "pattern": "^agents\\.[a-z0-9][a-z0-9_-]*\\.inbox$"
+        },
+        "mcp": { "type": ["string", "null"], "format": "uri" },
+        "a2a": { "type": ["string", "null"], "format": "uri" }
+      }
+    },
+    "heartbeat_interval_sec": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 600
+    },
+    "listens_broadcast": { "type": "boolean", "default": true },
+    "chain_depth_limit": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10,
+      "default": 3
+    },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/envelope.v1.json",
+  "title": "EdgeCitadel Agent Contract Envelope",
+  "description": "Wire format for all messages published to agents.*.*, tasks.*.*, or system.* subjects. See docs/agent-contract.md §1.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "id", "type", "sender_id", "timestamp", "payload"],
+  "properties": {
+    "v": {
+      "const": 1,
+      "description": "Envelope version. v0.1 uses 1."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+      "description": "UUID4. Unique per message."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "register",
+        "heartbeat",
+        "status",
+        "command",
+        "result",
+        "delegation",
+        "log",
+        "broadcast",
+        "task.assign",
+        "task.progress",
+        "task.complete",
+        "task.failed"
+      ]
+    },
+    "sender_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "description": "Publisher's agent ID. Lowercase, hyphens/underscores allowed."
+    },
+    "recipient_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "description": "Required for command, result, delegation. Omit for broadcasts and lifecycle."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC with ms precision. Example: 2026-04-21T10:00:00.000Z"
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Echoed unchanged across a request/reply conversation."
+    },
+    "causation_id": {
+      "type": "string",
+      "description": "ID of the message that directly caused this one. Enables causal tracing."
+    },
+    "chain_id": {
+      "type": "string",
+      "description": "Shared across all messages in a delegation chain. Used for loop detection."
+    },
+    "ttl_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Advisory drop-after-ms. Requires NTP sync; omit if clock is unreliable."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Type-specific body. Per-type payload schemas are planned for v0.2."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "enum": ["command", "result", "delegation"] } } },
+      "then": { "required": ["recipient_id"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "result" } } },
+      "then": { "required": ["correlation_id"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "delegation" } } },
+      "then": { "required": ["chain_id"] }
+    }
+  ]
+}
