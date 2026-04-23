@@ -73,13 +73,19 @@ one-at-a-time property server-side.
 
 ```
 stream AGENT_INBOX:
-  subjects:  ["agents.*.inbox"]
-  retention: WorkQueuePolicy
-  storage:   file
-  max_age:   24h
-  max_bytes: 1GB          # prevent unbounded growth on aggregator node
-  discard:   old          # drop oldest if cap hit
+  subjects:         ["agents.*.inbox"]
+  retention:        WorkQueuePolicy
+  storage:          file
+  max_age:          24h
+  max_bytes:        1GB           # prevent unbounded growth on aggregator node
+  max_msg_size:     1MB           # per-message cap; LLM tokens stream over SSE
+  discard:          new           # reject new publishes when full (do NOT drop queued work)
+  duplicate_window: 5m            # server-side dedup via Nats-Msg-Id header
 ```
+
+Publishers MUST set the `Nats-Msg-Id` header on every JetStream publish to the envelope's
+`id` field. JetStream deduplicates within `duplicate_window`, so a message whose publish
+client retries (network flap) or whose adapter crashes-before-ack does not execute twice.
 
 Per-agent consumer (created at agent startup):
 
@@ -174,7 +180,22 @@ deprecated names (`receiver_id`, `message_type`, `content`, `from`, `to`) are no
 | `context_id`  | `delegation` (required); `result`, `task.progress`, `cancel` (SHOULD propagate if the task is part of a chain) | A2A context ID; shared across a delegation chain. |
 | `task_state`  | `result` (required), `task.progress` (required), `status` (optional) | A2A task state enum (see below). |
 | `hop_count`   | `delegation` (required)   | Integer, 0 at root, +1 per hop; refuse at ≥8. |
-| `payload`     | all                       | Type-specific body. Always an object; `payload.body` for text; `payload.error` for failure detail. |
+| `payload`     | all                       | Type-specific body. Always an object. See payload shape below. |
+
+**Payload shape.** `payload` is a type-agnostic object. Conventional fields:
+
+| Field           | Present in                     | Semantics                                           |
+|-----------------|--------------------------------|-----------------------------------------------------|
+| `body`          | `command`, `result`, `delegation`, `broadcast`, `log` | Human-readable text (prompt, reply, log message). |
+| `args`          | `command`, `delegation` (optional) | Structured arguments object, agent-specific schema. |
+| `error`         | `result` (when `task_state: failed` or `rejected`) | Short machine-readable error tag.         |
+| `reason`        | `cancel`, `status` (optional)  | Human-readable reason string.                       |
+| `progress`      | `task.progress` (optional)     | Integer 0–100 for known-fraction work.              |
+| `message`       | `task.progress` (optional)     | Human-readable progress description.                |
+| `task_id`       | `cancel` (required)            | The task_id to cancel. Echoed in top-level `task_id` also for routing. |
+
+Unknown payload fields are preserved through the aggregator DB but not interpreted.
+Adapters MAY define additional fields within their own `args` object.
 
 `task_state` enum (A2A v1.0):
 
@@ -376,10 +397,22 @@ JetStream's durable work cheap — heartbeats, logs, and progress updates don't 
 redelivery.
 
 **Sender-side publish semantics:**
-- For `command` / `delegation`: use JetStream `js.publish("agents.{recipient}.inbox", env)` to get at-least-once delivery ack.
-- For `result`: also JetStream, published to the original sender's inbox.
+- For `command` / `delegation` / `cancel` / `result`: use JetStream
+  `js.publish("agents.{recipient}.inbox", env, headers={"Nats-Msg-Id": env["id"]})`.
+  This gives at-least-once delivery ack + server-side dedup within `duplicate_window`.
 - For everything else: plain `nc.publish(subject, env)`.
-- Agents MUST publish to their own `outbox` mirror whenever they publish to another agent's inbox, so observers can see the exchange without scraping JetStream.
+- Agents MUST publish to their own `outbox` mirror whenever they publish to another
+  agent's inbox, so observers can see the exchange without scraping JetStream.
+
+**Publish-failure retry.** If `js.publish` raises or returns an error (broker down,
+stream full, no responder), sender retries with exponential backoff (recommended:
+3 attempts, 100ms → 300ms → 1s). After final failure, sender either (a) surfaces the
+error to its own caller (if driving an HTTP request), or (b) publishes an internal
+`type: log` with level `error` so the aggregator surfaces the stuck message.
+
+**Stream-full behavior.** `AGENT_INBOX` uses `discard: new`, so when full, `js.publish`
+returns an error rather than silently dropping older queued work. The sender's retry
+loop plus the operator's queue-depth observability is the backpressure story for v0.1.
 
 ## Agent lifecycle
 
@@ -410,6 +443,9 @@ dance.
 
 Agents publish `type: heartbeat` to `agents.{self}.heartbeat` at an interval declared
 in their Agent Card under `metadata["runtime.heartbeat_interval_sec"]`. Default 30s.
+Allowed range: 10s–300s. The watchdog clamps out-of-range values to this interval
+before computing the 3× offline threshold.
+
 Payload: `{cpu_percent?, memory_percent?, power_source?, battery_percent?}` — all
 optional, all informational.
 
@@ -427,12 +463,26 @@ Final message before shutdown SHOULD be `{task_state: offline, reason: "shutdown
 Durable consumers are named `{agent_id}_inbox` and MUST be created idempotently
 (create-if-not-exists). On restart, an agent reuses its existing durable consumer;
 any unacked messages in-flight when it crashed will redeliver on the first fetch.
+JetStream `duplicate_window` ensures a redelivered-and-reprocessed message is
+deduplicated by `Nats-Msg-Id` if the adapter re-publishes the same result within
+5 minutes.
 
 On every restart (including clean shutdown and restart), the agent:
 1. Connects to NATS, acquires or reuses its durable consumer.
 2. Re-publishes its Agent Card on `agents.{self}.register`.
 3. Publishes `status: online`.
 4. Begins the fetch loop.
+
+### Graceful shutdown
+
+On SIGTERM or SIGINT:
+1. Stop fetching new messages from the consumer (break the loop after current fetch
+   returns).
+2. If a task is in-flight, finish it: publish `result`, ack the inbox message, then
+   shut down. Bounded by `ack_wait`; if the task exceeds the timeout the shutdown
+   proceeds anyway and the next run redelivers.
+3. Publish `status: offline, payload.reason: "shutdown"`.
+4. Disconnect. Durable consumer persists in JetStream for next startup.
 
 ### Multi-instance same `agent_id`
 
@@ -503,6 +553,8 @@ The aggregator participates in the fleet as a real agent:
 - When the aggregator publishes commands to other agents on behalf of an HTTP caller,
   it uses `sender_id: aggregator` — it does NOT impersonate the caller. The HTTP
   caller's identity lives in `payload.on_behalf_of` if present.
+- Aggregator excludes its own `sender_id` from the cards cache when it sees its own
+  `register` publish reflected back, so `GET /api/agents` lists peers only.
 
 ## Message size and schema evolution
 
@@ -551,6 +603,13 @@ Per session, minimum verification:
 13. **Subject inventory end-to-end:** one E2E spec exercises every subject in the
     Subject Inventory table at least once; aggregator DB rows include every
     `type` enum value.
+14. **Idempotency on redelivery:** publish the same `command` twice with the same
+    `Nats-Msg-Id` within 5 minutes; confirm JetStream delivers it to the consumer
+    only once. Kill adapter after it publishes result but before ack; on redelivery,
+    confirm the adapter either dedups at the application layer or publishes a
+    duplicate result which JetStream's duplicate_window discards.
+15. **Stream-full backpressure:** publish to `AGENT_INBOX` until `max_bytes`; confirm
+    next `js.publish` returns an error (not silent drop).
 
 ## Supported features matrix
 
@@ -572,6 +631,10 @@ Per session, minimum verification:
 | Synthesized failure for offline recipient    | Yes  | Watchdog publishes `task_state: failed, payload.error: recipient_offline` |
 | Intermediate progress events                 | Yes  | `type: task.progress` on dedicated subject |
 | Agent Card discovery after aggregator restart | Yes | `request_register` broadcast; v0.2 replaces with JetStream KV |
+| Server-side dedup on redelivery              | Yes  | `Nats-Msg-Id` header + `duplicate_window: 5m` |
+| Graceful shutdown (offline status + drain)   | Yes  | Adapter lifecycle contract |
+| Structured command arguments                 | Yes  | `payload.args` object |
+| Stream-full backpressure                     | Yes  | `discard: new`; publish returns error |
 | Per-agent JWT auth                           | No   | v0.2; shared `NATS_TOKEN` for v0.1 |
 | Multi-worker per `agent_id` (horizontal)     | No   | v0.2; relax `max_ack_pending` |
 | JetStream clustering                         | No   | When 2nd persistent node exists; [#7817](https://github.com/nats-io/nats-server/issues/7817) gotcha to resolve first |
