@@ -1,10 +1,18 @@
 # Agent Messaging Design — EdgeCitadel v0.1
 
-Status: draft, pending review
-Date: 2026-04-23
+Status: design-complete, pending user review
+Date: 2026-04-23 (rev 5)
 Branch: `feat/agent-contract-v0.1`
-Author: collaborative brainstorm (see `~/workplace/edge-research-notes/agent-contract-execution-plan.md` for the execution plan this spec supersedes)
+Author: collaborative brainstorm (see `~/workplace/edge-research-notes/agent-contract-execution-plan.md` for the prior execution plan this spec supersedes)
 Target spec: `docs/agent-contract.md`
+
+Revision history:
+- rev 1 (initial): three-layer design, migration-compatible
+- rev 2 (clean rebuild): drop migration, wipe DB, canonical names only
+- rev 3 (scenarios): subject inventory, lifecycle, error flows, cancel, ack semantics
+- rev 4 (durability): Nats-Msg-Id dedup, stream backpressure, payload shape, structured args
+- rev 5 (integration): aggregator durable intake, register validation, adapter layout,
+  retirement flow, schema provenance, v0.2 roadmap consolidation
 
 ## Summary
 
@@ -599,10 +607,10 @@ The aggregator participates in the fleet as a real agent:
 ## Message size and schema evolution
 
 **Max message size.** JetStream stream `AGENT_INBOX` is declared with
-`max_msg_size: 1MB`. Sufficient for LLM replies up to ~250k tokens of JSON overhead;
-tokens themselves should stream over the A2A SSE path (Phase 4), not through
-JetStream. Adapters that might produce larger results MUST chunk at the application
-level (not currently any such adapter in v0.1).
+`max_msg_size: 1MB`. Sufficient for LLM replies up to ~250k tokens of JSON overhead.
+Token-level streaming goes over the A2A SSE path (Phase 4), not through JetStream.
+Any adapter producing results larger than 1MB MUST chunk at the application level;
+no v0.1 adapter does.
 
 **Schema version pinning.** `envelope.v == 1` is required. v0.1 agents reject any
 envelope with `v != 1` at the validator. Schema evolution to `v: 2` requires a
@@ -963,6 +971,26 @@ legacy shape.
 | `ports: - "1883:1883"` in docker-compose.yml | Removed | 1.7 |
 | Frontend components reading `receiver_id` / `message_type` | Rewritten for canonical fields | 1.8 |
 | E2E specs asserting on legacy envelope shapes | Rewritten or pruned | 1.7 / 1.8 |
+
+## v0.2 roadmap (consolidated)
+
+All items deferred from v0.1 for a cleaner scope. Each is documented in its relevant
+section above; this is a consolidated forward-look.
+
+| Area                                    | v0.2 plan                                                |
+|-----------------------------------------|----------------------------------------------------------|
+| Agent Card storage                      | JetStream KV bucket `AGENT_CARDS` (key=agent_id); removes the aggregator-restart `request_register` dance |
+| Authentication                          | Per-agent JWT with per-subject grants; retires shared `NATS_TOKEN` |
+| Horizontal scale                        | Multi-worker per `agent_id` by relaxing `max_ack_pending` and declaring queue-group consumers |
+| Hot-standby                             | Two processes sharing one `agent_id` with deterministic card/heartbeat arbitration |
+| DB retention                            | Built-in retention task in aggregator; retires manual cron |
+| Automated retirement                    | Watchdog triggers consumer + card cleanup after N days offline |
+| External A2A edge                       | Expose `A2aAgentServer` HTTP endpoints outside the tailnet with OAuth2/mTLS |
+| Cancel on AG2 agents                    | Real cancel propagation through AG2 group-chat state |
+| Bridge crash-recovery                   | Checkpoint `{task_id → upstream session_id}` to JetStream KV so bridges survive restart |
+| Structured/multimodal payloads          | A2A-style `parts[]` on message payloads; image/audio/file attachments |
+| Multi-node JetStream clustering         | After [#7817](https://github.com/nats-io/nats-server/issues/7817) is verified fixed |
+| Transport binding URI publication       | Move `https://edgecitadel.local/ext/nats-binding/v1` to a stable public domain with a binding spec doc |
 
 ## Implementation notes flagged for execution
 
