@@ -394,6 +394,26 @@ The existing `agent-contract-execution-plan.md` needs these changes:
     similar. Not required for v0.1 completion.
 12. **Session budget:** realistic is now 14–17 sessions, not 7–10.
 
+### Documentation step (applies to every session)
+
+Each session in the execution plan adds a **Documentation** action, performed after code
+changes are applied and before the commit:
+
+> Invoke the `doc-writer` agent (`.claude/agents/doc-writer.md`) with the session's
+> change summary and the list of files touched. Review its proposed edits, apply them,
+> and include the doc updates in the same commit as the code change. Then optionally
+> invoke `document-standards` for a compliance pass.
+
+The `doc-writer` agent owns the mapping of change-type → doc-to-touch (subjects →
+`docs/05-messaging.md`, lifecycle → `docs/agent-contract.md`, API → `docs/08-api-reference.md`,
+etc.) and updates `docs/CHANGELOG.md` under `## [Unreleased]`. For hard-to-reverse
+decisions (protocol / schema / transport pins), it also drafts a new ADR in
+`docs/adr/NNNN-<slug>.md`.
+
+Sessions that produce no user-visible behavior change (pure refactors, internal type
+cleanups) may skip the Documentation step; the agent self-reports "no updates needed"
+in those cases.
+
 ## Open questions flagged for spec review
 
 - **Agent Card storage durability:** v0.1 uses publish-on-connect + aggregator cache.
