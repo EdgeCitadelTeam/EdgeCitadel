@@ -396,6 +396,18 @@ The complete v0.1 subject map. All use NATS dot-form (no MQTT slash-form).
 JetStream's durable work cheap — heartbeats, logs, and progress updates don't need
 redelivery.
 
+**`type: log` storage.** Log envelopes published to `agents.{id}.log` are observed by
+the aggregator's plain NATS subscriber and written to the `messages` DB table with
+`type = 'log'`. Log retention follows the same DB retention as other message types
+(see "Retention" below). Adapters that want sustained structured logging should
+**also** log to their own stdout/stderr (Docker captures those) — the NATS log
+subject is for coarse-grained fleet-wide observability, not full log aggregation.
+
+**Retention.** The aggregator's SQLite `messages` table grows unbounded in v0.1.
+Operators are expected to run a periodic cleanup (`DELETE FROM messages WHERE
+timestamp < datetime('now', '-7 days')`) as a cron job; a built-in retention task
+is v0.2 work. JetStream streams retain per their configured `max_age` / `max_bytes`.
+
 **Sender-side publish semantics:**
 - For `command` / `delegation` / `cancel` / `result`: use JetStream
   `js.publish("agents.{recipient}.inbox", env, headers={"Nats-Msg-Id": env["id"]})`.
@@ -419,9 +431,17 @@ loop plus the operator's queue-depth observability is the backpressure story for
 ### Register
 
 On connect, agent publishes `type: register` to `agents.{self}.register`. Payload is
-the full A2A v1.0 Agent Card. Aggregator subscribes to `agents.*.register` and caches
-cards in memory (in v0.1). The dashboard reads cards from `GET /api/agents` on the
-aggregator.
+the full A2A v1.0 Agent Card. Aggregator subscribes to `agents.*.register`, validates
+the payload against `schemas/agent-card.v1.json` (A2A v1.0 shape + EdgeCitadel
+metadata), and caches cards in memory (in v0.1). Invalid cards are rejected with an
+error log; the agent is treated as "unregistered" and commands to it will fail via
+the watchdog synthesized-failure path.
+
+**`sender_id` must equal the Agent Card's `agent_id`.** A register whose envelope
+`sender_id` doesn't match its payload's declared identity is rejected — this is the
+v0.1 minimum defense against impersonation before per-agent JWT (v0.2).
+
+The dashboard reads cards from `GET /api/agents` on the aggregator.
 
 **Late subscribers.** NATS core does not support retained messages. A client that
 connects after the register publish will not see it. Resolution in v0.1:
@@ -495,6 +515,19 @@ heartbeats.
 
 For v0.1, document: "one `agent_id` = one process." Multi-instance / hot-standby is
 not a supported configuration.
+
+### Retiring an agent
+
+When an agent is permanently removed from the fleet:
+1. Stop the process.
+2. Operator runs `nats consumer rm AGENT_INBOX {agent_id}_inbox` to free JetStream
+   quota.
+3. Operator runs `curl -X DELETE /api/agents/{agent_id}` on the aggregator to drop
+   the cached card.
+4. Any messages still pending for that consumer are orphaned in the stream until
+   `max_age` expires (default 24h).
+
+Automated retirement (triggered by watchdog after N days offline) is v0.2.
 
 ## Error and timeout flows
 
@@ -577,6 +610,20 @@ lockstep upgrade of all publishers and consumers; there is no dual-version suppo
 in v0.1. This is intentional — v0.1 is a clean rebuild and the fleet is small enough
 to upgrade atomically.
 
+**Schema provenance.** Both `schemas/envelope.v1.json` and `schemas/agent-card.v1.json`
+are **vendored** copies. The Agent Card schema is derived from A2A v1.0 with
+EdgeCitadel's metadata vocabulary spelled out explicitly. `scripts/update-a2a-schema.sh`
+(to be written in Session 1.2) pulls the latest A2A schema, diffs against our
+vendored copy, and surfaces the diff for human review. We do not fetch A2A schemas at
+runtime — supply chain and reproducibility require vendoring.
+
+**Outbound envelope validation.** Adapters MUST validate envelopes against
+`schemas/envelope.v1.json` before publishing. This is not cosmetic: the aggregator's
+inbound validator will drop malformed envelopes silently (to preserve its own liveness
+under attack), so an adapter that publishes garbage will see its messages vanish
+without obvious cause. The `adapters/_common/pull_consumer.py` wraps every publish
+helper with validation.
+
 ## Verification
 
 Per session, minimum verification:
@@ -622,6 +669,14 @@ Per session, minimum verification:
     processed (written to DB) on startup, not lost.
 17. **`task_id` ownership:** HTTP POST `/api/command/<agent_id>` returns a task_id
     in the response body; subsequent results from the agent echo that exact task_id.
+18. **Register payload validation:** publish a register envelope whose `sender_id`
+    differs from the payload Agent Card's `agent_id`, or whose card violates the
+    schema; confirm the aggregator rejects and does NOT cache; error logged.
+19. **Outbound envelope validation:** an adapter that attempts to publish an invalid
+    envelope (e.g., missing `task_id` on a `result`) is blocked by the
+    `_common/pull_consumer` wrapper with a clear error, not silently sent and dropped.
+20. **Retirement cleanup:** after `nats consumer rm` + `DELETE /api/agents/{id}`,
+    the agent is gone from `nats consumer ls AGENT_INBOX` and `GET /api/agents`.
 
 ## Supported features matrix
 
@@ -743,13 +798,18 @@ model no longer applies. v0.1 is a clean rebuild. New phase shape:
 ### Phase 3 — Operational hardening
 
 11. **3.1 — Watchdog.** nats-py native. Subscribes `agents.*.heartbeat` and the
-    MAX_DELIVERIES advisory subject. Publishes `status: offline` on
-    `agents.watchdog-1.outbox` after 3× interval miss. Publishes **synthesized failure
-    results** on `agents.{sender}.inbox` (via JetStream) when a command to an offline
-    agent fails delivery — envelope is `type: result, task_state: failed,
-    payload.error: "recipient_offline"`, with `sender_id: watchdog-1` and the
-    original `task_id` echoed. Its own card declares `runtime.roles: ["watchdog"]`.
-    Does not impersonate timed-out agents.
+    MAX_DELIVERIES advisory subject. Holds a durable consumer on
+    `agents.watchdog-1.inbox` following the same convention as all other adapters
+    (`max_ack_pending: 1`); default handler rejects unknown commands with
+    `task_state: rejected, payload.reason: "unknown_command"`. Publishes
+    `status: offline` on `agents.watchdog-1.outbox` after 3× interval miss.
+    Publishes **synthesized failure results** on `agents.{sender}.inbox` (via
+    JetStream) when a command to an offline agent fails delivery — envelope is
+    `type: result, task_state: failed, payload.error: "recipient_offline"`, with
+    `sender_id: watchdog-1` and the original `task_id` echoed. Bootstrap default:
+    expects heartbeats every 30s from any agent it hasn't seen register yet.
+    Its own card declares `runtime.roles: ["watchdog"]`. Does not impersonate
+    timed-out agents.
 12. **3.2 — Agent registry view (dashboard).** Per-agent panel: card (name, roles, tags,
     deployment), heartbeat freshness, queue depth, poison-message count, online/offline.
     Can be implemented in parallel with 3.1; verification requires 3.1 complete.
