@@ -3,40 +3,44 @@
 Status: draft, pending review
 Date: 2026-04-23
 Branch: `feat/agent-contract-v0.1`
-Author: collaborative brainstorm (see `~/workplace/edge-research-notes/agent-contract-execution-plan.md` for the execution plan this spec extends)
+Author: collaborative brainstorm (see `~/workplace/edge-research-notes/agent-contract-execution-plan.md` for the execution plan this spec supersedes)
 Target spec: `docs/agent-contract.md`
 
 ## Summary
 
-Define how agent-to-agent messages are queued, delivered, and lifecycled when the recipient
-is mid-task. The design has three layers:
+v0.1 is a **clean rebuild** of EdgeCitadel's messaging layer. No backward compatibility
+with the mid-2024-era MQTT+slash-topic codebase. Canonical field names from day one.
+Strict envelope validation. SQLite DB is wiped and recreated on first boot. The design
+has three layers:
 
 - **Transport:** NATS JetStream WorkQueue, one stream over `agents.*.inbox`, one durable pull
   consumer per agent with `max_ack_pending=1`. Server-enforced sequential processing per agent.
-- **Semantic:** Adopt the Google A2A protocol's task lifecycle vocabulary (`task_state`,
-  `task_id`, `context_id`) on top of our existing envelope. Borrow the names; keep NATS as the
-  wire.
-- **Adapter:** For v0.1 Phase 2–3, a thin nats-py pull-consumer loop wrapping `ConversableAgent`.
-  For Phase 4, wrap each AG2 agent in `A2aAgentServer` for HTTP+SSE streaming, bridged to NATS.
+- **Semantic:** A2A v1.0 task lifecycle vocabulary on every envelope (`task_id`, `context_id`,
+  `task_state`, `hop_count`). A2A v1.0 Agent Card shape for `register`.
+- **Adapter:** nats-py async pull-consumer loop for Phase 2–3 (shell, Gemma, watchdog). For
+  Phase 4, wrap each AG2 agent in `A2aAgentServer` for HTTP+SSE streaming, bridged to NATS.
 
-Openclaw-client migrates from paho-mqtt to nats.js in v0.1. MQTT adapter on NATS is retired
-from the primary path.
+openclaw-client is rewritten in nats.js with canonical field names only. Shell adapter is
+rewritten in nats-py async and supersedes `273e80a`. MQTT block is removed from `nats.conf`
+on day one.
 
 ## Problem
 
-Today, when A sends a message to B while B is executing:
-- The shell adapter has a dead `error: busy` code branch; in practice paho's single-threaded
-  callback implicitly serializes.
-- Any future nats-py adapter (AG2, watchdog) will process messages concurrently by default —
-  silent heterogeneity the spec does not address.
-- Adapter crash = in-flight work lost; sender has no signal to retry.
-- AG2's `ConversableAgent` is not thread-safe.
-- HiveMind (arXiv 2604.17111) documents 72–100% failure rate for uncoordinated LLM agents
-  under contention vs 0–18% with admission control.
+The existing mid-2024-era codebase has three problems this spec resolves together:
 
-The v0.1 goal is: make sequential processing an enforced property of the system, not an
-adapter-local convention, and give operators durability + observability without infrastructure
-changes beyond what NATS already supports.
+1. **Undefined busy-agent semantics.** When A sends a message to B while B is executing:
+   the shell adapter has a dead `error: busy` branch; paho's single-threaded callback
+   incidentally serializes; any nats-py adapter (AG2, watchdog) would process
+   concurrently by default. HiveMind ([arXiv 2604.17111](https://arxiv.org/html/2604.17111))
+   documents 72–100% failure rate for uncoordinated LLM agents under contention.
+2. **Heterogeneous transport and field names.** MQTT + slash-topics in clients; NATS + dots
+   in aggregator. Aliases like `from`/`to`/`receiver_id`/`message_type` everywhere.
+3. **No durability.** Adapter crash = in-flight work lost; no observability into queue depth;
+   no poison-message detection.
+
+Rather than layer a migration on top, v0.1 rebuilds the messaging layer from scratch with
+a coherent transport (NATS+JetStream only), a coherent vocabulary (A2A v1.0 on every
+envelope), and strict validation. Nothing in production depends on the legacy shapes.
 
 ## Goals
 
@@ -46,7 +50,8 @@ changes beyond what NATS already supports.
 4. Queue depth per agent is observable from the aggregator.
 5. Envelope vocabulary is compatible with the A2A v1.0 task lifecycle so future external
    agents can interop without envelope translation.
-6. AG2 v0.12 adapter works end-to-end for L2 conformance (delegation + chain_id).
+6. AG2 v0.12 adapter works end-to-end for L2 conformance (delegation + `context_id` +
+   `hop_count` loop protection).
 7. openclaw-client uses NATS natively; no MQTT bridge in the primary path.
 
 ## Non-goals (v0.1)
@@ -121,27 +126,32 @@ stream needed in v0.1.
 
 ### Semantic layer: A2A lifecycle vocabulary
 
-Envelope additions (backward-compatible in v0.1; deprecated old names removed in v0.2):
+Canonical envelope fields for v0.1. Strict: schema rejects unknown fields at the top level;
+deprecated names (`receiver_id`, `message_type`, `content`, `from`, `to`) are not accepted.
 
-| New field     | Required for              | Maps to / semantics                          |
+| Field         | Required for              | Semantics                                    |
 |---------------|---------------------------|----------------------------------------------|
-| `task_id`     | `command`, `result`, `delegation` | Alias of `correlation_id` — identical semantics |
-| `context_id`  | `delegation`              | Alias of `chain_id` — identical semantics    |
-| `task_state`  | Optional on `result` and intermediate progress messages | A2A task state enum |
-| `hop_count`   | `delegation` (required)   | Integer, starts at 0 on root delegation, +1 at each hop, refuse at ≥8 |
+| `v`           | all                       | Envelope version integer. v0.1 = `1`.        |
+| `id`          | all                       | UUID4 per message.                           |
+| `type`        | all                       | One of `register`, `heartbeat`, `status`, `command`, `result`, `delegation`, `log`, `broadcast`, `task.progress`. |
+| `sender_id`   | all                       | Publisher's agent ID.                        |
+| `recipient_id`| `command`, `result`, `delegation` | Addressee's agent ID.                |
+| `timestamp`   | all                       | ISO 8601 UTC with ms precision, `Z` suffix.  |
+| `task_id`     | `command`, `result`, `delegation` | A2A task ID; echoed across request/reply. |
+| `context_id`  | `delegation`              | A2A context ID; shared across a delegation chain. |
+| `task_state`  | `result` and `task.progress` | A2A task state enum (see below).           |
+| `hop_count`   | `delegation` (required)   | Integer, 0 at root, +1 per hop; refuse at ≥8. |
+| `payload`     | all                       | Type-specific body. Always an object; `payload.body` for text. |
 
-`task_state` enum (borrowed from A2A v1.0):
+`task_state` enum (A2A v1.0):
 
 ```
 submitted | working | input-required | completed | failed | canceled | rejected | auth-required
 ```
 
-Our existing `type: result` continues to exist; `task_state` refines what kind of result
-(`completed` vs `failed` vs `rejected`). The current `error` field in result payload becomes
-a detail of `task_state: failed`.
-
-During v0.1 the envelope schema accepts either set. Publishers SHOULD emit canonical (A2A)
-names; consumers MUST accept both. v0.2 drops the old names.
+Terminal states: `completed`, `failed`, `canceled`, `rejected`. Intermediate progress uses
+`type: task.progress` with `task_state: working` (or `input-required`, `auth-required`).
+Failure details go in `payload.error`.
 
 ### Agent Card and A2A extensions
 
@@ -232,34 +242,42 @@ A2A v1.0; no v0.3 clients expected at launch.
 
 **Loop protection:**
 
-`context_id` (née `chain_id`) carries a hop counter in envelope field `hop_count`, incremented
+`context_id` carries a hop counter in envelope field `hop_count`, incremented
 at each delegation. Refuse delegation at `hop_count >= 8`. This is an envelope-level
 mechanism; not per-process visit-sets (which don't detect cross-process cycles).
 
-### openclaw-client NATS port
+### openclaw-client rewrite
 
-Replace `paho-mqtt` with `@nats-io/nats` in openclaw-client. Changes:
-- `mqtt.connect(url, creds)` → `connect({ servers, token: NATS_TOKEN })`.
-- Subject form `agents/${id}/inbox` → `agents.${id}.inbox`.
-- `client.subscribe(topic, {qos: 1})` → `nc.subscribe(subject)` (no QoS; use JetStream for
-  durability where required).
-- `client.publish(topic, payload, {qos: 1})` → `js.publish(subject, payload)` for durable
-  publishes; plain `nc.publish(subject, payload)` for ephemeral (e.g., heartbeats).
-- Retained `register` message → JetStream `kv`-style pattern or republish on reconnect.
-  Simplest v0.1: publish on connect; aggregator caches. (Deferred detail: evaluate
-  JetStream KV for Agent Card storage in v0.2.)
+openclaw-client is rewritten in `@nats-io/nats`. Legacy paho-mqtt code is deleted, not
+wrapped. The rewrite uses:
+- `connect({ servers, token: NATS_TOKEN })` for plain NATS (heartbeats, status).
+- JetStream `js.publish(subject, payload)` for durable messages (commands, results,
+  delegations).
+- Subject form `agents.{id}.inbox` / `agents.{id}.heartbeat` / `agents.{id}.register`.
+- Canonical envelope fields only — no aliases. `recipient_id`, `type`, `task_id`, etc.
+- `register` publishes an A2A v1.0 Agent Card on startup; aggregator caches it.
 
-E2E tests touching openclaw flows will break and need updates. Budget ~1 session for the
-test migration in addition to the port.
+E2E test fixtures and assertions are rewritten to match the new envelope shape. Specs
+that asserted on legacy fields (`receiver_id`, `message_type`) are updated or pruned.
 
-### MQTT port retirement
+### MQTT removal
 
-`mqtt` block in `nats.conf` retained for one v0.1 release (in case a legacy publisher lags)
-but no EdgeCitadel-internal publisher uses it. v0.2 removes the block.
+`mqtt { port: 1883, ... }` block is removed from `nats.conf` on v0.1 first boot. Port
+1883 in docker-compose.yml is removed. No MQTT publisher or subscriber remains in the
+EdgeCitadel-internal fleet.
 
-Shell adapter: port from paho to nats-py as part of the Phase 1 work to unify the adapter
-story. Current shell adapter env vars `CITADEL_HOST` / `CITADEL_PORT` change to `NATS_URL`.
-Existing committed shell adapter (`273e80a`) is superseded.
+### Shell adapter rewrite
+
+The shell adapter is rewritten in nats-py async. Env vars `CITADEL_HOST` / `CITADEL_PORT`
+are replaced by `NATS_URL`. The rewrite uses the same pull-consumer pattern as every other
+v0.1 adapter. `273e80a`'s shell adapter is deleted, not ported.
+
+### Database wipe
+
+The existing SQLite DB at `/data/openclaw.db` is wiped on v0.1 first boot. New schema
+uses canonical column names: `recipient_id` (not `receiver_id`), `type` (not
+`message_type`), matching envelope field names. Indexes recreated accordingly. No
+migration script; the deployment note says "expect to lose dev message history."
 
 ### Bridge pattern for external runtimes
 
@@ -316,33 +334,37 @@ Per session, minimum verification:
    on `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` and dashboard surfaces it.
 5. **Queue depth observable:** new aggregator endpoint `/api/agents/{id}/queue` returning
    `{pending, ack_pending}` from JetStream; dashboard displays.
-6. **A2A vocab round-trip:** publisher emits `task_id`; aggregator reads both `task_id` and
-   `correlation_id` with no warnings.
-7. **openclaw-client:** all existing Playwright specs pass after port.
-8. **AG2 adapter (Phase 4):** planner→worker delegation with shared `context_id`, visible
+6. **Strict envelope validation:** publishing a legacy-shape message (e.g., with
+   `receiver_id` instead of `recipient_id`) is rejected by the validator and dropped; the
+   event logs the reason. No silent acceptance.
+7. **openclaw-client:** rewritten Playwright specs pass end-to-end against the new envelope.
+8. **Fresh DB schema:** `sqlite3 openclaw.db ".schema messages"` shows canonical column
+   names (`recipient_id`, `type`); no `receiver_id` / `message_type` columns remain.
+9. **AG2 adapter (Phase 4):** planner→worker delegation with shared `context_id`, visible
    chain in dashboard, loop protection refuses at `hop_count=8`.
 
 ## Supported features matrix
 
-| Feature                                      | v0.1 | v0.2 plan | Notes |
-|----------------------------------------------|------|-----------|-------|
-| Per-agent FIFO enforced by broker            | Yes  | —         | `max_ack_pending=1` |
-| Crash-survival / redelivery                  | Yes  | —         | `ack_wait` + `max_deliver` |
-| Poison-message detection                     | Yes  | —         | Advisories |
-| Queue-depth observability                    | Yes  | —         | `nats consumer info` |
-| A2A task lifecycle vocabulary                | Yes  | Rename-only | Aliased envelope fields |
-| AG2 L2 delegation + loop protection          | Yes  | —         | `hop_count` in envelope |
-| LLM token streaming                          | Yes (Phase 4) | — | A2A SSE, not over NATS |
-| Agent Card discovery (A2A-native in v0.1)    | Yes  | Add `/.well-known/agent-card.json` HTTP endpoint (Phase 4) | v0.1 publishes A2A Agent Card JSON via `register`; Phase 4 AG2 adapter also serves HTTP |
-| A2A extension: NATS transport binding        | Yes  | —         | `https://edgecitadel.local/ext/nats-binding/v1` profile extension |
-| Bridge pattern for non-A2A runtimes          | Yes  | KV-checkpoint for bridge crash-recovery | v0.1 marks `failed` on bridge restart |
-| NATS-native client for all v0.1 agents       | Yes  | —         | openclaw-client ported; shell adapter ported |
-| Per-agent JWT auth                           | No   | Planned   | Shared `NATS_TOKEN` for v0.1 |
-| Multi-worker per `agent_id` (horizontal)     | No   | Possible  | Relax `max_ack_pending` |
-| JetStream clustering                         | No   | When 2nd persistent node exists | [#7817](https://github.com/nats-io/nats-server/issues/7817) gotcha to resolve first |
-| MQTT 5.0 features                            | No   | No        | Blocked on NATS adapter |
-| Native A2A wire protocol on external edge    | No   | Possible  | Currently NATS-internal; can expose A2A HTTP endpoints |
-| Zenoh / P2P transport                        | No   | v0.3+     | Major rewrite |
+| Feature                                      | v0.1 | Notes |
+|----------------------------------------------|------|-------|
+| Per-agent FIFO enforced by broker            | Yes  | `max_ack_pending=1` |
+| Crash-survival / redelivery                  | Yes  | `ack_wait` + `max_deliver` |
+| Poison-message detection                     | Yes  | JetStream advisories |
+| Queue-depth observability                    | Yes  | `nats consumer info` + `/api/agents/{id}/queue` |
+| A2A v1.0 task lifecycle vocabulary           | Yes  | Canonical envelope fields |
+| A2A v1.0 Agent Card in `register`            | Yes  | Full card shape; legacy fields in `metadata` |
+| AG2 L2 delegation + loop protection          | Yes  | `hop_count` in envelope |
+| LLM token streaming                          | Yes (Phase 4) | A2A SSE; not over NATS |
+| A2A extension: NATS transport binding        | Yes  | `https://edgecitadel.local/ext/nats-binding/v1` profile extension |
+| Bridge pattern for non-A2A runtimes          | Yes  | Bridges declare `runtime.kind=bridge` |
+| NATS-native client for all v0.1 agents       | Yes  | openclaw-client rewritten; shell adapter rewritten |
+| Strict envelope validation                   | Yes  | Non-conformant messages dropped |
+| Per-agent JWT auth                           | No   | v0.2; shared `NATS_TOKEN` for v0.1 |
+| Multi-worker per `agent_id` (horizontal)     | No   | v0.2; relax `max_ack_pending` |
+| JetStream clustering                         | No   | When 2nd persistent node exists; [#7817](https://github.com/nats-io/nats-server/issues/7817) gotcha to resolve first |
+| MQTT (any version)                           | No   | Removed entirely; no bridge retained |
+| Native A2A wire protocol on external edge    | No   | v0.2 possibility via `A2aAgentServer` HTTP endpoints |
+| Zenoh / P2P transport                        | No   | v0.3+; major rewrite |
 
 ## Known limitations we are accepting
 
@@ -361,38 +383,92 @@ Per session, minimum verification:
 
 ## Impact on the execution plan
 
-The existing `agent-contract-execution-plan.md` needs these changes:
+The prior `agent-contract-execution-plan.md` is **superseded** — its dual-emit / migration
+model no longer applies. v0.1 is a clean rebuild. New phase shape:
 
-1. **New Session 1.4 — JetStream bootstrap.** Stream + per-agent consumer declarations.
-   Aggregator gains advisory subscriber and `/api/agents/{id}/queue` endpoint.
-2. **Session 1.1 extended:** envelope schema adds A2A alias fields (`task_id`, `context_id`,
-   `task_state`, `hop_count`) alongside existing fields; validator accepts both. LWT
-   guidance paragraph stays. `schemas/agent-card.v1.json` is replaced by A2A v1.0 Agent
-   Card shape; our legacy fields move to `metadata`.
-3. **Session 1.2 replaced:** openclaw-client is ported from paho-mqtt to nats.js. Dual-emit
-   of field names is preserved during v0.1; wire-level transport is NATS-only. E2E specs
-   updated. Larger than the original dual-emit session; budget 1.5×.
-4. **New Session 1.5 — Shell adapter port.** From paho to nats-py. Uses pull consumer with
-   `max_ack_pending=1`. Supersedes `273e80a`'s shell adapter.
-5. **New Session 1.6 — Shared Agent Card factory.** `adapters/_common/agent_card.py` that
-   builds a v1.0 A2A Agent Card from per-agent YAML config. Used by shell, Gemma, watchdog,
-   and the Phase 4 AG2 adapter.
-6. **Session 1.3 moves:** becomes the end-of-Phase-1 smoke test against the new transport
-   and Agent Card shape.
-7. **Phase 2.1 Gemma adapter:** uses nats-py pull-consumer pattern (not the plan's fictional
-   `handle_message` swap). Uses shared Agent Card factory. Budget ~60 lines (not 30).
-8. **Phase 3.1 watchdog:** nats-py native; subscribes `agents.*.heartbeat`; publishes
-   status under `agents.watchdog-1.outbox`. Card declares `metadata.runtime.roles = ["watchdog"]`.
-9. **Phase 4 API update:** `register_hand_off(OnCondition(target=AgentTarget|...))` and
-   `autogen.agentchat.group.AutoPattern` / `RoundRobinPattern` — not Swarm. Pin
-   `ag2>=0.12,<0.13`. `A2aRemoteAgent` async-only (`a_run` not `run`).
-10. **New Session 4.4 — A2A wrapper.** `A2aAgentServer(agent, agent_card=card).build()` +
-    NATS bridge process per AG2 agent. Serves `/.well-known/agent-card.json` alongside the
-    existing `agents.{id}.register` publish.
-11. **Optional Phase 5+ — Bridge adapter for Hermes/ACP runtime.** Covered by the bridge
-    pattern in this spec; only implemented if/when we onboard Nous Hermes Agent or
-    similar. Not required for v0.1 completion.
-12. **Session budget:** realistic is now 14–17 sessions, not 7–10.
+### Phase 1 — Messaging foundation (clean rebuild)
+
+1. **1.1 — Envelope schema + strict validation.** `schemas/envelope.v1.json` is the canonical
+   A2A-aligned schema (`v`, `id`, `type`, `sender_id`, `recipient_id`, `task_id`,
+   `context_id`, `task_state`, `hop_count`, `payload`). `additionalProperties: false` at
+   the top level. Aggregator loads the schema and drops non-conformant messages with a
+   logged reason. LWT paragraph in `docs/agent-contract.md §2.3`.
+2. **1.2 — Agent Card schema (A2A v1.0).** `schemas/agent-card.v1.json` replaced with the
+   A2A v1.0 Agent Card shape. EdgeCitadel metadata vocabulary (`runtime.kind`,
+   `runtime.roles`, `runtime.tags`, `runtime.deployment`, `runtime.upstream`) documented
+   and schema-validated inside `metadata`.
+3. **1.3 — Aggregator rewrite.** Drop all `receiver_id` / `message_type` / alias-fallback
+   reader code. Canonical field readers only. `database.py` schema rewritten: columns
+   `recipient_id`, `type` (not `receiver_id`, `message_type`). Indexes updated. DB wipe
+   on first boot (new schema; no migration script).
+4. **1.4 — JetStream bootstrap.** `AGENT_INBOX` stream on `agents.*.inbox` with
+   `WorkQueuePolicy`. Per-agent consumer helper. Aggregator gains advisory subscriber on
+   `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` and endpoint
+   `/api/agents/{id}/queue` returning `{pending, ack_pending}`.
+5. **1.5 — Shared Agent Card factory.** `adapters/_common/agent_card.py` builds a v1.0 A2A
+   Agent Card from per-agent YAML config. Consumed by shell, Gemma, watchdog, and the
+   Phase 4 AG2 adapter.
+6. **1.6 — Shell adapter rewrite.** nats-py async, pull consumer with `max_ack_pending=1`.
+   Uses the shared card factory. `273e80a`'s paho adapter is deleted.
+7. **1.7 — openclaw-client rewrite.** `@nats-io/nats`. Canonical fields only. Retained
+   MQTT block deleted from `nats.conf`; port 1883 removed from docker-compose. E2E test
+   fixtures and assertions rewritten for the new envelope shape; specs that tested legacy
+   shapes are pruned.
+8. **1.8 — Frontend rewrite.** All components reading `receiver_id` / `message_type`
+   updated to canonical fields. New queue-depth and poison-message surfaces wired to the
+   new aggregator endpoints.
+9. **1.9 — End-of-phase smoke test.** Fresh `docker compose down && up --build -d`, empty
+   DB, echo shell adapter round-trip through the full rebuilt stack, one representative
+   Playwright spec covering dashboard + conversation view.
+
+### Phase 2 — Gemma smoke test
+
+10. **2.1 — Gemma adapter.** `adapters/gemma/gemma_adapter.py` copies the shell adapter's
+    pull-consumer shape; replaces the handler body with an HTTP call to Ollama
+    (`POST /api/generate`, `stream: false`). Uses shared card factory.
+    **Preflight:** verify `$OLLAMA_MODEL` tag exists via `ollama list` / `ollama pull`
+    before writing code. Defaults: `gemma4:12b` preferred if present; `gemma3:12b` safe
+    floor.
+
+### Phase 3 — Operational hardening
+
+11. **3.1 — Watchdog.** nats-py native. Subscribes `agents.*.heartbeat`. Publishes
+    `status: offline` on `agents.watchdog-1.outbox` after 3× interval miss. Its own card
+    declares `runtime.roles: ["watchdog"]`. Does not impersonate timed-out agents.
+12. **3.2 — Agent registry view (dashboard).** Per-agent panel: card (name, roles, tags,
+    deployment), heartbeat freshness, queue depth, poison-message count, online/offline.
+    Can be implemented in parallel with 3.1; verification requires 3.1 complete.
+
+### Phase 4 — AG2 + A2A wrapper
+
+13. **4.1 — AG2 adapter L1 scaffold.** Pin `ag2>=0.12,<0.13`. Maps `ConversableAgent`
+    send/receive onto NATS via the shared pull-consumer pattern. Uses
+    `autogen.agentchat.group` orchestration (not deprecated Swarm). `A2aRemoteAgent`
+    async-only (`a_run` everywhere).
+14. **4.2 — AG2 L2 delegation + loop protection.** Maps AG2 hand-offs (registered via
+    `register_hand_off(OnCondition(target=AgentTarget(...)))`) onto `type: delegation`
+    envelopes. `hop_count` increments at each delegation publish; refuse at ≥8.
+15. **4.3 — Delegation chain view (dashboard).** `/api/chains/{context_id}` endpoint +
+    chain timeline UI.
+16. **4.4 — A2A HTTP wrapper.** `A2aAgentServer(agent, agent_card=card).build()` + NATS
+    bridge. Serves `/.well-known/agent-card.json` over HTTP alongside the NATS
+    `register` publish. Enables LLM token streaming via SSE.
+
+### Phase 5 — Permanent Gemma fleet member
+
+17. **5.1 — deploy-mac-mini.sh.** One-command Mac Mini deploy. **Preflight documented:**
+    (a) `.env` copied to the Mac Mini via Tailscale; (b) `BROKER_HOST` set to the
+    broker's tailnet name / LAN IP; (c) operator verifies the shared token has JetStream
+    permissions before deploying (one-line `nats consumer add` smoke on the broker host).
+
+### Optional, v0.1+
+
+18. **Bridge adapter for Hermes / ACP runtime.** Only if/when Nous Hermes Agent is
+    onboarded. Covered by the bridge pattern in this spec; not required for v0.1
+    completion.
+
+**Session budget:** 17 core sessions plus the optional bridge. Expect 1–2 fix sessions
+for issues surfaced during verification.
 
 ### Documentation step (applies to every session)
 
@@ -414,6 +490,25 @@ Sessions that produce no user-visible behavior change (pure refactors, internal 
 cleanups) may skip the Documentation step; the agent self-reports "no updates needed"
 in those cases.
 
+## Legacy code disposition
+
+Everything below is deleted or rewritten in Phase 1. No code survives the rebuild in
+legacy shape.
+
+| What                                         | Disposition      | Session |
+|----------------------------------------------|------------------|---------|
+| `adapters/shell/shell_adapter.py` (`273e80a`, paho) | Deleted, rewritten nats-py async | 1.6 |
+| `openclaw-client/mqtt-listener.js` (paho)    | Deleted, rewritten @nats-io/nats | 1.7 |
+| `aggregator/aggregator.py` alias fallbacks (`from`/`to`/`sender`/`assigned_agent`) | Deleted | 1.3 |
+| `aggregator/database.py` `messages.receiver_id`, `messages.message_type` columns + indexes | Dropped; new schema with `recipient_id`, `type` | 1.3 |
+| `/data/openclaw.db` existing file            | Wiped on first boot | 1.3 / deploy |
+| `schemas/agent-card.v1.json` legacy shape    | Replaced with A2A v1.0 Agent Card shape | 1.2 |
+| `schemas/envelope.v1.json` permissiveness (`additionalProperties: true`) | Tightened; strict validation | 1.1 |
+| `mqtt { port: 1883, ... }` block in `nats.conf` | Removed | 1.7 |
+| `ports: - "1883:1883"` in docker-compose.yml | Removed | 1.7 |
+| Frontend components reading `receiver_id` / `message_type` | Rewritten for canonical fields | 1.8 |
+| E2E specs asserting on legacy envelope shapes | Rewritten or pruned | 1.7 / 1.8 |
+
 ## Open questions flagged for spec review
 
 - **Agent Card storage durability:** v0.1 uses publish-on-connect + aggregator cache.
@@ -423,8 +518,6 @@ in those cases.
   not surface the envelope layer; verify that our adapter increments `hop_count` before
   publishing the outbound delegation envelope on NATS — not after, not inside AG2's chat
   history. Test during Phase 4.2.
-- **Aggregator dashboard surface for poison messages:** new panel in the agent registry
-  view, or inline next to per-agent queue depth. UX decision during Phase 3.2.
 - **NATS transport binding URI stability:** we mint `https://edgecitadel.local/ext/nats-binding/v1`
   as a placeholder. If we later publish EdgeCitadel as an open project, the URI should
   move to a stable public domain and a spec document should live at that URL describing
