@@ -3,7 +3,8 @@
 Status: design-complete, pending user review
 Date: 2026-04-23 (rev 5)
 Branch: `feat/agent-contract-v0.1`
-Author: collaborative brainstorm (see `~/workplace/edge-research-notes/agent-contract-execution-plan.md` for the prior execution plan this spec supersedes)
+Author: collaborative brainstorm (supersedes a prior execution plan kept outside the
+repo; not required reading)
 Target spec: `docs/agent-contract.md`
 
 Revision history:
@@ -13,6 +14,14 @@ Revision history:
 - rev 4 (durability): Nats-Msg-Id dedup, stream backpressure, payload shape, structured args
 - rev 5 (integration): aggregator durable intake, register validation, adapter layout,
   retirement flow, schema provenance, v0.2 roadmap consolidation
+- rev 6 (external review): document-standards pass caught 6 real defects —
+  (a) JetStream fanout claim was wrong → switched to outbox-mirror as authoritative
+  audit path; (b) `task_state` overloaded on status → introduced `agent_state`;
+  (c) watchdog synthesized-failure trigger was ambiguous → pin to MAX_DELIVERIES
+  advisory only; (d) watchdog consumer table contradicted session text → reconciled;
+  (e) AG2 API symbols asserted without pin-time verification → explicit verify note;
+  (f) stale docs (05-messaging, 08-api-reference, CHANGELOG) → scheduled as session
+  deliverables. Pending ADRs enumerated.
 
 ## Summary
 
@@ -123,11 +132,14 @@ while not shutdown:
     msgs = await sub.fetch(batch=1, timeout=30)
     for msg in msgs:
         env = json.loads(msg.data)
+        # Kick off a background task to extend ack_wait periodically.
+        keepalive = asyncio.create_task(_keepalive(msg, cadence=ack_wait / 3))
         try:
             # handle_envelope must:
             #   1. process the command/delegation/cancel
-            #   2. publish the result envelope to the sender's inbox
-            #   3. call msg.in_progress() every (ack_wait/3)s if work is long
+            #   2. publish the result envelope to the sender's inbox (JetStream,
+            #      with Nats-Msg-Id header set to envelope id)
+            #   3. also publish to agents.{self}.outbox for aggregator audit
             #   4. return only when done
             await handle_envelope(env, msg)
             await msg.ack()
@@ -135,13 +147,24 @@ while not shutdown:
             await msg.nak()        # redeliver after backoff
         except FatalError:
             await msg.term()       # poison — move to DLQ via advisory
+        finally:
+            keepalive.cancel()
+
+async def _keepalive(msg, cadence: float):
+    while True:
+        await asyncio.sleep(cadence)
+        await msg.in_progress()   # extends ack_wait
 ```
 
-Advisory subscriber (aggregator-side, informational):
+Advisory subscriber (watchdog + aggregator, authoritative for synthesized failures):
 
 ```
 $JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>
 ```
+
+**Stream name is case-sensitive** — `AGENT_INBOX` exactly. Creating the stream as
+`agent_inbox` (lowercase) would make the advisory subject pattern miss. Session 1.4
+bootstrap script enforces the all-caps name.
 
 Logged as poison-message events in the dashboard's agent registry view. No separate DLQ
 stream needed in v0.1.
@@ -161,15 +184,33 @@ seconds. Per-adapter `ack_wait` defaults:
 | shell              | 30s        | Subprocess timeout bounds it                         |
 | gemma / LLM        | 300s       | Ollama latency; `in_progress` ticks every 100s       |
 | AG2 (with delegation) | 600s    | Chain latency; `in_progress` ticks every 200s        |
-| watchdog           | n/a        | Does not hold inbox consumer                         |
+| watchdog           | 30s        | Holds inbox consumer per convention; handler typically no-ops on unknown commands |
 
-**Aggregator observation.** The aggregator observes fleet traffic via **plain NATS
-subscriptions**, not JetStream consumers. Plain subscribers see every message published
-on `agents.>`, `tasks.>`, and `system.>` regardless of whether that message was also
-persisted to JetStream for durable delivery. JetStream's `AGENT_INBOX` handles
-routing to the recipient; the aggregator's plain subscriber handles audit/dashboard.
-The two do not conflict: WorkQueue retention removes messages from the stream on ack,
-but the original NATS publish already fanned out to plain subscribers.
+**Aggregator observation.** The aggregator observes fleet traffic via two paths,
+with the outbox mirror as the load-bearing one for inbox traffic:
+
+1. **`outbox` mirror (authoritative for inbox traffic).** Every adapter MUST
+   publish a copy of its outbound inbox messages (`command`, `result`, `delegation`,
+   `cancel`) to its own `agents.{self}.outbox` subject via plain NATS immediately
+   after the JetStream publish succeeds. The aggregator subscribes to
+   `agents.*.outbox` and treats that as the canonical source for dashboard
+   conversation views. Outbox is plain NATS; aggregator must be online to receive
+   each outbox publish — if aggregator is down during an outbox publish, that event
+   is lost for the dashboard (but the inbox message itself was durably delivered to
+   the recipient via JetStream, and the recipient's eventual `result` will show up
+   once aggregator reconnects).
+2. **Plain NATS subscriptions on `agents.>`, `tasks.>`, `system.>`** for all other
+   ephemeral subjects (heartbeat, status, log, register, broadcast, outbox,
+   task_progress). These subjects are never bound to a JetStream stream so there is
+   no ambiguity about fan-out.
+
+Why not a JetStream audit consumer on `AGENT_INBOX` directly? WorkQueuePolicy
+requires that filter subjects across consumers on the stream be disjoint — an audit
+consumer with filter `agents.*.inbox` would overlap with every per-agent recipient
+consumer. To share the stream, the audit consumer would need its own
+`InterestPolicy`-retention stream mirror, which adds disk cost and duplicate
+storage. The outbox-mirror pattern gets the same observability at no stream cost
+and aligns with how MQTT systems typically handle audit.
 
 ### Semantic layer: A2A lifecycle vocabulary
 
@@ -186,7 +227,8 @@ deprecated names (`receiver_id`, `message_type`, `content`, `from`, `to`) are no
 | `timestamp`   | all                       | ISO 8601 UTC with ms precision, `Z` suffix.  |
 | `task_id`     | `command`, `result`, `delegation`, `cancel`, `task.progress` | A2A task ID (UUID4). Generated by the originator of the task; echoed unchanged by all responders. New `task_id` for each delegation hop (child task ≠ parent task); use `context_id` to group them. |
 | `context_id`  | `delegation` (required); `result`, `task.progress`, `cancel` (SHOULD propagate if the task is part of a chain) | A2A context ID; shared across a delegation chain. |
-| `task_state`  | `result` (required), `task.progress` (required), `status` (optional) | A2A task state enum (see below). |
+| `task_state`  | `result` (required), `task.progress` (required) | A2A task state enum (see below). Does NOT appear on `status` envelopes. |
+| `agent_state` | `status` (required)       | EdgeCitadel agent-state enum: `online | offline | busy | error`. Separate from `task_state` to avoid enum collision. |
 | `hop_count`   | `delegation` (required)   | Integer, 0 at root, +1 per hop; refuse at ≥8. |
 | `payload`     | all                       | Type-specific body. Always an object. See payload shape below. |
 
@@ -290,13 +332,27 @@ For AG2 agents specifically:
 3. Both the A2A HTTP endpoint at `/.well-known/agent-card.json` AND the NATS
    `agents.{agent_id}.register` publish serve the same Agent Card JSON.
 
-**AG2-specific constraints:**
-- `A2aRemoteAgent.run()` fails; use `a_run()` exclusively. Our adapter code is async-first.
-- AG2's `A2aAgentServer` in v0.12 auto-populates only `name` and `description`; everything
-  else comes from our factory.
-- AG2 group-chat API: use `autogen.agentchat.group` with `AutoPattern` / `RoundRobinPattern`
-  and `register_hand_off(OnCondition(target=AgentTarget(...)))`. Swarm is deprecated.
-- Pin: `ag2>=0.12,<0.13`. Expect breaking changes across minor bumps until v1.0.
+**AG2-specific constraints** (all symbol names below are expected API per AG2 v0.11
+release notes and the A2A integration blog post, but MUST be verified against the
+pinned `ag2==0.12.x` wheel at Session 4.1 start — AG2 is pre-1.0 with breaking
+changes across minor bumps):
+
+- `A2aRemoteAgent.run()` fails; use `a_run()` exclusively. Adapter code is async-first.
+  Expected import: `from autogen.agentchat.a2a import A2aRemoteAgent, A2aAgentServer`.
+- `A2aAgentServer` auto-populates only `name` and `description` from the wrapped
+  `ConversableAgent`; everything else comes from our Agent Card factory. Expected
+  construction: `A2aAgentServer(agent, agent_card=card)`; whether the server is
+  started via `.build()`, `.serve()`, or `.run()` depends on the pinned wheel — pick
+  one at Session 4.1 start and update this spec and the session body.
+- AG2 group-chat API: expected namespace is `autogen.agentchat.group` with pattern
+  classes `AutoPattern` / `RoundRobinPattern` / `RandomPattern` / `ManualPattern` /
+  `DefaultPattern`; hand-offs via
+  `register_hand_off(OnCondition(target=AgentTarget(...)))`. Swarm is deprecated
+  (v0.9+). If the actual import path or class names differ at pin time, update this
+  spec.
+- Pin: `ag2>=0.12,<0.13`. Session 4.1 begins with 15 minutes of pin-time
+  verification: import each expected symbol, confirm `a_run` / `a_initiate_chat`
+  signatures, and surface any mismatch before writing the adapter.
 
 **A2A version compatibility:** if we later upgrade A2A, set `enable_v0_3_compat=True` on the
 server to keep older clients working during migration windows. Current spec target is
@@ -378,9 +434,10 @@ redelivery the bridge either resumes (if the upstream protocol supports session 
 marks the task `failed` with reason `bridge_restart_lost_session` so the sender can retry.
 Checkpointing `{task_id → session_id}` to JetStream KV for bridge crash-recovery is v0.2.
 
-**Applicability note:** "openclaw/hermes" in EdgeCitadel conversations most likely refers
-to Nous Research's Hermes Agent (the OpenClaw alternative runtime). If instead it means
-something repo-specific that a future reader understands, re-scope this section.
+**Applicability note:** the reference target for the first bridge implementation is
+Nous Research's Hermes Agent (ACP-native, Feb 2026). The pattern applies to any
+non-A2A-native runtime; the Hermes-specific details (ACP session semantics,
+prompt/response mapping) are in the bridge implementation, not in this spec.
 
 ## Subject inventory
 
@@ -394,7 +451,8 @@ The complete v0.1 subject map. All use NATS dot-form (no MQTT slash-form).
 | `agents.{id}.log`                        | Agent (self)     | Aggregator                       | Plain NATS (ephemeral) | `log`            |
 | `agents.{id}.inbox`                      | Any sender       | Agent's durable consumer         | **JetStream `AGENT_INBOX`** | `command`, `result`, `delegation`, `cancel` |
 | `agents.{id}.task_progress.{task_id}`    | Agent processing a task | Subscribers interested in live progress (aggregator, Phase 4 SSE bridge) | Plain NATS (ephemeral) | `task.progress`  |
-| `agents.{id}.outbox`                     | Agent (self)     | Aggregator (audit)               | Plain NATS (ephemeral) | Mirror of what `{id}` is sending |
+| `agents.{id}.outbox`                     | Agent (self)     | Aggregator (audit, authoritative for inbox traffic) | Plain NATS (ephemeral) | Mirror of what `{id}` is sending |
+| `agents.watchdog-1.outbox`               | Watchdog         | Aggregator                       | Plain NATS (ephemeral) | `status: offline` notices about other agents (non-impersonating) |
 | `system.broadcast`                       | Any              | All agents                       | Plain NATS (ephemeral) | `broadcast`      |
 | `tasks.{task_id}.{event}`                | Aggregator       | Dashboard (WS)                   | Plain NATS            | Task board events|
 | `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` | JetStream (internal) | Aggregator | Plain NATS            | Poison-message alerts |
@@ -415,6 +473,12 @@ subject is for coarse-grained fleet-wide observability, not full log aggregation
 Operators are expected to run a periodic cleanup (`DELETE FROM messages WHERE
 timestamp < datetime('now', '-7 days')`) as a cron job; a built-in retention task
 is v0.2 work. JetStream streams retain per their configured `max_age` / `max_bytes`.
+
+**Naming convention.** NATS subjects use underscores within segments and dots as
+separators (`agents.{id}.task_progress.{task_id}`). Envelope `type` values use dots
+following A2A lifecycle conventions (`task.progress`). This dual convention is
+intentional: subject = NATS dot-separator-only rule; type = A2A-aligned value. An
+implementer should not try to reconcile them.
 
 **Sender-side publish semantics:**
 - For `command` / `delegation` / `cancel` / `result`: use JetStream
@@ -479,12 +543,14 @@ optional, all informational.
 
 ### Status
 
-Agents publish `type: status` to `agents.{self}.status` when state changes:
-`{task_state: online | offline | busy | error, reason?}`. The watchdog or operator
-may also publish status-of-others using the watchdog's own `sender_id` (never
-impersonate — see watchdog rule).
+Agents publish `type: status` to `agents.{self}.status` when state changes. The
+envelope's `agent_state` field (not `task_state` — those are different concepts)
+carries one of: `online`, `offline`, `busy`, `error`. Payload may include
+`payload.reason`. The watchdog or operator may also publish status-of-others using
+the watchdog's own `sender_id` (never impersonate — see watchdog rule).
 
-Final message before shutdown SHOULD be `{task_state: offline, reason: "shutdown"}`.
+Final message before shutdown SHOULD be `agent_state: offline,
+payload.reason: "shutdown"`.
 
 ### Restart / re-registration
 
@@ -509,8 +575,15 @@ On SIGTERM or SIGINT:
 2. If a task is in-flight, finish it: publish `result`, ack the inbox message, then
    shut down. Bounded by `ack_wait`; if the task exceeds the timeout the shutdown
    proceeds anyway and the next run redelivers.
-3. Publish `status: offline, payload.reason: "shutdown"`.
+3. Publish `status` with `agent_state: offline, payload.reason: "shutdown"`.
 4. Disconnect. Durable consumer persists in JetStream for next startup.
+
+**Docker `stop_grace_period`.** `docker compose down` sends SIGTERM, waits
+`stop_grace_period` (default 10s), then SIGKILL. v0.1 adapters MUST declare
+`stop_grace_period` in docker-compose.yml matching or exceeding their `ack_wait`:
+shell = 35s, gemma = 310s, ag2 = 610s. Operators accept that `docker compose down`
+of an AG2 adapter mid-task waits up to ~10 minutes for graceful finish; if they
+need faster teardown they accept task loss + redelivery on next up.
 
 ### Multi-instance same `agent_id`
 
@@ -544,16 +617,30 @@ Automated retirement (triggered by watchdog after N days offline) is v0.2.
 If A publishes `command` to `agents.B.inbox` and B is offline, the message sits in
 `AGENT_INBOX` until:
 - B reconnects and consumes it, OR
-- `ack_wait` expires `max_deliver` times (default 3 × 300s = 15min) and the message
-  is terminated via the MAX_DELIVERIES advisory.
+- `ack_wait` expires `max_deliver` times and the message is terminated via the
+  MAX_DELIVERIES advisory. Wall-clock time depends on B's adapter type:
+  shell = 3 × 30s = 1.5min; LLM (Gemma) = 3 × 300s = 15min; AG2 = 3 × 600s = 30min.
 
 **Synthesized failure.** To prevent A from waiting forever, the watchdog publishes a
 `type: result` envelope (with its own `sender_id: watchdog-1` and `task_id` matching
-A's original) carrying `task_state: failed, payload.error: "recipient_offline"` when
-either:
-- The recipient has been `offline` in the watchdog's view for > (N × heartbeat_interval)
-  at the time of the publish (watchdog notices at publish time via its own NATS trace), or
-- A MAX_DELIVERIES advisory fires for a message addressed to an offline recipient.
+A's original) carrying `task_state: failed, payload.error: "recipient_offline"`.
+
+**The sole trigger is the JetStream MAX_DELIVERIES advisory.** When JetStream
+terminates a message after `max_deliver` attempts, it fires
+`$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.<agent_id>.<consumer>` with
+the original message subject and metadata. The watchdog subscribes to that advisory
+subject, extracts the message's original `sender_id` and `task_id` from the advisory
+payload (which includes the delivered-but-unacked message headers), and publishes the
+synthesized result to `agents.{original_sender}.inbox` via JetStream with
+`Nats-Msg-Id: watchdog-syn-{original_task_id}` to prevent duplicate synthesis on
+advisory replay.
+
+This is a single, precise trigger. Earlier drafts contemplated additional triggers
+(watchdog detects offline status proactively and pre-empts the retry cycle) but
+those require the watchdog to observe inbox traffic, which conflicts with the
+disjoint-filter rule on `AGENT_INBOX`. Relying solely on MAX_DELIVERIES keeps the
+watchdog subscribed only to advisories and heartbeats, not to per-agent inbox
+traffic.
 
 The watchdog's synthesized result is published on `agents.{A}.inbox` the same way a
 real result would be. A consumes it and knows B couldn't be reached.
@@ -578,8 +665,18 @@ partial side-effects (e.g., subprocess writes).
 
 If A delegates `task_id: T` to B, and B delegates sub-task `task_id: T2` (same
 `context_id`), cancelling `T` at A does NOT automatically cancel `T2`. The adapter
-that is handling T is responsible for propagating cancel to its child delegations
-if it wants to. v0.1 documents this behavior; does not enforce it.
+handling `T` is responsible for propagating cancel to its child delegations if it
+wants to.
+
+For adapters that care about chain-cancel, the pattern is: maintain an in-memory
+`{parent_task_id → child_task_id[]}` map per active `context_id`. On receiving a
+`cancel` for a parent, publish `cancel` envelopes for each child before marking
+the parent `canceled`. This map is not persisted; if the adapter restarts, in-flight
+chain-cancel propagation is lost (child tasks will complete normally unless
+cancelled by their own receivers).
+
+v0.1 documents this behavior; does not enforce it. AG2 adapter in v0.1 does not
+implement chain-cancel (see Cancel on AG2 agents limitation).
 
 ## Aggregator's fleet identity
 
@@ -685,6 +782,16 @@ Per session, minimum verification:
     `_common/pull_consumer` wrapper with a clear error, not silently sent and dropped.
 20. **Retirement cleanup:** after `nats consumer rm` + `DELETE /api/agents/{id}`,
     the agent is gone from `nats consumer ls AGENT_INBOX` and `GET /api/agents`.
+21. **Outbox audit path:** publish a `command` from A to B via JetStream; confirm the
+    aggregator receives it via `agents.A.outbox` (plain NATS) and writes it to DB,
+    regardless of whether plain subscribers see JetStream-published subjects.
+22. **Agent state enum disjoint from task_state:** publish a `status` envelope with
+    `agent_state: busy`; confirm validator accepts. Publish a `result` with
+    `task_state: busy`; confirm validator rejects (not in A2A enum).
+23. **Pin-time AG2 verification (Session 4.1):** `python -c "from autogen.agentchat.a2a
+    import A2aRemoteAgent, A2aAgentServer; from autogen.agentchat.group import
+    AutoPattern; ..."` runs without ImportError against the pinned wheel; any mismatch
+    surfaces before adapter code is written.
 
 ## Supported features matrix
 
@@ -742,8 +849,8 @@ Per session, minimum verification:
   interrupt path through group-chat orchestration.
 - **Aggregator cache is lost on aggregator restart.** Mitigated by the
   `request_register` broadcast dance. JetStream KV for card storage is v0.2.
-- **AG2 v0.11+ API churn:** ag2 is pre-1.0 with breaking changes across minor bumps.
-  Pin tightly and expect refactor work on each upgrade.
+- **AG2 v0.12 API churn:** ag2 is pre-1.0 with breaking changes across minor bumps.
+  Pin tightly (`>=0.12,<0.13`) and expect refactor work on each upgrade.
 - **Max message size is 1MB.** Larger LLM outputs must stream over A2A SSE (Phase 4),
   not through JetStream.
 
@@ -759,22 +866,36 @@ model no longer applies. v0.1 is a clean rebuild. New phase shape:
    `context_id`, `task_state`, `hop_count`, `payload`). Type enum includes `cancel`.
    `additionalProperties: false` at the top level. Aggregator loads the schema and drops
    non-conformant messages with a logged reason.
-2. **1.2 — Agent Card schema (A2A v1.0).** `schemas/agent-card.v1.json` replaced with the
-   A2A v1.0 Agent Card shape. EdgeCitadel metadata vocabulary (`runtime.kind`,
-   `runtime.roles`, `runtime.tags`, `runtime.deployment`, `runtime.upstream`) documented
-   and schema-validated inside `metadata`.
+2. **1.2 — Agent Card schema (A2A v1.0).** `schemas/agent-card.v1.json` is replaced
+   **in-place** with the A2A v1.0 Agent Card shape (same filename to keep imports
+   stable; legacy v0 shape is dropped entirely per the clean rebuild). EdgeCitadel
+   metadata vocabulary (`runtime.kind`, `runtime.roles`, `runtime.tags`,
+   `runtime.deployment`, `runtime.upstream`) documented and schema-validated inside
+   `metadata`. Session also writes `scripts/update-a2a-schema.sh` which pulls the
+   latest A2A v1.x schema from upstream, diffs against our vendored copy, and
+   surfaces the diff for human review (does NOT auto-merge).
 3. **1.3 — Aggregator rewrite.** Drop all `receiver_id` / `message_type` / alias-fallback
    reader code. Canonical field readers only. `database.py` schema rewritten: columns
-   `recipient_id`, `type`, `task_id`, `context_id`, `task_state` (not `receiver_id`,
-   `message_type`). Indexes updated. DB wipe on first boot (new schema; no migration
-   script). Aggregator publishes its own `type: register` Agent Card on
-   `agents.aggregator.register` at startup. Aggregator subscribes to `agents.*.register`,
-   caches cards, and serves `GET /api/agents` and `GET /api/agents/{id}/card`.
-   Aggregator handles the `request_register` rebroadcast dance after its own restart.
+   `recipient_id`, `type`, `task_id`, `context_id`, `task_state`, `agent_state` (not
+   `receiver_id`, `message_type`). Indexes updated. DB wipe on first boot (new schema;
+   no migration script).
+   - Plain NATS subscribers: `agents.*.outbox` (authoritative audit), `agents.*.register`,
+     `agents.*.heartbeat`, `agents.*.status`, `agents.*.log`, `system.broadcast`.
+   - Publishes its own `type: register` Agent Card on `agents.aggregator.register`.
+   - Holds durable JetStream consumer `aggregator_inbox` on `agents.aggregator.inbox`
+     (`max_ack_pending: 100`, no serial constraint) to drain results from HTTP-driven
+     commands.
+   - Serves `GET /api/agents`, `GET /api/agents/{id}/card`, `DELETE /api/agents/{id}`;
+     `POST /api/command/{agent_id}` returns a `task_id`.
+   - Handles the `request_register` rebroadcast dance after its own restart.
+   - Rewrites `docs/08-api-reference.md` to match the new endpoints and response shapes.
 4. **1.4 — JetStream bootstrap.** `AGENT_INBOX` stream on `agents.*.inbox` with
-   `WorkQueuePolicy`. Per-agent consumer helper. Aggregator gains advisory subscriber on
-   `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` and endpoint
-   `/api/agents/{id}/queue` returning `{pending, ack_pending}`.
+   `WorkQueuePolicy`, `discard: new`, `max_msg_size: 1MB`, `duplicate_window: 5m`.
+   Per-agent consumer helper in `adapters/_common/pull_consumer.py`. Aggregator gains
+   advisory subscriber on `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>`
+   and endpoint `/api/agents/{id}/queue` returning `{pending, ack_pending}`. Rewrites
+   `docs/05-messaging.md` with the new subject inventory and removes MQTT content.
+   Drafts ADR for NATS JetStream WorkQueue adoption.
 5. **1.5 — Shared adapter common.** `adapters/_common/` package:
    - `pull_consumer.py` — JetStream pull-consumer loop (handles fetch, in_progress,
      ack, nak, term, `Nats-Msg-Id` header on outbound publishes).
@@ -859,6 +980,10 @@ for issues surfaced during verification.
 
 ### Documentation step (applies to every session)
 
+*(This subsection is execution-plan content, not spec content. When the spec is
+migrated to `docs/agent-contract.md` in Session 1.1, this subsection stays in the
+sibling execution plan, not the contract doc.)*
+
 Each session in the execution plan adds a **Documentation** action, performed after code
 changes are applied and before the commit:
 
@@ -876,6 +1001,27 @@ decisions (protocol / schema / transport pins), it also drafts a new ADR in
 Sessions that produce no user-visible behavior change (pure refactors, internal type
 cleanups) may skip the Documentation step; the agent self-reports "no updates needed"
 in those cases.
+
+**Doc files that must be rewritten for v0.1** (not patched — the pre-v0.1 docs
+describe the retired MQTT+slash-topic system):
+- `docs/agent-contract.md` — rewrite to match this spec as the authoritative
+  v0.1 contract. Primary deliverable of Session 1.1.
+- `docs/05-messaging.md` — rewrite for canonical A2A field names, subject
+  inventory, JetStream transport, MQTT removal. Deliverable of Session 1.4.
+- `docs/08-api-reference.md` — rewrite `GET /api/agents`, `GET /api/agents/{id}`,
+  `GET /api/agents/{id}/card`, `GET /api/agents/{id}/queue`,
+  `GET /api/chains/{context_id}`, `POST /api/command/{agent_id}` (returns
+  `task_id`, not `correlation_id`); remove `mqtt_connected` from `/system/status`.
+  Deliverable split across sessions 1.3, 1.4, 4.3.
+- `docs/CHANGELOG.md` — add v0.1 entry summarizing the clean rebuild. Deliverable
+  of the final Phase 1 session.
+
+**Pending ADRs to draft** (tracked as session deliverables, not open questions):
+- ADR-00NN: NATS JetStream WorkQueue for per-agent serialization (Session 1.4)
+- ADR-00NN: A2A v1.0 vocabulary adoption on NATS transport (Session 1.1)
+- ADR-00NN: MQTT removal from EdgeCitadel (Session 1.7)
+- ADR-00NN: Outbox mirror as authoritative aggregator audit path (Session 1.3)
+- ADR-00NN: `hop_count` over visit-set for delegation loop protection (Session 4.2)
 
 ## Extensibility: adding a new agent type
 
