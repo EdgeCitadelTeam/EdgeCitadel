@@ -93,7 +93,10 @@ consumer {agent_id}_inbox:
   max_deliver:     3
 ```
 
-Adapter loop (pseudocode):
+Adapter loop (pseudocode). The contract: `handle_envelope` MUST complete the full task
+(including publishing the `result` envelope) before returning. Ack happens only after
+a successful return. For long tasks, `handle_envelope` periodically calls
+`msg.in_progress()` to extend `ack_wait`.
 
 ```python
 js = await nc.jetstream()
@@ -107,7 +110,12 @@ while not shutdown:
     for msg in msgs:
         env = json.loads(msg.data)
         try:
-            await handle_envelope(env)
+            # handle_envelope must:
+            #   1. process the command/delegation/cancel
+            #   2. publish the result envelope to the sender's inbox
+            #   3. call msg.in_progress() every (ack_wait/3)s if work is long
+            #   4. return only when done
+            await handle_envelope(env, msg)
             await msg.ack()
         except TransientError:
             await msg.nak()        # redeliver after backoff
@@ -124,6 +132,31 @@ $JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>
 Logged as poison-message events in the dashboard's agent registry view. No separate DLQ
 stream needed in v0.1.
 
+**Delegation ack semantics.** When an adapter receives a `command` or `delegation`, it
+does NOT ack immediately. Ack happens only after the adapter publishes the final
+`result` envelope. Rationale: `max_ack_pending=1` only provides serial-execution
+guarantees if the message stays unacked for the whole task. Otherwise it becomes
+at-most-one-delivery, not serial.
+
+Adapters MUST call `msg.in_progress()` periodically to extend `ack_wait` for tasks
+longer than the configured `ack_wait`. Recommended cadence: every `ack_wait / 3`
+seconds. Per-adapter `ack_wait` defaults:
+
+| Adapter            | `ack_wait` | Notes                                                |
+|--------------------|------------|------------------------------------------------------|
+| shell              | 30s        | Subprocess timeout bounds it                         |
+| gemma / LLM        | 300s       | Ollama latency; `in_progress` ticks every 100s       |
+| AG2 (with delegation) | 600s    | Chain latency; `in_progress` ticks every 200s        |
+| watchdog           | n/a        | Does not hold inbox consumer                         |
+
+**Aggregator observation.** The aggregator observes fleet traffic via **plain NATS
+subscriptions**, not JetStream consumers. Plain subscribers see every message published
+on `agents.>`, `tasks.>`, and `system.>` regardless of whether that message was also
+persisted to JetStream for durable delivery. JetStream's `AGENT_INBOX` handles
+routing to the recipient; the aggregator's plain subscriber handles audit/dashboard.
+The two do not conflict: WorkQueue retention removes messages from the stream on ack,
+but the original NATS publish already fanned out to plain subscribers.
+
 ### Semantic layer: A2A lifecycle vocabulary
 
 Canonical envelope fields for v0.1. Strict: schema rejects unknown fields at the top level;
@@ -133,15 +166,15 @@ deprecated names (`receiver_id`, `message_type`, `content`, `from`, `to`) are no
 |---------------|---------------------------|----------------------------------------------|
 | `v`           | all                       | Envelope version integer. v0.1 = `1`.        |
 | `id`          | all                       | UUID4 per message.                           |
-| `type`        | all                       | One of `register`, `heartbeat`, `status`, `command`, `result`, `delegation`, `log`, `broadcast`, `task.progress`. |
+| `type`        | all                       | One of `register`, `heartbeat`, `status`, `command`, `result`, `delegation`, `cancel`, `log`, `broadcast`, `task.progress`. |
 | `sender_id`   | all                       | Publisher's agent ID.                        |
-| `recipient_id`| `command`, `result`, `delegation` | Addressee's agent ID.                |
+| `recipient_id`| `command`, `result`, `delegation`, `cancel` | Addressee's agent ID.       |
 | `timestamp`   | all                       | ISO 8601 UTC with ms precision, `Z` suffix.  |
-| `task_id`     | `command`, `result`, `delegation` | A2A task ID; echoed across request/reply. |
-| `context_id`  | `delegation`              | A2A context ID; shared across a delegation chain. |
-| `task_state`  | `result` and `task.progress` | A2A task state enum (see below).           |
+| `task_id`     | `command`, `result`, `delegation`, `cancel`, `task.progress` | A2A task ID; echoed across request/reply. |
+| `context_id`  | `delegation` (required); `result`, `task.progress`, `cancel` (SHOULD propagate if the task is part of a chain) | A2A context ID; shared across a delegation chain. |
+| `task_state`  | `result` (required), `task.progress` (required), `status` (optional) | A2A task state enum (see below). |
 | `hop_count`   | `delegation` (required)   | Integer, 0 at root, +1 per hop; refuse at ≥8. |
-| `payload`     | all                       | Type-specific body. Always an object; `payload.body` for text. |
+| `payload`     | all                       | Type-specific body. Always an object; `payload.body` for text; `payload.error` for failure detail. |
 
 `task_state` enum (A2A v1.0):
 
@@ -320,6 +353,171 @@ Checkpointing `{task_id → session_id}` to JetStream KV for bridge crash-recove
 to Nous Research's Hermes Agent (the OpenClaw alternative runtime). If instead it means
 something repo-specific that a future reader understands, re-scope this section.
 
+## Subject inventory
+
+The complete v0.1 subject map. All use NATS dot-form (no MQTT slash-form).
+
+| Subject                                  | Published by     | Consumed by                      | Persistence           | Envelope `type`  |
+|------------------------------------------|------------------|----------------------------------|-----------------------|------------------|
+| `agents.{id}.register`                   | Agent (self)     | Aggregator (plain sub)           | Plain NATS (ephemeral) + aggregator cache | `register`       |
+| `agents.{id}.heartbeat`                  | Agent (self)     | Watchdog + aggregator            | Plain NATS (ephemeral) | `heartbeat`      |
+| `agents.{id}.status`                     | Agent (self)     | Watchdog + aggregator            | Plain NATS (ephemeral) | `status`         |
+| `agents.{id}.log`                        | Agent (self)     | Aggregator                       | Plain NATS (ephemeral) | `log`            |
+| `agents.{id}.inbox`                      | Any sender       | Agent's durable consumer         | **JetStream `AGENT_INBOX`** | `command`, `result`, `delegation`, `cancel` |
+| `agents.{id}.task_progress.{task_id}`    | Agent processing a task | Subscribers interested in live progress (aggregator, Phase 4 SSE bridge) | Plain NATS (ephemeral) | `task.progress`  |
+| `agents.{id}.outbox`                     | Agent (self)     | Aggregator (audit)               | Plain NATS (ephemeral) | Mirror of what `{id}` is sending |
+| `system.broadcast`                       | Any              | All agents                       | Plain NATS (ephemeral) | `broadcast`      |
+| `tasks.{task_id}.{event}`                | Aggregator       | Dashboard (WS)                   | Plain NATS            | Task board events|
+| `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` | JetStream (internal) | Aggregator | Plain NATS            | Poison-message alerts |
+
+**Routing rule:** only `agents.{id}.inbox` is persistent (goes through JetStream's
+`AGENT_INBOX` stream). Everything else is plain NATS fire-and-forget. This keeps
+JetStream's durable work cheap — heartbeats, logs, and progress updates don't need
+redelivery.
+
+**Sender-side publish semantics:**
+- For `command` / `delegation`: use JetStream `js.publish("agents.{recipient}.inbox", env)` to get at-least-once delivery ack.
+- For `result`: also JetStream, published to the original sender's inbox.
+- For everything else: plain `nc.publish(subject, env)`.
+- Agents MUST publish to their own `outbox` mirror whenever they publish to another agent's inbox, so observers can see the exchange without scraping JetStream.
+
+## Agent lifecycle
+
+### Register
+
+On connect, agent publishes `type: register` to `agents.{self}.register`. Payload is
+the full A2A v1.0 Agent Card. Aggregator subscribes to `agents.*.register` and caches
+cards in memory (in v0.1). The dashboard reads cards from `GET /api/agents` on the
+aggregator.
+
+**Late subscribers.** NATS core does not support retained messages. A client that
+connects after the register publish will not see it. Resolution in v0.1:
+- Aggregator's `GET /api/agents/{id}/card` and `GET /api/agents` (list) serve the
+  cached Agent Card JSON for any agent it has seen.
+- New clients (dashboard, other adapters) call that HTTP endpoint on startup rather
+  than relying on NATS retention.
+- If the aggregator itself restarts, it loses its cache. It solicits re-registration
+  by publishing `type: broadcast` with `payload: {action: "request_register"}` on
+  `system.broadcast`. All online agents re-publish their cards on receipt. Deadline:
+  agents reply within 5s; aggregator considers any card it hasn't received by then
+  "agent offline until heartbeat."
+
+v0.2 replaces this with a JetStream KV bucket (`AGENT_CARDS`, key = `agent_id`) so
+card discovery is durable and aggregator-crash-safe without the re-registration
+dance.
+
+### Heartbeat
+
+Agents publish `type: heartbeat` to `agents.{self}.heartbeat` at an interval declared
+in their Agent Card under `metadata["runtime.heartbeat_interval_sec"]`. Default 30s.
+Payload: `{cpu_percent?, memory_percent?, power_source?, battery_percent?}` — all
+optional, all informational.
+
+### Status
+
+Agents publish `type: status` to `agents.{self}.status` when state changes:
+`{task_state: online | offline | busy | error, reason?}`. The watchdog or operator
+may also publish status-of-others using the watchdog's own `sender_id` (never
+impersonate — see watchdog rule).
+
+Final message before shutdown SHOULD be `{task_state: offline, reason: "shutdown"}`.
+
+### Restart / re-registration
+
+Durable consumers are named `{agent_id}_inbox` and MUST be created idempotently
+(create-if-not-exists). On restart, an agent reuses its existing durable consumer;
+any unacked messages in-flight when it crashed will redeliver on the first fetch.
+
+On every restart (including clean shutdown and restart), the agent:
+1. Connects to NATS, acquires or reuses its durable consumer.
+2. Re-publishes its Agent Card on `agents.{self}.register`.
+3. Publishes `status: online`.
+4. Begins the fetch loop.
+
+### Multi-instance same `agent_id`
+
+Running two processes with the same `AGENT_ID` is discouraged but not blocked at the
+transport layer. Both processes bind to the same durable consumer; JetStream delivers
+each message to exactly one of them (work-sharing). Heartbeats and register publishes
+are last-write-wins at the aggregator cache. Operators who want hot-standby should
+accept that the aggregator's dashboard will flicker between the two processes'
+heartbeats.
+
+For v0.1, document: "one `agent_id` = one process." Multi-instance / hot-standby is
+not a supported configuration.
+
+## Error and timeout flows
+
+### Recipient offline
+
+If A publishes `command` to `agents.B.inbox` and B is offline, the message sits in
+`AGENT_INBOX` until:
+- B reconnects and consumes it, OR
+- `ack_wait` expires `max_deliver` times (default 3 × 300s = 15min) and the message
+  is terminated via the MAX_DELIVERIES advisory.
+
+**Synthesized failure.** To prevent A from waiting forever, the watchdog publishes a
+`type: result` envelope (with its own `sender_id: watchdog-1` and `task_id` matching
+A's original) carrying `task_state: failed, payload.error: "recipient_offline"` when
+either:
+- The recipient has been `offline` in the watchdog's view for > (N × heartbeat_interval)
+  at the time of the publish (watchdog notices at publish time via its own NATS trace), or
+- A MAX_DELIVERIES advisory fires for a message addressed to an offline recipient.
+
+The watchdog's synthesized result is published on `agents.{A}.inbox` the same way a
+real result would be. A consumes it and knows B couldn't be reached.
+
+### Cancellation
+
+A2A v1.0 supports `tasks/cancel`. EdgeCitadel models this as `type: cancel` on
+`agents.{B}.inbox` with `payload: {task_id: <id-to-cancel>, reason?: string}`. The
+envelope is delivered through the same JetStream path. On receipt:
+- If B is still working on `task_id`, B attempts a best-effort cancel (e.g.,
+  interrupt the Ollama request, kill the subprocess, set a cancel flag in the AG2
+  agent's state).
+- B publishes `type: result` with `task_id: <id-to-cancel>, task_state: canceled,
+  payload.reason: <reason>`.
+- If B has already completed the task, the cancel is a no-op; B publishes a
+  `task_state: rejected` result with reason `"already_completed"`.
+
+Cancel is best-effort. v0.1 does not guarantee cancellation takes effect before
+partial side-effects (e.g., subprocess writes).
+
+### Chain-level cancellation
+
+If A delegates `task_id: T` to B, and B delegates sub-task `task_id: T2` (same
+`context_id`), cancelling `T` at A does NOT automatically cancel `T2`. The adapter
+that is handling T is responsible for propagating cancel to its child delegations
+if it wants to. v0.1 documents this behavior; does not enforce it.
+
+## Aggregator's fleet identity
+
+The aggregator participates in the fleet as a real agent:
+- `agent_id: aggregator` (reserved name, not reassignable)
+- Publishes its own Agent Card on startup at `agents.aggregator.register`
+- `metadata.runtime.roles: ["aggregator"]`, `runtime.kind: "native"`
+- Does NOT hold a durable JetStream consumer on `agents.aggregator.inbox` in v0.1
+  (it operates entirely as an observer + HTTP gateway; it does not receive
+  commands via NATS). v0.2 may add this if needed for agent-to-aggregator control
+  plane.
+- When the aggregator publishes commands to other agents on behalf of an HTTP caller,
+  it uses `sender_id: aggregator` — it does NOT impersonate the caller. The HTTP
+  caller's identity lives in `payload.on_behalf_of` if present.
+
+## Message size and schema evolution
+
+**Max message size.** JetStream stream `AGENT_INBOX` is declared with
+`max_msg_size: 1MB`. Sufficient for LLM replies up to ~250k tokens of JSON overhead;
+tokens themselves should stream over the A2A SSE path (Phase 4), not through
+JetStream. Adapters that might produce larger results MUST chunk at the application
+level (not currently any such adapter in v0.1).
+
+**Schema version pinning.** `envelope.v == 1` is required. v0.1 agents reject any
+envelope with `v != 1` at the validator. Schema evolution to `v: 2` requires a
+lockstep upgrade of all publishers and consumers; there is no dual-version support
+in v0.1. This is intentional — v0.1 is a clean rebuild and the fleet is small enough
+to upgrade atomically.
+
 ## Verification
 
 Per session, minimum verification:
@@ -342,6 +540,17 @@ Per session, minimum verification:
    names (`recipient_id`, `type`); no `receiver_id` / `message_type` columns remain.
 9. **AG2 adapter (Phase 4):** planner→worker delegation with shared `context_id`, visible
    chain in dashboard, loop protection refuses at `hop_count=8`.
+10. **Cancel round-trip:** A sends `command` to B (long-running); A sends `cancel` with
+    the same `task_id`; B publishes `result` with `task_state: canceled` within a
+    bounded window (best-effort).
+11. **Recipient-offline synthesized failure:** publish a `command` to an unregistered
+    `agent_id`; after `ack_wait * max_deliver` (15min default) the watchdog publishes
+    a `task_state: failed, payload.error: "recipient_offline"` result; A observes it.
+12. **Aggregator restart discovery:** restart aggregator with 2 agents online; confirm
+    `GET /api/agents` lists both within 10s via the `request_register` broadcast.
+13. **Subject inventory end-to-end:** one E2E spec exercises every subject in the
+    Subject Inventory table at least once; aggregator DB rows include every
+    `type` enum value.
 
 ## Supported features matrix
 
@@ -359,6 +568,10 @@ Per session, minimum verification:
 | Bridge pattern for non-A2A runtimes          | Yes  | Bridges declare `runtime.kind=bridge` |
 | NATS-native client for all v0.1 agents       | Yes  | openclaw-client rewritten; shell adapter rewritten |
 | Strict envelope validation                   | Yes  | Non-conformant messages dropped |
+| Cancellation (best-effort)                   | Yes  | `type: cancel`, terminal `task_state: canceled` |
+| Synthesized failure for offline recipient    | Yes  | Watchdog publishes `task_state: failed, payload.error: recipient_offline` |
+| Intermediate progress events                 | Yes  | `type: task.progress` on dedicated subject |
+| Agent Card discovery after aggregator restart | Yes | `request_register` broadcast; v0.2 replaces with JetStream KV |
 | Per-agent JWT auth                           | No   | v0.2; shared `NATS_TOKEN` for v0.1 |
 | Multi-worker per `agent_id` (horizontal)     | No   | v0.2; relax `max_ack_pending` |
 | JetStream clustering                         | No   | When 2nd persistent node exists; [#7817](https://github.com/nats-io/nats-server/issues/7817) gotcha to resolve first |
@@ -368,18 +581,30 @@ Per session, minimum verification:
 
 ## Known limitations we are accepting
 
-- **NATS→MQTT delivery is always QoS 0** ([discussion #4750](https://github.com/nats-io/nats-server/discussions/4750)).
-  Irrelevant after openclaw-client ports, but a constraint if any external MQTT consumer
-  ever attaches.
 - **JetStream clustering bug [#7817](https://github.com/nats-io/nats-server/issues/7817)**
   (Feb 2026): workqueue + max-deliver can silently lose messages on 3-replica cluster.
   Single-node deployment is fine; flag before ever clustering.
-- **A2A semantic-only borrow:** we adopt A2A vocabulary but not its HTTP+JSON-RPC wire form
-  for internal traffic. External A2A interop requires the Phase 4 `A2aAgentServer` wrapper.
+- **Shared `NATS_TOKEN` means any token-holder can impersonate any `sender_id`.**
+  Per-agent JWT auth is v0.2 work. Until then, the fleet boundary is the Tailscale
+  tailnet; trust is tailnet-scoped.
+- **Multi-instance same `agent_id` is not a supported configuration.** One `agent_id`
+  = one process. JetStream tolerates it (work-sharing at inbox level) but aggregator
+  cache and heartbeat view become non-deterministic. Hot-standby is a v0.2+ topic.
+- **A2A semantic-only borrow:** we adopt A2A vocabulary but not its HTTP+JSON-RPC wire
+  form for internal traffic. External A2A interop requires the Phase 4 `A2aAgentServer`
+  wrapper.
 - **No built-in DLQ in JetStream**; we use advisories + aggregator logging. Acceptable
   for v0.1 volumes.
+- **Cancel is best-effort.** Side-effects already committed before cancel arrives
+  remain. Partial writes, subprocess output, external API calls may have completed.
+- **Chain-level cancellation is not automatic.** Cancelling a parent task does not
+  cancel its delegations; the adapter handling the parent must propagate if desired.
+- **Aggregator cache is lost on aggregator restart.** Mitigated by the
+  `request_register` broadcast dance. JetStream KV for card storage is v0.2.
 - **AG2 v0.11+ API churn:** ag2 is pre-1.0 with breaking changes across minor bumps.
   Pin tightly and expect refactor work on each upgrade.
+- **Max message size is 1MB.** Larger LLM outputs must stream over A2A SSE (Phase 4),
+  not through JetStream.
 
 ## Impact on the execution plan
 
@@ -390,17 +615,21 @@ model no longer applies. v0.1 is a clean rebuild. New phase shape:
 
 1. **1.1 — Envelope schema + strict validation.** `schemas/envelope.v1.json` is the canonical
    A2A-aligned schema (`v`, `id`, `type`, `sender_id`, `recipient_id`, `task_id`,
-   `context_id`, `task_state`, `hop_count`, `payload`). `additionalProperties: false` at
-   the top level. Aggregator loads the schema and drops non-conformant messages with a
-   logged reason. LWT paragraph in `docs/agent-contract.md §2.3`.
+   `context_id`, `task_state`, `hop_count`, `payload`). Type enum includes `cancel`.
+   `additionalProperties: false` at the top level. Aggregator loads the schema and drops
+   non-conformant messages with a logged reason.
 2. **1.2 — Agent Card schema (A2A v1.0).** `schemas/agent-card.v1.json` replaced with the
    A2A v1.0 Agent Card shape. EdgeCitadel metadata vocabulary (`runtime.kind`,
    `runtime.roles`, `runtime.tags`, `runtime.deployment`, `runtime.upstream`) documented
    and schema-validated inside `metadata`.
 3. **1.3 — Aggregator rewrite.** Drop all `receiver_id` / `message_type` / alias-fallback
    reader code. Canonical field readers only. `database.py` schema rewritten: columns
-   `recipient_id`, `type` (not `receiver_id`, `message_type`). Indexes updated. DB wipe
-   on first boot (new schema; no migration script).
+   `recipient_id`, `type`, `task_id`, `context_id`, `task_state` (not `receiver_id`,
+   `message_type`). Indexes updated. DB wipe on first boot (new schema; no migration
+   script). Aggregator publishes its own `type: register` Agent Card on
+   `agents.aggregator.register` at startup. Aggregator subscribes to `agents.*.register`,
+   caches cards, and serves `GET /api/agents` and `GET /api/agents/{id}/card`.
+   Aggregator handles the `request_register` rebroadcast dance after its own restart.
 4. **1.4 — JetStream bootstrap.** `AGENT_INBOX` stream on `agents.*.inbox` with
    `WorkQueuePolicy`. Per-agent consumer helper. Aggregator gains advisory subscriber on
    `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` and endpoint
@@ -432,9 +661,14 @@ model no longer applies. v0.1 is a clean rebuild. New phase shape:
 
 ### Phase 3 — Operational hardening
 
-11. **3.1 — Watchdog.** nats-py native. Subscribes `agents.*.heartbeat`. Publishes
-    `status: offline` on `agents.watchdog-1.outbox` after 3× interval miss. Its own card
-    declares `runtime.roles: ["watchdog"]`. Does not impersonate timed-out agents.
+11. **3.1 — Watchdog.** nats-py native. Subscribes `agents.*.heartbeat` and the
+    MAX_DELIVERIES advisory subject. Publishes `status: offline` on
+    `agents.watchdog-1.outbox` after 3× interval miss. Publishes **synthesized failure
+    results** on `agents.{sender}.inbox` (via JetStream) when a command to an offline
+    agent fails delivery — envelope is `type: result, task_state: failed,
+    payload.error: "recipient_offline"`, with `sender_id: watchdog-1` and the
+    original `task_id` echoed. Its own card declares `runtime.roles: ["watchdog"]`.
+    Does not impersonate timed-out agents.
 12. **3.2 — Agent registry view (dashboard).** Per-agent panel: card (name, roles, tags,
     deployment), heartbeat freshness, queue depth, poison-message count, online/offline.
     Can be implemented in parallel with 3.1; verification requires 3.1 complete.
@@ -490,6 +724,44 @@ Sessions that produce no user-visible behavior change (pure refactors, internal 
 cleanups) may skip the Documentation step; the agent self-reports "no updates needed"
 in those cases.
 
+## Extensibility: adding a new agent type
+
+The spec is designed so that adding a new agent type is a configuration + handler-body
+change, not an infrastructure change. To add a new agent:
+
+1. Write `adapters/<type>/config.yaml` declaring `agent_id`, name, description, skills,
+   `runtime.roles`, `runtime.tags`, any model-specific fields.
+2. Copy `adapters/_common/template.py` (a thin pull-consumer skeleton) and implement
+   the handler body. The handler signature is
+   `async def handle(env: dict) -> tuple[dict, str]` returning (result payload, task_state).
+3. The shared Agent Card factory (`adapters/_common/agent_card.py`) builds the A2A
+   card from the YAML. No schema changes needed.
+4. First boot: the adapter creates its durable JetStream consumer if absent.
+
+An adapter that needs to declare a new A2A extension (e.g., vendor-specific JSON-RPC
+method) adds its extension URI to the YAML's `capabilities.extensions[]` list; the
+factory passes it through.
+
+For non-A2A-native upstream runtimes, follow the Bridge pattern section instead of
+writing a direct adapter.
+
+## Testing strategy
+
+- **Unit tests per adapter:** assert envelope-shape handling, status transitions,
+  error paths. Live in `adapters/<type>/tests/`.
+- **Integration tests:** `e2e/fleet/` contains Playwright specs that bring up a
+  docker-compose stack with 2–3 adapters, publish commands via the aggregator's HTTP
+  API, and assert on conversation view + chain view + queue depth.
+- **Transport conformance:** a reference test (`adapters/_common/tests/conformance.py`)
+  publishes a suite of envelopes (valid, missing required fields, wrong `v`, wrong
+  enum) and asserts validator accept/reject. Every adapter's test suite runs this
+  against its own NATS connection.
+- **Bridge pattern test:** if a bridge is implemented post-v0.1, it runs the same
+  conformance suite plus a translator correctness test (upstream session events ↔
+  A2A task_state transitions).
+
+Verification commands — see AGENTS.md for canonical invocations.
+
 ## Legacy code disposition
 
 Everything below is deleted or rewritten in Phase 1. No code survives the rebuild in
@@ -509,23 +781,25 @@ legacy shape.
 | Frontend components reading `receiver_id` / `message_type` | Rewritten for canonical fields | 1.8 |
 | E2E specs asserting on legacy envelope shapes | Rewritten or pruned | 1.7 / 1.8 |
 
-## Open questions flagged for spec review
+## Implementation notes flagged for execution
 
-- **Agent Card storage durability:** v0.1 uses publish-on-connect + aggregator cache.
-  JetStream KV bucket (key = `agent_id`, value = Agent Card JSON) would give durable
-  fleet-wide discovery. Defer to v0.2.
-- **`hop_count` threading through AG2 hand-offs:** `register_hand_off` in AG2 v0.12 does
-  not surface the envelope layer; verify that our adapter increments `hop_count` before
-  publishing the outbound delegation envelope on NATS — not after, not inside AG2's chat
-  history. Test during Phase 4.2.
-- **NATS transport binding URI stability:** we mint `https://edgecitadel.local/ext/nats-binding/v1`
-  as a placeholder. If we later publish EdgeCitadel as an open project, the URI should
-  move to a stable public domain and a spec document should live at that URL describing
-  the binding semantics. v0.2 cleanup.
-- **Hermes/openclaw terminology:** bridge section assumes Nous Research's Hermes Agent
-  (ACP-native). If a different runtime is in scope when Phase 5+ onboarding starts,
-  the bridge pattern is the same but the upstream protocol details in the bridge
-  implementation differ.
+These are not architectural ambiguities — the design is settled. They are details that
+implementers must get right during the relevant session.
+
+- **`hop_count` threading through AG2 hand-offs (Phase 4.2).** `register_hand_off` in
+  AG2 v0.12 does not surface the envelope layer; the AG2 adapter MUST increment
+  `hop_count` at the NATS publish boundary (in the outbound `type: delegation` envelope),
+  not inside AG2's in-process chat history. Verified by sending a two-hop delegation
+  and inspecting the envelope on the wire.
+- **NATS transport binding URI stability.** `https://edgecitadel.local/ext/nats-binding/v1`
+  is the declared extension URI. If EdgeCitadel becomes an open-source project, move
+  to a public domain and publish a spec document at that URL. Until then, the URI
+  is informational only — A2A consumers on the EdgeCitadel tailnet do not dereference
+  it.
+- **Bridge reference target.** The bridge pattern applies to any non-A2A-native runtime.
+  v0.1 does not ship a bridge; the reference target for the first bridge (post-v0.1)
+  is Nous Research's Hermes Agent (ACP-native). The bridge pattern section documents
+  the shape; the implementation is a separate deliverable.
 
 ## References
 
