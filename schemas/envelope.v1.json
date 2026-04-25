@@ -69,6 +69,14 @@
       "if": {"properties": {"type": {"const": "status"}}, "required": ["type"]},
       "then": {"required": ["agent_state"],
                "not": {"required": ["task_state"]}}
+    },
+    {
+      "if": {"properties": {"type": {"enum": ["register", "heartbeat", "log", "broadcast"]}},
+             "required": ["type"]},
+      "then": {"not": {"anyOf": [
+                {"required": ["agent_state"]},
+                {"required": ["task_state"]}
+              ]}}
     }
   ]
 }

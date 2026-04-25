@@ -51,7 +51,7 @@ Concretely:
 - **One vocabulary, one schema.** No alias-fallback code in validators, parsers, or storage. Producers can't drift quietly.
 - **Future federation is wrapping, not translation.** When EdgeCitadel exposes an agent to an external A2A client (Phase 4), the wire format already speaks the right names — only transport changes.
 - **Clean separation of concerns.** `task_state` (A2A) describes a task's lifecycle; `agent_state` (EdgeCitadel) describes an agent's runtime; `hop_count` is delegation depth. No overloaded fields.
-- **Stable subset of A2A v1.0.** EdgeCitadel emits a strictly smaller envelope than full A2A, easing future expansion without breaking changes.
+- **Stable subset of A2A v1.0.** EdgeCitadel emits a strictly smaller envelope than full A2A, reducing the surface area that would need change for future federation.
 
 #### Negative
 

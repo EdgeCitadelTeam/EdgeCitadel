@@ -125,6 +125,16 @@ class TestRejects:
             validator.validate(_base(type="status", agent_state="online",
                                      task_state="working", payload={}))
 
+    def test_agent_state_on_heartbeat_rejected(self, validator):
+        # agent_state must not appear on heartbeat - only on status
+        with pytest.raises(ValidationError):
+            validator.validate(_base(type="heartbeat", agent_state="online"))
+
+    def test_task_state_on_broadcast_rejected(self, validator):
+        # task_state has no meaning on broadcast envelopes
+        with pytest.raises(ValidationError):
+            validator.validate(_base(type="broadcast", task_state="working"))
+
     def test_hop_count_too_high_allowed_by_schema_refused_by_adapter(self, validator):
         # Schema allows any int; refusal at >=8 is adapter-level (Task 9 / 4.2).
         validator.validate(_base(
