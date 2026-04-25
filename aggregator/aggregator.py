@@ -107,6 +107,32 @@ class MessageRouter:
         log.warning("poison message on %s (consumer=%s, task_id=%s)",
                     agent, consumer, task_id)
 
+    async def on_openclaw_ingress(self, msg: Msg) -> None:
+        """Translate openclaw.{session}.command.{target} → agents.{target}.inbox."""
+        parts = msg.subject.split(".")
+        if len(parts) < 4 or parts[0] != "openclaw":
+            return
+        session_id, kind = parts[1], parts[2]
+        env = self._parse(msg.data)
+        if env is None: return
+        if kind == "command" and len(parts) == 4:
+            target = parts[3]
+            # server-set sender_id, do NOT trust browser
+            out = {
+                "v": 1, "id": env.get("id") or _uuid4_str(),
+                "type": "command",
+                "sender_id": f"openclaw-{session_id}",
+                "recipient_id": target,
+                "task_id": env.get("task_id") or _uuid4_str(),
+                "timestamp": now_iso(),
+                "payload": env.get("payload", {})
+            }
+            await self.js.publish(f"agents.{target}.inbox",
+                                  json.dumps(out).encode(),
+                                  headers={"Nats-Msg-Id": out["id"]})
+            await self.nc.publish(f"agents.openclaw-{session_id}.outbox",
+                                  json.dumps(out).encode())
+
     # ---- helpers ----
 
     def _parse(self, data: bytes) -> dict | None:
@@ -153,6 +179,7 @@ class AggregatorApp:
         await nc.subscribe(
             "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>",
             cb=self.router.on_advisory)
+        await nc.subscribe("openclaw.*.>", cb=self.router.on_openclaw_ingress)
 
         from .jetstream_bootstrap import ensure_stream, ensure_consumer
         await ensure_stream(self.router.js)
@@ -211,4 +238,8 @@ class AggregatorApp:
 
 
 def _uuid4() -> str:
+    import uuid; return str(uuid.uuid4())
+
+
+def _uuid4_str() -> str:
     import uuid; return str(uuid.uuid4())

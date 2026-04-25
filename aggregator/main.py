@@ -12,6 +12,9 @@ from .aggregator import AggregatorApp, now_iso
 from .models import CommandRequest, CommandResponse
 
 
+_OPENCLAW_TOKENS: dict[str, str] = {}
+
+
 def make_app(for_testing: bool = False) -> FastAPI:
     app = FastAPI(title="EdgeCitadel Aggregator", version="0.1.0")
     state: dict = {"app": None}
@@ -133,6 +136,24 @@ def make_app(for_testing: bool = False) -> FastAPI:
     @app.get("/api/poison")
     async def query_poison(agent_id: str | None = None, limit: int = 100):
         return db.recent_poison(agent_id=agent_id, limit=limit)
+
+    @app.post("/api/openclaw/login")
+    async def openclaw_login(body: dict):
+        session_id = body.get("session_id", "")
+        import re
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", session_id):
+            raise HTTPException(422, "invalid session_id")
+        # v0.1: stub — real per-session NATS JWT issuance is v0.2.
+        # We return a short-lived opaque token the aggregator recognizes on the
+        # openclaw.* ingress path.
+        import uuid as _u
+        from datetime import datetime, timezone, timedelta
+        token = _u.uuid4().hex
+        exp = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(
+            timespec="milliseconds").replace("+00:00", "Z")
+        _OPENCLAW_TOKENS[token] = session_id  # in-memory, resets on restart
+        return {"token": token, "expires_at": exp,
+                "agent_id": f"openclaw-{session_id}"}
 
     return app
 

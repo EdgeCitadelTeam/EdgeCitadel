@@ -66,3 +66,18 @@ def test_get_queue_requires_jetstream(client):
     r = client.get("/api/agents/shell-1/queue")
     # In test mode, returns 503 when JetStream not wired
     assert r.status_code in (200, 503)
+
+
+def test_openclaw_login_returns_token(client):
+    r = client.post("/api/openclaw/login",
+                    json={"session_id": "sess-abc123"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "token" in body
+    assert "expires_at" in body
+    assert body["agent_id"] == "openclaw-sess-abc123"
+
+
+def test_openclaw_login_rejects_bad_session(client):
+    r = client.post("/api/openclaw/login", json={"session_id": "bad/slash"})
+    assert r.status_code == 422
