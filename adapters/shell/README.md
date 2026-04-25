@@ -1,66 +1,73 @@
 # Shell Adapter
 
-L1 reference implementation of the [Agent Contract](../../docs/agent-contract.md).
+L1 reference implementation of the [Agent Contract](../../docs/agent-contract.md), rebuilt for v0.1 on the shared `nats-py` async / JetStream pull-consumer skeleton in [`adapters/_common`](../_common).
 
-This is the minimum viable conformant agent. Its job is to prove L1 is actually trivial — if writing this adapter exposed gaps in the contract, the contract is wrong, not the adapter.
+The legacy paho-mqtt `shell_adapter.py` has been **deleted**. This is the clean rebuild.
 
 ## What it does
 
-1. Connects to the NATS server's MQTT port.
-2. Publishes an Agent Card on `agents/{id}/register` (retained).
-3. Sends heartbeats every `HEARTBEAT_SEC` seconds.
-4. Subscribes to `agents/{id}/inbox` and `system/broadcast`.
-5. For each inbound `command` or `delegation`, runs `$SHELL_COMMAND` with the message body on stdin and replies with stdout as the result body. If `SHELL_COMMAND` is unset, echoes the body back.
-6. Validates every outbound envelope and Agent Card against the JSON Schemas in [`schemas/`](../../schemas). Fails loud on the producer.
-7. On SIGINT/SIGTERM, publishes `{status: offline}` and exits cleanly. On ungraceful drop, the MQTT Last Will does it for us.
+- Subscribes to `agents.shell-1.inbox` via a JetStream **pull** consumer (durable name `shell-1_inbox`, `max_ack_pending: 1` for FIFO ordering).
+- Publishes its Agent Card on `agents.shell-1.register` at startup and a heartbeat envelope on `agents.shell-1.heartbeat` every 30s.
+- For each `command` envelope on the inbox, runs `payload.body` via `asyncio.create_subprocess_shell` with a default 30s timeout (override via `payload.args.timeout_sec`).
+- Returns a `result` envelope to the sender's inbox with:
+  - `payload.body`: combined stdout + stderr, capped at 64 KB.
+  - `payload.returncode`: process exit code.
+  - `payload.error`: `nonzero_exit` on non-zero rc, `timeout` if the timeout fired, `empty_command` on a blank body, `unsupported_type` for non-`command` envelopes.
+  - `task_state`: `completed` (rc == 0), `failed` (timeout or non-zero rc), or `rejected` (non-command type / empty body).
+- `delegation`, `cancel`, and other inbox types are rejected with `task_state: rejected`. (The shell adapter does not delegate further.)
+
+## Subjects
+
+| Subject | Purpose |
+|---|---|
+| `agents.shell-1.register` | Agent Card published on startup |
+| `agents.shell-1.heartbeat` | Periodic liveness, every 30s |
+| `agents.shell-1.status` | `online`/`offline` lifecycle events |
+| `agents.shell-1.inbox` | JetStream-durable inbox (consumed by this adapter) |
+| `agents.shell-1.outbox` | Best-effort mirror of every `result` published |
+| `agents.shell-1.log` | Adapter log stream (reserved) |
 
 ## Run it
 
-```bash
-cd adapters/shell
-pip install -r requirements.txt
+From the repository root:
 
-AGENT_ID=echo-1 \
-CITADEL_HOST=127.0.0.1 \
+```bash
+pip install -r adapters/shell/requirements.txt
+
+NATS_URL=nats://127.0.0.1:4222 \
 NATS_TOKEN=edgecitadel-nats-secret-2026 \
-python shell_adapter.py
+PYTHONPATH=. \
+python3 -m adapters.shell.adapter
 ```
 
-With a real command:
+`PYTHONPATH=.` is required so the adapter can import `adapters._common` and `aggregator.jetstream_bootstrap` as packages.
+
+### Environment variables
+
+| Var | Default | Purpose |
+|---|---|---|
+| `NATS_URL` | *(required)* | NATS server URL (e.g. `nats://127.0.0.1:4222`). |
+| `NATS_TOKEN` | *(optional)* | Shared token used for NATS auth. |
+| `ACK_WAIT_SEC` | `300` | JetStream ack-wait window. The pull consumer extends this with periodic `in_progress()` keepalives while the subprocess runs. |
+
+The agent identity, heartbeat cadence, skills, and tags are declared in `config.yaml`, not env vars. Edit that file to clone the adapter to a new id.
+
+## Cancel / shutdown
+
+`SIGTERM` and `SIGINT` cause the adapter to publish a `status: offline` envelope, stop the pull consumer, drain the NATS connection, and exit cleanly.
+
+## Tests
 
 ```bash
-AGENT_ID=sensor-reader \
-AGENT_TAGS=indoor,low-latency \
-SHELL_COMMAND='jq -r ".temperature // \"unknown\""' \
-CITADEL_HOST=100.97.29.74 \
-NATS_TOKEN=... \
-python shell_adapter.py
+pytest adapters/shell/tests/test_shell.py -v
 ```
 
-## Config
+The unit tests cover three cases: a successful `echo hello`, a `sleep 99` with `timeout_sec: 1` that must return `task_state: failed` with `error: timeout`, and a `delegation` envelope rejected with `task_state: rejected`.
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `AGENT_ID` | *(required)* | Lowercase, matches `^[a-z0-9][a-z0-9_-]{0,63}$`. |
-| `AGENT_DISPLAY` | title-cased ID | Shown in the dashboard. |
-| `AGENT_ROLE` | `Shell Worker` | Free-form string. |
-| `AGENT_DEVICE_TYPE` | `server` | One of the enum values in the Card schema. |
-| `AGENT_TAGS` | *empty* | Comma-separated tags for planner selection. |
-| `CITADEL_HOST` | `127.0.0.1` | NATS server host. |
-| `CITADEL_PORT` | `1883` | MQTT adapter port. |
-| `NATS_TOKEN` | *(required)* | Shared token. Used as MQTT password. |
-| `HEARTBEAT_SEC` | `30` | Heartbeat interval. Declared in the Card. |
-| `SHELL_COMMAND` | *empty* | Command to run on each inbound command. Empty → echo mode. |
-| `SHELL_TIMEOUT_SEC` | `60` | Kill the shell command after this long. |
-| `SCHEMA_DIR` | `../../schemas` | Where to find `envelope.v1.json` and `agent-card.v1.json`. |
+The timeout test starts a real subprocess that gets killed after 1s; any POSIX shell on `PATH` is sufficient.
 
 ## What it does NOT do (by design)
 
-- **P2P delegation.** That's L2 — use the AG2 adapter or extend this one.
+- **P2P delegation.** Out of scope for L1; planners use specialized adapters.
 - **MCP tool serving.** That's L3.
-- **Typed payload validation.** Only the envelope and Card are schema-validated in v0.1. Per-type payload schemas come in v0.2.
-- **Retained Card verification of inbound `sender_id`.** §1.5 of the contract requires this; this adapter currently logs but doesn't enforce. The aggregator is the intended central enforcement point.
-
-## Why it's a test of the contract
-
-If this adapter grew past ~300 lines, or if any of its code had to invent behavior the contract doesn't specify, the contract is under-specified. Treat any growth as a spec bug first.
+- **Per-type payload schema validation.** Only the envelope and Card are schema-validated in v0.1. Per-payload schemas come in v0.2.

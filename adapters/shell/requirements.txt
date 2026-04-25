@@ -1,4 +1,3 @@
-paho-mqtt>=2.0.0
-jsonschema>=4.20.0
-# psutil is optional; without it, cpu/memory report as 0.0
-psutil>=5.9.0
+nats-py>=2.9.0
+pyyaml>=6.0
+jsonschema>=4.20
