@@ -2,157 +2,305 @@
 
 Base URL: `http://<host>/api`
 
-## Public Endpoints (No Auth)
+This is the EdgeCitadel Aggregator HTTP surface for v0.1 of the agent messaging
+contract. All envelope rows returned by `/api/messages` conform to
+[`schemas/envelope.v1.json`](../schemas/envelope.v1.json) and all agent records
+embed an A2A v1.0 Agent Card from [`schemas/agent-card.v1.json`](../schemas/agent-card.v1.json).
 
-### Agents
+The aggregator owns the canonical command-dispatch path: dashboards and
+operators call `POST /api/command/{id}` rather than publishing to NATS
+directly. Direct JetStream publish is reserved for the openclaw browser flow
+(Task 14, session-token endpoint) and adapter-to-adapter delegation.
 
-| Method | Path | Description |
+## Endpoint Index
+
+| Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/agents` | List all agents |
-| `GET` | `/agents/{id}` | Get agent by ID |
-| `GET` | `/agents/{id}/stats` | Agent message & task counts |
-| `POST` | `/agents` | Create agent |
-| `PATCH` | `/agents/{id}` | Update agent fields |
-| `DELETE` | `/agents/{id}` | Delete agent |
+| `GET` | `/api/system/status` | NATS + JetStream health |
+| `GET` | `/api/agents` | List agent records (excluding `aggregator`) |
+| `GET` | `/api/agents/{id}` | Single agent record |
+| `GET` | `/api/agents/{id}/card` | A2A Agent Card payload only |
+| `GET` | `/api/agents/{id}/queue` | JetStream consumer pending counts |
+| `DELETE` | `/api/agents/{id}` | Forget cached card |
+| `POST` | `/api/command/{id}` | Dispatch a `command` envelope, returns `task_id` |
+| `GET` | `/api/messages` | Filtered envelope rows |
+| `GET` | `/api/poison` | Recent JetStream MAX_DELIVERIES poison events |
 
-**GET /agents** query params:
-- `exclude_test` (bool): filter out test agents
+The legacy v0 surface — `/api/agents/{id}/heartbeat`, `/api/messages` with
+`receiver_id`/`message_type`/`correlation_id` parameters, the
+`mqtt_connected` field on system status, the `/deployments` and `/publish`
+families, and the `/health`, `/tasks`, `/logs`, `/messages/conversations`,
+`/messages/flow`, `/system/topology`, and `/broadcast` routes — has been
+removed. Adapters use the canonical NATS surface (`docs/05-messaging.md`)
+directly.
 
-### Messages
+---
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/messages` | List messages |
-| `GET` | `/messages/conversations` | Grouped conversation threads |
-| `GET` | `/messages/flow` | Communication topology graph |
+## GET /api/system/status
 
-**GET /messages** query params:
-- `limit` (int, default 50)
-- `offset` (int, default 0)
-- `agent` (string): filter by sender or receiver
-- `type` (string): filter by message_type
-- `search` (string): full-text search
-- `correlation_id` (string): get conversation thread
-- `exclude_test` (bool): filter out test data
+Returns NATS connection status, JetStream stream readiness, and the
+aggregator build version.
 
-**GET /messages/flow** query params:
-- `hours` (int, default 24)
-- `exclude_test` (bool)
-
-### Tasks
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/tasks` | List tasks |
-| `POST` | `/tasks` | Create task |
-| `PATCH` | `/tasks/{id}` | Update task |
-| `GET` | `/tasks/{id}/trace` | Messages linked to task |
-
-**GET /tasks** query params:
-- `limit` (int, default 200)
-- `agent` (string): filter by assigned agent
-- `status` (string): filter by status
-- `exclude_test` (bool)
-
-**POST /tasks** body:
+**Response 200**
 ```json
 {
-  "title": "Check sensors",
-  "description": "Read all temperature sensors",
-  "assigned_agent": "jeeves",
-  "priority": "normal"
-}
-```
-
-### Logs
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/logs` | List log entries |
-
-**GET /logs** query params:
-- `limit` (int, default 200)
-- `level` (string): INFO, WARN, ERROR, DEBUG, NATS
-- `agent` or `agent_id` (string): filter by agent
-- `source` (string): filter by log source
-- `search` (string): full-text search
-- `exclude_test` (bool)
-
-### Commands
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/command/{agent_name}` | Send command to agent |
-| `POST` | `/broadcast` | Broadcast to all agents |
-
-**POST /command/{agent_name}** body:
-```json
-{
-  "message_type": "command",
-  "payload": { "message": "What is the system status?" }
-}
-```
-
-Auto-injects `sender_id: "dashboard"`, `receiver_id: agent_name`, and `correlation_id` if not provided. Returns `{ "ok": true, "correlation_id": "..." }`.
-
-### System
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/system/status` | System-wide metrics |
-| `GET` | `/system/topology` | Same as /messages/flow |
-| `GET` | `/health` | Health check |
-
-**GET /system/status** response:
-```json
-{
-  "agents_online": 3,
-  "agents_total": 5,
-  "total_messages": 142,
-  "active_tasks": 2,
-  "errors_today": 0,
   "nats_connected": true,
-  "mqtt_connected": true
+  "jetstream_stream_ok": true,
+  "version": "0.1.0"
 }
 ```
 
-## Protected Endpoints (api-key header required)
+- `nats_connected` — whether the aggregator's NATS client is currently
+  connected.
+- `jetstream_stream_ok` — whether `stream_info("AGENT_INBOX")` succeeded on
+  the most recent call. Returns `false` when NATS is connected but the
+  stream is missing or unreachable.
+- `version` — aggregator build version.
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/publish` | Publish raw NATS message |
-| `GET` | `/history` | Raw episode history |
-| `POST` | `/deployments/register` | Register deployment |
-| `DELETE` | `/deployments/{name}` | Remove deployment |
-| `GET` | `/deployments` | List deployments |
-| `GET` | `/deployments/{name}/status` | Deployment status |
+The legacy `mqtt_connected` field has been removed; MQTT is now an optional
+NATS-side translation, not a separate broker (see `docs/05-messaging.md`).
 
-Auth header: `api-key: <OPENCLAW_API_KEY>`
+---
 
-**POST /publish** body:
+## GET /api/agents
+
+List of all known agents excluding the aggregator's self-cached entry.
+
+**Response 200**
+```json
+[
+  {
+    "agent_id": "shell-1",
+    "card": {
+      "name": "shell-1",
+      "description": "Generic shell adapter",
+      "version": "0.1.0",
+      "url": "nats://edgecitadel/agents.shell-1.inbox",
+      "provider": {"organization": "EdgeCitadel"},
+      "capabilities": {"streaming": false},
+      "securitySchemes": {},
+      "metadata": {
+        "runtime.kind": "native",
+        "runtime.roles": ["worker"],
+        "runtime.heartbeat_interval_sec": 30
+      }
+    },
+    "agent_state": "online",
+    "last_heartbeat": "2026-04-23T10:05:12.412Z",
+    "last_register": "2026-04-23T10:00:00.000Z",
+    "deployment": null,
+    "heartbeat_interval_sec": 30
+  }
+]
+```
+
+Each entry combines the cached A2A Agent Card with aggregator-tracked
+metadata: `agent_state`, `last_heartbeat`, `last_register`, `deployment`,
+and `heartbeat_interval_sec`.
+
+---
+
+## GET /api/agents/{id}
+
+Single agent record. Same shape as one element of `GET /api/agents`.
+
+**Response 200** — entry as above.
+**Response 404** — `{"detail": "agent not found"}`.
+
+---
+
+## GET /api/agents/{id}/card
+
+Returns just the A2A Agent Card payload (no aggregator metadata).
+
+**Response 200**
 ```json
 {
-  "topic": "agents/jeeves/inbox",
-  "payload": "{\"message\": \"hello\"}"
+  "name": "shell-1",
+  "description": "Generic shell adapter",
+  "version": "0.1.0",
+  "url": "nats://edgecitadel/agents.shell-1.inbox",
+  "provider": {"organization": "EdgeCitadel"},
+  "capabilities": {"streaming": false},
+  "securitySchemes": {},
+  "metadata": {
+    "runtime.kind": "native",
+    "runtime.roles": ["worker"],
+    "runtime.heartbeat_interval_sec": 30
+  }
 }
 ```
 
-## WebSocket Endpoints
+**Response 404** — `{"detail": "agent not found"}`.
 
-| Path | Description |
-|---|---|
-| `/ws` | Raw NATS events (topic + payload) |
-| `/ws/stream` | Structured events for the frontend |
-| `/ws/agent/{name}` | Agent-specific event stream |
+---
 
-### /ws/stream Events
+## GET /api/agents/{id}/queue
 
+JetStream consumer info for `AGENT_INBOX` / `{id}_inbox`. Used by the
+dashboard to surface inbox depth and ack pressure.
+
+**Response 200**
 ```json
-{"event": "message", "data": {"sender_id": "rupert", "receiver_id": "jeeves", ...}}
-{"event": "agent_registered", "agent_id": "jeeves", "status": "online"}
-{"event": "agent_status_change", "agent_id": "jeeves", "status": "offline"}
-{"event": "task_update", "data": {"task_id": "...", "action": "complete", ...}}
-{"event": "token_stream", "data": {"task_id": "...", "action": "stream", ...}}
+{
+  "pending": 3,
+  "ack_pending": 1,
+  "num_waiting": 0
+}
 ```
 
-Send `"ping"` as text to keep the connection alive. The frontend pings every 15 seconds.
+- `pending` — `num_pending` from the consumer.
+- `ack_pending` — `num_ack_pending` from the consumer.
+- `num_waiting` — `num_waiting` if available, else `0`.
+
+**Response 404** — consumer not found (`{"detail": "consumer not found: ..."}`).
+**Response 503** — JetStream not yet initialized; the aggregator hasn't
+finished startup or NATS is unreachable.
+
+---
+
+## DELETE /api/agents/{id}
+
+Forget an agent's cached card and aggregator metadata. The agent will
+reappear on its next `register` envelope.
+
+**Response 204** — deleted.
+**Response 400** — `{"detail": "cannot delete self"}` for `id == "aggregator"`.
+**Response 404** — `{"detail": "agent not found"}`.
+
+---
+
+## POST /api/command/{id}
+
+Canonical command dispatch. The aggregator generates a fresh `task_id`,
+publishes a `command` envelope to `agents.{id}.inbox` via JetStream with
+`Nats-Msg-Id = envelope.id` for idempotency, and mirrors the envelope to
+`agents.aggregator.outbox` for the audit trail.
+
+The frontend uses the returned `task_id` to subscribe to subsequent
+`task.progress` and `result` envelopes for the same task.
+
+**Request body**
+```json
+{
+  "body": "echo hi",
+  "args": {"timeout_sec": 30}
+}
+```
+
+- `body` (string, required) — the command body, interpreted by the recipient
+  adapter.
+- `args` (object, optional) — adapter-specific arguments.
+
+**Response 202**
+```json
+{
+  "task_id": "5d1a3e1c-9e47-4bd7-8c6a-2f0e3a1c9b88",
+  "recipient_id": "shell-1",
+  "accepted_at": "2026-04-24T12:34:56.789Z"
+}
+```
+
+- `task_id` — UUID4 generated by the aggregator. Use this to filter
+  `/api/messages?task_id=...` and to correlate streamed progress events.
+- `recipient_id` — echoed for convenience.
+- `accepted_at` — envelope `timestamp`.
+
+**Response 422** — request body fails Pydantic validation (e.g. missing
+`body`).
+
+The published envelope conforms to the `command` shape in
+[`schemas/envelope.v1.json`](../schemas/envelope.v1.json):
+
+```json
+{
+  "v": 1,
+  "id": "<envelope-uuid>",
+  "type": "command",
+  "sender_id": "aggregator",
+  "recipient_id": "shell-1",
+  "task_id": "<task-uuid>",
+  "timestamp": "2026-04-24T12:34:56.789Z",
+  "payload": {"body": "echo hi", "args": {"timeout_sec": 30}}
+}
+```
+
+---
+
+## GET /api/messages
+
+Returns filtered envelope rows from the outbox-mirrored audit log
+(see ADR-0006). All filters AND together; `agent_id` matches sender OR
+recipient.
+
+**Query parameters**
+
+| Name | Type | Default | Notes |
+|---|---|---|---|
+| `agent_id` | string | — | matches `sender_id` OR `recipient_id` |
+| `task_id` | string | — | exact match |
+| `context_id` | string | — | exact match |
+| `type` | string | — | `register`, `heartbeat`, `status`, `command`, `result`, `delegation`, `cancel`, `log`, `broadcast`, `task.progress` |
+| `limit` | int | 500 | result cap |
+
+**Response 200**
+```json
+[
+  {
+    "id": "ec6d…",
+    "v": 1,
+    "type": "command",
+    "sender_id": "aggregator",
+    "recipient_id": "shell-1",
+    "task_id": "5d1a…",
+    "context_id": null,
+    "task_state": null,
+    "agent_state": null,
+    "hop_count": null,
+    "timestamp": "2026-04-24T12:34:56.789Z",
+    "payload": {"body": "echo hi"},
+    "deployment": "default"
+  }
+]
+```
+
+Rows are returned newest-first. Envelope shape matches
+[`schemas/envelope.v1.json`](../schemas/envelope.v1.json) with the
+columnar fields lifted into top-level keys for easy filtering.
+
+The legacy `receiver_id`, `message_type`, and `correlation_id` query
+parameters and columns are gone. Use `recipient_id`, `type`, and `task_id`
+respectively.
+
+---
+
+## GET /api/poison
+
+Recent JetStream `MAX_DELIVERIES` advisory events captured from
+`$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>`. Used by the
+dashboard to surface inbox messages an adapter has repeatedly failed to
+process.
+
+**Query parameters**
+
+| Name | Type | Default | Notes |
+|---|---|---|---|
+| `agent_id` | string | — | filter by recipient agent |
+| `limit` | int | 100 | result cap |
+
+**Response 200**
+```json
+[
+  {
+    "id": 14,
+    "agent_id": "shell-1",
+    "consumer": "shell-1_inbox",
+    "task_id": "5d1a…",
+    "original_sender": "aggregator",
+    "detected_at": "2026-04-24T12:35:11.020Z",
+    "advisory_json": "{...full advisory body...}"
+  }
+]
+```
+
+Rows are newest-first.
