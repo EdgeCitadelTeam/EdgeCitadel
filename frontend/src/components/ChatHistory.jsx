@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { ArrowDown, Filter, Search, Loader2 } from 'lucide-react'
 import useAppStore from '../stores/appStore'
-import { messageApi } from '../api/client'
+import { api } from '../api/client'
 import MessageBubble from './MessageBubble'
 import ConversationThread from './ConversationThread'
 import CommandInput from './CommandInput'
@@ -9,10 +9,12 @@ import CommandInput from './CommandInput'
 const TYPE_OPTIONS = [
   'command',
   'result',
-  'alert',
-  'info',
+  'status',
+  'log',
   'broadcast',
-  'task_assign',
+  'delegation',
+  'cancel',
+  'task.progress',
 ]
 
 export default function ChatHistory() {
@@ -26,9 +28,8 @@ export default function ChatHistory() {
   const [historicalMessages, setHistoricalMessages] = useState([])
   const [loading, setLoading] = useState(false)
   const [hasMore, setHasMore] = useState(true)
-  const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
-  const [selectedCorrelation, setSelectedCorrelation] = useState(null)
+  const [selectedTask, setSelectedTask] = useState(null)
   const [autoScroll, setAutoScroll] = useState(true)
 
   const scrollRef = useRef(null)
@@ -41,41 +42,34 @@ export default function ChatHistory() {
     return Math.max(10, Math.ceil(el.clientHeight / 90) + 5)
   }
 
-  const fetchMessages = useCallback(
-    async (reset = false) => {
-      setLoading(true)
-      const newOffset = reset ? 0 : offset
-      const pageSize = getPageSize()
-      try {
-        const params = { limit: pageSize, offset: newOffset }
-        if (selectedAgent) params.agent = selectedAgent
-        if (messageTypeFilter) params.type = messageTypeFilter
-        if (search) params.search = search
+  const fetchMessages = useCallback(async () => {
+    setLoading(true)
+    const limit = getPageSize() * 4
+    try {
+      const params = { limit }
+      if (selectedAgent) params.agent_id = selectedAgent
+      if (messageTypeFilter) params.type = messageTypeFilter
 
-        const { data } = await messageApi.list(params)
-        const items = data.items || []
-
-        if (reset) {
-          setHistoricalMessages(items.reverse())
-          setOffset(items.length)
-        } else {
-          setHistoricalMessages((prev) => [...items.reverse(), ...prev])
-          setOffset(newOffset + items.length)
-        }
-        setHasMore(items.length === pageSize)
-      } catch {
-        // ignore
+      let items = (await api.queryMessages(params)) || []
+      if (search) {
+        const needle = search.toLowerCase()
+        items = items.filter((m) =>
+          JSON.stringify(m.payload || {}).toLowerCase().includes(needle)
+        )
       }
-      setLoading(false)
-    },
-    [selectedAgent, messageTypeFilter, search, offset]
-  )
+      // API returns newest-first; reverse for chronological display.
+      setHistoricalMessages(items.slice().reverse())
+      setHasMore(items.length === limit)
+    } catch {
+      // ignore
+    }
+    setLoading(false)
+  }, [selectedAgent, messageTypeFilter, search])
 
   useEffect(() => {
-    setOffset(0)
     setHistoricalMessages([])
-    fetchMessages(true)
-  }, [selectedAgent, messageTypeFilter, showTestAgents])
+    fetchMessages()
+  }, [selectedAgent, messageTypeFilter, showTestAgents, fetchMessages])
 
   // Auto-scroll
   useEffect(() => {
@@ -89,60 +83,55 @@ export default function ChatHistory() {
     if (!el) return
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
     setAutoScroll(nearBottom)
-
-    // Load more on scroll to top
-    if (el.scrollTop < 50 && hasMore && !loading) {
-      fetchMessages(false)
-    }
   }
 
   // Combine historical + realtime, filter for selected agent
   const merged = [...historicalMessages]
   const realtimeFiltered = realtimeMessages.filter((m) => {
     if (selectedAgent) {
-      return m.sender_id === selectedAgent || m.receiver_id === selectedAgent
+      return m.sender_id === selectedAgent || m.recipient_id === selectedAgent
     }
     return true
   })
-  // Dedupe by id, and also dedupe optimistic commands vs server-confirmed ones
+  // Dedupe by id, and dedupe optimistic commands vs server-confirmed ones by task_id.
   const seen = new Set(merged.map((m) => m.id))
-  const seenCorrCmd = new Set(
+  const seenTaskCmd = new Set(
     merged
-      .filter((m) => m.message_type === 'command' && m.correlation_id)
-      .map((m) => m.correlation_id)
+      .filter((m) => m.type === 'command' && m.task_id)
+      .map((m) => m.task_id)
   )
   for (const m of realtimeFiltered) {
     if (seen.has(m.id)) continue
-    // Skip if we already have a command with this correlation (optimistic vs server)
-    if (m.message_type === 'command' && m.correlation_id && seenCorrCmd.has(m.correlation_id)) continue
+    if (m.type === 'command' && m.task_id && seenTaskCmd.has(m.task_id)) continue
     merged.push(m)
     seen.add(m.id)
-    if (m.message_type === 'command' && m.correlation_id) seenCorrCmd.add(m.correlation_id)
+    if (m.type === 'command' && m.task_id) seenTaskCmd.add(m.task_id)
   }
 
-  // Group by correlation_id so command-reply pairs stay together,
+  // Group by task_id so command-result pairs stay together,
   // then sort groups by the command (earliest) timestamp.
   const grouped = new Map()
   const ungrouped = []
   for (const m of merged) {
-    if (m.correlation_id) {
-      if (!grouped.has(m.correlation_id)) grouped.set(m.correlation_id, [])
-      grouped.get(m.correlation_id).push(m)
+    if (m.task_id) {
+      if (!grouped.has(m.task_id)) grouped.set(m.task_id, [])
+      grouped.get(m.task_id).push(m)
     } else {
       ungrouped.push(m)
     }
   }
-  // Sort within each group: commands first, then by timestamp
   for (const msgs of grouped.values()) {
     msgs.sort((a, b) => {
-      if (a.message_type === 'command' && b.message_type !== 'command') return -1
-      if (a.message_type !== 'command' && b.message_type === 'command') return 1
+      if (a.type === 'command' && b.type !== 'command') return -1
+      if (a.type !== 'command' && b.type === 'command') return 1
       return new Date(a.timestamp) - new Date(b.timestamp)
     })
   }
-  // Build final list: sort groups by their first message timestamp, interleave ungrouped
   const allEntries = [
-    ...Array.from(grouped.values()).map((msgs) => ({ ts: new Date(msgs[0].timestamp), msgs })),
+    ...Array.from(grouped.values()).map((msgs) => ({
+      ts: new Date(msgs[0].timestamp),
+      msgs,
+    })),
     ...ungrouped.map((m) => ({ ts: new Date(m.timestamp), msgs: [m] })),
   ]
   allEntries.sort((a, b) => a.ts - b.ts)
@@ -173,7 +162,7 @@ export default function ChatHistory() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') fetchMessages(true)
+                if (e.key === 'Enter') fetchMessages()
               }}
               placeholder="Search..."
               className="w-full bg-surface-100 border border-surface-200 rounded pl-7 pr-2 py-1 text-xs text-gray-300 placeholder:text-gray-600 focus:outline-none focus:ring-1 focus:ring-accent/50"
@@ -207,11 +196,11 @@ export default function ChatHistory() {
             {hasMore && historicalMessages.length > 0 && (
               <div className="text-center py-2">
                 <button
-                  onClick={() => fetchMessages(false)}
+                  onClick={fetchMessages}
                   disabled={loading}
                   className="text-[10px] text-gray-500 hover:text-accent transition-colors"
                 >
-                  {loading ? 'Loading...' : 'Load older messages'}
+                  {loading ? 'Loading...' : 'Refresh'}
                 </button>
               </div>
             )}
@@ -219,16 +208,11 @@ export default function ChatHistory() {
               <MessageBubble
                 key={msg.id}
                 message={msg}
-                highlighted={
-                  selectedCorrelation &&
-                  msg.correlation_id === selectedCorrelation
-                }
+                highlighted={selectedTask && msg.task_id === selectedTask}
                 onClick={() => {
-                  if (msg.correlation_id) {
-                    setSelectedCorrelation(
-                      selectedCorrelation === msg.correlation_id
-                        ? null
-                        : msg.correlation_id
+                  if (msg.task_id) {
+                    setSelectedTask(
+                      selectedTask === msg.task_id ? null : msg.task_id
                     )
                   }
                 }}
@@ -241,17 +225,17 @@ export default function ChatHistory() {
               </div>
             )}
             {/* Thinking indicators for pending commands */}
-            {Object.entries(pendingCommands).map(([corrId, { target }]) => (
+            {Object.entries(pendingCommands).map(([taskId, { target }]) => (
               <div
-                key={`pending-${corrId}`}
+                key={`pending-${taskId}`}
                 className="rounded-lg border border-surface-200 bg-surface-100/50 px-3 py-2.5 flex items-center gap-2.5 animate-pulse"
               >
                 <Loader2 size={14} className="text-accent animate-spin" />
                 <span className="text-xs text-gray-400">
                   <span className="text-gray-300 font-medium">{target}</span> is thinking...
                 </span>
-                <span className="text-[10px] text-gray-600 ml-auto">
-                  {corrId.slice(0, 8)}
+                <span className="text-[10px] text-gray-600 ml-auto font-mono">
+                  {taskId.slice(0, 8)}
                 </span>
               </div>
             ))}
@@ -279,11 +263,11 @@ export default function ChatHistory() {
         </div>
       </div>
 
-      {/* Trace panel - hidden on mobile, shown as overlay */}
-      {selectedCorrelation && (
+      {/* Trace panel */}
+      {selectedTask && (
         <ConversationThread
-          correlationId={selectedCorrelation}
-          onClose={() => setSelectedCorrelation(null)}
+          taskId={selectedTask}
+          onClose={() => setSelectedTask(null)}
         />
       )}
     </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { messageApi } from '../api/client'
+import { api } from '../api/client'
 import { getAgentColor } from '../utils/agentColors'
 import useAppStore from '../stores/appStore'
 
@@ -11,6 +11,29 @@ const TIME_OPTIONS = [
   { label: '7d', hours: 168 },
 ]
 
+// Build {nodes, edges} from a list of envelope messages. Nodes are unique
+// sender_id ∪ recipient_id; edges are weighted by occurrence count.
+function buildGraph(messages) {
+  const agents = new Set()
+  const edgeCounts = new Map() // key = "src→dst"
+  for (const m of messages || []) {
+    const src = m.sender_id
+    const dst = m.recipient_id
+    if (src) agents.add(src)
+    if (dst) agents.add(dst)
+    if (src && dst) {
+      const k = `${src}→${dst}`
+      edgeCounts.set(k, (edgeCounts.get(k) || 0) + 1)
+    }
+  }
+  const nodes = [...agents].map((id) => ({ id, color: getAgentColor(id), val: 1 }))
+  const links = [...edgeCounts.entries()].map(([k, count]) => {
+    const [source, target] = k.split('→')
+    return { source, target, value: count }
+  })
+  return { nodes, links }
+}
+
 export default function CommFlow() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] })
   const [selectedHours, setSelectedHours] = useState(24)
@@ -20,12 +43,11 @@ export default function CommFlow() {
 
   const fetchFlow = useCallback(async () => {
     try {
-      const { data } = await messageApi.flow({ hours: selectedHours })
-      const nodes = (data.nodes || []).map((n) => ({
-        id: n.id,
-        color: getAgentColor(n.id),
-        val: 1,
-      }))
+      const sinceTs = new Date(
+        Date.now() - selectedHours * 3600 * 1000
+      ).toISOString()
+      const items = await api.queryMessages({ since_ts: sinceTs, limit: 2000 })
+      const { nodes, links } = buildGraph(items || [])
 
       // Add NATS hub node for visualization
       const hasNodes = nodes.length > 0
@@ -36,16 +58,6 @@ export default function CommFlow() {
           val: 3,
           isBroker: true,
         })
-      }
-
-      const links = (data.edges || []).map((e) => ({
-        source: e.source,
-        target: e.target,
-        value: e.count || 1,
-      }))
-
-      // Add synthetic edges from each agent to the NATS hub
-      if (hasNodes) {
         for (const node of nodes) {
           if (!node.isBroker) {
             links.push({

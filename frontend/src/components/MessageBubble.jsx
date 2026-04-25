@@ -1,32 +1,45 @@
 import clsx from 'clsx'
-import { ArrowRight, Terminal, CheckCircle, AlertTriangle, Info, Radio, Zap } from 'lucide-react'
+import { ArrowRight, Terminal, CheckCircle, AlertTriangle, Info, Radio, Zap, Activity, XCircle } from 'lucide-react'
 import { getAgentColor } from '../utils/agentColors'
 import { relativeTime, fullTimestamp } from '../utils/formatTime'
 
 const typeConfig = {
   command: { icon: Terminal, color: 'text-blue-400' },
   result: { icon: CheckCircle, color: 'text-emerald-400' },
-  alert: { icon: AlertTriangle, color: 'text-red-400' },
-  error: { icon: AlertTriangle, color: 'text-red-400' },
-  info: { icon: Info, color: 'text-amber-400' },
+  status: { icon: Info, color: 'text-amber-400' },
+  log: { icon: Info, color: 'text-amber-400' },
+  delegation: { icon: Zap, color: 'text-indigo-400' },
+  cancel: { icon: XCircle, color: 'text-red-400' },
   broadcast: { icon: Radio, color: 'text-cyan-400' },
-  task_assign: { icon: Zap, color: 'text-indigo-400' },
+  'task.progress': { icon: Activity, color: 'text-yellow-400' },
+  register: { icon: Info, color: 'text-gray-400' },
+  heartbeat: { icon: Info, color: 'text-gray-400' },
+}
+
+// A2A task-state badge colors
+const taskStateColors = {
+  submitted: 'bg-gray-500/20 text-gray-300',
+  working: 'bg-yellow-500/20 text-yellow-300',
+  'input-required': 'bg-purple-500/20 text-purple-300',
+  completed: 'bg-green-500/20 text-green-300',
+  failed: 'bg-red-500/20 text-red-300',
+  canceled: 'bg-gray-500/20 text-gray-400',
+  rejected: 'bg-red-500/20 text-red-400',
+  'auth-required': 'bg-orange-500/20 text-orange-300',
 }
 
 // Extract human-readable content from the message payload
 function extractContent(payload) {
   if (!payload || typeof payload !== 'object') return null
 
-  // Direct message/response/content text
   if (payload.message) return payload.message
   if (payload.content) return payload.content
   if (payload.response) return payload.response
+  if (payload.body) return payload.body
 
-  // Result object - format key details
   if (payload.result) {
     if (typeof payload.result === 'string') return payload.result
     if (typeof payload.result === 'object') {
-      // Check for response text inside result
       if (payload.result.response) return payload.result.response
       return Object.entries(payload.result)
         .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
@@ -34,7 +47,6 @@ function extractContent(payload) {
     }
   }
 
-  // Command details
   if (payload.command) {
     const parts = [payload.command]
     if (payload.payload) {
@@ -52,18 +64,18 @@ function extractContent(payload) {
     return parts.join('\n')
   }
 
-  // Status info
   if (payload.status && payload.status !== 'success') return `Status: ${payload.status}`
 
   return null
 }
 
 export default function MessageBubble({ message, highlighted, onClick }) {
-  const type = message.message_type || 'unknown'
+  const type = message.type || 'unknown'
   const config = typeConfig[type] || { icon: Info, color: 'text-gray-400' }
   const Icon = config.icon
   const senderColor = getAgentColor(message.sender_id)
   const content = extractContent(message.payload)
+  const taskState = message.task_state
 
   return (
     <div
@@ -79,26 +91,36 @@ export default function MessageBubble({ message, highlighted, onClick }) {
         borderColor: highlighted ? undefined : `${senderColor}35`,
       }}
     >
-      {/* Header: sender -> receiver, type icon, timestamp */}
+      {/* Header: sender -> recipient, type icon, timestamp */}
       <div className="flex items-center gap-2 min-w-0">
         <Icon size={13} className={clsx(config.color, 'shrink-0')} />
         <span className="font-medium text-xs truncate" style={{ color: senderColor }}>
           {message.sender_id || 'unknown'}
         </span>
-        {message.receiver_id && (
+        {message.recipient_id && (
           <>
             <ArrowRight size={10} className="text-gray-600 shrink-0" />
             <span
               className="text-xs truncate"
-              style={{ color: getAgentColor(message.receiver_id) }}
+              style={{ color: getAgentColor(message.recipient_id) }}
             >
-              {message.receiver_id}
+              {message.recipient_id}
             </span>
           </>
         )}
         <span className={clsx('text-[10px] font-medium uppercase shrink-0 ml-1', config.color)}>
           {type}
         </span>
+        {taskState && (
+          <span
+            className={clsx(
+              'text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
+              taskStateColors[taskState] || 'bg-surface-200 text-gray-400'
+            )}
+          >
+            {taskState}
+          </span>
+        )}
         <span
           className="ml-auto text-[10px] text-gray-600 shrink-0"
           title={fullTimestamp(message.timestamp)}
@@ -114,12 +136,19 @@ export default function MessageBubble({ message, highlighted, onClick }) {
         </div>
       )}
 
-      {/* Correlation badge */}
-      {message.correlation_id && (
-        <div className="mt-1.5 flex items-center">
-          <span className="text-[10px] text-gray-600 bg-surface-200/50 px-1.5 py-0.5 rounded font-mono">
-            {message.correlation_id.slice(0, 8)}
-          </span>
+      {/* Task / context badges */}
+      {(message.task_id || message.context_id) && (
+        <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+          {message.task_id && (
+            <span className="text-[10px] text-gray-600 bg-surface-200/50 px-1.5 py-0.5 rounded font-mono" title={`task_id: ${message.task_id}`}>
+              t:{message.task_id.slice(0, 8)}
+            </span>
+          )}
+          {message.context_id && (
+            <span className="text-[10px] text-gray-600 bg-surface-200/30 px-1.5 py-0.5 rounded font-mono" title={`context_id: ${message.context_id}`}>
+              c:{message.context_id.slice(0, 8)}
+            </span>
+          )}
         </div>
       )}
     </div>

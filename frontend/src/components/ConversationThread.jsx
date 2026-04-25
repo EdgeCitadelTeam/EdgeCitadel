@@ -1,31 +1,42 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
-import { messageApi } from '../api/client'
+import { api } from '../api/client'
 import MessageBubble from './MessageBubble'
 
-export default function ConversationThread({ correlationId, onClose }) {
+// Renders a single trace. Pass either taskId (preferred — single A2A task)
+// or contextId (multi-task chain). Falls back to taskId if both supplied.
+export default function ConversationThread({ taskId, contextId, onClose }) {
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
 
+  const tracingId = taskId || contextId
+  const tracingKind = taskId ? 'task_id' : 'context_id'
+
   useEffect(() => {
-    if (!correlationId) return
+    if (!tracingId) return
+    let cancelled = false
     const fetch = async () => {
       setLoading(true)
       try {
-        const { data } = await messageApi.list({
-          correlation_id: correlationId,
-          limit: 200,
-        })
-        setMessages(data.items?.reverse() || [])
+        const params = { limit: 200 }
+        if (taskId) params.task_id = taskId
+        else if (contextId) params.context_id = contextId
+        const items = await api.queryMessages(params)
+        if (!cancelled) {
+          setMessages((items || []).slice().reverse())
+        }
       } catch {
         // ignore
       }
-      setLoading(false)
+      if (!cancelled) setLoading(false)
     }
     fetch()
-  }, [correlationId])
+    return () => {
+      cancelled = true
+    }
+  }, [taskId, contextId, tracingId])
 
-  if (!correlationId) return null
+  if (!tracingId) return null
 
   return (
     <>
@@ -35,7 +46,9 @@ export default function ConversationThread({ correlationId, onClose }) {
         <div className="flex items-center justify-between p-3 border-b border-surface-200">
           <div className="min-w-0">
             <h3 className="text-sm font-medium text-gray-200">Trace</h3>
-            <p className="text-[10px] text-gray-500 truncate">{correlationId}</p>
+            <p className="text-[10px] text-gray-500 truncate">
+              {tracingKind}: {tracingId}
+            </p>
           </div>
           <button
             onClick={onClose}

@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { Radio, Activity, AlertTriangle, CheckCircle, Moon, Sun, Menu, FlaskConical } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from '../stores/appStore'
-import { systemApi } from '../api/client'
+import { api } from '../api/client'
 import StatusBadge from './StatusBadge'
 
 export default function HeaderBar() {
@@ -16,10 +16,12 @@ export default function HeaderBar() {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const setSidebarOpen = useAppStore((s) => s.setSidebarOpen)
 
+  const agents = useAppStore((s) => s.agents)
+
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const { data } = await systemApi.status()
+        const data = await api.systemStatus()
         setSystemStatus(data)
       } catch {
         // Will retry
@@ -63,20 +65,20 @@ export default function HeaderBar() {
           <div className="hidden md:flex items-center gap-4">
             <span className="flex items-center gap-1">
               <Activity size={12} />
-              {systemStatus.agents_online}/{systemStatus.agents_total} online
+              {agents.filter((a) => a.agent_state === 'online').length}/{agents.length} online
             </span>
             <span className="flex items-center gap-1">
               <CheckCircle size={12} />
-              {systemStatus.total_messages} msgs
+              NATS {systemStatus.nats_connected ? 'up' : 'down'}
             </span>
             <span className="flex items-center gap-1">
               <Activity size={12} />
-              {systemStatus.active_tasks} tasks
+              JS {systemStatus.jetstream_stream_ok ? 'ok' : 'pending'}
             </span>
-            {systemStatus.errors_today > 0 && (
+            {!systemStatus.nats_connected && (
               <span className="flex items-center gap-1 text-status-error">
                 <AlertTriangle size={12} />
-                {systemStatus.errors_today} errors
+                disconnected
               </span>
             )}
           </div>

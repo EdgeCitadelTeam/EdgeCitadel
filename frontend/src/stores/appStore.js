@@ -1,16 +1,18 @@
 import { create } from 'zustand'
+import { api } from '../api/client'
 
 const MAX_REALTIME_MESSAGES = 500
 
 const useAppStore = create((set, get) => ({
-  // Agents
+  // Agents — items shaped like {agent_id, card, agent_state, last_heartbeat,
+  // last_register, deployment, heartbeat_interval_sec}
   agents: [],
   selectedAgent: null,
 
   // Navigation
   activeTab: 'chat',
 
-  // Real-time
+  // Real-time messages — canonical envelopes
   realtimeMessages: [],
   wsConnected: false,
 
@@ -19,7 +21,7 @@ const useAppStore = create((set, get) => ({
   logLevelFilter: null,
   taskStatusFilter: null,
 
-  // Pending commands awaiting reply (correlation_id -> { target, text, sentAt })
+  // Pending commands awaiting reply, keyed by task_id -> { target, sentAt }
   pendingCommands: {},
 
   // System
@@ -35,39 +37,53 @@ const useAppStore = create((set, get) => ({
   // Mobile sidebar
   sidebarOpen: false,
 
+  // v0.1 messaging surfaces
+  agentQueue: {}, // agentQueue[agentId] = {pending, ack_pending, num_waiting}
+  poisonEvents: {}, // poisonEvents[agentId] = [advisories]
+
   // Actions
   setAgents: (agents) => set({ agents }),
 
   setSelectedAgent: (agent) => set({ selectedAgent: agent }),
 
-  updateAgentStatus: (agentId, status) =>
+  updateAgentStatus: (agentId, agentState) =>
     set((state) => ({
       agents: state.agents.map((a) =>
-        a.id === agentId ? { ...a, status } : a
+        a.agent_id === agentId ? { ...a, agent_state: agentState } : a
       ),
     })),
 
-  addPendingCommand: (correlationId, target) =>
+  addPendingCommand: (taskId, target) =>
     set((state) => ({
-      pendingCommands: { ...state.pendingCommands, [correlationId]: { target, sentAt: Date.now() } },
+      pendingCommands: {
+        ...state.pendingCommands,
+        [taskId]: { target, sentAt: Date.now() },
+      },
     })),
 
-  removePendingCommand: (correlationId) =>
+  removePendingCommand: (taskId) =>
     set((state) => {
       const next = { ...state.pendingCommands }
-      delete next[correlationId]
+      delete next[taskId]
       return { pendingCommands: next }
     }),
 
   addRealtimeMessage: (message) =>
     set((state) => {
       const msgs = [message, ...state.realtimeMessages]
-      // Clear pending if this is a reply
+      // Clear pending if a non-command envelope arrives for this task_id
       const pending = { ...state.pendingCommands }
-      if (message.correlation_id && pending[message.correlation_id] && message.message_type !== 'command') {
-        delete pending[message.correlation_id]
+      if (
+        message.task_id &&
+        pending[message.task_id] &&
+        message.type !== 'command'
+      ) {
+        delete pending[message.task_id]
       }
-      return { realtimeMessages: msgs.slice(0, MAX_REALTIME_MESSAGES), pendingCommands: pending }
+      return {
+        realtimeMessages: msgs.slice(0, MAX_REALTIME_MESSAGES),
+        pendingCommands: pending,
+      }
     }),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
@@ -94,6 +110,32 @@ const useAppStore = create((set, get) => ({
     })),
 
   clearRealtimeMessages: () => set({ realtimeMessages: [] }),
+
+  // v0.1: queue depth / poison advisories
+  fetchAgentQueue: async (agentId) => {
+    if (!agentId) return
+    try {
+      const queue = await api.getAgentQueue(agentId)
+      set((state) => ({
+        agentQueue: { ...state.agentQueue, [agentId]: queue },
+      }))
+    } catch (e) {
+      // Surface a notification but don't throw — consumer not yet bootstrapped is normal.
+      console.warn(`getAgentQueue ${agentId}: ${e.message}`)
+    }
+  },
+
+  fetchPoisonEvents: async (agentId) => {
+    if (!agentId) return
+    try {
+      const events = await api.queryPoison(agentId)
+      set((state) => ({
+        poisonEvents: { ...state.poisonEvents, [agentId]: events || [] },
+      }))
+    } catch (e) {
+      console.warn(`queryPoison ${agentId}: ${e.message}`)
+    }
+  },
 }))
 
 export default useAppStore
