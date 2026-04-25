@@ -154,7 +154,15 @@ class AggregatorApp:
             "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>",
             cb=self.router.on_advisory)
 
-        # TODO Task 7: ensure_stream + ensure_consumer for self + drain_own_inbox
+        from .jetstream_bootstrap import ensure_stream, ensure_consumer
+        await ensure_stream(self.router.js)
+        # aggregator's own inbox: no serial constraint
+        await ensure_consumer(self.router.js, "aggregator",
+                              ack_wait_sec=60, max_ack_pending=100)
+        # subscribe durable consumer to drain results
+        psub = await self.router.js.pull_subscribe(
+            "agents.aggregator.inbox", durable="aggregator_inbox")
+        asyncio.create_task(self._drain_own_inbox(psub))
 
         await self._publish_self_register()
         await self._broadcast_request_register()
@@ -183,6 +191,23 @@ class AggregatorApp:
                "payload": {"action": "request_register"}}
         await self.router.nc.publish("system.broadcast",
                                      json.dumps(env).encode())
+
+    async def _drain_own_inbox(self, psub) -> None:
+        while True:
+            try:
+                msgs = await psub.fetch(batch=10, timeout=30)
+            except Exception:
+                await asyncio.sleep(1); continue
+            for m in msgs:
+                env = self.router._parse_and_validate(m.data)
+                if env:
+                    db.insert_message(env)
+                    if env["type"] == "result":
+                        f = self.router.pending_tasks.pop(
+                            env.get("task_id", ""), None)
+                        if f is not None and not f.done():
+                            f.set_result(env)
+                await m.ack()
 
 
 def _uuid4() -> str:
