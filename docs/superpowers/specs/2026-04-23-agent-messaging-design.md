@@ -1,7 +1,7 @@
 # Agent Messaging Design — EdgeCitadel v0.1
 
 Status: design-complete, pending user review
-Date: 2026-04-23 (rev 5)
+Date: 2026-04-23 (rev 7)
 Branch: `feat/agent-contract-v0.1`
 Author: collaborative brainstorm (supersedes a prior execution plan kept outside the
 repo; not required reading)
@@ -22,6 +22,10 @@ Revision history:
   (e) AG2 API symbols asserted without pin-time verification → explicit verify note;
   (f) stale docs (05-messaging, 08-api-reference, CHANGELOG) → scheduled as session
   deliverables. Pending ADRs enumerated.
+- rev 7 (research-driven refinements): honest trust model under shared token; bridge
+  streaming-translation requirement + per-upstream resume truth table + `sender_id`
+  allowlist; optional MQTT ingress at deploy time (default off); browser JetStream
+  auth scoping; IoT onboarding routes (A/B/C).
 
 ## Summary
 
@@ -37,9 +41,11 @@ has three layers:
 - **Adapter:** nats-py async pull-consumer loop for Phase 2–3 (shell, Gemma, watchdog). For
   Phase 4, wrap each AG2 agent in `A2aAgentServer` for HTTP+SSE streaming, bridged to NATS.
 
-openclaw-client is rewritten in nats.js with canonical field names only. Shell adapter is
-rewritten in nats-py async and supersedes `273e80a`. MQTT block is removed from `nats.conf`
-on day one.
+openclaw-client is rewritten in nats.js with canonical field names only (and scoped
+with a session-bounded `OPENCLAW_TOKEN`, not the fleet-wide token). Shell adapter is
+rewritten in nats-py async and supersedes `273e80a`. MQTT block is templated and
+**disabled by default** in `nats.conf` on day one — available only via a deploy-time
+opt-in flag (`EC_ENABLE_MQTT=1`) for constrained-device onboarding.
 
 ## Problem
 
@@ -76,7 +82,13 @@ envelope), and strict validation. Nothing in production depends on the legacy sh
 - JetStream clustering (single-node broker is fine until a second persistent host joins).
 - Per-agent JWT auth (parked; shared `NATS_TOKEN` for v0.1).
 - Token-streaming over NATS (SSE over HTTP via A2A in Phase 4 instead).
-- MQTT 5.0 features (blocked on NATS's adapter being 3.1.1 only; not worth a second broker).
+- MQTT 5.0 features. NATS queue groups + JetStream + `Nats-*` headers already subsume
+  the 5.0 features that matter to us (shared subscriptions, session expiry, user
+  properties). The NATS MQTT adapter remains 3.1.1-only; upstream 5.0 support is
+  stale (issues [#6562](https://github.com/nats-io/nats-server/issues/6562),
+  [#6859](https://github.com/nats-io/nats-server/issues/6859) — tagged "2.12+ and
+  beyond", no assignees, likely never shipping). If 5.0 is ever required, run EMQX
+  with its native NATS Gateway as a sidecar rather than waiting on in-broker support.
 - Horizontal scale of a single `agent_id` across worker replicas (achievable by relaxing
   `max_ack_pending`; not a v0.1 requirement).
 - P2P transport (Zenoh) — v0.3+ consideration.
@@ -368,23 +380,110 @@ mechanism; not per-process visit-sets (which don't detect cross-process cycles).
 
 ### openclaw-client rewrite
 
-openclaw-client is rewritten in `@nats-io/nats`. Legacy paho-mqtt code is deleted, not
-wrapped. The rewrite uses:
-- `connect({ servers, token: NATS_TOKEN })` for plain NATS (heartbeats, status).
+openclaw-client is rewritten in `@nats-io/nats`. Legacy paho-mqtt code is deleted,
+not wrapped. Framing note: paho JS is effectively dormant in 2026 (few recent
+updates, 3.1.1 only); the modern MQTT browser client would be `mqtt.js`. The real
+win here is that `@nats-io/nats` is actively maintained and gives us JetStream
+semantics directly — not that paho was the gold standard we're stepping up from.
+
+The rewrite uses:
+- `connect({ servers, token: OPENCLAW_TOKEN })` for plain NATS (heartbeats, status).
+  Note: `OPENCLAW_TOKEN`, **not** the fleet-wide `NATS_TOKEN`. See browser auth
+  scope below.
 - JetStream `js.publish(subject, payload)` for durable messages (commands, results,
-  delegations).
-- Subject form `agents.{id}.inbox` / `agents.{id}.heartbeat` / `agents.{id}.register`.
+  delegations) — via the aggregator, not direct (see below).
+- Subject form `openclaw.{session_id}.{kind}` on the wire; the aggregator translates
+  to canonical `agents.{id}.inbox` before JetStream publish.
 - Canonical envelope fields only — no aliases. `recipient_id`, `type`, `task_id`, etc.
 - `register` publishes an A2A v1.0 Agent Card on startup; aggregator caches it.
 
-E2E test fixtures and assertions are rewritten to match the new envelope shape. Specs
-that asserted on legacy fields (`receiver_id`, `message_type`) are updated or pruned.
+**Browser JetStream auth scope (v0.1 ship-blocker).** The browser holds NATS
+credentials in a Javascript runtime it does not control. With the fleet-wide
+`NATS_TOKEN`, a compromised browser session can publish to any `agents.*.inbox`
+subject and impersonate any `sender_id`. v0.1 mitigates as follows:
 
-### MQTT removal
+- The openclaw-client connects with an **account-scoped token** (`OPENCLAW_TOKEN`),
+  not `NATS_TOKEN`. NATS accounts configuration restricts that token to publish
+  only on `openclaw.{session_id}.*` subjects and subscribe to
+  `openclaw.{session_id}.results.*`.
+- The aggregator is the only participant in the `openclaw` account's export list.
+  It subscribes to `openclaw.*.>` (plain NATS), validates the envelope, and
+  translates `openclaw.{session_id}.command.{target_id}` publishes into canonical
+  `js.publish("agents.{target_id}.inbox", envelope)` with `sender_id:
+  openclaw-{session_id}` **set server-side by the aggregator, not trusted from the
+  browser.**
+- Per-session tokens are issued by the aggregator's HTTP login endpoint with a short
+  TTL (~1h) and refreshed via the same channel. Rotation on logout.
+- This is deliberately more restrictive than v0.1's "every internal agent trusts the
+  shared token." Browsers are not internal agents; their blast radius is strictly
+  bounded to subjects the aggregator can police.
 
-`mqtt { port: 1883, ... }` block is removed from `nats.conf` on v0.1 first boot. Port
-1883 in docker-compose.yml is removed. No MQTT publisher or subscriber remains in the
-EdgeCitadel-internal fleet.
+Per-user NATS JWTs replacing the session-token scheme is v0.2.
+
+E2E test fixtures and assertions are rewritten to match the new envelope shape.
+Specs that asserted on legacy fields (`receiver_id`, `message_type`) are updated or
+pruned.
+
+### MQTT ingress: disabled by default, opt-in at deploy time
+
+The `mqtt { port: 1883, ... }` block is **disabled by default** on v0.1 first boot.
+Port 1883 is not exposed in the default docker-compose. No MQTT publisher or
+subscriber is present in the EdgeCitadel-internal fleet by default — all internal
+agents speak NATS natively (openclaw-client in `@nats-io/nats`, shell adapter in
+`nats-py`, AG2 in Phase 4).
+
+MQTT ingress is available as a **deploy-time opt-in** for constrained-device
+onboarding (ESP32 sensors, Tasmota devices, Zigbee2MQTT, etc.). The toggle is baked
+at deploy time, never hot-reloadable — switching it requires a `docker compose down`
++ re-template + `up`. Runtime toggling is a v0.2 consideration, not v0.1 scope.
+
+See "Optional MQTT ingress (deploy-time toggle)" below for the setup flow and the
+gateway-agent requirement, and "IoT onboarding routes" under Known limitations for
+when Route A (this toggle) vs. Route B (EMQX sidecar) vs. Route C (gateway Pi) is
+the right choice.
+
+### Optional MQTT ingress (deploy-time toggle)
+
+Enabled only at deploy time. The setup script asks:
+
+```
+Enable MQTT ingress for constrained devices? [y/N]
+  (required only for ESP32 / Tasmota / Zigbee2MQTT / similar firmware-locked IoT;
+   exposes port 1883; inherits NATS MQTT adapter limitations — 3.1.1 only, known
+   in-flight/reconnect bugs in nats-server issue #5282. Production sensor fleets
+   should prefer a gateway Pi — see "IoT onboarding routes" under Known limitations.)
+```
+
+If `y`, the setup script:
+1. Uncomments the `mqtt { port: 1883, ... }` block in the templated `nats.conf`.
+2. Enables the `mqtt-ingress` docker-compose profile so port 1883 is exposed and the
+   gateway agent container is started.
+3. Deploys a **designated gateway agent** (`agent_id: mqtt-gateway-1`,
+   `metadata.runtime.kind: bridge`, `metadata.runtime.upstream: mqtt-ingress`) that
+   subscribes to MQTT-originated subjects and normalizes them to canonical A2A
+   envelopes before republishing on `agents.{target}.inbox`.
+
+**The fleet invariant is preserved.** MQTT devices do NOT appear as first-class
+agents on the NATS bus. They deliver sensor data to the gateway agent, which is the
+only participant that sees MQTT-flavored messages. Every message that reaches a
+non-gateway agent still carries a canonical envelope.
+
+**Subject mapping** (handled by the NATS MQTT adapter automatically): MQTT topic
+`sensors/X/temperature` maps to NATS subject `sensors.X.temperature`. The gateway
+agent subscribes to `sensors.>` (plain NATS) and emits `agents.aggregator.inbox` (or
+another designated recipient) messages carrying structured envelope payloads. Sensor
+devices never publish directly to `agents.*.inbox`; they cannot because the gateway
+owns that normalization.
+
+**Operational caveats (document in the deploy README):**
+- NATS MQTT adapter is 3.1.1 only. No QoS 2, no MQTT 5.0 features (shared subs,
+  session expiry, user properties).
+- Known issue: [#5282](https://github.com/nats-io/nats-server/issues/5282) — MQTT
+  consumer sequence advancing with ack always at 0 under certain reconnect patterns.
+  Open since April 2024. Regression-test any nats-server upgrade.
+- The shared `NATS_TOKEN` is exposed to MQTT clients as the MQTT password. For
+  untrusted sensor networks, isolate via NATS accounts (v0.2) or run a separate
+  broker per the Route B / Route C options below.
 
 ### Shell adapter rewrite
 
@@ -424,17 +523,51 @@ The bridge is, from NATS's perspective, an ordinary agent:
    ACP `session/prompt`).
 2. Translate upstream lifecycle events → A2A `task_state` updates on NATS. Unmappable
    upstream states default to `failed` with a clear reason in the result payload.
-3. Maintain a `{A2A task_id → upstream session_id}` map for the duration of each task.
-4. Terminate trust at the bridge (v0.1): the bridge is trusted by NATS; it is the bridge's
-   responsibility to authenticate to the upstream runtime out-of-band.
-5. Propagate `context_id` and `hop_count` unchanged in both directions so loop protection
-   remains coherent end-to-end.
+3. **Translate intermediate progress events.** If the upstream emits progress (ACP
+   `session/update` notifications, MCP streaming responses, AG2 inter-agent turns,
+   any SSE/long-poll update), the bridge MUST republish each as `type: task.progress`
+   with `task_state: working` on `agents.{bridge_id}.task_progress.{task_id}`.
+   Bridges that emit only terminal states silently degrade every upstream to
+   non-streaming — this is a correctness regression vs. a native A2A agent, not an
+   acceptable simplification. If the upstream does not emit progress at all, the
+   bridge SHOULD publish a synthetic heartbeat progress event every
+   `ack_wait / 3` seconds so senders can detect liveness.
+4. Maintain a `{A2A task_id → upstream session_id}` map for the duration of each task.
+   In v0.1 this is process-local (see "Bridge failure semantics" below).
+5. **Enforce a `sender_id` allowlist at the bridge boundary.** Even without
+   cryptographic identity (shared `NATS_TOKEN` in v0.1), the bridge MUST reject
+   envelopes whose `sender_id` is not in its configured allowlist. Rejected
+   envelopes are logged with reason `bridge_sender_not_allowlisted` and terminated
+   (`msg.term()`) so they don't redeliver. This is defense-in-depth against internal
+   routing mistakes and surfaces misconfig early.
+6. Propagate `context_id` and `hop_count` unchanged in both directions. Note:
+   `hop_count` only prevents **inter-fleet** loops — intra-upstream recursion
+   (e.g., Hermes's `acp-delegate` skill calling itself) is invisible to the A2A
+   counter and relies on the upstream framework's own turn or iteration cap.
+7. Authenticate to the upstream runtime out-of-band (per-upstream credentials file
+   or OIDC client secret, loaded from the bridge's environment). The bridge does
+   NOT forward the A2A `sender_id` as upstream identity; it acts under its own
+   upstream credentials.
+
+**Per-upstream session-resume truth table.** The v0.1 default on bridge restart is
+"fail with `bridge_restart_lost_session`." Resume is the exception, not the rule —
+verify the upstream's actual behavior before marking a bridge as resume-capable.
+
+| Upstream runtime        | Session resume after bridge restart?                 |
+|-------------------------|------------------------------------------------------|
+| Hermes (ACP)            | No. `session/resume` is process-local to the Hermes agent process. |
+| MCP streamable-HTTP     | No by default (session IDs are process-local unless the server is explicitly backed by Redis/KV). |
+| OpenAI Assistants API   | Yes (threads persist server-side; the bridge only needs to re-hand the thread_id). |
+| Anthropic tool sessions | Conditionally — server-side sessions exist, but the bridge must have kept the message history to replay. |
+| AG2 group-chat          | No (in-memory `GroupChat` state dies with the process). |
 
 **Bridge failure semantics (v0.1):** if the bridge crashes mid-task, the NATS message is
-unacked and JetStream redelivers per `ack_wait`. Upstream session state may be lost; on
-redelivery the bridge either resumes (if the upstream protocol supports session resume) or
-marks the task `failed` with reason `bridge_restart_lost_session` so the sender can retry.
-Checkpointing `{task_id → session_id}` to JetStream KV for bridge crash-recovery is v0.2.
+unacked and JetStream redelivers per `ack_wait`. On redelivery the bridge attempts
+resume once if the upstream is resume-capable per the table above; otherwise it
+publishes `type: result, task_state: failed, payload.error: "bridge_restart_lost_session"`.
+**This is the expected outcome for most upstreams, not an error path** — operators
+should not file bugs against it until v0.2's `{task_id → session_id}` checkpoint to
+JetStream KV lands.
 
 **Applicability note:** the reference target for the first bridge implementation is
 Nous Research's Hermes Agent (ACP-native, Feb 2026). The pattern applies to any
@@ -794,6 +927,30 @@ Per session, minimum verification:
     import A2aRemoteAgent, A2aAgentServer; from autogen.agentchat.group import
     AutoPattern; ..."` runs without ImportError against the pinned wheel; any mismatch
     surfaces before adapter code is written.
+24. **MQTT ingress toggle off by default:** fresh `docker compose up` with
+    `EC_ENABLE_MQTT` unset; confirm port 1883 is not exposed (`docker compose ps`
+    shows no `:1883` mapping); `nats-server` logs show no MQTT adapter line.
+25. **MQTT ingress toggle on (opt-in path):** `EC_ENABLE_MQTT=1 docker compose --profile
+    mqtt-ingress up`; `mosquitto_pub -h localhost -t sensors/test/temp -m '{"c":21}'`
+    succeeds; the `mqtt-gateway-1` agent logs receipt on `sensors.>`; a canonical
+    envelope appears in the aggregator DB with the gateway as `sender_id`.
+26. **Bridge sender_id allowlist:** bridge adapter configured with allowlist
+    `[aggregator, planner-1]`; publish a `command` with `sender_id: random-agent`;
+    confirm the bridge logs `bridge_sender_not_allowlisted`, calls `msg.term()`, and
+    does NOT invoke the upstream.
+27. **Bridge progress translation:** simulate an upstream that emits three progress
+    events before a terminal result; confirm three `type: task.progress` envelopes
+    appear on `agents.{bridge_id}.task_progress.{task_id}` with `task_state: working`
+    before the `completed` result.
+28. **Bridge restart lost-session default:** start a bridge task, kill the bridge
+    mid-task, let JetStream redeliver; for an upstream in the "No" row of the
+    resume truth table, confirm the redelivery produces `task_state: failed,
+    payload.error: "bridge_restart_lost_session"` — not a retry storm.
+29. **Browser auth scope:** run openclaw-client against the aggregator with
+    `OPENCLAW_TOKEN`; attempt a raw `nats pub "agents.shell.inbox" ...` from the
+    browser's session; confirm the NATS server rejects with permission error.
+    Confirm only aggregator-mediated publishes (with `sender_id: openclaw-{session}`)
+    reach `agents.*.inbox`.
 
 ## Supported features matrix
 
@@ -822,7 +979,7 @@ Per session, minimum verification:
 | Per-agent JWT auth                           | No   | v0.2; shared `NATS_TOKEN` for v0.1 |
 | Multi-worker per `agent_id` (horizontal)     | No   | v0.2; relax `max_ack_pending` |
 | JetStream clustering                         | No   | When 2nd persistent node exists; [#7817](https://github.com/nats-io/nats-server/issues/7817) gotcha to resolve first |
-| MQTT (any version)                           | No   | Removed entirely; no bridge retained |
+| MQTT ingress (3.1.1 via NATS adapter)        | Opt-in | Disabled by default; deploy-time toggle (`EC_ENABLE_MQTT=1`) enables port 1883 + designated gateway agent. See "Optional MQTT ingress" and "IoT onboarding routes". |
 | Native A2A wire protocol on external edge    | No   | v0.2 possibility via `A2aAgentServer` HTTP endpoints |
 | Zenoh / P2P transport                        | No   | v0.3+; major rewrite |
 
@@ -833,7 +990,15 @@ Per session, minimum verification:
   Single-node deployment is fine; flag before ever clustering.
 - **Shared `NATS_TOKEN` means any token-holder can impersonate any `sender_id`.**
   Per-agent JWT auth is v0.2 work. Until then, the fleet boundary is the Tailscale
-  tailnet; trust is tailnet-scoped.
+  tailnet; trust is tailnet-scoped. The bridge pattern's "trust terminates at the
+  bridge" language is aspirational under this model — a bridge is no more
+  cryptographically trusted than any other agent, because any agent can publish an
+  envelope claiming `sender_id: bridge-xyz`. The bridge-side `sender_id` allowlist
+  (bridge responsibility #5) is defense-in-depth against routing mistakes, not
+  against a malicious peer. v0.2's per-agent NATS JWT credentials are the actual
+  fix; until then, threat-model accordingly. The openclaw-client browser carveout
+  (account-scoped `OPENCLAW_TOKEN`, aggregator-mediated publishes) is the one place
+  v0.1 does apply a real scope reduction — see "openclaw-client rewrite" above.
 - **Multi-instance same `agent_id` is not a supported configuration.** One `agent_id`
   = one process. JetStream tolerates it (work-sharing at inbox level) but aggregator
   cache and heartbeat view become non-deterministic. Hot-standby is a v0.2+ topic.
@@ -855,6 +1020,28 @@ Per session, minimum verification:
   Pin tightly (`>=0.12,<0.13`) and expect refactor work on each upgrade.
 - **Max message size is 1MB.** Larger LLM outputs must stream over A2A SSE (Phase 4),
   not through JetStream.
+
+## IoT onboarding routes
+
+If EdgeCitadel ever needs to onboard constrained devices (ESP32 sensors,
+firmware-locked smart devices, Home Assistant integrations, Zigbee2MQTT gateways),
+three routes exist. They are listed in rough order of preference **for production
+sensor fleets** — for dev / home-lab use, Route A is fine and cheapest.
+
+| Route | Shape | When to use |
+|-------|-------|-------------|
+| **A — NATS MQTT adapter (deploy-time toggle)** | Set `EC_ENABLE_MQTT=1` at setup; the in-broker MQTT 3.1.1 adapter is activated, and a designated gateway agent normalizes MQTT-origin subjects to canonical A2A envelopes. See "Optional MQTT ingress" above. | Dev, PoC, single-operator home labs. Fastest path (one flag). Inherits adapter bugs (#5282) and lacks MQTT 5.0 features. |
+| **B — EMQX sidecar with native NATS Gateway** | Run EMQX 5.10+ next to NATS; EMQX ingests MQTT (3.1.1 or 5.0) and forwards to NATS subjects via its [built-in NATS Gateway](https://www.emqx.com/en/blog/emqx-nats-gateway). Same gateway agent normalizes on the NATS side. | When MQTT 5.0 features (shared subs, session expiry, user properties) are required, or device count pushes past ~100 and the in-broker adapter's limitations bite. |
+| **C — Gateway Pi (recommended for production)** | Raspberry Pi runs Mosquitto downstream for devices and a `nats-py` client upstream to the main broker; envelope normalization is application code on the Pi. | Production sensor fleets. Devices use any MQTT firmware; NATS fleet stays canonical; upgrade path to Route B by swapping Mosquitto for EMQX+NATS-Gateway when scale demands. |
+
+**Not recommended: native NATS on MCUs.** MicroPython and ESP-IDF NATS clients exist
+(`mkharibalaji/mpynats`, `debsahu/espidf-nats`) but are hobbyist-grade — low star
+counts, no JetStream support, stale commit history. Don't ship sensors on them.
+
+**Not recommended: run NATS MQTT adapter as the forever answer.** The adapter is
+3.1.1-only with known in-flight/reconnect bugs (#5282, open since 2024) and Synadia's
+own tone on recent issues suggests it would be rewritten if built from scratch
+today. Treat Route A as a short-term bridge, not a long-term commitment.
 
 ## Impact on the execution plan
 
@@ -1010,7 +1197,8 @@ describe the retired MQTT+slash-topic system):
 - `docs/agent-contract.md` — rewrite to match this spec as the authoritative
   v0.1 contract. Primary deliverable of Session 1.1.
 - `docs/05-messaging.md` — rewrite for canonical A2A field names, subject
-  inventory, JetStream transport, MQTT removal. Deliverable of Session 1.4.
+  inventory, JetStream transport, MQTT ingress as opt-in (not removed). Deliverable
+  of Session 1.4.
 - `docs/08-api-reference.md` — rewrite `GET /api/agents`, `GET /api/agents/{id}`,
   `GET /api/agents/{id}/card`, `GET /api/agents/{id}/queue`,
   `GET /api/chains/{context_id}`, `POST /api/command/{agent_id}` (returns
@@ -1022,7 +1210,11 @@ describe the retired MQTT+slash-topic system):
 **Pending ADRs to draft** (tracked as session deliverables, not open questions):
 - ADR-00NN: NATS JetStream WorkQueue for per-agent serialization (Session 1.4)
 - ADR-00NN: A2A v1.0 vocabulary adoption on NATS transport (Session 1.1)
-- ADR-00NN: MQTT removal from EdgeCitadel (Session 1.7)
+- ADR-00NN: MQTT ingress is deploy-time opt-in, not default (Session 1.7)
+- ADR-00NN: Browser JetStream access via account-scoped `OPENCLAW_TOKEN` with
+  aggregator-mediated publishes (Session 1.7)
+- ADR-00NN: Bridge pattern — trust model, streaming translation requirement, and
+  per-upstream session-resume posture (Session 1.5 or first bridge session)
 - ADR-00NN: Outbox mirror as authoritative aggregator audit path (Session 1.3)
 - ADR-00NN: `hop_count` over visit-set for delegation loop protection (Session 4.2)
 
@@ -1116,8 +1308,8 @@ legacy shape.
 | `/data/openclaw.db` existing file            | Wiped on first boot | 1.3 / deploy |
 | `schemas/agent-card.v1.json` legacy shape    | Replaced with A2A v1.0 Agent Card shape | 1.2 |
 | `schemas/envelope.v1.json` permissiveness (`additionalProperties: true`) | Tightened; strict validation | 1.1 |
-| `mqtt { port: 1883, ... }` block in `nats.conf` | Removed | 1.7 |
-| `ports: - "1883:1883"` in docker-compose.yml | Removed | 1.7 |
+| `mqtt { port: 1883, ... }` block in `nats.conf` | Templated; disabled by default, opt-in via deploy-time flag | 1.7 |
+| `ports: - "1883:1883"` in docker-compose.yml | Moved behind `mqtt-ingress` compose profile; disabled by default | 1.7 |
 | Frontend components reading `receiver_id` / `message_type` | Rewritten for canonical fields | 1.8 |
 | E2E specs asserting on legacy envelope shapes | Rewritten or pruned | 1.7 / 1.8 |
 
