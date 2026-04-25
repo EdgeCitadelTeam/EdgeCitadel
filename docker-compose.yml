@@ -4,13 +4,13 @@ services:
     command: ["-c", "/etc/nats/nats.conf"]
     ports:
       - "4222:4222"
-      - "1883:1883"
       - "8222:8222"
     volumes:
       - ./nats/nats.conf:/etc/nats/nats.conf:ro
       - ./nats/data:/data
     environment:
       - NATS_TOKEN=${NATS_TOKEN}
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 5s
@@ -18,9 +18,27 @@ services:
       retries: 5
     restart: unless-stopped
 
+  nats-mqtt:
+    # Activated only with --profile mqtt-ingress.
+    profiles: ["mqtt-ingress"]
+    image: nats:2.10-alpine
+    command: ["-c", "/etc/nats/nats.conf"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+      - "1883:1883"
+    volumes:
+      - ./nats/nats.conf:/etc/nats/nats.conf:ro
+      - ./nats/data:/data
+    environment:
+      - NATS_TOKEN=${NATS_TOKEN}
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+    restart: unless-stopped
+
   aggregator:
     build: ./aggregator
     restart: unless-stopped
+    stop_grace_period: 40s
     volumes:
       - ./data:/data
     environment:
