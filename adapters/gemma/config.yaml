@@ -1,0 +1,16 @@
+agent_id: gemma-1
+name: gemma-1
+description: Single-shot Ollama-backed reasoner. Wraps /api/generate.
+version: 0.1.0
+runtime:
+  kind: native
+  roles: [reasoner]
+  tags: [ollama, llm]
+  heartbeat_interval_sec: 30
+skills:
+  - id: reasoning.chat
+    name: chat
+    description: Send a free-text prompt; receive the model's full response.
+    tags: [llm, generate]
+capabilities:
+  streaming: false
