@@ -36,7 +36,9 @@ services:
     restart: unless-stopped
 
   aggregator:
-    build: ./aggregator
+    build:
+      context: .
+      dockerfile: aggregator/Dockerfile
     restart: unless-stopped
     stop_grace_period: 40s
     volumes:

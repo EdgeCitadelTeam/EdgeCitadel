@@ -14,16 +14,20 @@ SUBJECTS = ["agents.*.inbox"]
 
 
 async def ensure_stream(js: JetStreamContext):
+    # nats-py >=2.9 expects nanosecond ints for max_age and duplicate_window
+    # and drops keys whose value is None during JSON serialization for
+    # add/update_stream — passing storage=None caused the broker to receive
+    # an invalid JSON config (NATS error 10025). Omitting storage uses the
+    # server-side default (FILE).
     cfg = StreamConfig(
         name=STREAM_NAME,
         subjects=SUBJECTS,
         retention=RetentionPolicy.WORK_QUEUE,
-        storage=None,            # default file storage on server
         discard=DiscardPolicy.NEW,
-        max_age=24 * 60 * 60,    # 24h seconds
-        max_bytes=1 * 1024 * 1024 * 1024,  # 1GB
-        max_msg_size=1 * 1024 * 1024,      # 1MB
-        duplicate_window=5 * 60 * 1_000_000_000,   # 5min in ns
+        max_age=24 * 60 * 60,                    # 24h, seconds (nats-py → ns)
+        max_bytes=1 * 1024 * 1024 * 1024,        # 1GB
+        max_msg_size=1 * 1024 * 1024,            # 1MB
+        duplicate_window=5 * 60,                 # 5min, seconds (nats-py → ns)
     )
     try:
         return await js.update_stream(cfg)
@@ -39,7 +43,7 @@ async def ensure_consumer(js: JetStreamContext, agent_id: str,
         durable_name=f"{agent_id}_inbox",
         filter_subject=f"agents.{agent_id}.inbox",
         ack_policy=AckPolicy.EXPLICIT,
-        ack_wait=ack_wait_sec * 1_000_000_000,
+        ack_wait=ack_wait_sec,
         max_ack_pending=max_ack_pending,
         max_deliver=max_deliver,
     )
