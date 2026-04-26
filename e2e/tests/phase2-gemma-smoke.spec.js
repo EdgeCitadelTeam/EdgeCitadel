@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+const { test, expect } = require('@playwright/test');
 
 const API = process.env.AGG_URL || 'http://localhost';
 const POLL_INTERVAL_MS = 1000;
