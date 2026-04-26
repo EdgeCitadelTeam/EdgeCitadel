@@ -147,3 +147,46 @@ async def test_handle_args_override_model_and_temperature(monkeypatch):
     assert captured["json"]["model"] == "gemma3:12b"
     assert captured["json"]["options"]["temperature"] == 0.2
     assert captured["json"]["options"]["num_predict"] == 512
+
+
+@pytest.mark.asyncio
+async def test_preflight_passes_when_model_listed(monkeypatch):
+    from adapters.gemma.adapter import preflight
+
+    async def fake_get(self, url, **kw):
+        return _FakeResp(200, json_body={
+            "models": [{"name": "gemma3:4b"}, {"name": "llama3.2:3b"}]
+        })
+
+    monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
+    monkeypatch.setenv("OLLAMA_MODEL", "gemma3:4b")
+    # Should not raise
+    await preflight()
+
+
+@pytest.mark.asyncio
+async def test_preflight_raises_when_unreachable(monkeypatch):
+    from adapters.gemma.adapter import preflight, PreflightError
+    import httpx
+
+    async def fake_get(self, url, **kw):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
+    with pytest.raises(PreflightError, match="ollama_unreachable"):
+        await preflight()
+
+
+@pytest.mark.asyncio
+async def test_preflight_raises_when_model_not_found(monkeypatch):
+    from adapters.gemma.adapter import preflight, PreflightError
+
+    async def fake_get(self, url, **kw):
+        return _FakeResp(200, json_body={
+            "models": [{"name": "llama3.2:3b"}]   # gemma3:4b absent
+        })
+
+    monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
+    monkeypatch.setenv("OLLAMA_MODEL", "gemma3:4b")
+    with pytest.raises(PreflightError, match="model_not_loaded"):
+        await preflight()

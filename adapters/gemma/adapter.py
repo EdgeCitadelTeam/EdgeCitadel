@@ -23,6 +23,49 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
 OLLAMA_TIMEOUT_SEC = int(os.environ.get("OLLAMA_TIMEOUT_SEC", "120"))
 
 
+class PreflightError(RuntimeError):
+    """Raised when the adapter cannot start because Ollama is unreachable
+    or the configured model is not pulled."""
+
+
+async def preflight() -> None:
+    """Verify Ollama is reachable and OLLAMA_MODEL is in the loaded list.
+
+    Raises PreflightError on failure. Called once at startup before the
+    consumer is registered. We intentionally do NOT auto-pull on missing
+    models — see docs/superpowers/specs/2026-04-24-gemma-adapter-design.md
+    section "Why fail-fast, not auto-pull?"."""
+    model = os.environ.get("OLLAMA_MODEL", OLLAMA_MODEL)
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(_ollama_url("/api/tags"), timeout=5)
+    except httpx.ConnectError as e:
+        raise PreflightError(
+            f"ollama_unreachable: cannot reach {_ollama_url('/api/tags')}: {e}"
+        ) from e
+    except (httpx.ReadTimeout, httpx.WriteTimeout):
+        raise PreflightError(
+            f"ollama_unreachable: timeout reading {_ollama_url('/api/tags')}"
+        )
+
+    if resp.status_code != 200:
+        raise PreflightError(
+            f"ollama_unreachable: /api/tags returned {resp.status_code}"
+        )
+
+    try:
+        body = resp.json()
+    except ValueError as e:
+        raise PreflightError(f"ollama_bad_response: {e}") from e
+
+    names = [m.get("name") for m in (body.get("models") or [])]
+    if model not in names:
+        raise PreflightError(
+            f"model_not_loaded: OLLAMA_MODEL={model!r} not in {names!r}; "
+            f"run `ollama pull {model}`"
+        )
+
+
 def _ollama_url(path: str) -> str:
     return f"http://{OLLAMA_HOST}:{OLLAMA_PORT}{path}"
 
@@ -78,7 +121,18 @@ async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
 
 
 async def main():
-    """Adapter entry point. Handler is injected into the shared template."""
+    """Adapter entry point. Preflight first, then delegate to template."""
+    try:
+        await preflight()
+    except PreflightError as e:
+        log.error("preflight failed: %s", e)
+        msg = str(e)
+        if msg.startswith("ollama_unreachable"):
+            raise SystemExit(1)
+        if msg.startswith("model_not_loaded"):
+            raise SystemExit(2)
+        raise SystemExit(3)
+
     from adapters._common import template
     template.handle = handle
     config = Path(__file__).resolve().parent / "config.yaml"
