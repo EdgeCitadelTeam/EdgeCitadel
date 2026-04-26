@@ -42,6 +42,31 @@ Items that surfaced during Phase 1 implementation but were out of plan scope:
 | **Phase 1 test stack (`docker-compose.test.yml` + `test-nats.conf`) inherits the same `token + users` NATS auth bug fixed in `abcce8e`** | Medium — blocks Playwright `globalSetup` from spinning up the test stack | Apply the same `nats.conf` fix to `e2e/test-nats.conf`; verify `npx playwright test` (without smoke-config bypass) brings up the test stack cleanly |
 | **`adapters/_common/template.py` builds the registration card from YAML and publishes a `register` envelope, but never mirrors register/heartbeat to outbox** | Low — observability gap | Either persist via `on_register`/`on_heartbeat` (above) or have adapters mirror to outbox |
 
+### Test-data separation convention (introduced after Phase 2 walkthrough)
+
+The `messages` and `agents` tables both have a `deployment` column. As of the
+post-Phase-2 walkthrough fixes, the aggregator's `MessageRouter` now resolves
+each message's deployment by looking up the sender's (or recipient's) cached
+A2A card and reading `metadata.runtime.deployment` (default: `"default"`).
+Frontend `AgentSidebar` and `ChatHistory` filter out `deployment === "test"`
+unless the user toggles "Test data" on in the header.
+
+**Convention for test runners:**
+- Tests that need their own visible-but-hideable agent should register with
+  `runtime.deployment: test` in their `config.yaml` (or programmatically).
+  All messages they send AND results targeted at them get tagged `test`.
+- Tests that drive production agents (the current Playwright smoke does this
+  for `gemma-1` / `shell-1`) cannot be tagged this way today — they need
+  EITHER (a) a registered test runner agent that publishes the commands,
+  OR (b) an envelope-level `deployment` field (schema change). Tracked as a
+  follow-up below.
+
+| Item | Severity | Notes |
+|---|---|---|
+| **Phase 2 Playwright smoke pollutes prod data** — `phase2-gemma-smoke.spec.js` POSTs to `/api/command/gemma-1` directly; the resulting messages have `deployment="default"` and aren't filterable by the showTestAgents toggle | Medium — the user's reported pain in the post-walkthrough review | Either (a) test runner registers a `test-runner` agent with `runtime.deployment: test` and uses delegation through it, OR (b) add an envelope-level `deployment` field and have `POST /api/command/{id}` accept a `?deployment=test` query param. |
+| **`/api/messages` endpoint doesn't accept a `deployment` filter param** — frontend filtering is purely client-side after fetch | Low — works for current data volumes but doesn't scale | Add `deployment` filter to `db.query_messages` and surface as `/api/messages?deployment=...` |
+| **Logs tab content is sparse** — only lifecycle (register/shutdown) and handler errors publish log envelopes today. Per-command success info isn't logged | Low — by design (verbose) but operators may want it | Optional toggle for verbose mode that publishes a `log` envelope per completed command |
+
 ---
 
 ## Phase handover — delayed-to-later-phases

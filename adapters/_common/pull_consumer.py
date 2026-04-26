@@ -135,6 +135,19 @@ class PullConsumer:
                                            error=type(e).__name__)
             except Exception:
                 pass
+            # Best-effort log envelope so the dashboard's Logs tab surfaces
+            # handler crashes alongside successes (LogViewer reads
+            # payload.level/source/message).
+            try:
+                from .template import publish_log
+                await publish_log(
+                    self.nc, self.agent_id,
+                    level="ERROR", source="handler",
+                    message=f"handler raised {type(e).__name__}: {e}",
+                    extra={"task_id": env.get("task_id"),
+                           "envelope_type": env.get("type")})
+            except Exception:
+                pass
             await msg.nak()
         finally:
             keepalive.cancel()

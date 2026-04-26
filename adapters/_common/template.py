@@ -1,6 +1,7 @@
 """Skeleton adapter. Copy to adapters/<type>/adapter.py and fill in handle()."""
 from __future__ import annotations
-import asyncio, logging, os, signal
+import asyncio, json, logging, os, signal, uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from nats.aio.client import Client as NATS
@@ -8,6 +9,38 @@ from .agent_card import build_card
 from .pull_consumer import PullConsumer, Context
 
 log = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z")
+
+
+async def publish_log(nc: NATS, agent_id: str, *,
+                      level: str = "INFO",
+                      message: str,
+                      source: str | None = None,
+                      extra: dict | None = None) -> None:
+    """Publish a `log` envelope on agents.{id}.log.
+
+    Adapters call this for lifecycle events (register, shutdown) and
+    handler errors. Frontend `LogViewer` reads payload.level/source/message.
+    Best-effort; swallows publish failures so logging never breaks the
+    adapter loop."""
+    payload = {"level": level, "message": message}
+    if source:
+        payload["source"] = source
+    if extra:
+        payload.update(extra)
+    env = {"v": 1, "id": str(uuid.uuid4()), "type": "log",
+           "sender_id": agent_id, "timestamp": _now_iso(),
+           "payload": payload}
+    try:
+        await nc.publish(f"agents.{agent_id}.log",
+                         json.dumps(env).encode())
+    except Exception as e:  # noqa: BLE001
+        log.warning("log envelope publish failed (%s): %s",
+                    type(e).__name__, e)
 
 
 async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
@@ -25,22 +58,22 @@ async def main(config_path: str | Path) -> None:
                      token=os.environ.get("NATS_TOKEN"))
 
     # Publish register
-    import json, uuid
-    from datetime import datetime, timezone
-    ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
-        "+00:00", "Z")
     env = {"v": 1, "id": str(uuid.uuid4()), "type": "register",
-           "sender_id": agent_id, "timestamp": ts, "payload": card}
+           "sender_id": agent_id, "timestamp": _now_iso(), "payload": card}
     await nc.publish(f"agents.{agent_id}.register", json.dumps(env).encode())
+
+    # Lifecycle log: started
+    await publish_log(nc, agent_id, level="INFO", source="lifecycle",
+                      message=f"adapter registered as {agent_id} "
+                              f"(role={card['metadata']['runtime.roles'][0]}, "
+                              f"kind={card['metadata']['runtime.kind']})")
 
     # Heartbeat loop
     async def heartbeat():
         interval = card["metadata"]["runtime.heartbeat_interval_sec"]
         while True:
-            ts2 = datetime.now(timezone.utc).isoformat(
-                timespec="milliseconds").replace("+00:00", "Z")
             hb = {"v": 1, "id": str(uuid.uuid4()), "type": "heartbeat",
-                  "sender_id": agent_id, "timestamp": ts2, "payload": {}}
+                  "sender_id": agent_id, "timestamp": _now_iso(), "payload": {}}
             await nc.publish(f"agents.{agent_id}.heartbeat",
                              json.dumps(hb).encode())
             await asyncio.sleep(interval)
@@ -59,10 +92,11 @@ async def main(config_path: str | Path) -> None:
     await stop.wait()
 
     # graceful shutdown
+    await publish_log(nc, agent_id, level="INFO", source="lifecycle",
+                      message="adapter received shutdown signal; draining")
     off = {"v": 1, "id": str(uuid.uuid4()), "type": "status",
            "sender_id": agent_id, "agent_state": "offline",
-           "timestamp": datetime.now(timezone.utc).isoformat(
-               timespec="milliseconds").replace("+00:00", "Z"),
+           "timestamp": _now_iso(),
            "payload": {"reason": "shutdown"}}
     await nc.publish(f"agents.{agent_id}.status", json.dumps(off).encode())
     await pc.stop()

@@ -59,23 +59,36 @@ class MessageRouter:
         if env is None or env["type"] != "heartbeat": return
         db.update_heartbeat(env["sender_id"], env["timestamp"])
 
+    def _deployment_for(self, env: dict) -> str:
+        """Resolve the deployment ('default' | 'test' | ...) for this envelope
+        by looking up the sender's cached A2A card. Falls back to recipient,
+        then 'default'. Lets the dashboard filter test traffic via the
+        existing showTestAgents toggle even for messages sent TO production
+        agents from a test runner that registered with runtime.deployment=test."""
+        for who in (env.get("sender_id"), env.get("recipient_id")):
+            card = self.cache.get(who) if who else None
+            dep = (card or {}).get("metadata", {}).get("runtime.deployment")
+            if dep:
+                return dep
+        return "default"
+
     async def on_status(self, msg: Msg) -> None:
         env = self._parse_and_validate(msg.data)
         if env is None or env["type"] != "status": return
         db.update_agent_state(env["sender_id"], env["agent_state"])
-        db.insert_message(env)
+        db.insert_message(env, deployment=self._deployment_for(env))
 
     async def on_log(self, msg: Msg) -> None:
         env = self._parse_and_validate(msg.data)
         if env is None or env["type"] != "log": return
-        db.insert_message(env)
+        db.insert_message(env, deployment=self._deployment_for(env))
 
     async def on_outbox(self, msg: Msg) -> None:
         """Outbox mirror: authoritative audit path for inbox traffic."""
         env = self._parse_and_validate(msg.data)
         if env is None: return
         # We persist every outbox event so the dashboard has a canonical view
-        db.insert_message(env)
+        db.insert_message(env, deployment=self._deployment_for(env))
         # If this outbox is a result matching an HTTP-driven pending task, resolve it
         if env["type"] == "result":
             f = self.pending_tasks.pop(env.get("task_id", ""), None)
@@ -85,7 +98,7 @@ class MessageRouter:
     async def on_broadcast(self, msg: Msg) -> None:
         env = self._parse_and_validate(msg.data)
         if env is None: return
-        db.insert_message(env)
+        db.insert_message(env, deployment=self._deployment_for(env))
 
     async def on_advisory(self, msg: Msg) -> None:
         """$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.<agent>.<consumer>."""

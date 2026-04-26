@@ -24,6 +24,7 @@ export default function ChatHistory() {
   const setMessageTypeFilter = useAppStore((s) => s.setMessageTypeFilter)
   const showTestAgents = useAppStore((s) => s.showTestAgents)
   const pendingCommands = useAppStore((s) => s.pendingCommands)
+  const removePendingCommand = useAppStore((s) => s.removePendingCommand)
 
   const [historicalMessages, setHistoricalMessages] = useState([])
   const [loading, setLoading] = useState(false)
@@ -51,6 +52,13 @@ export default function ChatHistory() {
       if (messageTypeFilter) params.type = messageTypeFilter
 
       let items = (await api.queryMessages(params)) || []
+      // Hide test-deployment messages by default. Aggregator tags rows
+      // with the sender/recipient agent's runtime.deployment from the
+      // cached A2A card (see MessageRouter._deployment_for). Pairs with
+      // the showTestAgents toggle that already filters AgentSidebar.
+      if (!showTestAgents) {
+        items = items.filter((m) => (m.deployment || 'default') !== 'test')
+      }
       if (search) {
         const needle = search.toLowerCase()
         items = items.filter((m) =>
@@ -64,12 +72,41 @@ export default function ChatHistory() {
       // ignore
     }
     setLoading(false)
-  }, [selectedAgent, messageTypeFilter, search])
+  }, [selectedAgent, messageTypeFilter, search, showTestAgents])
 
   useEffect(() => {
     setHistoricalMessages([])
     fetchMessages()
   }, [selectedAgent, messageTypeFilter, showTestAgents, fetchMessages])
+
+  // Auto-poll every 3s while the panel is mounted. A proper fix is the
+  // /ws/* endpoint family (Phase 1 follow-up in docs/roadmap.md); polling
+  // is the v0.1 stopgap so command results actually appear without the
+  // user clicking "Refresh".
+  useEffect(() => {
+    const id = setInterval(fetchMessages, 3000)
+    return () => clearInterval(id)
+  }, [fetchMessages])
+
+  // Clear pending-command "thinking..." indicators once the polled history
+  // contains a terminal envelope (result/task.progress with a terminal
+  // task_state) for that task_id. Without this, the indicator never goes
+  // away because the dedicated WebSocket clear path in addRealtimeMessage
+  // only fires for live-pushed envelopes (and /ws/* endpoints aren't shipped
+  // yet — see docs/roadmap.md Phase 1 follow-ups).
+  useEffect(() => {
+    const pendingIds = Object.keys(pendingCommands)
+    if (pendingIds.length === 0) return
+    const terminalStates = new Set([
+      'completed', 'failed', 'canceled', 'rejected',
+    ])
+    for (const m of historicalMessages) {
+      if (!m.task_id || !pendingIds.includes(m.task_id)) continue
+      if (m.type === 'result' && terminalStates.has(m.task_state)) {
+        removePendingCommand(m.task_id)
+      }
+    }
+  }, [historicalMessages, pendingCommands, removePendingCommand])
 
   // Auto-scroll
   useEffect(() => {
