@@ -38,6 +38,9 @@ Items that surfaced during Phase 1 implementation but were out of plan scope:
 | **`python-backend.md` rule violations**: FastAPI endpoints lack `summary`/`description`; `database.py` has f-string in `PRAGMA table_info({name})` | Low — internal-only, no security risk; PRAGMA is a parameterless SQL form so f-string is acceptable here | Either refactor or update the rule to permit |
 | **TaskBoard "Create task" UX removed in Phase 1 Task 16** — no `/api/tasks` endpoint exists in v0.1 | Low — TaskBoard now derives task state from `/api/messages` filtered by `task_id` | Decide: re-add via new endpoint, or stay derived-only. Visible UX change. |
 | **Live-stack Phase 1 verification checklist (13 rows in `docs/CHANGELOG.md`)** | Required before tagging v0.1 | Operator step; cannot be automated |
+| **`on_register` / `on_heartbeat` don't persist to `messages` table** — Phase 1 smoke spec's "subject inventory coverage" test expects `register` and `heartbeat` rows in `/api/messages`, but Phase 1 implementation only updates the `agents` table for those types | Low — actual messaging contract works; test was aspirational | Either (a) update `MessageRouter.on_register` / `on_heartbeat` to also call `db.insert_message`, OR (b) update the smoke spec to drop register/heartbeat from required types |
+| **Phase 1 test stack (`docker-compose.test.yml` + `test-nats.conf`) inherits the same `token + users` NATS auth bug fixed in `abcce8e`** | Medium — blocks Playwright `globalSetup` from spinning up the test stack | Apply the same `nats.conf` fix to `e2e/test-nats.conf`; verify `npx playwright test` (without smoke-config bypass) brings up the test stack cleanly |
+| **`adapters/_common/template.py` builds the registration card from YAML and publishes a `register` envelope, but never mirrors register/heartbeat to outbox** | Low — observability gap | Either persist via `on_register`/`on_heartbeat` (above) or have adapters mirror to outbox |
 
 ---
 
