@@ -1,0 +1,120 @@
+# EdgeCitadel Roadmap
+
+This file tracks deferred work and the path forward beyond what's currently implemented or scheduled. Two top-level sections:
+
+1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
+2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
+
+Last updated: 2026-04-24.
+
+---
+
+## Out of scope — deferred enhancements
+
+Items intentionally NOT in the current spec scope. Each has been brainstormed and consciously deferred; landing them later should be a clean delta, not a redesign.
+
+### Gemma adapter (Phase 2 spec)
+
+| Item | Reason deferred | Forward-compat hook |
+|---|---|---|
+| **Multi-skill dispatch** (`text.summarize`, `text.classify`, `code.explain`, ...) keyed by `payload.skill_id` | Single-skill is enough to validate the wire contract; per-skill prompt templates compound testing complexity | `skills` array in `config.yaml` is open-ended; a future skill_id dispatcher inside `handle()` adds dispatch without touching the envelope |
+| **Conversational memory** keyed by `context_id` (turn history → prepended into prompts) | Smoke scope; memory eviction policy is its own design problem (token budget, summarization, abandonment) | Spec preserves `context_id` from inbound to outbound result; future memory store keys on it |
+| **Token streaming** via `task.progress` envelopes (Ollama `stream=true` → batched updates) | Frontend has no WebSocket plumbing today; per-token NATS publishes have measurable cost without user-visible benefit | `capabilities.streaming` is `false`; flipping to `true` is schema-clean. `task.progress` envelope type already exists in v0.1 schema |
+| **Non-Ollama backends** (vLLM, llama.cpp, OpenAI-compatible, Anthropic API) | Different failure modes, different auth assumptions, different streaming protocols — each needs its own adapter | Backend is hidden behind `handle()`; a parallel `adapters/openai/` would mirror this directory's shape |
+| **Auto-pull on startup** (`ollama pull` if model missing) | 3–8 GB downloads mask "operator forgot to pull" as "adapter is slow"; failure mode confusion | Preflight already detects missing model and exits 2 with a clear message; auto-pull is one branch added |
+| **Container packaging** of the Gemma adapter | Ollama runs on the host; containerizing the adapter complicates `OLLAMA_HOST` networking. Phase 5 Mac Mini deploy can run both as host services | Adapter has no Docker assumptions today; future Dockerfile is additive |
+
+### Phase 1 follow-ups (loose ends from the v0.1 messaging rebuild)
+
+Items that surfaced during Phase 1 implementation but were out of plan scope:
+
+| Item | Severity | Notes |
+|---|---|---|
+| **WebSocket endpoints** (`/ws/stream`, `/ws/agent/<id>`) — `frontend/src/hooks/useWebSocket.js` references them but `aggregator/main.py` doesn't ship them | Medium — frontend currently relies on polling (TaskBoard 5s, AgentDetail queue 5s, poison 30s) | Add `/ws/agent/<id>` to aggregator and wire `task.progress` deliveries to it. Pairs naturally with Phase 2.5 streaming. |
+| **Stale `.claude/rules/docker-infra.md` and `nats-messaging.md`** — still describe MQTT-on-1883 default; contradicts ADR-0004 | Low — informational rule files for tools, not runtime | Reconcile in a doc-cleanup PR |
+| **`httpx` not pinned in `aggregator/requirements.txt`** | Medium — TestClient depends on it; production builds need it | Add `httpx>=0.27` to requirements |
+| **`OPENCLAW_API_KEY` env var preserved in `docker-compose.yml`** | Low — pre-existing var; may be obsolete after openclaw rewrite | Decide retire vs keep |
+| **JetStream test fixture slow-skip (~2 min/test without broker)** | Low — local dev annoyance | Add TCP probe before `nats-py.connect()` so unreachable broker fails fast |
+| **`python-backend.md` rule violations**: FastAPI endpoints lack `summary`/`description`; `database.py` has f-string in `PRAGMA table_info({name})` | Low — internal-only, no security risk; PRAGMA is a parameterless SQL form so f-string is acceptable here | Either refactor or update the rule to permit |
+| **TaskBoard "Create task" UX removed in Phase 1 Task 16** — no `/api/tasks` endpoint exists in v0.1 | Low — TaskBoard now derives task state from `/api/messages` filtered by `task_id` | Decide: re-add via new endpoint, or stay derived-only. Visible UX change. |
+| **Live-stack Phase 1 verification checklist (13 rows in `docs/CHANGELOG.md`)** | Required before tagging v0.1 | Operator step; cannot be automated |
+
+---
+
+## Phase handover — delayed-to-later-phases
+
+Each phase has its own spec/plan cycle when activated. The Phase 1 plan handoff section (`docs/superpowers/plans/2026-04-23-agent-messaging-v0.1-phase-1.md`) is the original source for these.
+
+### Phase 2.5 — Gemma adapter enhancements
+
+When? After Phase 2 ships and we have a baseline of "what users actually ask the LLM agent for". Possibly bundled with Phase 3.
+
+Items:
+- Multi-skill dispatch (see deferred table above)
+- Conversational memory
+- Token streaming via `task.progress`
+- WebSocket bridge for live UI updates
+
+Spec file: `docs/superpowers/specs/<date>-gemma-enhancements-design.md` (TBD).
+
+### Phase 3 — Operational hardening
+
+Two sessions, one plan. Builds on Phase 1's heartbeat + advisory infrastructure.
+
+#### Phase 3.1 — Watchdog adapter
+
+Subscribes `agents.*.heartbeat` and `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>`. Tracks per-agent heartbeat freshness; when an agent goes silent past 2× its declared `runtime.heartbeat_interval_sec`, publishes synthesized `result` envelopes for any in-flight commands targeted at it (`task_state: failed`, `payload.error: "recipient_offline"`).
+
+Has its own durable inbox (`agents.watchdog-1.inbox`) with `max_ack_pending: 1`. `runtime.kind: native`, `runtime.roles: [watchdog]`.
+
+Spec file: `docs/superpowers/specs/<date>-watchdog-adapter-design.md` (TBD).
+
+#### Phase 3.2 — Dashboard agent-registry panel
+
+Per-agent UI panel showing card metadata, heartbeat freshness, queue depth, poison count, and online/offline badge. Uses the endpoints already shipped in Phase 1 Task 6 + Task 8 (`/api/agents`, `/api/agents/{id}/queue`, `/api/poison`).
+
+Pairs well with WebSocket bridge (deferred above) so the panel updates live instead of via polling.
+
+Spec file: `docs/superpowers/specs/<date>-agent-registry-panel-design.md` (TBD).
+
+### Phase 4 — AG2 + A2A wrapper
+
+Four sessions, one plan. The first phase that exercises the **bridge** pattern (`runtime.kind: bridge`).
+
+#### Phase 4.1 — AG2 adapter L1 scaffold
+
+Pin `ag2>=0.12,<0.13`. Spend 15 minutes verifying imports (`A2aRemoteAgent`, `A2aAgentServer`, `autogen.agentchat.group.AutoPattern`) against the pinned wheel before writing code. Use `a_run` async-only.
+
+#### Phase 4.2 — AG2 L2 delegation + hop_count loop protection
+
+Refuse delegations at `hop_count >= 8`. Cancel returns `task_state: rejected, payload.reason: "ag2_cancel_not_supported"` (v0.2 limitation; revisit if/when AG2 ships cancel).
+
+#### Phase 4.3 — Dashboard delegation-chain view
+
+`GET /api/chains/{context_id}` endpoint + chain timeline UI. Visualizes a delegation cascade across multiple agents.
+
+#### Phase 4.4 — A2A HTTP wrapper
+
+`A2aAgentServer(agent, agent_card=card)` serving `/.well-known/agent-card.json`. NATS bridge translates SSE → `task.progress` envelopes. Decide `.build()` vs `.serve()` vs `.run()` at pin time.
+
+Spec file: `docs/superpowers/specs/<date>-ag2-a2a-wrapper-design.md` (TBD).
+
+### Phase 5 — Mac Mini deploy
+
+One session, one plan. Production-shaped deployment to the dedicated host.
+
+Items:
+- `deploy-mac-mini.sh` script (preflight: `.env` over tailnet, `BROKER_HOST` set, operator verifies `NATS_TOKEN` has JetStream perms via `nats consumer add` smoke).
+- launchd / systemd-style services for Ollama + Gemma adapter + watchdog adapter (Phase 3) + openclaw browser launcher.
+- Backup strategy for `data/openclaw.db` and `nats/data/jetstream/`.
+- Tailnet ACLs for inter-host access.
+
+Spec file: `docs/superpowers/specs/<date>-mac-mini-deploy-design.md` (TBD).
+
+### Optional / parking lot
+
+- **Bridge adapter for Hermes / ACP.** Spec rev 7 §"Bridge pattern" already covers the design. Plan when Nous Research's Hermes Agent is first onboarded.
+- **Per-agent JWT auth** (replaces shared `NATS_TOKEN`). v0.2+. Necessary for multi-tenant deployments.
+- **JetStream clustering.** Single-node broker is fine until a second persistent host joins (likely v0.3+).
+- **P2P transport (Zenoh).** v0.3+ exploration; only relevant if we want agent-to-agent communication that doesn't traverse the central broker.
+- **Token streaming over NATS for browser clients.** Currently planned via A2A SSE wrapper at Phase 4. Revisit if we want native NATS streaming for non-browser clients.
