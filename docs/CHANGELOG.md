@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — v0.2 Gemma reasoner adapter (Phase 2)
+- `adapters/gemma/` — single-shot Ollama-backed reasoner agent
+  (`agent_id: gemma-1`, `runtime.kind: native`, `runtime.roles:
+  [reasoner]`, skill `reasoning.chat`).
+- Wraps `POST /api/generate` (no streaming, no memory in v0.2);
+  configurable model/temperature/max_tokens/timeout via per-command
+  `payload.args` or env vars.
+- Seven typed adapter-level error codes (`unsupported_type`,
+  `empty_prompt`, `ollama_unreachable`, `ollama_timeout`,
+  `model_not_loaded`, `ollama_inference_error`, `ollama_bad_response`)
+  give the dashboard a stable failure vocabulary.
+- Fail-fast preflight (`/api/tags` health + model presence check)
+  blocks startup with exit code 1 (unreachable) or 2 (model-not-loaded);
+  no auto-pull on missing model.
+- 11 unit tests + gated live-Ollama integration test +
+  `e2e/tests/phase2-gemma-smoke.spec.js`.
+- `.env.example` documents `OLLAMA_HOST`, `OLLAMA_PORT`,
+  `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_SEC`.
+
+Out of scope (deferred — see `docs/roadmap.md`): multi-skill dispatch,
+conversational memory keyed by `context_id`, token streaming via
+`task.progress`, WebSocket bridge for live UI updates, non-Ollama
+backends, auto-pull, container packaging.
+
 ### Added — v0.1 messaging clean rebuild (Phase 1)
 - NATS JetStream `AGENT_INBOX` WorkQueue stream with per-agent durable pull
   consumers (`max_ack_pending=1`). Envelope dedup via `Nats-Msg-Id` and
