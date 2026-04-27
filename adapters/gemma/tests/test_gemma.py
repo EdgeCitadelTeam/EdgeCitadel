@@ -190,3 +190,20 @@ async def test_preflight_raises_when_model_not_found(monkeypatch):
     monkeypatch.setenv("OLLAMA_MODEL", "gemma3:4b")
     with pytest.raises(PreflightError, match="model_not_loaded"):
         await preflight()
+
+
+@pytest.mark.asyncio
+async def test_preflight_accepts_bare_name_when_only_latest_tag_listed(monkeypatch):
+    """Operators commonly set OLLAMA_MODEL=gemma4 expecting an implicit
+    :latest tag. Ollama lists pulled models as 'name:tag' (e.g.
+    'gemma4:latest'), so the bare form must match the :latest entry."""
+    from adapters.gemma.adapter import preflight
+
+    async def fake_get(self, url, **kw):
+        return _FakeResp(200, json_body={
+            "models": [{"name": "gemma4:latest"}, {"name": "llama3.1:8b"}]
+        })
+
+    monkeypatch.setattr("httpx.AsyncClient.get", fake_get)
+    monkeypatch.setenv("OLLAMA_MODEL", "gemma4")
+    await preflight()  # should not raise

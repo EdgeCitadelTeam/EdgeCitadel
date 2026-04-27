@@ -59,7 +59,12 @@ async def preflight() -> None:
         raise PreflightError(f"ollama_bad_response: {e}") from e
 
     names = [m.get("name") for m in (body.get("models") or [])]
-    if model not in names:
+    # Accept the bare-name shorthand: Ollama lists models as "name:tag" (e.g.
+    # "gemma4:latest"); operators commonly set OLLAMA_MODEL=gemma4 expecting
+    # the implicit ":latest" tag, so match either form.
+    candidates = {model, f"{model}:latest"} if ":" not in model else {model}
+    matched = next((n for n in names if n in candidates), None)
+    if matched is None:
         raise PreflightError(
             f"model_not_loaded: OLLAMA_MODEL={model!r} not in {names!r}; "
             f"run `ollama pull {model}`"
