@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { Users, X } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from '../stores/appStore'
-import { agentApi } from '../api/client'
+import { api } from '../api/client'
 import AgentCard from './AgentCard'
 
 export default function AgentSidebar() {
@@ -16,8 +16,15 @@ export default function AgentSidebar() {
   useEffect(() => {
     const fetchAgents = async () => {
       try {
-        const { data } = await agentApi.list()
-        setAgents(data)
+        const items = await api.listAgents()
+        const filtered = showTestAgents
+          ? items
+          : (items || []).filter((a) => {
+              const meta = a.card?.metadata || {}
+              const deployment = meta['runtime.deployment'] || a.deployment
+              return deployment !== 'test'
+            })
+        setAgents(filtered || [])
       } catch {
         // Will retry on next interval
       }
@@ -32,8 +39,8 @@ export default function AgentSidebar() {
     setSidebarOpen(false)
   }
 
-  const onlineAgents = agents.filter((a) => a.status === 'online')
-  const offlineAgents = agents.filter((a) => a.status !== 'online')
+  const onlineAgents = agents.filter((a) => a.agent_state === 'online')
+  const offlineAgents = agents.filter((a) => a.agent_state !== 'online')
   const sorted = [...onlineAgents, ...offlineAgents]
 
   return (
@@ -73,10 +80,10 @@ export default function AgentSidebar() {
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
         {sorted.map((agent) => (
           <AgentCard
-            key={agent.id}
+            key={agent.agent_id}
             agent={agent}
-            selected={selectedAgent === agent.id}
-            onClick={() => handleSelect(agent.id)}
+            selected={selectedAgent === agent.agent_id}
+            onClick={() => handleSelect(agent.agent_id)}
           />
         ))}
         {agents.length === 0 && (

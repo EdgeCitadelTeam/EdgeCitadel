@@ -1,0 +1,16 @@
+agent_id: shell-1
+name: shell-1
+description: Executes shell commands in a subprocess, default timeout 30s.
+version: 0.1.0
+runtime:
+  kind: native
+  roles: [worker]
+  tags: [shell, executor]
+  heartbeat_interval_sec: 30
+skills:
+  - id: shell.exec
+    name: shell-exec
+    description: Run a shell command and return stdout/stderr.
+    tags: [shell, subprocess]
+capabilities:
+  streaming: false

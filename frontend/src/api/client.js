@@ -1,52 +1,55 @@
-import axios from 'axios'
-import useAppStore from '../stores/appStore'
+// v0.1 messaging contract — canonical /api endpoints (Tasks 6 + 14).
+// Uses native fetch; previous axios surface (`agentApi`, `messageApi`, ...)
+// is replaced by a single `api` object with the methods listed below.
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
-})
+const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
-// Automatically add exclude_test param when test data is hidden
-api.interceptors.request.use((config) => {
-  if (!useAppStore.getState().showTestAgents) {
-    config.params = { ...config.params, exclude_test: true }
+async function req(path, opts = {}) {
+  const r = await fetch(`${API_BASE}${path}`, opts)
+  if (!r.ok) {
+    const detail = await r.text().catch(() => '')
+    throw new Error(`${r.status} ${detail}`)
   }
-  return config
-})
-
-export const agentApi = {
-  list: () => api.get('/agents'),
-  get: (id) => api.get(`/agents/${id}`),
-  create: (data) => api.post('/agents', data),
-  update: (id, data) => api.patch(`/agents/${id}`, data),
-  delete: (id) => api.delete(`/agents/${id}`),
-  stats: (id) => api.get(`/agents/${id}/stats`),
+  if (r.status === 204) return null
+  return r.json()
 }
 
-export const messageApi = {
-  list: (params) => api.get('/messages', { params }),
-  conversations: (params) => api.get('/messages/conversations', { params }),
-  flow: (params) => api.get('/messages/flow', { params }),
-}
+export const api = {
+  // System
+  systemStatus: () => req('/system/status'),
 
-export const taskApi = {
-  list: (params) => api.get('/tasks', { params }),
-  create: (data) => api.post('/tasks', data),
-  update: (id, data) => api.patch(`/tasks/${id}`, data),
-  trace: (id) => api.get(`/tasks/${id}/trace`),
-}
+  // Agents
+  listAgents: () => req('/agents'),
+  getAgent: (id) => req(`/agents/${encodeURIComponent(id)}`),
+  getAgentCard: (id) => req(`/agents/${encodeURIComponent(id)}/card`),
+  getAgentQueue: (id) => req(`/agents/${encodeURIComponent(id)}/queue`),
+  deleteAgent: (id) =>
+    req(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-export const logApi = {
-  list: (params) => api.get('/logs', { params }),
-}
+  // Commands (returns {task_id, recipient_id, accepted_at})
+  sendCommand: (agentId, body, args) =>
+    req(`/command/${encodeURIComponent(agentId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body, ...(args ? { args } : {}) }),
+    }),
 
-export const commandApi = {
-  send: (agentName, data) => api.post(`/command/${agentName}`, data),
-  broadcast: (data) => api.post('/broadcast', data),
-}
+  // Messages — accepts {agent_id, task_id, context_id, type, limit, since_ts}
+  queryMessages: (params = {}) => {
+    const filtered = Object.fromEntries(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    )
+    const qs = new URLSearchParams(filtered).toString()
+    return req(`/messages${qs ? `?${qs}` : ''}`)
+  },
 
-export const systemApi = {
-  status: () => api.get('/system/status'),
-  topology: (params) => api.get('/system/topology', { params }),
+  // Poison events — agent_id optional
+  queryPoison: (agentId, limit = 100) => {
+    const params = { limit }
+    if (agentId) params.agent_id = agentId
+    const qs = new URLSearchParams(params).toString()
+    return req(`/poison?${qs}`)
+  },
 }
 
 export default api

@@ -44,12 +44,12 @@ export default function useWebSocket(agentName = null) {
 
         if (data.event === 'message') {
           // Skip heartbeat/register messages from chat display
-          const msgType = data.data?.message_type
+          const msgType = data.data?.type
           if (msgType !== 'heartbeat' && msgType !== 'register') {
             addRealtimeMessage(data.data)
           }
         } else if (data.event === 'agent_status_change') {
-          updateAgentStatus(data.data.agent_id, data.data.status)
+          updateAgentStatus(data.data.agent_id, data.data.agent_state || data.data.status)
           if (data.data.status === 'offline') {
             addNotification({
               type: 'warning',

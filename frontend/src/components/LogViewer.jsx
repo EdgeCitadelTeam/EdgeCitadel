@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Filter } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from '../stores/appStore'
-import { logApi } from '../api/client'
+import { api } from '../api/client'
 import { relativeTime, fullTimestamp } from '../utils/formatTime'
 
 const LEVEL_COLORS = {
@@ -37,14 +37,27 @@ export default function LogViewer() {
   const fetchLogs = useCallback(async () => {
     setLoading(true)
     try {
-      const params = { limit: 200 }
-      if (levelFilter) params.level = levelFilter
-      if (selectedAgent) params.agent = selectedAgent
-      if (sourceFilter) params.source = sourceFilter
-      if (search) params.search = search
+      const params = { type: 'log', limit: 200 }
+      if (selectedAgent) params.agent_id = selectedAgent
 
-      const { data } = await logApi.list(params)
-      setLogs((data.items || []).reverse())
+      let items = (await api.queryMessages(params)) || []
+      // Map log envelopes to a flat row shape; payload is free-form per agent.
+      let rows = items.map((m) => ({
+        id: m.id,
+        level: (m.payload?.level || 'INFO').toUpperCase(),
+        timestamp: m.timestamp,
+        agent_id: m.sender_id,
+        source: m.payload?.source || m.payload?.logger || '',
+        message: m.payload?.message || m.payload?.body || JSON.stringify(m.payload),
+        metadata: m.payload,
+      }))
+      if (levelFilter) rows = rows.filter((r) => r.level === levelFilter)
+      if (sourceFilter) rows = rows.filter((r) => (r.source || '').includes(sourceFilter))
+      if (search) {
+        const needle = search.toLowerCase()
+        rows = rows.filter((r) => (r.message || '').toLowerCase().includes(needle))
+      }
+      setLogs(rows.slice().reverse())
     } catch {
       // ignore
     }
