@@ -63,13 +63,16 @@ test.describe('Phase 1 smoke — canonical envelope round trip', () => {
     expect(Number.isInteger(body.ack_pending)).toBe(true);
   });
 
-  test('subject inventory coverage — DB contains each seeded type', async ({ request }) => {
-    // relies on prior tests + the running shell-1 adapter to have produced
-    // register, heartbeat, command, and result envelopes.
+  test('subject inventory coverage — DB contains each persisted type', async ({ request }) => {
+    // The aggregator persists `command`/`result` (via outbox mirror, ADR-0006)
+    // plus `status`/`log`/`broadcast` directly. `register` and `heartbeat`
+    // intentionally update the `agents` table only and are NOT inserted into
+    // `messages` — that's a per-row-cost / observability tradeoff. See
+    // docs/roadmap.md Phase 1 follow-ups if we ever want to reverse it.
     const r = await request.get(`${API}/api/messages?limit=500`);
     const rows = await r.json();
     const types = new Set(rows.map((x) => x.type));
-    for (const t of ['register', 'heartbeat', 'command', 'result']) {
+    for (const t of ['command', 'result']) {
       expect(types.has(t), `missing type=${t}`).toBe(true);
     }
   });
