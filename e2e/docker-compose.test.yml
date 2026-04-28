@@ -23,7 +23,8 @@ services:
     environment:
       - NATS_URL=nats://nats:4222
       - DB_PATH=/data/openclaw.db
-      - API_KEY=test-api-key
+      # API_KEY retired in Phase 1 follow-ups: aggregator no longer reads
+      # it; HTTP-level auth is a v0.2 design topic.
       - HEARTBEAT_INTERVAL=2
       - HEARTBEAT_TIMEOUT=6
     volumes:

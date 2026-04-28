@@ -4,7 +4,7 @@
 
 ```bash
 git clone <repo-url> && cd EdgeCitadel
-cp .env.example .env          # configure NATS_TOKEN, API_KEY
+cp .env.example .env          # configure NATS_TOKEN, OPENCLAW_TOKEN
 docker compose up --build     # start full stack
 ```
 

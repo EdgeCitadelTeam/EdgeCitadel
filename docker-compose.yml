@@ -45,7 +45,6 @@ services:
       - ./data:/data
     environment:
       - DB_PATH=/data/openclaw.db
-      - API_KEY=${OPENCLAW_API_KEY}
       - NATS_URL=nats://nats:4222
       - NATS_TOKEN=${NATS_TOKEN}
     expose:

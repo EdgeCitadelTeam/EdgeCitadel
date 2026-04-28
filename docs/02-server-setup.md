@@ -12,7 +12,7 @@ git clone <repo> EdgeCitadel && cd EdgeCitadel
 
 # Configure secrets
 cp .env.example .env
-# Edit .env — set OPENCLAW_API_KEY and NATS_TOKEN
+# Edit .env — set NATS_TOKEN and OPENCLAW_TOKEN
 
 # Start the stack
 docker compose up -d --build
@@ -30,8 +30,10 @@ The dashboard is available at `http://localhost`.
 
 | Variable | Description | Default |
 |---|---|---|
-| `OPENCLAW_API_KEY` | API key for deployment endpoints | `change-me` |
-| `NATS_TOKEN` | Auth token for NATS/MQTT connections | `changeme` |
+| `NATS_TOKEN` | Auth token the aggregator and host adapters present to NATS | `change-me` |
+| `OPENCLAW_TOKEN` | Account-scoped token for the openclaw browser client (per ADR-0005) | `change-me-scoped` |
+| `EC_ENABLE_MQTT` | `1` to expose MQTT ingress on port 1883 (ADR-0004); off by default | `0` |
+| `OLLAMA_HOST` / `OLLAMA_PORT` / `OLLAMA_MODEL` / `OLLAMA_TIMEOUT_SEC` | Gemma adapter Ollama config; see `adapters/gemma/README.md` | localhost / 11434 / `gemma3:4b` / 120 |
 
 ### Aggregator (set in docker-compose.yml)
 
@@ -40,9 +42,11 @@ The dashboard is available at `http://localhost`.
 | `NATS_URL` | NATS server URL | `nats://nats:4222` |
 | `NATS_TOKEN` | NATS auth token | from .env |
 | `DB_PATH` | SQLite database path | `/data/openclaw.db` |
-| `API_KEY` | API key for protected endpoints | from .env |
-| `HEARTBEAT_INTERVAL` | Seconds between offline checks | `15` |
-| `HEARTBEAT_TIMEOUT` | Seconds before marking agent offline | `120` |
+
+> v0.1 has no HTTP-level auth (write endpoints are gated by NATS-token + the
+> aggregator-mediated openclaw translator). HTTP auth is a v0.2 design topic;
+> the legacy `API_KEY` / `OPENCLAW_API_KEY` env was retired in commit
+> [phase1-followups] because nothing read it anymore.
 
 ## Ports
 
