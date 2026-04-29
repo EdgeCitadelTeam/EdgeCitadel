@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import database as db
 from .aggregator import AggregatorApp, now_iso
 from .models import CommandRequest, CommandResponse
+from .websocket_hub import WebSocketHub
 
 
 _OPENCLAW_TOKENS: dict[str, str] = {}
@@ -33,6 +34,7 @@ def make_app(for_testing: bool = False) -> FastAPI:
     async def _startup():
         if for_testing:
             state["app"] = None
+            state["hub"] = WebSocketHub()
             return
         nats_url = os.environ["NATS_URL"]
         nats_token = os.environ["NATS_TOKEN"]
@@ -40,6 +42,12 @@ def make_app(for_testing: bool = False) -> FastAPI:
                             db_path=db_path,
                             envelope_schema=envelope_schema,
                             card_schema=card_schema)
+        # Wire the WebSocket fan-out hub onto the router BEFORE start()
+        # so any boot-time envelopes (self-register, request_register
+        # broadcast) reach connected dashboards.
+        hub = WebSocketHub()
+        agg.router.hub = hub
+        state["hub"] = hub
         await agg.start()
         state["app"] = agg
 
@@ -189,6 +197,56 @@ def make_app(for_testing: bool = False) -> FastAPI:
         _OPENCLAW_TOKENS[token] = session_id  # in-memory, resets on restart
         return {"token": token, "expires_at": exp,
                 "agent_id": f"openclaw-{session_id}"}
+
+    # ---- WebSocket fan-out ----
+    #
+    # Phase 1 follow-up: real-time push to the dashboard, replacing the
+    # 3-30s polling loops in ChatHistory / AgentDetail / TaskBoard.
+    # Two surfaces:
+    #   /ws/stream         — global firehose; every persisted envelope.
+    #   /ws/agent/{id}     — only envelopes whose sender_id or recipient_id
+    #                        matches {id}; keeps single-agent panels quiet.
+    # Wire format mirrors what frontend/src/hooks/useWebSocket.js expects:
+    # {event, data} JSON frames, plus client-side "ping" keepalives that
+    # the server discards.
+    async def _ws_loop(ws: WebSocket) -> None:
+        """Consume client frames so the connection stays alive. The
+        frontend sends 'ping' strings every 15s; we accept anything and
+        do nothing with it. Returns on disconnect."""
+        try:
+            while True:
+                # receive_text raises WebSocketDisconnect on close
+                await ws.receive_text()
+        except WebSocketDisconnect:
+            return
+        except Exception:
+            return
+
+    @app.websocket("/ws/stream")
+    async def ws_stream(ws: WebSocket):
+        hub: WebSocketHub | None = state.get("hub")
+        if hub is None:
+            await ws.close(code=1011, reason="hub not ready")
+            return
+        await ws.accept()
+        await hub.add_global(ws)
+        try:
+            await _ws_loop(ws)
+        finally:
+            await hub.remove(ws)
+
+    @app.websocket("/ws/agent/{agent_id}")
+    async def ws_agent(ws: WebSocket, agent_id: str):
+        hub: WebSocketHub | None = state.get("hub")
+        if hub is None:
+            await ws.close(code=1011, reason="hub not ready")
+            return
+        await ws.accept()
+        await hub.add_agent(agent_id, ws)
+        try:
+            await _ws_loop(ws)
+        finally:
+            await hub.remove(ws)
 
     return app
 

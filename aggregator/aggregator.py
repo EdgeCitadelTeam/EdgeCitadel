@@ -37,6 +37,25 @@ class MessageRouter:
         self.pending_tasks: dict[str, asyncio.Future] = {}  # task_id -> future
         self.nc: NATS | None = None
         self.js = None
+        # Optional WebSocket fan-out hub. AggregatorApp wires this in
+        # before start(); broadcast failures are logged but never break
+        # the NATS handler chain.
+        self.hub = None  # type: ignore[assignment]
+
+    async def _hub_broadcast(self, env: dict) -> None:
+        if self.hub is None: return
+        try:
+            await self.hub.broadcast(env)
+        except Exception as e:  # noqa: BLE001
+            log.warning("ws envelope broadcast failed: %s", e)
+
+    async def _hub_event(self, event: str, data: dict, *,
+                         agent_id: str | None = None) -> None:
+        if self.hub is None: return
+        try:
+            await self.hub.broadcast_event(event, data, agent_id=agent_id)
+        except Exception as e:  # noqa: BLE001
+            log.warning("ws %s broadcast failed: %s", event, e)
 
     # ---- plain-NATS subscriber handlers ----
 
@@ -53,6 +72,10 @@ class MessageRouter:
         db.upsert_agent_card(card, timestamp=env["timestamp"])
         log.info("registered %s (kind=%s)", env["sender_id"],
                  card["metadata"]["runtime.kind"])
+        await self._hub_event(
+            "agent_registered",
+            {"agent_id": env["sender_id"], "card": card},
+            agent_id=env["sender_id"])
 
     async def on_heartbeat(self, msg: Msg) -> None:
         env = self._parse_and_validate(msg.data)
@@ -77,18 +100,42 @@ class MessageRouter:
         if env is None or env["type"] != "status": return
         db.update_agent_state(env["sender_id"], env["agent_state"])
         db.insert_message(env, deployment=self._deployment_for(env))
+        await self._hub_event(
+            "agent_status_change",
+            {"agent_id": env["sender_id"], "agent_state": env["agent_state"]},
+            agent_id=env["sender_id"])
 
     async def on_log(self, msg: Msg) -> None:
         env = self._parse_and_validate(msg.data)
         if env is None or env["type"] != "log": return
         db.insert_message(env, deployment=self._deployment_for(env))
+        # Forward only WARN/ERROR-level log envelopes — INFO would flood the
+        # dashboard's notification stream. Frontend filters on data.level.
+        payload = env.get("payload") or {}
+        if (payload.get("level") or "").upper() in ("ERROR", "WARN", "WARNING"):
+            await self._hub_event(
+                "log",
+                {
+                    "level": payload.get("level"),
+                    "message": payload.get("message", ""),
+                    "source": payload.get("source"),
+                    "agent_id": env["sender_id"],
+                },
+                agent_id=env["sender_id"])
 
     async def on_outbox(self, msg: Msg) -> None:
         """Outbox mirror: authoritative audit path for inbox traffic."""
         env = self._parse_and_validate(msg.data)
         if env is None: return
+        deployment = self._deployment_for(env)
         # We persist every outbox event so the dashboard has a canonical view
-        db.insert_message(env, deployment=self._deployment_for(env))
+        db.insert_message(env, deployment=deployment)
+        # Push to subscribed dashboard sockets — global firehose plus the
+        # per-agent streams that match either sender or recipient. Carry the
+        # resolved deployment on the WS frame so client-side filters
+        # (showTestAgents) work on real-time messages identically to
+        # historical /api/messages rows.
+        await self._hub_broadcast({**env, "deployment": deployment})
         # If this outbox is a result matching an HTTP-driven pending task, resolve it
         if env["type"] == "result":
             f = self.pending_tasks.pop(env.get("task_id", ""), None)
