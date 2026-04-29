@@ -50,15 +50,14 @@ export default function ChatHistory() {
       const params = { limit }
       if (selectedAgent) params.agent_id = selectedAgent
       if (messageTypeFilter) params.type = messageTypeFilter
-
-      let items = (await api.queryMessages(params)) || []
       // Hide test-deployment messages by default. Aggregator tags rows
       // with the sender/recipient agent's runtime.deployment from the
       // cached A2A card (see MessageRouter._deployment_for). Pairs with
       // the showTestAgents toggle that already filters AgentSidebar.
-      if (!showTestAgents) {
-        items = items.filter((m) => (m.deployment || 'default') !== 'test')
-      }
+      // Server-side filter — pre-page-size LIMIT only sees prod rows.
+      if (!showTestAgents) params.exclude_deployment = 'test'
+
+      let items = (await api.queryMessages(params)) || []
       if (search) {
         const needle = search.toLowerCase()
         items = items.filter((m) =>

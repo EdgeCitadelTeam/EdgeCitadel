@@ -111,7 +111,10 @@ def insert_message(env: dict, deployment: str = "default") -> None:
 
 def query_messages(*, agent_id: str | None = None, task_id: str | None = None,
                    context_id: str | None = None, type: str | None = None,
-                   since_ts: str | None = None, limit: int = 500) -> list[dict]:
+                   since_ts: str | None = None,
+                   deployment: str | None = None,
+                   exclude_deployment: str | None = None,
+                   limit: int = 500) -> list[dict]:
     q = "SELECT * FROM messages WHERE 1=1"
     params: list = []
     if agent_id:
@@ -124,6 +127,10 @@ def query_messages(*, agent_id: str | None = None, task_id: str | None = None,
         q += " AND type = ?"; params.append(type)
     if since_ts:
         q += " AND timestamp >= ?"; params.append(since_ts)
+    if deployment:
+        q += " AND deployment = ?"; params.append(deployment)
+    if exclude_deployment:
+        q += " AND deployment != ?"; params.append(exclude_deployment)
     q += " ORDER BY timestamp DESC LIMIT ?"; params.append(limit)
     with _conn() as c:
         rows = [dict(r) for r in c.execute(q, params).fetchall()]

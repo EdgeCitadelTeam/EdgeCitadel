@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import database as db
 from .aggregator import AggregatorApp, now_iso
 from .models import CommandRequest, CommandResponse
+from .websocket_hub import WebSocketHub
 
 
 _OPENCLAW_TOKENS: dict[str, str] = {}
@@ -33,6 +34,7 @@ def make_app(for_testing: bool = False) -> FastAPI:
     async def _startup():
         if for_testing:
             state["app"] = None
+            state["hub"] = WebSocketHub()
             return
         nats_url = os.environ["NATS_URL"]
         nats_token = os.environ["NATS_TOKEN"]
@@ -40,6 +42,12 @@ def make_app(for_testing: bool = False) -> FastAPI:
                             db_path=db_path,
                             envelope_schema=envelope_schema,
                             card_schema=card_schema)
+        # Wire the WebSocket fan-out hub onto the router BEFORE start()
+        # so any boot-time envelopes (self-register, request_register
+        # broadcast) reach connected dashboards.
+        hub = WebSocketHub()
+        agg.router.hub = hub
+        state["hub"] = hub
         await agg.start()
         state["app"] = agg
 
@@ -105,12 +113,39 @@ def make_app(for_testing: bool = False) -> FastAPI:
 
     @app.post("/api/command/{agent_id}", status_code=202,
               response_model=CommandResponse)
-    async def post_command(agent_id: str, req: CommandRequest):
+    async def post_command(agent_id: str, req: CommandRequest,
+                           sender_id: str | None = None):
+        """Dispatch a command envelope to {agent_id} via JetStream.
+
+        The optional `sender_id` query param overrides the default
+        `aggregator` sender. When set to anything other than `aggregator`,
+        the aggregator auto-registers a synthetic A2A card with
+        `runtime.deployment: test` for that sender, so the resulting
+        command + outbox + result envelopes all tag `deployment=test` via
+        MessageRouter._deployment_for. Pattern intended for test runners
+        (e.g. Playwright Phase 2 smoke); production callers omit it."""
         agg = state["app"]
+        actual_sender = sender_id or "aggregator"
+        # Auto-register a synthetic test-deployment card for non-default
+        # senders so deployment tagging propagates without requiring a real
+        # NATS register envelope from the caller.
+        if (agg is not None and actual_sender != "aggregator"
+                and actual_sender not in agg.router.cache):
+            agg.router.cache[actual_sender] = {
+                "name": actual_sender,
+                "metadata": {
+                    "runtime.kind": "native",
+                    "runtime.roles": ["worker"],
+                    "runtime.heartbeat_interval_sec": 30,
+                    "runtime.deployment": "test",
+                    "runtime.tags": ["synthetic", "auto-registered"],
+                },
+            }
+
         task_id = str(uuid.uuid4())
         env = {
             "v": 1, "id": str(uuid.uuid4()), "type": "command",
-            "sender_id": "aggregator", "recipient_id": agent_id,
+            "sender_id": actual_sender, "recipient_id": agent_id,
             "task_id": task_id, "timestamp": now_iso(),
             "payload": {"body": req.body, **({"args": req.args} if req.args else {})}
         }
@@ -119,8 +154,10 @@ def make_app(for_testing: bool = False) -> FastAPI:
             await agg.router.js.publish(f"agents.{agent_id}.inbox",
                                         json.dumps(env).encode(),
                                         headers={"Nats-Msg-Id": env["id"]})
-            # also mirror on own outbox
-            await agg.router.nc.publish("agents.aggregator.outbox",
+            # Mirror on the SENDER's outbox (was always aggregator before;
+            # now matches the actual sender so test-runner traffic tags
+            # consistently).
+            await agg.router.nc.publish(f"agents.{actual_sender}.outbox",
                                         json.dumps(env).encode())
         return CommandResponse(task_id=task_id, recipient_id=agent_id,
                                accepted_at=env["timestamp"])
@@ -129,9 +166,15 @@ def make_app(for_testing: bool = False) -> FastAPI:
     async def query_messages(agent_id: str | None = None,
                              task_id: str | None = None,
                              context_id: str | None = None,
-                             type: str | None = None, limit: int = 500):
+                             type: str | None = None,
+                             deployment: str | None = None,
+                             exclude_deployment: str | None = None,
+                             limit: int = 500):
         return db.query_messages(agent_id=agent_id, task_id=task_id,
-                                 context_id=context_id, type=type, limit=limit)
+                                 context_id=context_id, type=type,
+                                 deployment=deployment,
+                                 exclude_deployment=exclude_deployment,
+                                 limit=limit)
 
     @app.get("/api/poison")
     async def query_poison(agent_id: str | None = None, limit: int = 100):
@@ -154,6 +197,56 @@ def make_app(for_testing: bool = False) -> FastAPI:
         _OPENCLAW_TOKENS[token] = session_id  # in-memory, resets on restart
         return {"token": token, "expires_at": exp,
                 "agent_id": f"openclaw-{session_id}"}
+
+    # ---- WebSocket fan-out ----
+    #
+    # Phase 1 follow-up: real-time push to the dashboard, replacing the
+    # 3-30s polling loops in ChatHistory / AgentDetail / TaskBoard.
+    # Two surfaces:
+    #   /ws/stream         — global firehose; every persisted envelope.
+    #   /ws/agent/{id}     — only envelopes whose sender_id or recipient_id
+    #                        matches {id}; keeps single-agent panels quiet.
+    # Wire format mirrors what frontend/src/hooks/useWebSocket.js expects:
+    # {event, data} JSON frames, plus client-side "ping" keepalives that
+    # the server discards.
+    async def _ws_loop(ws: WebSocket) -> None:
+        """Consume client frames so the connection stays alive. The
+        frontend sends 'ping' strings every 15s; we accept anything and
+        do nothing with it. Returns on disconnect."""
+        try:
+            while True:
+                # receive_text raises WebSocketDisconnect on close
+                await ws.receive_text()
+        except WebSocketDisconnect:
+            return
+        except Exception:
+            return
+
+    @app.websocket("/ws/stream")
+    async def ws_stream(ws: WebSocket):
+        hub: WebSocketHub | None = state.get("hub")
+        if hub is None:
+            await ws.close(code=1011, reason="hub not ready")
+            return
+        await ws.accept()
+        await hub.add_global(ws)
+        try:
+            await _ws_loop(ws)
+        finally:
+            await hub.remove(ws)
+
+    @app.websocket("/ws/agent/{agent_id}")
+    async def ws_agent(ws: WebSocket, agent_id: str):
+        hub: WebSocketHub | None = state.get("hub")
+        if hub is None:
+            await ws.close(code=1011, reason="hub not ready")
+            return
+        await ws.accept()
+        await hub.add_agent(agent_id, ws)
+        try:
+            await _ws_loop(ws)
+        finally:
+            await hub.remove(ws)
 
     return app
 

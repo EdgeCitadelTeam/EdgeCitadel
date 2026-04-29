@@ -21,7 +21,7 @@ Monitor, command, and orchestrate AI agents across edge devices from a single da
 
 ```bash
 git clone https://github.com/zhonghaozhan/EdgeCitadel.git && cd EdgeCitadel
-cp .env.example .env              # set NATS_TOKEN and OPENCLAW_API_KEY
+cp .env.example .env              # set NATS_TOKEN and OPENCLAW_TOKEN
 mkdir -p data nats/data
 docker compose up --build -d
 ```

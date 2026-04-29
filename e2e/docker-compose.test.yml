@@ -4,8 +4,9 @@ services:
     command: ["-c", "/etc/nats/nats.conf"]
     ports:
       - "14222:4222"
-      - "11883:1883"
       - "18222:8222"
+    environment:
+      - NATS_TOKEN=${NATS_TOKEN:-test-token}
     volumes:
       - ./test-nats.conf:/etc/nats/nats.conf:ro
       - nats_test_data:/data
@@ -16,23 +17,27 @@ services:
       retries: 10
 
   backend:
+    # Phase 1 follow-up: build context must be the repo root so the
+    # Dockerfile can COPY both aggregator/ and schemas/ as package
+    # subdirs (mirrors the production aggregator service).
     build:
-      context: ../aggregator
+      context: ..
+      dockerfile: aggregator/Dockerfile
     ports:
       - "18000:8000"
     environment:
       - NATS_URL=nats://nats:4222
+      - NATS_TOKEN=${NATS_TOKEN:-test-token}
       - DB_PATH=/data/openclaw.db
-      - API_KEY=test-api-key
-      - HEARTBEAT_INTERVAL=2
-      - HEARTBEAT_TIMEOUT=6
     volumes:
       - test-data:/data
     depends_on:
       nats:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      # Phase 1 retired the /health endpoint; /api/system/status returns
+      # the canonical v0.1 shape (nats_connected, jetstream_stream_ok).
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/api/system/status', timeout=2); sys.exit(0 if r.status==200 else 1)"]
       interval: 3s
       timeout: 5s
       retries: 15

@@ -3,6 +3,12 @@ const { test, expect } = require('@playwright/test');
 const API = process.env.AGG_URL || 'http://localhost';
 const POLL_INTERVAL_MS = 1000;
 const POLL_BUDGET_S = 60;
+// All POSTs from this spec carry sender_id=test-runner so the aggregator
+// auto-registers a synthetic deployment=test card and tags every related
+// envelope (command, outbox mirror, gemma's result) with deployment=test.
+// Operators with the showTestAgents toggle off won't see this traffic in
+// the dashboard. See docs/roadmap.md "Test-data separation convention".
+const TEST_RUNNER = 'test-runner';
 
 test.describe('Phase 2 smoke — Gemma round trip', () => {
   test('gemma-1 registered with reasoner role', async ({ request }) => {
@@ -18,9 +24,9 @@ test.describe('Phase 2 smoke — Gemma round trip', () => {
   });
 
   test('POST /command/gemma-1 returns task_id and result completes', async ({ request }) => {
-    const post = await request.post(`${API}/api/command/gemma-1`, {
-      data: { body: 'Reply with exactly the digit 4 and nothing else.' }
-    });
+    const post = await request.post(
+      `${API}/api/command/gemma-1?sender_id=${TEST_RUNNER}`,
+      { data: { body: 'Reply with exactly the digit 4 and nothing else.' } });
     expect(post.status()).toBe(202);
     const { task_id } = await post.json();
     expect(task_id).toMatch(/^[0-9a-f-]{36}$/);
@@ -38,6 +44,9 @@ test.describe('Phase 2 smoke — Gemma round trip', () => {
     expect(result.payload.body).toMatch(/4/);
     expect(result.payload.model).toBeTruthy();
     expect(typeof result.payload.duration_ms).toBe('number');
+    // Smoke-driven envelopes should be tagged deployment=test so the
+    // dashboard's showTestAgents toggle filters them out by default.
+    expect(result.deployment).toBe('test');
   });
 
   test('POST /command/gemma-1 with empty body is rejected by adapter', async ({ request }) => {
@@ -45,9 +54,9 @@ test.describe('Phase 2 smoke — Gemma round trip', () => {
     // We DON'T test the adapter-level "empty_prompt" rejection here (that
     // would require a malformed envelope going through NATS, which is
     // covered by adapters/gemma/tests/test_gemma.py).
-    const post = await request.post(`${API}/api/command/gemma-1`, {
-      data: { body: '' }
-    });
+    const post = await request.post(
+      `${API}/api/command/gemma-1?sender_id=${TEST_RUNNER}`,
+      { data: { body: '' } });
     expect([202, 422]).toContain(post.status());
   });
 
