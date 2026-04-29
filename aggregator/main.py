@@ -129,9 +129,15 @@ def make_app(for_testing: bool = False) -> FastAPI:
     async def query_messages(agent_id: str | None = None,
                              task_id: str | None = None,
                              context_id: str | None = None,
-                             type: str | None = None, limit: int = 500):
+                             type: str | None = None,
+                             deployment: str | None = None,
+                             exclude_deployment: str | None = None,
+                             limit: int = 500):
         return db.query_messages(agent_id=agent_id, task_id=task_id,
-                                 context_id=context_id, type=type, limit=limit)
+                                 context_id=context_id, type=type,
+                                 deployment=deployment,
+                                 exclude_deployment=exclude_deployment,
+                                 limit=limit)
 
     @app.get("/api/poison")
     async def query_poison(agent_id: str | None = None, limit: int = 100):

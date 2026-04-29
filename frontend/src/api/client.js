@@ -34,7 +34,8 @@ export const api = {
       body: JSON.stringify({ body, ...(args ? { args } : {}) }),
     }),
 
-  // Messages — accepts {agent_id, task_id, context_id, type, limit, since_ts}
+  // Messages — accepts {agent_id, task_id, context_id, type, deployment,
+  //                     exclude_deployment, since_ts, limit}
   queryMessages: (params = {}) => {
     const filtered = Object.fromEntries(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
