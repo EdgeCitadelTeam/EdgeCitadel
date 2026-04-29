@@ -105,12 +105,39 @@ def make_app(for_testing: bool = False) -> FastAPI:
 
     @app.post("/api/command/{agent_id}", status_code=202,
               response_model=CommandResponse)
-    async def post_command(agent_id: str, req: CommandRequest):
+    async def post_command(agent_id: str, req: CommandRequest,
+                           sender_id: str | None = None):
+        """Dispatch a command envelope to {agent_id} via JetStream.
+
+        The optional `sender_id` query param overrides the default
+        `aggregator` sender. When set to anything other than `aggregator`,
+        the aggregator auto-registers a synthetic A2A card with
+        `runtime.deployment: test` for that sender, so the resulting
+        command + outbox + result envelopes all tag `deployment=test` via
+        MessageRouter._deployment_for. Pattern intended for test runners
+        (e.g. Playwright Phase 2 smoke); production callers omit it."""
         agg = state["app"]
+        actual_sender = sender_id or "aggregator"
+        # Auto-register a synthetic test-deployment card for non-default
+        # senders so deployment tagging propagates without requiring a real
+        # NATS register envelope from the caller.
+        if (agg is not None and actual_sender != "aggregator"
+                and actual_sender not in agg.router.cache):
+            agg.router.cache[actual_sender] = {
+                "name": actual_sender,
+                "metadata": {
+                    "runtime.kind": "native",
+                    "runtime.roles": ["worker"],
+                    "runtime.heartbeat_interval_sec": 30,
+                    "runtime.deployment": "test",
+                    "runtime.tags": ["synthetic", "auto-registered"],
+                },
+            }
+
         task_id = str(uuid.uuid4())
         env = {
             "v": 1, "id": str(uuid.uuid4()), "type": "command",
-            "sender_id": "aggregator", "recipient_id": agent_id,
+            "sender_id": actual_sender, "recipient_id": agent_id,
             "task_id": task_id, "timestamp": now_iso(),
             "payload": {"body": req.body, **({"args": req.args} if req.args else {})}
         }
@@ -119,8 +146,10 @@ def make_app(for_testing: bool = False) -> FastAPI:
             await agg.router.js.publish(f"agents.{agent_id}.inbox",
                                         json.dumps(env).encode(),
                                         headers={"Nats-Msg-Id": env["id"]})
-            # also mirror on own outbox
-            await agg.router.nc.publish("agents.aggregator.outbox",
+            # Mirror on the SENDER's outbox (was always aggregator before;
+            # now matches the actual sender so test-runner traffic tags
+            # consistently).
+            await agg.router.nc.publish(f"agents.{actual_sender}.outbox",
                                         json.dumps(env).encode())
         return CommandResponse(task_id=task_id, recipient_id=agent_id,
                                accepted_at=env["timestamp"])
