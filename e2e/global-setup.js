@@ -3,7 +3,8 @@ const axios = require('axios');
 const path = require('path');
 
 const COMPOSE_FILE = path.join(__dirname, 'docker-compose.test.yml');
-const API_URL = 'http://localhost:18000/health';
+// Phase 1 retired /health; canonical v0.1 health surface is /api/system/status.
+const API_URL = 'http://localhost:18000/api/system/status';
 const FRONTEND_URL = 'http://localhost:13000';
 const MAX_WAIT_MS = 180_000;
 const POLL_INTERVAL_MS = 3_000;
