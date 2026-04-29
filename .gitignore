@@ -59,3 +59,6 @@ docs/demo-raw.webm
 
 # Git worktrees
 .worktrees/
+
+# Superpowers brainstorm session files (visual companion mockups)
+.superpowers/
