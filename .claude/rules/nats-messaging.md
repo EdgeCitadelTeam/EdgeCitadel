@@ -2,39 +2,99 @@
 paths:
   - "nats/**"
   - "aggregator/aggregator.py"
-  - "openclaw-client/**"
+  - "aggregator/jetstream_bootstrap.py"
+  - "adapters/_common/**"
+  - "schemas/envelope.v1.json"
 ---
 
-# NATS & MQTT Messaging Rules
+# NATS & Messaging Rules (v0.1+)
 
-## Subject Naming
-- NATS subjects use dots: `agents.{name}.{action}`
-- MQTT topics use slashes: `agents/{name}/{action}` (auto-translated)
-- Agent actions: `register`, `heartbeat`, `inbox`, `outbox`, `status`, `log`
-- Task actions: `assign`, `progress`, `stream`, `complete`, `failed`
-- System: `system.broadcast`
+> Authoritative sources: `docs/agent-contract.md`, `schemas/envelope.v1.json`,
+> ADR-0002 (JetStream WorkQueue), ADR-0003 (A2A vocabulary), ADR-0004 (MQTT
+> opt-in), ADR-0005 (browser-scoped token), ADR-0006 (outbox mirror).
+> This file is short-form guidance for tools; conflicts in favor of the docs.
 
-## Adding New Subjects
-1. Define the subject pattern in aggregator subscription (`aggregator.py`)
-2. Add corresponding handler in aggregator message parser
-3. Update `docs/05-messaging.md` with subject, payload schema, and purpose
-4. If agents publish to it: update `openclaw-client/mqtt-listener.js`
-5. If frontend consumes it: update WebSocket broadcast in `main.py`
+## Transport
+
+- NATS-only by default. JetStream is enabled with file storage.
+- MQTT ingress is **deploy-time opt-in** (`EC_ENABLE_MQTT=1` +
+  `scripts/render-nats-conf.sh`); off in default `docker compose up`.
+  Internal fleet does not use MQTT under any deployment.
+
+## Envelope contract
+
+Every message published under `agents.*`, `tasks.*`, or `system.*` follows
+the strict schema at `schemas/envelope.v1.json`:
+
+- `v: 1`, `id` (UUID4), `type`, `sender_id`, `timestamp` (`.sssZ`), `payload`
+  are always required.
+- `type` ∈ `{register, heartbeat, status, command, result, delegation,
+  cancel, log, broadcast, task.progress}`.
+- `task_state` ∈ A2A v1.0 enum: `submitted | working | input-required |
+  completed | failed | canceled | rejected | auth-required`.
+- `agent_state` ∈ `{online, offline, busy, error}` and **only** appears on
+  `status` envelopes (forbidden elsewhere by schema).
+- `task_id` / `context_id` are UUID4. **Never** `correlation_id` /
+  `chain_id` / `receiver_id` / `message_type` — those are legacy and rejected
+  at the validator layer.
+
+## Subjects
+
+- `agents.{id}.register` — A2A v1.0 Agent Card payload, idempotent.
+- `agents.{id}.heartbeat` — periodic liveness (default 30s).
+- `agents.{id}.status` — `agent_state` transitions.
+- `agents.{id}.inbox` — JetStream `AGENT_INBOX` WorkQueue, durable consumer
+  `{id}_inbox` (`max_ack_pending=1`, `ack_wait=300s`, `max_deliver=3`).
+- `agents.{id}.outbox` — plain-NATS audit mirror (per ADR-0006).
+- `agents.{id}.log` — plain-NATS structured log envelopes (lifecycle,
+  errors); see `adapters/_common/template.py:publish_log`.
+- `agents.{id}.task_progress.{task_id}` — plain-NATS streaming progress.
+- `system.broadcast` — fleet-wide.
+- `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` —
+  aggregator-only subscriber for poison events.
+- `openclaw.{session_id}.{kind}` — browser ingress; aggregator translates
+  `command.{target}` → `agents.{target}.inbox` with server-set `sender_id`.
+
+## Adding new subjects
+
+1. Define the subject in `aggregator/aggregator.py:AggregatorApp.start`.
+2. Add a handler on `MessageRouter` (validate via `_parse_and_validate`).
+3. Update `docs/05-messaging.md` (subject inventory + semantics).
+4. For new envelope types: extend `schemas/envelope.v1.json` (with
+   conditional `if/then` rules for required-by-type) and add tests in
+   `schemas/tests/test_envelope_schema.py`. Then update the validator
+   re-export at `adapters/_common/validator.py`.
 
 ## JetStream
-- Streams must have explicit `max_msgs`, `max_age`, and `storage` settings
-- Use `FileStorage` for persistence, `MemoryStorage` only for ephemeral data
-- Consumer names should be descriptive: `aggregator-messages`, not `consumer-1`
 
-## Message Format
-- All payloads are JSON-encoded UTF-8
-- Include `timestamp` (ISO 8601) in every message
-- Include `agent_id` or `agent_name` for attribution
-- Use `correlation_id` (UUID4) for request-reply patterns
-- Payload size limit: 1MB (NATS default)
+- `AGENT_INBOX` config is owned by `aggregator/jetstream_bootstrap.py`:
+  `WorkQueuePolicy`, `discard: new`, `max_msg_size: 1MB`,
+  `duplicate_window: 5min`. Adapters call the same module on first
+  connect (idempotent).
+- Per-agent durable consumers: `{agent_id}_inbox`, `max_ack_pending=1`
+  (FIFO), `ack_wait_sec=300`, `max_deliver=3`.
+- nats-py StreamConfig/ConsumerConfig accepts `max_age`,
+  `duplicate_window`, `ack_wait` in **seconds** and converts to ns
+  internally during JSON serialization. Don't pre-convert to ns — the
+  values overflow uint64.
+
+## Publisher semantics
+
+- JetStream publishes (`agents.{id}.inbox`) MUST set
+  `Nats-Msg-Id: <envelope.id>` for the 5-min dedup window.
+- Adapters MUST mirror inbox publishes to their own
+  `agents.{self}.outbox` via plain NATS (per ADR-0006).
+- Plain-NATS publishes (heartbeat, status, log, broadcast, task_progress)
+  do not need `Nats-Msg-Id`.
 
 ## Auth
-- Single `NATS_TOKEN` for both protocols
-- NATS native: pass as `token` in connection options
-- MQTT adapter: pass as `password` (username is ignored)
-- Token loaded from environment variable, never hardcoded
+
+- v0.1 broker auth is token-only (`token: $NATS_TOKEN` in `nats.conf`).
+  Adapters and aggregator connect with that token.
+- The browser openclaw client uses an account-scoped `OPENCLAW_TOKEN`
+  (per ADR-0005). The token-based connection model means a single
+  user/openclaw account-scoped JWT is v0.2 work — today the aggregator
+  translator + the fact that `OPENCLAW_TOKEN` is held only by trusted
+  browsers is the actual scoping.
+- HTTP-level auth on aggregator endpoints: **none** in v0.1. Designs for
+  v0.2 are deferred (see `docs/roadmap.md`).
