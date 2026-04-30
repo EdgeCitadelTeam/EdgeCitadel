@@ -29,3 +29,20 @@ class CommandResponse(BaseModel):
     task_id: str
     recipient_id: str
     accepted_at: str
+
+
+class RegistryQueue(BaseModel):
+    pending: int = 0
+    ack_pending: int = 0
+
+
+class RegistryEntry(BaseModel):
+    agent_id: str
+    card: dict
+    agent_state: str
+    last_heartbeat: Optional[str] = None
+    last_register: str
+    deployment: Optional[str] = None
+    heartbeat_interval_sec: int
+    queue: RegistryQueue
+    poison_count: int

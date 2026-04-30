@@ -180,6 +180,47 @@ def make_app(for_testing: bool = False) -> FastAPI:
     async def query_poison(agent_id: str | None = None, limit: int = 100):
         return db.recent_poison(agent_id=agent_id, limit=limit)
 
+    @app.get("/api/registry",
+             summary="Fleet snapshot",
+             description=(
+                 "Return one row per registered agent with card metadata, "
+                 "JetStream queue depth, and poison event count. Used by the "
+                 "dashboard's Registry tab. Frontend filters infrastructure "
+                 "agents (watchdog, aggregator) from the chat sidebar by "
+                 "inspecting card.metadata.runtime.roles."))
+    async def get_registry(deployment: str | None = None):
+        rows = db.list_agents()
+        if deployment is not None:
+            rows = [r for r in rows if (r.get("deployment") or "default") ==
+                    (deployment or "default")]
+        poison_counts = db.count_poison_by_agent()
+
+        out: list[dict] = []
+        agg = state["app"]
+        for r in rows:
+            queue = {"pending": 0, "ack_pending": 0}
+            if agg is not None:
+                try:
+                    ci = await agg.router.js.consumer_info(
+                        "AGENT_INBOX", f"{r['agent_id']}_inbox")
+                    queue = {"pending": ci.num_pending,
+                             "ack_pending": ci.num_ack_pending}
+                except Exception:
+                    # consumer missing → graceful zero
+                    pass
+            out.append({
+                "agent_id": r["agent_id"],
+                "card": r["card"],
+                "agent_state": r["agent_state"],
+                "last_heartbeat": r.get("last_heartbeat"),
+                "last_register": r["last_register"],
+                "deployment": r.get("deployment"),
+                "heartbeat_interval_sec": r.get("heartbeat_interval_sec", 30),
+                "queue": queue,
+                "poison_count": poison_counts.get(r["agent_id"], 0),
+            })
+        return out
+
     @app.post("/api/openclaw/login")
     async def openclaw_login(body: dict):
         session_id = body.get("session_id", "")
