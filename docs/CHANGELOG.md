@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 3)
+
+- **Watchdog adapter** (`adapters/watchdog/`). Native nats-py adapter,
+  `runtime.kind: native`, `runtime.roles: [watchdog]`. Synthesises
+  `task_state: failed, payload.error: "recipient_offline"` envelopes
+  when an agent goes silent past `2 × declared_interval`, when a new
+  command targets an already-offline agent, or when JetStream's
+  MAX_DELIVERIES advisory fires. ~30–65 s detection latency for
+  default-interval agents (down from 1.5–15 min).
+- **`GET /api/registry`** aggregator endpoint. Returns one row per
+  registered agent with card metadata, JetStream queue depth, and
+  poison-event count.
+- **`agent_deleted`** WebSocket event broadcast on `DELETE /api/agents/{id}`.
+- **Dashboard "Registry" top-level tab** (5th tab, keyboard `5`).
+  Sortable fleet table with state, heartbeat freshness, queue depth,
+  and poison count.
+- **Sidebar roles-based filter.** `AgentSidebar` now hides agents whose
+  `runtime.roles` includes `watchdog` or `aggregator`; those appear only
+  in the Registry tab.
+- **ADR-0007:** records the heartbeat-staleness + advisory-backstop
+  trigger model, divergent from the v0.1 messaging spec rev 6's
+  advisory-only pin.
+
 ### Added — v0.2 Gemma reasoner adapter (Phase 2)
 - `adapters/gemma/` — single-shot Ollama-backed reasoner agent
   (`agent_id: gemma-1`, `runtime.kind: native`, `runtime.roles:
