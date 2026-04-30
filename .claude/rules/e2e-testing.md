@@ -10,8 +10,9 @@ paths:
 
 ## Structure
 
-- Test files: `e2e/tests/*.spec.js`. Round-trip smoke specs use the
-  `phase{N}-...-smoke.spec.js` pattern.
+- Test files: `e2e/tests/*.spec.js`. Phase smoke specs use either
+  `phase{N}-...-smoke.spec.js` (Phase 1–2) or `phase{N}-<feature>.spec.js`
+  (Phase 3+). The smoke config picks both up via a widened `testMatch`.
 - Helpers: `e2e/helpers/fixtures.js` exports
   `buildCanonicalEnvelope({type, sender_id, recipient_id, task_id, body,
   payload})`. The legacy `helpers/mqtt-client.js`,
