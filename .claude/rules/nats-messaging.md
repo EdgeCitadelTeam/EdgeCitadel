@@ -51,7 +51,9 @@ the strict schema at `schemas/envelope.v1.json`:
 - `agents.{id}.task_progress.{task_id}` — plain-NATS streaming progress.
 - `system.broadcast` — fleet-wide.
 - `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` —
-  aggregator-only subscriber for poison events.
+  aggregator subscriber for poison-event logging; watchdog also
+  subscribes (Phase 3.1) for synthesising recipient_offline failures.
+  Two subscribers on plain NATS = no consumer-slot conflict.
 - `openclaw.{session_id}.{kind}` — browser ingress; aggregator translates
   `command.{target}` → `agents.{target}.inbox` with server-set `sender_id`.
 

@@ -25,6 +25,7 @@ directly. Direct JetStream publish is reserved for the openclaw browser flow
 | `POST` | `/api/command/{id}` | Dispatch a `command` envelope, returns `task_id` |
 | `GET` | `/api/messages` | Filtered envelope rows |
 | `GET` | `/api/poison` | Recent JetStream MAX_DELIVERIES poison events |
+| `GET` | `/api/registry` | Fleet snapshot for Registry tab (card + queue + poison count) |
 
 The legacy v0 surface — `/api/agents/{id}/heartbeat`, `/api/messages` with
 `receiver_id`/`message_type`/`correlation_id` parameters, the
@@ -304,3 +305,56 @@ process.
 ```
 
 Rows are newest-first.
+
+---
+
+## GET /api/registry
+
+Fleet snapshot consumed by the dashboard's Registry tab. Joins the
+`agents` table with JetStream consumer info and a poison-event count.
+
+**Query params:**
+- `deployment` (optional) — filter to one deployment string.
+
+**Response:** `200 OK`
+```json
+[
+  {
+    "agent_id": "gemma-1",
+    "card": { "..." : "..." },
+    "agent_state": "online",
+    "last_heartbeat": "2026-04-29T10:15:23.412Z",
+    "last_register": "2026-04-29T08:02:11.001Z",
+    "deployment": "default",
+    "heartbeat_interval_sec": 30,
+    "queue": {"pending": 0, "ack_pending": 1},
+    "poison_count": 0
+  }
+]
+```
+
+- `card` — full A2A Agent Card as stored by the aggregator.
+- `agent_state` — last known runtime state (`online`, `offline`, `busy`, `error`).
+- `last_heartbeat` / `last_register` — ISO 8601 UTC timestamps from the most recent envelope of each type.
+- `deployment` — value of `metadata["runtime.deployment"]` from the Agent Card, or `null`.
+- `heartbeat_interval_sec` — declared heartbeat interval used by the watchdog staleness calculation.
+- `queue` — live JetStream consumer counts (`pending`, `ack_pending`). `null` if the consumer does not exist yet.
+- `poison_count` — number of MAX_DELIVERIES advisory rows for this agent in the current 24-hour window.
+
+**Response 200** — always an array (empty array when no agents are registered).
+
+---
+
+## WebSocket events
+
+The aggregator broadcasts real-time agent and task events over the WebSocket endpoint
+(`ws://<host>/ws`). Each frame is a JSON object with an `event` field indicating the
+type and an `data` payload.
+
+| Event | Payload | Notes |
+|---|---|---|
+| `agent_registered` | `{agent_id, card, agent_state}` | Fired when a new `register` envelope is received. Dashboard adds or refreshes the agent row. |
+| `agent_state_changed` | `{agent_id, agent_state}` | Fired on `status` envelope or watchdog heartbeat-timeout. |
+| `agent_deleted` | `{agent_id}` | Fired when `DELETE /api/agents/{id}` succeeds. Registry tab removes the row. |
+| `task_progress` | `{task_id, task_state, payload}` | Forwarded from `agents.{id}.task_progress.{task_id}` subjects. |
+| `result` | `{task_id, task_state, sender_id, payload}` | Fired when a `result` envelope lands on any inbox the aggregator observes. |
