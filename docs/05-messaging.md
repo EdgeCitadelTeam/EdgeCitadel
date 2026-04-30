@@ -24,9 +24,16 @@ All envelopes are JSON objects validated against [`schemas/envelope.v1.json`](..
 | `agents.{id}.log` | Plain NATS | `log` | Agent → fleet | Optional structured log envelopes. Persisted by the aggregator. |
 | `agents.{id}.task_progress.{task_id}` | Plain NATS | `task.progress` | Agent → observers | In-flight progress for a specific task. Note the dual naming: subject uses `task_progress` (underscore), envelope `type` uses `task.progress` (A2A dotted form). Intentional. |
 | `system.broadcast` | Plain NATS | `broadcast` | Any → all | Fleet-wide announcements. Aggregator publishes `payload: {action: "request_register"}` here on restart to solicit re-registration. |
-| `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` | JetStream advisory | (advisory, not envelope) | JetStream → aggregator | Poison-message advisory. Aggregator-only subscriber; raised when a consumer hits `max_deliver`. Surfaced via `GET /api/poison`. |
+| `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` | JetStream advisory | (advisory, not envelope) | JetStream → aggregator + watchdog | Poison-message advisory. Raised when a consumer hits `max_deliver`. Aggregator persists it (surfaced via `GET /api/poison`); watchdog (`watchdog-1`) also subscribes (Phase 3.1) to synthesise `recipient_offline` failures for tasks the heartbeat-staleness and sticky-offline paths missed. Two plain-NATS subscribers — no JetStream consumer-slot conflict. |
 
 **Routing rule:** only `agents.{id}.inbox` is durable (JetStream). Everything else is plain NATS fire-and-forget.
+
+**Watchdog (`watchdog-1`) subject summary:**
+
+| Role | Subjects |
+|---|---|
+| Subscribes to | `agents.*.register`, `agents.*.outbox`, `agents.*.heartbeat`, `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` |
+| Publishes to | `agents.watchdog-1.register`, `agents.watchdog-1.heartbeat`, `agents.watchdog-1.status`, `agents.watchdog-1.outbox`, `agents.watchdog-1.log`; synthesised `result` envelopes → `agents.{original_sender}.inbox` (JetStream) |
 
 ---
 

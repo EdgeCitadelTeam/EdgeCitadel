@@ -63,6 +63,10 @@ export default function useWebSocket(agentName = null) {
             title: 'Agent Registered',
             message: `${data.data.agent_id} connected`,
           })
+        } else if (data.event === 'agent_deleted') {
+          // Registry tab listens to this via the store
+          const removeRow = useAppStore.getState().removeRegistryRow
+          removeRow(data.data.agent_id)
         } else if (data.event === 'log') {
           if (data.data?.level === 'ERROR') {
             addNotification({

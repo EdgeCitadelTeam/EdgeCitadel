@@ -1,0 +1,3 @@
+# Watchdog adapter has no deps beyond what aggregator + _common pulls in.
+# All transports (nats-py, jsonschema) come from aggregator/requirements.txt
+# via the host process; the watchdog runs as a sibling.

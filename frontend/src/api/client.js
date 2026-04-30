@@ -51,6 +51,9 @@ export const api = {
     const qs = new URLSearchParams(params).toString()
     return req(`/poison?${qs}`)
   },
+
+  // Registry — fleet snapshot used by the Registry tab
+  getRegistry: () => req('/registry'),
 }
 
 export default api

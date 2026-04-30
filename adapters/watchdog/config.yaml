@@ -1,0 +1,12 @@
+agent_id: watchdog-1
+name: watchdog-1
+description: Detects offline agents and synthesises recipient_offline failures.
+version: 0.1.0
+runtime:
+  kind: native
+  roles: [watchdog]
+  tags: [observer, infrastructure]
+  heartbeat_interval_sec: 30
+skills: []
+capabilities:
+  streaming: false

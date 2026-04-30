@@ -179,11 +179,38 @@ A Watchdog (typically the aggregator, but it can be a peer):
   ```json
   {"sender_id": "watchdog-1", "type": "status",
    "agent_state": "offline",
-   "payload": {"subject_agent": "{stale_id}", "reason": "heartbeat_timeout"}}
+   "payload": {"observed_agent_id": "{stale_id}", "trigger": "heartbeat_staleness"}}
   ```
 - Clears the cached Agent Card so late subscribers don't see ghost peers.
 
 Watchdog-role conformance is declared in the Agent Card via `metadata["runtime.roles"]` containing `"watchdog"`.
+
+### Recipient offline
+
+When agent A publishes `command` to `agents.B.inbox` and B is offline,
+the watchdog (`agent_id: watchdog-1`) synthesises a `result` envelope
+on A's behalf. The synthesised envelope carries
+`task_state: failed, payload.error: "recipient_offline",
+sender_id: watchdog-1`. Synthesised publishes share the dedup key
+`Nats-Msg-Id: watchdog-syn-{task_id}` so JetStream's 5-min
+`duplicate_window` collapses double-fires.
+
+Three reinforcing trigger paths produce the synthesised envelope:
+
+1. **Heartbeat-staleness fast path** (primary). When the watchdog has
+   not seen a heartbeat from B for `max(2 × declared_interval, 20s) + 5s
+   tolerance`, it fans out a synthesised failure for every in-flight
+   task observed in B's outbox stream. ~30–65 s detection.
+2. **Sticky-offline immediate path.** Once B is flagged offline, any new
+   `command` or `delegation` observed on the outbox feed targeting B is
+   synthesised immediately (~ms).
+3. **MAX_DELIVERIES advisory backstop.** JetStream's
+   `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` advisory
+   is the authoritative "this message will never deliver" signal. The
+   watchdog synthesises in response to it for any task the fast paths
+   missed (cold-start, watchdog restart gap, dropped outbox traffic).
+
+Rationale and tradeoffs: see `docs/adr/0007-watchdog-trigger-model.md`.
 
 ---
 

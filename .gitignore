@@ -59,3 +59,9 @@ docs/demo-raw.webm
 
 # Git worktrees
 .worktrees/
+
+# Superpowers — keep all brainstorm/spec/plan artifacts local-only.
+# Visual companion mockups:
+.superpowers/
+# Design specs and implementation plans (per-developer working artifacts):
+docs/superpowers/

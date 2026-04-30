@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import database as db
 from .aggregator import AggregatorApp, now_iso
-from .models import CommandRequest, CommandResponse
+from .models import CommandRequest, CommandResponse, RegistryEntry
 from .websocket_hub import WebSocketHub
 
 
@@ -95,6 +95,14 @@ def make_app(for_testing: bool = False) -> FastAPI:
             raise HTTPException(400, "cannot delete self")
         ok = db.delete_agent(agent_id)
         if not ok: raise HTTPException(404, "agent not found")
+        hub: WebSocketHub | None = state.get("hub")
+        if hub is not None:
+            try:
+                await hub.broadcast_event("agent_deleted",
+                                          {"agent_id": agent_id},
+                                          agent_id=agent_id)
+            except Exception:
+                pass
         return PlainTextResponse(status_code=204)
 
     @app.get("/api/agents/{agent_id}/queue")
@@ -179,6 +187,48 @@ def make_app(for_testing: bool = False) -> FastAPI:
     @app.get("/api/poison")
     async def query_poison(agent_id: str | None = None, limit: int = 100):
         return db.recent_poison(agent_id=agent_id, limit=limit)
+
+    @app.get("/api/registry",
+             response_model=list[RegistryEntry],
+             summary="Fleet snapshot",
+             description=(
+                 "Return one row per registered agent with card metadata, "
+                 "JetStream queue depth, and poison event count. Used by the "
+                 "dashboard's Registry tab. Frontend filters infrastructure "
+                 "agents (watchdog, aggregator) from the chat sidebar by "
+                 "inspecting card.metadata.runtime.roles."))
+    async def get_registry(deployment: str | None = None):
+        rows = db.list_agents()
+        if deployment is not None:
+            rows = [r for r in rows if (r.get("deployment") or "default") ==
+                    (deployment or "default")]
+        poison_counts = db.count_poison_by_agent()
+
+        out: list[dict] = []
+        agg = state["app"]
+        for r in rows:
+            queue = {"pending": 0, "ack_pending": 0}
+            if agg is not None:
+                try:
+                    ci = await agg.router.js.consumer_info(
+                        "AGENT_INBOX", f"{r['agent_id']}_inbox")
+                    queue = {"pending": ci.num_pending,
+                             "ack_pending": ci.num_ack_pending}
+                except Exception:
+                    # consumer missing → graceful zero
+                    pass
+            out.append({
+                "agent_id": r["agent_id"],
+                "card": r["card"],
+                "agent_state": r["agent_state"],
+                "last_heartbeat": r.get("last_heartbeat"),
+                "last_register": r["last_register"],
+                "deployment": r.get("deployment"),
+                "heartbeat_interval_sec": r.get("heartbeat_interval_sec", 30),
+                "queue": queue,
+                "poison_count": poison_counts.get(r["agent_id"], 0),
+            })
+        return out
 
     @app.post("/api/openclaw/login")
     async def openclaw_login(body: dict):

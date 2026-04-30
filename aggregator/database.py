@@ -224,3 +224,12 @@ def recent_poison(agent_id: str | None = None, limit: int = 100) -> list[dict]:
     q += " ORDER BY detected_at DESC LIMIT ?"; params.append(limit)
     with _conn() as c:
         return [dict(r) for r in c.execute(q, params).fetchall()]
+
+
+def count_poison_by_agent() -> dict[str, int]:
+    """Return {agent_id: count} for poison_events. Used by /api/registry."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT agent_id, COUNT(*) AS n FROM poison_events "
+            "GROUP BY agent_id").fetchall()
+    return {r["agent_id"]: r["n"] for r in rows}

@@ -5,7 +5,7 @@ This file tracks deferred work and the path forward beyond what's currently impl
 1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
 2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
 
-Last updated: 2026-04-24.
+Last updated: 2026-04-29.
 
 ---
 
@@ -90,21 +90,19 @@ Spec file: `docs/superpowers/specs/<date>-gemma-enhancements-design.md` (TBD).
 
 Two sessions, one plan. Builds on Phase 1's heartbeat + advisory infrastructure.
 
-#### Phase 3.1 — Watchdog adapter
+#### Phase 3.1 — Watchdog adapter ✅ shipped 2026-04-29
 
-Subscribes `agents.*.heartbeat` and `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>`. Tracks per-agent heartbeat freshness; when an agent goes silent past 2× its declared `runtime.heartbeat_interval_sec`, publishes synthesized `result` envelopes for any in-flight commands targeted at it (`task_state: failed`, `payload.error: "recipient_offline"`).
+Native nats-py adapter at `adapters/watchdog/`. Subscribes
+`agents.*.register / .outbox / .heartbeat` and the MAX_DELIVERIES
+advisory. Three-path trigger model (heartbeat-staleness fast path,
+sticky-offline immediate, advisory backstop) with `Nats-Msg-Id:
+watchdog-syn-{task_id}` dedup. See `docs/adr/0007-watchdog-trigger-model.md`.
 
-Has its own durable inbox (`agents.watchdog-1.inbox`) with `max_ack_pending: 1`. `runtime.kind: native`, `runtime.roles: [watchdog]`.
+#### Phase 3.2 — Dashboard agent-registry panel ✅ shipped 2026-04-29
 
-Spec file: `docs/superpowers/specs/<date>-watchdog-adapter-design.md` (TBD).
-
-#### Phase 3.2 — Dashboard agent-registry panel
-
-Per-agent UI panel showing card metadata, heartbeat freshness, queue depth, poison count, and online/offline badge. Uses the endpoints already shipped in Phase 1 Task 6 + Task 8 (`/api/agents`, `/api/agents/{id}/queue`, `/api/poison`).
-
-Pairs well with WebSocket bridge (deferred above) so the panel updates live instead of via polling.
-
-Spec file: `docs/superpowers/specs/<date>-agent-registry-panel-design.md` (TBD).
+New `Registry` top-level tab + `GET /api/registry` snapshot endpoint +
+`agent_deleted` WS event + sidebar roles-based filter so infrastructure
+agents only appear in Registry, not Chat.
 
 ### Phase 4 — AG2 + A2A wrapper
 

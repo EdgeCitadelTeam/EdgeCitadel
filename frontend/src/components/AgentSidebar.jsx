@@ -16,10 +16,15 @@ export default function AgentSidebar() {
   useEffect(() => {
     const fetchAgents = async () => {
       try {
+        const isOperatorAgent = (a) => {
+          const roles = a.card?.metadata?.['runtime.roles'] || []
+          return !roles.some((r) => r === 'aggregator' || r === 'watchdog')
+        }
         const items = await api.listAgents()
+        const operators = (items || []).filter(isOperatorAgent)
         const filtered = showTestAgents
-          ? items
-          : (items || []).filter((a) => {
+          ? operators
+          : operators.filter((a) => {
               const meta = a.card?.metadata || {}
               const deployment = meta['runtime.deployment'] || a.deployment
               return deployment !== 'test'
