@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, AlertOctagon } from 'lucide-react'
+import { ArrowDown, ArrowUp } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from '../stores/appStore'
 import { api } from '../api/client'
-import StatusBadge from './StatusBadge'
 import toast from 'react-hot-toast'
+import RegistryRow from './RegistryRow'
+import { ageSec } from '../utils/heartbeatAge'
 
 const REFRESH_MS = 5000
 const TICK_MS = 1000
@@ -19,11 +20,6 @@ const COLUMNS = [
   { key: 'poison_count', label: 'Poison' },
   { key: 'deployment', label: 'Deployment' },
 ]
-
-function ageSec(lastHeartbeat) {
-  if (!lastHeartbeat) return Infinity
-  return Math.max(0, (Date.now() - new Date(lastHeartbeat).getTime()) / 1000)
-}
 
 function compareRows(a, b, sortKey, sortDir) {
   const dir = sortDir === 'asc' ? 1 : -1
@@ -152,45 +148,14 @@ export default function AgentRegistry() {
           </tr>
         </thead>
         <tbody>
-          {visibleRows.map((r) => {
-            const meta = r.card?.metadata || {}
-            const roles = meta['runtime.roles'] || []
-            const kind = meta['runtime.kind'] || ''
-            const age = ageSec(r.last_heartbeat)
-            const ageLabel = age === Infinity
-              ? '—'
-              : age < 60 ? `${Math.round(age)}s`
-              : age < 3600 ? `${Math.round(age / 60)}m`
-              : `${Math.round(age / 3600)}h`
-            const poisonClass = r.poison_count > 0 ? 'text-red-400 font-medium' : 'text-gray-500'
-            return (
-              <tr
-                key={r.agent_id}
-                onClick={() => handleRowClick(r.agent_id)}
-                className="border-t border-surface-200 hover:bg-surface-100 cursor-pointer"
-              >
-                <td className="px-3 py-2 font-medium">{r.agent_id}</td>
-                <td className="px-3 py-2 text-gray-400">{roles.join(', ')}</td>
-                <td className="px-3 py-2 text-gray-400">{kind}</td>
-                <td className="px-3 py-2"><StatusBadge state={r.agent_state} /></td>
-                <td className="px-3 py-2 text-gray-400">{ageLabel}</td>
-                <td className="px-3 py-2 text-gray-400">
-                  {(r.queue?.pending ?? 0)} / {(r.queue?.ack_pending ?? 0)}
-                </td>
-                <td className={clsx('px-3 py-2', poisonClass)}>
-                  {r.poison_count > 0 && (
-                    <AlertOctagon size={12} className="inline mr-1" />
-                  )}
-                  {r.poison_count}
-                </td>
-                {showTestAgents && (
-                  <td className="px-3 py-2 text-gray-500">
-                    {r.deployment || 'default'}
-                  </td>
-                )}
-              </tr>
-            )
-          })}
+          {visibleRows.map((r) => (
+            <RegistryRow
+              key={r.agent_id}
+              row={r}
+              onClick={handleRowClick}
+              showTestAgents={showTestAgents}
+            />
+          ))}
         </tbody>
       </table>
     </div>

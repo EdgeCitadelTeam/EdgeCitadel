@@ -179,7 +179,7 @@ A Watchdog (typically the aggregator, but it can be a peer):
   ```json
   {"sender_id": "watchdog-1", "type": "status",
    "agent_state": "offline",
-   "payload": {"subject_agent": "{stale_id}", "reason": "heartbeat_timeout"}}
+   "payload": {"observed_agent_id": "{stale_id}", "trigger": "heartbeat_staleness"}}
   ```
 - Clears the cached Agent Card so late subscribers don't see ghost peers.
 
