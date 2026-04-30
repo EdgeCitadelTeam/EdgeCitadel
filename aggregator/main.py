@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import database as db
 from .aggregator import AggregatorApp, now_iso
-from .models import CommandRequest, CommandResponse
+from .models import CommandRequest, CommandResponse, RegistryEntry
 from .websocket_hub import WebSocketHub
 
 
@@ -189,6 +189,7 @@ def make_app(for_testing: bool = False) -> FastAPI:
         return db.recent_poison(agent_id=agent_id, limit=limit)
 
     @app.get("/api/registry",
+             response_model=list[RegistryEntry],
              summary="Fleet snapshot",
              description=(
                  "Return one row per registered agent with card metadata, "

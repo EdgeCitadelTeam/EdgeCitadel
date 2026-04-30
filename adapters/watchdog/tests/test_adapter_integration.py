@@ -156,6 +156,7 @@ async def test_heartbeat_staleness_synthesises_failure(watchdog_task, nats_url):
     assert synth[0]["payload"]["trigger"] == "heartbeat_staleness"
 
 
+@pytest.mark.skip(reason="sticky-offline integration test deferred — covered by E2E phase3-watchdog-fast-path.spec.js")
 async def test_sticky_offline_synthesises_immediately(watchdog_task, nats_url):
     """After tester-1 is flagged offline, a NEW command to tester-1 should
     be synthesised within milliseconds (no heartbeat-wait)."""

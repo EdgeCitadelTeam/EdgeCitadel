@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (Phase 3.1)
+Accepted (Phase 3.1, shipped 2026-04-29)
 
 ## Date
 
