@@ -91,3 +91,60 @@ def test_registry_includes_aggregator_and_watchdog_when_seeded(client):
     ids = {e["agent_id"] for e in body}
     # Registry shows ALL fleet members; client filters by role for sidebar.
     assert ids == {"aggregator", "watchdog-1", "gemma-1"}
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_broadcasts_agent_deleted_event(client):
+    """Test that DELETE /api/agents/{id} broadcasts agent_deleted event.
+
+    This uses a mock WebSocket to capture broadcast calls without needing
+    real async WebSocket handling in the test.
+    """
+    from aggregator import database as db
+    from unittest.mock import AsyncMock, patch
+    import asyncio
+
+    # Seed the agent
+    db.upsert_agent_card({
+        "name": "doomed-1", "description": "x", "version": "0",
+        "url": "u", "provider": {"organization": "x"},
+        "capabilities": {}, "securitySchemes": {},
+        "metadata": {"runtime.kind": "native", "runtime.roles": ["worker"],
+                     "runtime.heartbeat_interval_sec": 30}},
+        timestamp="2026-04-29T10:00:00.000Z")
+
+    # Capture broadcast_event calls
+    broadcasts = []
+
+    async def capture_broadcast(event, data, *, agent_id=None):
+        broadcasts.append({"event": event, "data": data, "agent_id": agent_id})
+
+    # The app should have been created with for_testing=True, so it has a hub
+    app = client.app
+
+    # We need to patch the hub in the closure. Since we can't access the local
+    # state dict directly, we'll patch the WebSocketHub class to track calls.
+    from aggregator.websocket_hub import WebSocketHub
+
+    # Get any existing WebSocketHub instances from the app
+    # Actually, let's directly patch the broadcast_event on the existing hub
+    # by iterating through the app's route handlers
+
+    # Simple approach: monkeypatch the WebSocketHub.broadcast_event method
+    original_broadcast_event = WebSocketHub.broadcast_event
+
+    async def patched_broadcast_event(self, event, data, *, agent_id=None):
+        broadcasts.append({"event": event, "data": data, "agent_id": agent_id})
+        # Call the original too, if needed
+        await original_broadcast_event(self, event, data, agent_id=agent_id)
+
+    with patch.object(WebSocketHub, 'broadcast_event', patched_broadcast_event):
+        # Delete the agent
+        r = client.delete("/api/agents/doomed-1")
+        assert r.status_code == 204
+
+    # Check that agent_deleted was broadcast
+    deletions = [b for b in broadcasts
+                 if b.get("event") == "agent_deleted"
+                 and b.get("data", {}).get("agent_id") == "doomed-1"]
+    assert deletions, f"no agent_deleted event broadcast; broadcasts: {broadcasts}"

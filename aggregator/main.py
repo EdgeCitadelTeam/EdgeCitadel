@@ -95,6 +95,14 @@ def make_app(for_testing: bool = False) -> FastAPI:
             raise HTTPException(400, "cannot delete self")
         ok = db.delete_agent(agent_id)
         if not ok: raise HTTPException(404, "agent not found")
+        hub: WebSocketHub | None = state.get("hub")
+        if hub is not None:
+            try:
+                await hub.broadcast_event("agent_deleted",
+                                          {"agent_id": agent_id},
+                                          agent_id=agent_id)
+            except Exception:
+                pass
         return PlainTextResponse(status_code=204)
 
     @app.get("/api/agents/{agent_id}/queue")
