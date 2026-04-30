@@ -1,4 +1,4 @@
-import { MessageSquare, GitBranch, FileText, ListTodo } from 'lucide-react'
+import { MessageSquare, GitBranch, FileText, ListTodo, Server } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from './stores/appStore'
 import HeaderBar from './components/HeaderBar'
@@ -8,12 +8,14 @@ import CommFlow from './components/CommFlow'
 import LogViewer from './components/LogViewer'
 import TaskBoard from './components/TaskBoard'
 import AgentDetail from './components/AgentDetail'
+import AgentRegistry from './components/AgentRegistry'
 
 const TABS = [
   { key: 'chat', label: 'Chat', icon: MessageSquare, shortcut: '1' },
   { key: 'flow', label: 'Flow', icon: GitBranch, shortcut: '2' },
   { key: 'logs', label: 'Logs', icon: FileText, shortcut: '3' },
   { key: 'tasks', label: 'Tasks', icon: ListTodo, shortcut: '4' },
+  { key: 'registry', label: 'Registry', icon: Server, shortcut: '5' },
 ]
 
 export default function Layout() {
@@ -44,6 +46,8 @@ export default function Layout() {
         return <LogViewer />
       case 'tasks':
         return <TaskBoard />
+      case 'registry':
+        return <AgentRegistry />
       default:
         return <ChatHistory />
     }

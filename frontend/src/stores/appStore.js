@@ -41,6 +41,18 @@ const useAppStore = create((set, get) => ({
   agentQueue: {}, // agentQueue[agentId] = {pending, ack_pending, num_waiting}
   poisonEvents: {}, // poisonEvents[agentId] = [advisories]
 
+  // Registry tab state — array of RegistryEntry rows. Patched in place
+  // by WS events; replaced wholesale on /api/registry refetch.
+  registry: [],
+  setRegistry: (rows) => set({ registry: rows || [] }),
+  patchRegistryRow: (agentId, partial) => set((state) => ({
+    registry: state.registry.map((r) =>
+      r.agent_id === agentId ? { ...r, ...partial } : r),
+  })),
+  removeRegistryRow: (agentId) => set((state) => ({
+    registry: state.registry.filter((r) => r.agent_id !== agentId),
+  })),
+
   // Actions
   setAgents: (agents) => set({ agents }),
 

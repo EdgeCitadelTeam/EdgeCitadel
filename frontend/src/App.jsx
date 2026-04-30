@@ -36,6 +36,9 @@ export default function App() {
           case '4':
             setActiveTab('tasks')
             break
+          case '5':
+            setActiveTab('registry')
+            break
         }
       }
     }
