@@ -30,7 +30,7 @@ class MemoryService:
       memory.turns.delete {context_id}
     """
 
-    def __init__(self, nc: NATS):
+    def __init__(self, nc: NATS) -> None:
         self.nc = nc
         self._cleanup_task: asyncio.Task | None = None
 
@@ -44,12 +44,24 @@ class MemoryService:
     async def stop(self) -> None:
         if self._cleanup_task:
             self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
 
     async def on_get(self, msg: Msg) -> None:
         req = self._parse(msg.data) or {}
         ctx_id = req.get("context_id")
         agent = req.get("agent_id")
-        budget = int(req.get("token_budget", DEFAULT_TOKEN_BUDGET))
+        raw_budget = req.get("token_budget")
+        if raw_budget is None:
+            budget = DEFAULT_TOKEN_BUDGET
+        else:
+            try:
+                budget = int(raw_budget)
+            except (TypeError, ValueError):
+                await msg.respond(b'{"error":"invalid_token_budget"}')
+                return
         if not (ctx_id and agent):
             await msg.respond(b'{"error":"missing_context_or_agent"}')
             return
@@ -109,6 +121,7 @@ class MemoryService:
 
     def _parse(self, data: bytes) -> dict | None:
         try:
-            return json.loads(data)
+            result = json.loads(data)
         except json.JSONDecodeError:
             return None
+        return result if isinstance(result, dict) else None

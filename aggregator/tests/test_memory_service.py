@@ -140,3 +140,39 @@ async def test_concurrent_writes_serialized():
     assert len(rows) == 10
     ids = sorted(r["id"] for r in rows)
     assert ids == list(range(ids[0], ids[0] + 10))   # contiguous monotonic
+
+
+@pytest.mark.asyncio
+async def test_get_token_budget_null_uses_default():
+    """JSON null on token_budget falls back to DEFAULT_TOKEN_BUDGET, no crash."""
+    svc = MemoryService(nc=AsyncMock())
+    await svc.on_put(_msg({"context_id": "ctx-1", "agent_id": "gemma-1",
+                           "role": "user", "content": "hi"}))
+    msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1",
+                "token_budget": None})
+    await svc.on_get(msg)
+    reply = json.loads(msg.respond.call_args.args[0])
+    assert "turns" in reply  # responded with data, did not crash
+
+
+@pytest.mark.asyncio
+async def test_get_token_budget_non_numeric_rejected():
+    """Non-numeric token_budget yields invalid_token_budget error envelope."""
+    svc = MemoryService(nc=AsyncMock())
+    msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1",
+                "token_budget": "many"})
+    await svc.on_get(msg)
+    reply = json.loads(msg.respond.call_args.args[0])
+    assert reply == {"error": "invalid_token_budget"}
+
+
+@pytest.mark.asyncio
+async def test_parse_non_dict_payload_treated_as_empty():
+    """JSON list/scalar payload should be treated as missing, not crash."""
+    svc = MemoryService(nc=AsyncMock())
+    m = MagicMock()
+    m.data = b"[1,2,3]"
+    m.respond = AsyncMock()
+    await svc.on_get(m)
+    reply = json.loads(m.respond.call_args.args[0])
+    assert "error" in reply  # missing_context_or_agent
