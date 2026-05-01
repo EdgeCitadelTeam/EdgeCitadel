@@ -42,9 +42,16 @@ class Context:
         await self.msg.in_progress()
 
     async def publish_progress(self, task_id: str, *, body: str = "",
-                               progress: Optional[int] = None) -> None:
-        payload = {"message": body}
-        if progress is not None: payload["progress"] = progress
+                               progress: Optional[int] = None,
+                               extra: Optional[dict] = None) -> None:
+        """Publish a task.progress envelope. `extra` merges into payload
+        alongside body/progress (used by Gemma to carry skill_id during
+        streaming)."""
+        payload: dict = {"message": body}
+        if progress is not None:
+            payload["progress"] = progress
+        if extra:
+            payload.update(extra)
         env = {"v": 1, "id": str(uuid.uuid4()), "type": "task.progress",
                "sender_id": self.agent_id,
                "task_id": task_id, "task_state": "working",
