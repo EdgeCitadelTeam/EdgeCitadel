@@ -114,6 +114,23 @@ export default function ChatHistory() {
     }
   }, [realtimeMessages, pendingCommands, autoScroll])
 
+  // Stall detection: mark streaming bubbles as stalled if no delta for 60s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const STALL_MS = 60_000
+      const now = Date.now()
+      useAppStore.setState((state) => ({
+        realtimeMessages: state.realtimeMessages.map((m) =>
+          m.streaming && !m.stalled && m.last_delta_at &&
+          (now - m.last_delta_at) > STALL_MS
+            ? { ...m, stalled: true }
+            : m
+        ),
+      }))
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
   const handleScroll = () => {
     const el = scrollRef.current
     if (!el) return
@@ -240,20 +257,32 @@ export default function ChatHistory() {
                 </button>
               </div>
             )}
-            {allMessages.map((msg) => (
-              <MessageBubble
-                key={msg.id}
-                message={msg}
-                highlighted={selectedTask && msg.task_id === selectedTask}
-                onClick={() => {
-                  if (msg.task_id) {
-                    setSelectedTask(
-                      selectedTask === msg.task_id ? null : msg.task_id
-                    )
-                  }
-                }}
-              />
-            ))}
+            {allMessages.map((msg) => {
+              // For result bubbles without their own skill_id, inherit
+              // skill_id from the matching command envelope (same task_id).
+              let commandSkillId
+              if (msg.type === 'result' && !msg.skill_id && msg.task_id) {
+                const cmd = allMessages.find(
+                  (m) => m.type === 'command' && m.task_id === msg.task_id && m.skill_id
+                )
+                commandSkillId = cmd?.skill_id
+              }
+              return (
+                <MessageBubble
+                  key={msg.id}
+                  message={msg}
+                  highlighted={selectedTask && msg.task_id === selectedTask}
+                  commandSkillId={commandSkillId}
+                  onClick={() => {
+                    if (msg.task_id) {
+                      setSelectedTask(
+                        selectedTask === msg.task_id ? null : msg.task_id
+                      )
+                    }
+                  }}
+                />
+              )
+            })}
             {allMessages.length === 0 && !loading && (
               <div className="flex flex-col items-center justify-center py-16 text-gray-500">
                 <div className="text-sm">No messages yet</div>
