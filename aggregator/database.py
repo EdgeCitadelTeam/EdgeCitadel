@@ -108,6 +108,21 @@ def init_db(path: str, wipe: bool = False) -> None:
         if should_wipe:
             c.executescript(_DROP_SQL)
         c.executescript(SCHEMA_SQL)
+        # Best-effort load of sqlite-vec extension for future semantic memory.
+        # Aggregator boots fine without it; v0.3 will populate turn_embedding.
+        try:
+            import sqlite_vec        # noqa: F401 — provides loadable extension
+            c.enable_load_extension(True)
+            sqlite_vec.load(c)
+            c.enable_load_extension(False)
+            import logging
+            logging.getLogger(__name__).info(
+                "sqlite-vec loaded; v0.3 semantic memory ready")
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "sqlite-vec not available (%s); semantic memory deferred",
+                type(e).__name__)
 
 
 # ── Messages ───────────────────────────────────────────────────────────
