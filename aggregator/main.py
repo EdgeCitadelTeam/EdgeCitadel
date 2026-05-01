@@ -236,6 +236,16 @@ def make_app(for_testing: bool = False) -> FastAPI:
             })
         return out
 
+    @app.get("/api/conversations",
+             summary="Conversation snapshot",
+             description=(
+                 "Group conversation_turns by (agent_id, context_id) and return "
+                 "one row per conversation with turn count, total tokens, "
+                 "first/last seen timestamps, and skills used. Used by future "
+                 "dashboard 'active conversations' views."))
+    async def get_conversations(agent_id: str | None = None):
+        return db.list_conversations(agent_id=agent_id)
+
     @app.post("/api/openclaw/login")
     async def openclaw_login(body: dict):
         session_id = body.get("session_id", "")
