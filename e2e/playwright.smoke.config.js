@@ -4,12 +4,13 @@
 // dev stack on :80. Used for ad-hoc walkthrough verification.
 //
 // testMatch covers both naming styles: legacy `phaseN-...-smoke.spec.js`
-// (Phase 1 + 2) and `phase3+` specs without the -smoke suffix.
+// (Phase 1 + 2) and `phase3+` specs without the -smoke suffix. The
+// `[\d.]+` shape also accepts decimal phase numbers (e.g. phase2.5).
 const { defineConfig } = require('@playwright/test');
 
 module.exports = defineConfig({
   testDir: './tests',
-  testMatch: /phase\d+-.*\.spec\.js/,
+  testMatch: /phase[\d.]+-.*\.spec\.js/,
   workers: 1,
   retries: 0,
   timeout: 120_000,
