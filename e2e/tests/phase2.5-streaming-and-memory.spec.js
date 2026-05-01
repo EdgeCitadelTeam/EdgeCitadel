@@ -17,12 +17,12 @@ async function pollForResult(request, taskId, budgetSec = POLL_BUDGET_S) {
 
 test.describe('Phase 2.5 — streaming + memory + skills', () => {
   test('multi-turn memory: second turn references first', async ({ request }) => {
-    const ctxId = `ctx-${Date.now()}`;
+    const ctxId = crypto.randomUUID();
 
     const first = await request.post(
       `${API}/api/command/gemma-1?sender_id=${TEST_RUNNER}`,
       { data: { body: 'Remember this number: 42. Acknowledge briefly.',
-                args: { context_id: ctxId } } });
+                context_id: ctxId } });
     expect(first.status()).toBe(202);
     const { task_id: taskA } = await first.json();
     const resA = await pollForResult(request, taskA);
@@ -32,7 +32,7 @@ test.describe('Phase 2.5 — streaming + memory + skills', () => {
     const second = await request.post(
       `${API}/api/command/gemma-1?sender_id=${TEST_RUNNER}`,
       { data: { body: 'What number did I just ask you to remember?',
-                args: { context_id: ctxId } } });
+                context_id: ctxId } });
     const { task_id: taskB } = await second.json();
     const resB = await pollForResult(request, taskB);
     expect(resB, 'second response not received').toBeDefined();
@@ -88,10 +88,7 @@ test.describe('Phase 2.5 — streaming + memory + skills', () => {
 
     // Within ~500ms a streaming bubble should appear
     await expect(page.locator(`[data-task-id="${task_id}"]`))
-      .toBeVisible({ timeout: 5000 })
-      .catch(() => {
-        // Selector pattern may differ; assert the result eventually completes.
-      });
+      .toBeVisible({ timeout: 5000 });
 
     const result = await pollForResult(request, task_id);
     expect(result.task_state).toBe('completed');

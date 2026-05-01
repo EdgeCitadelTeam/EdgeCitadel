@@ -136,7 +136,7 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
   const config = typeConfig[type] || { icon: Info, color: 'text-gray-400' }
   const Icon = config.icon
   const senderColor = getAgentColor(message.sender_id)
-  const content = extractContent(message.payload)
+  const content = extractContent(message.payload) ?? message.content ?? null
   const taskState = message.task_state
 
   const { preview, isClipped, hiddenLabel } = buildPreview(content)
@@ -151,6 +151,7 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
     <>
       <div
         onClick={onClick}
+        data-task-id={message.task_id || ''}
         className={clsx(
           'rounded-lg border px-3 py-2 transition-all cursor-pointer border-l-[3px] relative',
           highlighted && 'ring-1 ring-accent/40 shadow-sm shadow-accent/10',
@@ -200,14 +201,14 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
               {taskState}
             </span>
           )}
-          {(message.skill_id || commandSkillId) && (
+          {(message.skill_id || message.payload?.skill_id || commandSkillId) && (
             <span
               className={clsx(
                 'ml-2 inline-block px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0',
-                skillBadgeClass(message.skill_id || commandSkillId)
+                skillBadgeClass(message.skill_id || message.payload?.skill_id || commandSkillId)
               )}
             >
-              {message.skill_id || commandSkillId}
+              {message.skill_id || message.payload?.skill_id || commandSkillId}
             </span>
           )}
           <button

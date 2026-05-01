@@ -75,6 +75,7 @@ _DROP_SQL = """
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS agents;
 DROP TABLE IF EXISTS poison_events;
+DROP TABLE IF EXISTS conversation_turns;
 """
 
 

@@ -157,12 +157,18 @@ def make_app(for_testing: bool = False) -> FastAPI:
             }
 
         task_id = str(uuid.uuid4())
-        env = {
+        env: dict = {
             "v": 1, "id": str(uuid.uuid4()), "type": "command",
             "sender_id": actual_sender, "recipient_id": agent_id,
             "task_id": task_id, "timestamp": now_iso(),
-            "payload": {"body": req.body, **({"args": req.args} if req.args else {})}
+            "payload": {
+                "body": req.body,
+                **({"args": req.args} if req.args else {}),
+                **({"skill_id": req.skill_id} if req.skill_id else {}),
+            },
         }
+        if req.context_id:
+            env["context_id"] = req.context_id
         if agg is not None:
             # Publish JetStream with Nats-Msg-Id for idempotency
             await agg.router.js.publish(f"agents.{agent_id}.inbox",

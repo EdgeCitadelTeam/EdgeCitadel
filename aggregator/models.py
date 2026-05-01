@@ -23,6 +23,8 @@ class Envelope(BaseModel):
 class CommandRequest(BaseModel):
     body: str
     args: Optional[dict] = None
+    skill_id: Optional[str] = None
+    context_id: Optional[str] = None
 
 
 class CommandResponse(BaseModel):
