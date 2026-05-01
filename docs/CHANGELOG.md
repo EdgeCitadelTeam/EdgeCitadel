@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 2.5)
+
+- **Multi-skill dispatch** in Gemma adapter. Four skills routed by
+  `payload.skill_id`: `reasoning.chat`, `text.summarize`, `text.classify`
+  (JSON output via Ollama `format: "json"` + JSON-schema validation),
+  `code.explain`. Skills are data in `adapters/gemma/config.yaml` —
+  adding a fifth is a YAML edit, no code change.
+- **Conversational memory service** in the aggregator. New
+  `conversation_turns` table; three NATS request-reply subjects
+  (`memory.turns.get`, `memory.turns.put`, `memory.turns.delete`).
+  Token-budget sliding-window eviction at `get` time; 30-day hard-delete
+  idle cleanup runs every 5 min. ADR-0008 records the architecture.
+- **Token streaming** in Gemma. Ollama `stream: true` → `task.progress`
+  envelopes with hybrid 8-tokens-or-100ms flush. Canonical `result`
+  envelope still emits with full text.
+- **Live UI rendering** in dashboard. Synthetic streaming bubble in
+  `ChatHistory.jsx` keyed by `task_id`. Cursor glyph, skill badge with
+  per-skill colors, 60s stall detection. Replaced by canonical bubble
+  when result lands.
+- **`GET /api/conversations`** aggregator endpoint. Group
+  `conversation_turns` by `(agent_id, context_id)`; returns turns,
+  tokens, first/last seen, skills used.
+- **`sqlite-vec` extension** loaded at aggregator startup (best-effort).
+  Forward hook for v0.3 semantic memory.
+- **ADR-0008** — centralized memory service hosted by aggregator over
+  NATS.
+
 ### Added (Phase 3)
 
 - **Watchdog adapter** (`adapters/watchdog/`). Native nats-py adapter,

@@ -74,17 +74,21 @@ unless the user toggles "Test data" on in the header.
 
 Each phase has its own spec/plan cycle when activated. The Phase 1 plan handoff section (`docs/superpowers/plans/2026-04-23-agent-messaging-v0.1-phase-1.md`) is the original source for these.
 
-### Phase 2.5 — Gemma adapter enhancements
+### Phase 2.5 — Gemma adapter enhancements ✅ shipped 2026-04-30
 
-When? After Phase 2 ships and we have a baseline of "what users actually ask the LLM agent for". Possibly bundled with Phase 3.
+Items shipped:
+- Multi-skill dispatch (`payload.skill_id`) — 4 skills: `reasoning.chat`,
+  `text.summarize`, `text.classify` (JSON output), `code.explain`.
+- Conversational memory keyed by `context_id` — centralized SQLite
+  service in the aggregator, exposed via NATS request-reply on
+  `memory.turns.{get,put,delete}`. 30-day retention. See ADR-0008.
+- Token streaming via `task.progress` envelopes — hybrid 8-tokens-or-100ms
+  cadence; full text in final `result`.
+- Live UI rendering — synthetic streaming bubble in `ChatHistory.jsx`
+  with skill badges and 60s stall detection.
 
-Items:
-- Multi-skill dispatch (see deferred table above)
-- Conversational memory
-- Token streaming via `task.progress`
-- WebSocket bridge for live UI updates
-
-Spec file: `docs/superpowers/specs/<date>-gemma-enhancements-design.md` (TBD).
+Forward hooks for v0.3 semantic memory: `sqlite-vec` extension loaded at
+aggregator startup; `turn_embedding BLOB` column reserved.
 
 ### Phase 3 — Operational hardening
 
