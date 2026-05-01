@@ -49,10 +49,16 @@ def make_app(for_testing: bool = False) -> FastAPI:
         agg.router.hub = hub
         state["hub"] = hub
         await agg.start()
+        from .memory import MemoryService
+        mem_svc = MemoryService(nc=agg.router.nc)
+        await mem_svc.start()
+        state["memory"] = mem_svc
         state["app"] = agg
 
     @app.on_event("shutdown")
     async def _shutdown():
+        if state.get("memory"):
+            await state["memory"].stop()
         if state["app"] and state["app"].router.nc:
             await state["app"].router.nc.drain()
 
