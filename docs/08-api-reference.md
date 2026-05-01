@@ -63,6 +63,30 @@ NATS-side translation, not a separate broker (see `docs/05-messaging.md`).
 
 ---
 
+## GET /api/conversations
+
+Conversation snapshot — one row per `(agent_id, context_id)` with aggregate fields. Used by future "active conversations" dashboard view.
+
+**Query params:**
+- `agent_id` (optional) — filter to one agent.
+
+**Response:** `200 OK`
+```json
+[
+  {
+    "context_id": "ctx-abc",
+    "agent_id": "gemma-1",
+    "turns": 14,
+    "tokens": 3210,
+    "first_seen": "2026-04-30T08:01:00.000Z",
+    "last_seen":  "2026-04-30T08:14:32.000Z",
+    "skills": ["reasoning.chat", "text.summarize"]
+  }
+]
+```
+
+---
+
 ## GET /api/agents
 
 List of all known agents excluding the aggregator's self-cached entry.

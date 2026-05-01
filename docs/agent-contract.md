@@ -212,6 +212,54 @@ Three reinforcing trigger paths produce the synthesised envelope:
 
 Rationale and tradeoffs: see `docs/adr/0007-watchdog-trigger-model.md`.
 
+### Skills
+
+Adapters declare skills on their A2A Agent Card. Callers select a skill via `payload.skill_id` on `command` envelopes; missing → defaults to the agent's primary skill. Unknown `skill_id` → `task_state: rejected, payload.error: "unknown_skill"`.
+
+Each skill in the card includes:
+- `id` — fully-qualified identifier (e.g., `reasoning.chat`, `text.summarize`).
+- `name`, `description`, `tags` — A2A v1.0 metadata.
+- `system_prompt` — template prepended to inference (adapter-internal; not exposed via card).
+- `defaults` — per-skill defaults (temperature, max_tokens, etc.).
+- `output_shape` — `"free_text"` (default) or `{type: "json", schema: <JSON Schema>}`.
+
+For `output_shape: json` skills, the adapter requests structured output from the underlying model (e.g., Ollama's `format: "json"`) and validates the response against the schema. Validation failure → `task_state: failed, payload.error: "structured_output_validation_failed", payload.raw: <model output>`.
+
+The result envelope's `payload.skill_id` echoes the dispatched skill so audit/correlation works without consulting the original command.
+
+### Streaming
+
+Adapters that advertise `capabilities.streaming: true` may emit `task.progress` envelopes during inference. Phase 2.5 standard cadence: hybrid 8-tokens-or-100ms flush. Payload shape:
+
+```json
+{
+  "type": "task.progress",
+  "sender_id": "<agent_id>",
+  "task_id": "<inbound task_id>",
+  "task_state": "working",
+  "payload": {
+    "delta": "<accumulated chunk>",
+    "skill_id": "<active skill>"
+  }
+}
+```
+
+`task.progress` is plain NATS (no JetStream durability) — frames may be dropped if a subscriber is slow. The canonical `result` envelope is the audit record; it always emits with the full text after streaming completes.
+
+Cancel mid-stream: receiver publishes `result` with `task_state: canceled` and `payload.partial_body` carrying text accumulated to that point.
+
+### Conversational memory
+
+Adapters that need cross-turn memory request it from the aggregator's memory service via NATS request-reply on `memory.turns.{get,put,delete}`. The aggregator owns the `conversation_turns` table in `/data/openclaw.db`; adapters never read or write the DB directly.
+
+- `memory.turns.get`: `{context_id, agent_id, token_budget?}` → `{turns: [...], total_tokens}`. Sliding-window eviction at the budget boundary.
+- `memory.turns.put`: `{context_id, agent_id, role, content, skill_id?}` → `{id, token_count}`.
+- `memory.turns.delete`: `{context_id}` → `{deleted_count}`.
+
+Best-effort by design: a memory service timeout or failure returns empty/None — the adapter logs WARN and proceeds statelessly. Inference always succeeds.
+
+Retention: hard-delete after 30 days of context idle. See ADR-0008 for architectural rationale and v0.3 semantic-memory forward hooks.
+
 ---
 
 ## 3. Agent Card
