@@ -261,7 +261,7 @@ def fetch_recent_turns(*, agent_id: str, context_id: str,
             "SELECT id, role, content, token_count, skill_id, created_at "
             "FROM conversation_turns "
             "WHERE agent_id = ? AND context_id = ? "
-            "ORDER BY created_at DESC LIMIT ?",
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
             (agent_id, context_id, limit)).fetchall()
     return [dict(r) for r in rows]
 
