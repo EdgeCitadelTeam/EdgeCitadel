@@ -98,6 +98,52 @@ const useAppStore = create((set, get) => ({
       }
     }),
 
+  // Phase 2.5 — Streaming bubble reducers.
+  // Synthetic streaming bubbles live in the existing realtimeMessages array
+  // with streaming: true. When the canonical result envelope arrives,
+  // finalizeStream swaps the synthetic for the real one.
+  appendStreamDelta: (taskId, senderId, delta, skillId) => set((state) => {
+    const idx = state.realtimeMessages.findIndex(
+      (m) => m.task_id === taskId && m.streaming === true
+    )
+    if (idx >= 0) {
+      const existing = state.realtimeMessages[idx]
+      return {
+        realtimeMessages: [
+          ...state.realtimeMessages.slice(0, idx),
+          {
+            ...existing,
+            content: existing.content + delta,
+            last_delta_at: Date.now(),
+          },
+          ...state.realtimeMessages.slice(idx + 1),
+        ],
+      }
+    }
+    const synth = {
+      id: `stream-${taskId}`,
+      task_id: taskId,
+      sender_id: senderId,
+      type: 'result',
+      streaming: true,
+      skill_id: skillId,
+      content: delta,
+      timestamp: new Date().toISOString(),
+      last_delta_at: Date.now(),
+    }
+    return {
+      realtimeMessages: [synth, ...state.realtimeMessages].slice(0, MAX_REALTIME_MESSAGES),
+    }
+  }),
+
+  finalizeStream: (taskId, resultEnvelope) => set((state) => ({
+    realtimeMessages: state.realtimeMessages.map((m) =>
+      m.task_id === taskId && m.streaming
+        ? { ...resultEnvelope, streaming: false }
+        : m
+    ),
+  })),
+
   setActiveTab: (tab) => set({ activeTab: tab }),
   setMessageTypeFilter: (filter) => set({ messageTypeFilter: filter }),
   setLogLevelFilter: (filter) => set({ logLevelFilter: filter }),

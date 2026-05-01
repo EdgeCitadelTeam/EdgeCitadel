@@ -43,10 +43,23 @@ export default function useWebSocket(agentName = null) {
         const data = JSON.parse(event.data)
 
         if (data.event === 'message') {
+          const env = data.data
+          if (env?.type === 'task.progress') {
+            const delta = env.payload?.delta || ''
+            const skill = env.payload?.skill_id
+            useAppStore.getState().appendStreamDelta(
+              env.task_id, env.sender_id, delta, skill)
+            return
+          }
+          if (env?.type === 'result' && env?.task_id) {
+            useAppStore.getState().finalizeStream(env.task_id, env)
+            // fall through to existing addRealtimeMessage path so
+            // the canonical result is added to the regular feed too
+          }
           // Skip heartbeat/register messages from chat display
-          const msgType = data.data?.type
+          const msgType = env?.type
           if (msgType !== 'heartbeat' && msgType !== 'register') {
-            addRealtimeMessage(data.data)
+            addRealtimeMessage(env)
           }
         } else if (data.event === 'agent_status_change') {
           updateAgentStatus(data.data.agent_id, data.data.agent_state || data.data.status)
