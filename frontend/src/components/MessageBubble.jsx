@@ -43,6 +43,16 @@ const taskStateColors = {
   'auth-required': 'bg-orange-500/20 text-orange-300',
 }
 
+function skillBadgeClass(skillId) {
+  switch (skillId) {
+    case 'reasoning.chat':   return 'bg-skill-chat-bg text-skill-chat-text'
+    case 'text.summarize':   return 'bg-skill-summarize-bg text-skill-summarize-text'
+    case 'text.classify':    return 'bg-skill-classify-bg text-skill-classify-text'
+    case 'code.explain':     return 'bg-skill-explain-bg text-skill-explain-text'
+    default:                 return 'bg-surface-200 text-gray-400'
+  }
+}
+
 // Inline preview thresholds. Generous enough that short LLM replies don't
 // trigger an expander; tight enough that 12b paragraphs do.
 const PREVIEW_LINE_LIMIT = 6
@@ -118,7 +128,7 @@ function buildPreview(content) {
   return { preview, isClipped: true, hiddenLabel }
 }
 
-export default function MessageBubble({ message, highlighted, onClick }) {
+export default function MessageBubble({ message, highlighted, onClick, commandSkillId }) {
   const [expanded, setExpanded] = useState(false)
   const [inspecting, setInspecting] = useState(false)
 
@@ -126,7 +136,7 @@ export default function MessageBubble({ message, highlighted, onClick }) {
   const config = typeConfig[type] || { icon: Info, color: 'text-gray-400' }
   const Icon = config.icon
   const senderColor = getAgentColor(message.sender_id)
-  const content = extractContent(message.payload)
+  const content = extractContent(message.payload) ?? message.content ?? null
   const taskState = message.task_state
 
   const { preview, isClipped, hiddenLabel } = buildPreview(content)
@@ -141,6 +151,7 @@ export default function MessageBubble({ message, highlighted, onClick }) {
     <>
       <div
         onClick={onClick}
+        data-task-id={message.task_id || ''}
         className={clsx(
           'rounded-lg border px-3 py-2 transition-all cursor-pointer border-l-[3px] relative',
           highlighted && 'ring-1 ring-accent/40 shadow-sm shadow-accent/10',
@@ -190,6 +201,16 @@ export default function MessageBubble({ message, highlighted, onClick }) {
               {taskState}
             </span>
           )}
+          {(message.skill_id || message.payload?.skill_id || commandSkillId) && (
+            <span
+              className={clsx(
+                'ml-2 inline-block px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0',
+                skillBadgeClass(message.skill_id || message.payload?.skill_id || commandSkillId)
+              )}
+            >
+              {message.skill_id || message.payload?.skill_id || commandSkillId}
+            </span>
+          )}
           <button
             onClick={(e) => {
               stop(e)
@@ -224,6 +245,13 @@ export default function MessageBubble({ message, highlighted, onClick }) {
             )}
           >
             {displayed}
+
+            {message.streaming && !message.stalled && (
+              <span className="ml-1 inline-block animate-pulse text-gray-400">▍</span>
+            )}
+            {message.stalled && (
+              <span className="ml-1 text-xs text-amber-400">(stream interrupted)</span>
+            )}
 
             {/* Bottom fade — bubble-tinted so it blends with the
                 sender-colored background; only when collapsed. */}

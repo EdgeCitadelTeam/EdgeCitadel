@@ -49,6 +49,9 @@ the strict schema at `schemas/envelope.v1.json`:
 - `agents.{id}.log` — plain-NATS structured log envelopes (lifecycle,
   errors); see `adapters/_common/template.py:publish_log`.
 - `agents.{id}.task_progress.{task_id}` — plain-NATS streaming progress.
+- `memory.turns.{get,put,delete}` — Phase 2.5 memory service, request-reply.
+  Aggregator is sole subscriber/responder. Adapters use these instead of
+  reaching into the aggregator's SQLite directly.
 - `system.broadcast` — fleet-wide.
 - `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>` —
   aggregator subscriber for poison-event logging; watchdog also

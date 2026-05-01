@@ -23,6 +23,12 @@ export default {
           error: '#ef4444',
           warning: '#f59e0b',
         },
+        skill: {
+          chat:      { bg: 'rgba(120,140,180,0.12)', text: '#9aa9c2' },
+          summarize: { bg: 'rgba(96,165,250,0.16)',  text: '#60a5fa' },
+          classify:  { bg: 'rgba(251,191,36,0.16)',  text: '#fbbf24' },
+          explain:   { bg: 'rgba(74,222,128,0.16)',  text: '#4ade80' },
+        },
       },
     },
   },

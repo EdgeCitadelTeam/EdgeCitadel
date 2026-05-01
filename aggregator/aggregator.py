@@ -167,6 +167,15 @@ class MessageRouter:
         log.warning("poison message on %s (consumer=%s, task_id=%s)",
                     agent, consumer, task_id)
 
+    async def on_task_progress(self, msg: Msg) -> None:
+        """agents.*.task_progress.{task_id} — Phase 2.5 streaming. Persist
+        and broadcast via WebSocket bridge for live UI rendering."""
+        env = self._parse_and_validate(msg.data)
+        if env is None or env.get("type") != "task.progress":
+            return
+        db.insert_message(env, deployment=self._deployment_for(env))
+        await self._hub_broadcast(env)
+
     async def on_openclaw_ingress(self, msg: Msg) -> None:
         """Translate openclaw.{session}.command.{target} → agents.{target}.inbox."""
         parts = msg.subject.split(".")
@@ -240,6 +249,9 @@ class AggregatorApp:
             "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>",
             cb=self.router.on_advisory)
         await nc.subscribe("openclaw.*.>", cb=self.router.on_openclaw_ingress)
+        await nc.subscribe(
+            "agents.*.task_progress.>",
+            cb=self.router.on_task_progress)
 
         from .jetstream_bootstrap import ensure_stream, ensure_consumer
         await ensure_stream(self.router.js)

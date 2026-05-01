@@ -49,10 +49,16 @@ def make_app(for_testing: bool = False) -> FastAPI:
         agg.router.hub = hub
         state["hub"] = hub
         await agg.start()
+        from .memory import MemoryService
+        mem_svc = MemoryService(nc=agg.router.nc)
+        await mem_svc.start()
+        state["memory"] = mem_svc
         state["app"] = agg
 
     @app.on_event("shutdown")
     async def _shutdown():
+        if state.get("memory"):
+            await state["memory"].stop()
         if state["app"] and state["app"].router.nc:
             await state["app"].router.nc.drain()
 
@@ -151,12 +157,18 @@ def make_app(for_testing: bool = False) -> FastAPI:
             }
 
         task_id = str(uuid.uuid4())
-        env = {
+        env: dict = {
             "v": 1, "id": str(uuid.uuid4()), "type": "command",
             "sender_id": actual_sender, "recipient_id": agent_id,
             "task_id": task_id, "timestamp": now_iso(),
-            "payload": {"body": req.body, **({"args": req.args} if req.args else {})}
+            "payload": {
+                "body": req.body,
+                **({"args": req.args} if req.args else {}),
+                **({"skill_id": req.skill_id} if req.skill_id else {}),
+            },
         }
+        if req.context_id:
+            env["context_id"] = req.context_id
         if agg is not None:
             # Publish JetStream with Nats-Msg-Id for idempotency
             await agg.router.js.publish(f"agents.{agent_id}.inbox",
@@ -229,6 +241,16 @@ def make_app(for_testing: bool = False) -> FastAPI:
                 "poison_count": poison_counts.get(r["agent_id"], 0),
             })
         return out
+
+    @app.get("/api/conversations",
+             summary="Conversation snapshot",
+             description=(
+                 "Group conversation_turns by (agent_id, context_id) and return "
+                 "one row per conversation with turn count, total tokens, "
+                 "first/last seen timestamps, and skills used. Used by future "
+                 "dashboard 'active conversations' views."))
+    async def get_conversations(agent_id: str | None = None):
+        return db.list_conversations(agent_id=agent_id)
 
     @app.post("/api/openclaw/login")
     async def openclaw_login(body: dict):

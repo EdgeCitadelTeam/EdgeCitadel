@@ -53,12 +53,29 @@ CREATE TABLE IF NOT EXISTS poison_events (
     advisory_json   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_poison_agent ON poison_events(agent_id, detected_at);
+
+CREATE TABLE IF NOT EXISTS conversation_turns (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    context_id      TEXT    NOT NULL,
+    agent_id        TEXT    NOT NULL,
+    role            TEXT    NOT NULL CHECK(role IN ('user','assistant','system')),
+    content         TEXT    NOT NULL,
+    token_count     INTEGER NOT NULL DEFAULT 0,
+    skill_id        TEXT,
+    turn_embedding  BLOB,
+    created_at      REAL    NOT NULL DEFAULT (unixepoch('now','subsec'))
+);
+CREATE INDEX IF NOT EXISTS idx_turns_lookup
+    ON conversation_turns(agent_id, context_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_turns_idle
+    ON conversation_turns(created_at);
 """
 
 _DROP_SQL = """
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS agents;
 DROP TABLE IF EXISTS poison_events;
+DROP TABLE IF EXISTS conversation_turns;
 """
 
 
@@ -92,6 +109,21 @@ def init_db(path: str, wipe: bool = False) -> None:
         if should_wipe:
             c.executescript(_DROP_SQL)
         c.executescript(SCHEMA_SQL)
+        # Best-effort load of sqlite-vec extension for future semantic memory.
+        # Aggregator boots fine without it; v0.3 will populate turn_embedding.
+        try:
+            import sqlite_vec        # noqa: F401 — provides loadable extension
+            c.enable_load_extension(True)
+            sqlite_vec.load(c)
+            c.enable_load_extension(False)
+            import logging
+            logging.getLogger(__name__).info(
+                "sqlite-vec loaded; v0.3 semantic memory ready")
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "sqlite-vec not available (%s); semantic memory deferred",
+                type(e).__name__)
 
 
 # ── Messages ───────────────────────────────────────────────────────────
@@ -233,3 +265,88 @@ def count_poison_by_agent() -> dict[str, int]:
             "SELECT agent_id, COUNT(*) AS n FROM poison_events "
             "GROUP BY agent_id").fetchall()
     return {r["agent_id"]: r["n"] for r in rows}
+
+
+# ── Conversation memory (Phase 2.5) ────────────────────────────────────
+
+def fetch_recent_turns(*, agent_id: str, context_id: str,
+                       limit: int = 200) -> list[dict]:
+    """Return turns newest-first; caller walks token budget."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, role, content, token_count, skill_id, created_at "
+            "FROM conversation_turns "
+            "WHERE agent_id = ? AND context_id = ? "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (agent_id, context_id, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_turn(*, context_id: str, agent_id: str, role: str, content: str,
+                token_count: int, skill_id: str | None) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO conversation_turns "
+            "(context_id, agent_id, role, content, token_count, skill_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (context_id, agent_id, role, content, token_count, skill_id))
+        return cur.lastrowid
+
+
+def delete_turns_by_context(*, context_id: str) -> int:
+    with _conn() as c:
+        cur = c.execute("DELETE FROM conversation_turns WHERE context_id = ?",
+                        (context_id,))
+        return cur.rowcount
+
+
+def purge_idle_contexts(*, idle_seconds: int) -> int:
+    """Hard-delete all turns in contexts whose newest turn is past
+    `idle_seconds` ago. Used by the memory service's cleanup loop."""
+    with _conn() as c:
+        cur = c.execute(
+            "DELETE FROM conversation_turns WHERE context_id IN "
+            "(SELECT context_id FROM conversation_turns "
+            " GROUP BY context_id "
+            " HAVING MAX(created_at) < unixepoch('now') - ?)",
+            (idle_seconds,))
+        return cur.rowcount
+
+
+def list_conversations(agent_id: str | None = None) -> list[dict]:
+    """Group conversation_turns by (agent_id, context_id) for the
+    /api/conversations endpoint. Returns one row per conversation with
+    aggregate fields."""
+    q = ("SELECT agent_id, context_id, COUNT(*) AS turns, "
+         "SUM(token_count) AS tokens, "
+         "MIN(created_at) AS first_seen, MAX(created_at) AS last_seen, "
+         "GROUP_CONCAT(DISTINCT skill_id) AS skills_csv "
+         "FROM conversation_turns")
+    params: list = []
+    if agent_id:
+        q += " WHERE agent_id = ?"
+        params = [agent_id]
+    q += " GROUP BY agent_id, context_id ORDER BY last_seen DESC"
+    with _conn() as c:
+        rows = [dict(r) for r in c.execute(q, params).fetchall()]
+    out = []
+    for r in rows:
+        out.append({
+            "context_id": r["context_id"],
+            "agent_id": r["agent_id"],
+            "turns": r["turns"],
+            "tokens": r["tokens"] or 0,
+            "first_seen": _iso_from_epoch(r["first_seen"]),
+            "last_seen": _iso_from_epoch(r["last_seen"]),
+            "skills": [s for s in (r["skills_csv"] or "").split(",") if s],
+        })
+    return out
+
+
+def _iso_from_epoch(ts: float | None) -> str | None:
+    """Convert UNIX epoch (subsec) to ISO 8601 with .sssZ suffix."""
+    if ts is None:
+        return None
+    from datetime import datetime, timezone
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
