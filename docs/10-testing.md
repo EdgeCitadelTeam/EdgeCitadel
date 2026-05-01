@@ -1,116 +1,101 @@
 # Testing
 
-## Test Infrastructure
+End-to-end coverage runs through Playwright against either the dedicated test
+stack (full isolation) or the live dev stack (smoke). The legacy
+`full-e2e.js` / `record-demo.js` scripts and the MQTT-based helpers were
+retired in the v0.1 messaging rebuild — see `docs/roadmap.md` and
+`docs/CHANGELOG.md`.
 
-EdgeCitadel has two test suites:
+## Suites
 
-1. **Playwright suite**: 112 tests across 21 spec files
-2. **Full E2E smoke test**: 38 checks in `full-e2e.js`
+| Spec | Tests | Scope |
+|---|---|---|
+| `phase1-smoke.spec.js` | 5 | v0.1 canonical-envelope round trip (register → command → result → outbox mirror). |
+| `phase2-gemma-smoke.spec.js` | 4 | Gemma adapter wire contract (single-skill `reasoning.chat`). |
+| `phase2.5-streaming-and-memory.spec.js` | 5 | Multi-skill dispatch, `task.progress` streaming, conversational memory, unknown-skill rejection. |
+| `phase3-watchdog-fast-path.spec.js` | 2 | Watchdog SYN dedup + heartbeat-staleness fast path. |
+| `phase3-registry-tab.spec.js` | 3 | Dashboard Registry tab, `agent_deleted` WS event, role-based sidebar filter. |
+| `dark-mode.spec.js` | 2 | Theme toggle. |
+| `keyboard-shortcuts.spec.js` | 3 | Tab-switch shortcuts. |
 
-Both use a dedicated Docker Compose stack with isolated ports.
+Total: 7 spec files, 24 tests.
 
-## Running Playwright Tests
+## Run modes
+
+### Full isolated stack
 
 ```bash
 cd e2e
-npx playwright test
+npm test
 ```
 
-This automatically:
-1. Builds and starts the test stack (`docker-compose.test.yml`)
-2. Waits for services to be healthy
-3. Runs all 112 tests in parallel (3 workers)
-4. Tears down the stack
-
-### Test Ports
+`global-setup.js` builds and starts `docker-compose.test.yml`, waits for
+healthchecks, runs all specs in parallel (3 workers), then `global-teardown.js`
+stops the stack. Test ports are remapped so the dev stack on :80 / :4222 stays
+untouched.
 
 | Port | Service |
 |---|---|
-| 14222 | NATS (client) |
-| 11883 | NATS MQTT adapter |
-| 18222 | NATS monitoring |
+| 13000 | Frontend (nginx) |
 | 18000 | Aggregator API |
-| 13000 | Frontend |
+| 14222 | NATS client |
+| 18222 | NATS monitoring |
 
-### Test Configuration
+Phase 2/2.5 round-trip specs require a host-side Gemma adapter pointed at
+`NATS_URL=nats://localhost:14222`; the test compose does not run Ollama-backed
+adapters (Ollama is host-only). Until `global-setup.js` learns to spawn host
+adapters automatically, those specs should be run via the smoke config below.
 
-- **Config**: `e2e/playwright.config.js`
-- **Global setup**: `e2e/global-setup.js` (starts Docker stack)
-- **Global teardown**: `e2e/global-teardown.js` (stops Docker stack)
-- **Storage state**: `e2e/test-storage-state.json` (sets `showTestAgents: true`)
-- **NATS config**: `e2e/test-nats.conf` (no auth, small JetStream limits)
-
-### Test Files
-
-| File | Tests | Description |
-|---|---|---|
-| `agent-crud.spec.js` | 7 | Agent CRUD API operations |
-| `agent-detail.spec.js` | 7 | Agent detail view (profile, stats, commands) |
-| `agent-heartbeat.spec.js` | 5 | Heartbeat updates and auto-creation |
-| `agent-offline.spec.js` | 3 | Offline detection and UI updates |
-| `agent-registration.spec.js` | 5 | MQTT registration flow |
-| `agent-sidebar.spec.js` | 5 | Sidebar selection and filtering |
-| `commands.spec.js` | 5 | Dashboard command sending |
-| `dashboard-command-pipeline.spec.js` | 8 | Full command → reply → task flow |
-| `dark-mode.spec.js` | 2 | Theme toggle |
-| `flow-graph.spec.js` | 4 | Communication topology graph |
-| `health.spec.js` | 3 | Health endpoints |
-| `keyboard-shortcuts.spec.js` | 3 | Tab switching shortcuts |
-| `logs.spec.js` | 8 | Log viewer filters and display |
-| `messages-chat.spec.js` | 6 | Chat history and filtering |
-| `messages-correlation.spec.js` | 4 | Correlation ID grouping |
-| `messages-realtime.spec.js` | 4 | WebSocket live updates |
-| `onboarding.spec.js` | 8 | Agent join protocol |
-| `system-status.spec.js` | 4 | System status API and UI |
-| `tasks-board.spec.js` | 7 | Task board CRUD and display |
-| `tasks-lifecycle.spec.js` | 4 | Task lifecycle state machine |
-| `tasks-trace.spec.js` | 3 | Task message trace |
-
-### Test Helpers
-
-- **mqtt-client.js**: MQTT client with convenience methods (`registerAgent`, `sendHeartbeat`, `assignTask`, `completeTask`, etc.)
-- **api-client.js**: REST API client
-- **ws-client.js**: WebSocket client for testing events
-- **test-data.js**: Test agent/ID generators with timestamp suffixes
-- **wait-utils.js**: Polling utilities (`pollUntil`, `sleep`)
-
-## Full E2E Smoke Test
-
-Run against the **production** stack (localhost:80):
+### Smoke against the dev stack
 
 ```bash
-node e2e/full-e2e.js
+cd e2e
+npx playwright test --config=playwright.smoke.config.js tests/phase2.5-streaming-and-memory.spec.js
 ```
 
-This simulates a complete user workflow:
-1. Register 3 agents (Rupert, Jeeves, Percy)
-2. Load dashboard, verify UI elements
-3. Send inter-agent messages
-4. Navigate all tabs (Chat, Flow, Logs, Tasks)
-5. Send commands from dashboard
-6. Verify API persistence
-7. Check agent detail view
-8. 38 assertions total
+`playwright.smoke.config.js` skips global setup/teardown and points at
+`http://localhost` (the dev stack). `testMatch` covers any
+`phase[\d.]+-*.spec.js`. Used for ad-hoc walkthrough verification when host
+adapters are already running against the dev broker on :4222.
 
-Screenshots saved to `test-artifacts/`.
+## Configuration
 
-## Demo Recording
+| File | Purpose |
+|---|---|
+| `playwright.config.js` | Full-stack run; baseURL `http://localhost:13000`, 3 workers, 1 retry. |
+| `playwright.smoke.config.js` | Dev-stack run; baseURL `http://localhost`, 1 worker, 0 retries. |
+| `global-setup.js` / `global-teardown.js` | Test-stack lifecycle. |
+| `test-storage-state.json` | Sets `localStorage.showTestAgents = "true"` so test-tagged data is visible. |
+| `test-nats.conf` | Token-only auth, MQTT off, 2 GB JetStream `max_file`. |
+| `test-nginx.conf` | Test-stack nginx (preserve-prefix proxy). |
+| `docker-compose.test.yml` | Test stack: nats + aggregator + dashboard + nginx, isolated ports. |
 
-Record a video of the dashboard in action:
+## Helpers
 
-```bash
-node e2e/record-demo.js
-```
+- `helpers/api-client.js` — REST client (`/api/agents`, `/api/messages`,
+  `/api/command/{id}`, `/api/registry`, `/api/conversations`).
+- `helpers/fixtures.js` — `buildCanonicalEnvelope({ type, sender_id, ... })`
+  emits the v0.1 envelope (UUID id, ISO-8601 timestamp). Same shape as the
+  Python adapters and `openclaw-client/src/nats-session.js`.
+- `helpers/ws-client.js` — `/ws/stream` and `/ws/agent/{id}` clients.
+- `helpers/wait-utils.js` — `pollUntil`, `sleep`.
 
-Outputs:
-- `docs/demo-raw.webm` (original)
-- `docs/demo.mp4` (H.264, requires ffmpeg)
-- `docs/demo.gif` (animated, requires ffmpeg)
+## Test-data isolation
 
-## Test Data Isolation
+Both `messages` and `agents` carry a `deployment` column. The aggregator
+resolves it from the sender's (or recipient's) cached A2A card
+(`metadata.runtime.deployment`, default `"default"`). The dashboard hides
+`deployment === "test"` rows unless **Test data** is toggled on in the header.
 
-Test agents use IDs with timestamp suffixes (e.g., `agent-1710000000000-1-abc123`). The frontend filters these out by default via the `exclude_test` parameter. The test storage state sets `showTestAgents: true` so tests can see their own data.
+For tests that need an isolatable identity:
 
-Test ID patterns recognized:
-- Timestamp suffix: `-\d{13,}-\d{1,3}-[a-z0-9]{3,6}$`
-- Test prefix/suffix: `^test[-_]`, `[-_]test$`, `[-_]test[-_]`
+- Static identity: register a card with `runtime.deployment: test`.
+- Dashboard-driven commands: pass `?sender_id=<name>` to
+  `POST /api/command/{agent_id}`. When the sender is unknown, the aggregator
+  auto-registers a synthetic test-deployment card and tags every envelope in
+  the resulting task `deployment=test`. The Phase 2 / 2.5 smokes use this.
+
+Server-side filtering: `/api/messages` accepts `deployment` (allowlist) and
+`exclude_deployment` (denylist). The dashboard passes
+`exclude_deployment=test` when `showTestAgents` is off so the LIMIT only sees
+production rows.
