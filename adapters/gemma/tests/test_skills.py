@@ -8,7 +8,7 @@ from adapters.gemma.skills import (load_skills, dispatch_skill,
 @pytest.fixture(scope="module")
 def skills():
     from pathlib import Path
-    return load_skills(Path("adapters/gemma/config.yaml"))
+    return load_skills(Path(__file__).parent.parent / "config.yaml")
 
 
 def test_load_skills_returns_four_known_skills(skills):
