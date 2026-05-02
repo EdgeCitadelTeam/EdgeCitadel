@@ -5,7 +5,7 @@ This file tracks deferred work and the path forward beyond what's currently impl
 1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
 2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
 
-Last updated: 2026-04-29.
+Last updated: 2026-05-02.
 
 ---
 
