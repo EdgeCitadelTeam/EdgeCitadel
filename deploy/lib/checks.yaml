@@ -1,0 +1,169 @@
+# deploy/lib/checks.yaml — single source of truth for `deploy-host.sh --check`.
+#
+# Each check has:
+#   - name (short identifier, used in output)
+#   - category (grouping for table output)
+#   - cmd (shell command to run; exit 0 = pass)
+#   - expected (optional: regex stdout must match)
+#   - remediation (one-line hint when failing)
+#   - level (default: error; warn = non-blocking)
+#
+# Adding a new check: append one entry. The runner picks it up; no script edits.
+
+categories:
+  - name: Platform
+    checks:
+      - name: linux-x86_64-ubuntu
+        cmd: bash -c '[[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]]'
+        remediation: "deploy-host.sh supports linux/x86_64 (this) and macos/arm64 only"
+      - name: python3.12-present
+        cmd: command -v python3.12
+        remediation: "apt install python3.12 — should be in manifest.toml"
+      - name: docker-installed
+        cmd: docker --version
+        remediation: "install docker per https://docs.docker.com/engine/install/ubuntu/"
+      - name: tailscale-running
+        cmd: tailscale status --json
+        remediation: "sudo tailscale up — host should be on the tailnet"
+      - name: tailscale-tag-set
+        cmd: bash -c 'tailscale status --json | python3 -c "import sys,json; d=json.load(sys.stdin); assert \"tag:edgecitadel-aggregator\" in d.get(\"Self\",{}).get(\"Tags\",[]), \"tag missing\""'
+        remediation: "tag this host in https://login.tailscale.com/admin/machines per setup-linux guide"
+
+  - name: User & FS
+    checks:
+      - name: edgecitadel-user-exists
+        cmd: getent passwd edgecitadel
+        remediation: "sudo useradd --system --no-create-home --shell /usr/sbin/nologin edgecitadel"
+      - name: env-file-mode
+        cmd: bash -c '[[ "$(stat -c %a /etc/edgecitadel/env)" == "640" ]]'
+        remediation: "sudo chmod 0640 /etc/edgecitadel/env"
+      - name: opt-edgecitadel-exists
+        cmd: bash -c '[[ -d /opt/edgecitadel && -d /opt/edgecitadel/adapters ]]'
+        remediation: "sudo deploy-host.sh --update --source-dir /root/snap/EdgeCitadel"
+      - name: var-lib-edgecitadel-owned
+        cmd: bash -c '[[ "$(stat -c %U /var/lib/edgecitadel)" == "edgecitadel" ]]'
+        remediation: "sudo chown -R edgecitadel:edgecitadel /var/lib/edgecitadel"
+
+  - name: Manifest deps
+    checks:
+      - name: ollama-version-pinned
+        cmd: bash -c '[[ "$(ollama --version 2>/dev/null | grep -oE "[0-9]+\\.[0-9]+\\.[0-9]+")" == "$(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.version)" ]]'
+        remediation: "sudo /opt/edgecitadel/deploy/lib/install-ollama.sh"
+      - name: nats-cli-version-pinned
+        cmd: bash -c '[[ "$(nats --version 2>/dev/null | head -1 | grep -oE "[0-9]+\\.[0-9]+\\.[0-9]+")" == "$(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get nats_cli.version)" ]]'
+        remediation: "sudo /opt/edgecitadel/deploy/lib/install-nats-cli.sh"
+      - name: ollama-model-pulled
+        cmd: bash -c 'ollama list | grep -q "gemma3:4b"'
+        remediation: "sudo -u edgecitadel ollama pull gemma3:4b"
+
+  - name: Adapter venvs
+    checks:
+      - name: gemma-venv-current
+        cmd: bash -c '[[ "$(sha256sum /opt/edgecitadel/adapters/gemma/requirements.txt | cut -d" " -f1)" == "$(cat /var/lib/edgecitadel/venvs/gemma/.requirements.sha 2>/dev/null)" ]]'
+        remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
+      - name: watchdog-venv-current
+        cmd: bash -c '[[ "$(sha256sum /opt/edgecitadel/adapters/watchdog/requirements.txt | cut -d" " -f1)" == "$(cat /var/lib/edgecitadel/venvs/watchdog/.requirements.sha 2>/dev/null)" ]]'
+        remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
+      - name: shell-venv-installed
+        cmd: bash -c '[[ -x /var/lib/edgecitadel/venvs/shell/bin/python ]]'
+        remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
+
+  - name: Systemd units
+    checks:
+      - name: ollama-unit-enabled
+        cmd: systemctl is-enabled --quiet edgecitadel-ollama
+        remediation: "sudo systemctl enable edgecitadel-ollama (deploy-host.sh does this)"
+      - name: gemma-unit-active
+        cmd: systemctl is-active --quiet edgecitadel-gemma
+        remediation: "sudo systemctl start edgecitadel-gemma; check journalctl -u edgecitadel-gemma"
+      - name: watchdog-unit-active
+        cmd: systemctl is-active --quiet edgecitadel-watchdog
+        remediation: "sudo systemctl start edgecitadel-watchdog"
+      - name: shell-unit-installed-not-enabled
+        cmd: bash -c 'systemctl cat edgecitadel-shell >/dev/null 2>&1 && ! systemctl is-enabled --quiet edgecitadel-shell'
+        remediation: "shell adapter is opt-in; if intentionally enabled, ignore this check"
+
+  - name: Hardening
+    checks:
+      - name: gemma-hardening-score
+        cmd: bash -c 'score=$(systemd-analyze security edgecitadel-gemma 2>/dev/null | tail -1 | grep -oE "[0-9]+\\.[0-9]+"); awk -v s="$score" "BEGIN{exit !(s<2.0)}"'
+        remediation: "expected score < 2.0; see ADR-0009 for hardening directives"
+      - name: watchdog-hardening-score
+        cmd: bash -c 'score=$(systemd-analyze security edgecitadel-watchdog 2>/dev/null | tail -1 | grep -oE "[0-9]+\\.[0-9]+"); awk -v s="$score" "BEGIN{exit !(s<2.0)}"'
+        remediation: "expected score < 2.0"
+
+  - name: Docker stack
+    checks:
+      - name: nats-container-up
+        cmd: bash -c 'docker ps --format "{{.Names}}\t{{.Status}}" | grep -q "nats.*Up.*healthy"'
+        remediation: "cd /root/snap/EdgeCitadel && docker compose --profile mqtt-ingress up -d"
+      - name: aggregator-container-up
+        cmd: bash -c 'docker ps --format "{{.Names}}\t{{.Status}}" | grep -q "aggregator.*Up"'
+        remediation: "cd /root/snap/EdgeCitadel && docker compose up -d"
+      - name: nginx-container-up
+        cmd: bash -c 'docker ps --format "{{.Names}}\t{{.Status}}" | grep -q "nginx.*Up"'
+        remediation: "cd /root/snap/EdgeCitadel && docker compose up -d"
+      - name: mqtt-profile-active
+        cmd: bash -c 'ss -tnl | grep -q ":1883"'
+        remediation: "cd /root/snap/EdgeCitadel && docker compose --profile mqtt-ingress up -d"
+
+  - name: HTTP endpoints
+    checks:
+      - name: dashboard-200
+        cmd: curl -sf -o /dev/null http://localhost/api/system/status
+        remediation: "check docker logs aggregator and nginx containers"
+      - name: monitoring-200
+        cmd: curl -sf -o /dev/null http://localhost:8222/healthz
+        remediation: "check NATS broker; docker logs edgecitadel-nats-1"
+      - name: ollama-200
+        cmd: curl -sf -o /dev/null http://localhost:11434/api/version
+        remediation: "sudo systemctl restart edgecitadel-ollama"
+
+  - name: Broker
+    checks:
+      - name: jetstream-stream-CONVERSATIONS
+        cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server=nats://localhost:4222 --token="$NATS_TOKEN" stream info CONVERSATIONS >/dev/null 2>&1'
+        remediation: "stream missing — JetStream may not have initialized; restart aggregator container"
+      - name: jetstream-kv-AGENT_STATE
+        cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server=nats://localhost:4222 --token="$NATS_TOKEN" kv ls 2>/dev/null | grep -q AGENT_STATE'
+        remediation: "KV bucket missing; aggregator should re-create on startup"
+
+  - name: Agents
+    checks:
+      - name: gemma-1-heartbeat-fresh
+        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x['id']=='gemma-1'),None); assert a and a['status']=='online', 'gemma-1 not online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<60, 'heartbeat too old'"
+        remediation: "sudo journalctl -u edgecitadel-gemma --since '2 min ago'"
+      - name: watchdog-1-heartbeat-fresh
+        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x['id']=='watchdog-1'),None); assert a and a['status']=='online', 'watchdog-1 not online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<60"
+        remediation: "sudo journalctl -u edgecitadel-watchdog --since '2 min ago'"
+      - name: us-openclaw-heartbeat-fresh
+        level: warn   # not our agent, just observe
+        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x['id']=='us-openclaw'),None); assert a and a['status']=='online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<300"
+        remediation: "openclaw tool may need to reconnect; we don't manage its lifecycle"
+
+  - name: Backups
+    checks:
+      - name: latest-daily-fresh
+        cmd: bash -c 'latest=$(ls -1t /var/lib/edgecitadel/backups/daily/ 2>/dev/null | head -1); [[ -n "$latest" ]] && age=$(( $(date +%s) - $(stat -c %Y "/var/lib/edgecitadel/backups/daily/$latest") )); [[ -n "$latest" && $age -lt $(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get verification.backup_max_age_sec) ]]'
+        remediation: "no recent daily backup; check /etc/cron.daily/edgecitadel-backup and journalctl -t edgecitadel-backup"
+      - name: backup-cron-installed
+        cmd: bash -c '[[ -x /etc/cron.daily/edgecitadel-backup && -x /etc/cron.weekly/edgecitadel-backup-weekly ]]'
+        remediation: "sudo deploy-host.sh (Phase 7 installs cron)"
+      - name: backup-restore-drill
+        cmd: bash -c 'tmpd=$(mktemp -d); latest=$(ls -1t /var/lib/edgecitadel/backups/daily/ | head -1); cp "/var/lib/edgecitadel/backups/daily/$latest/openclaw.db" "$tmpd/"; sqlite3 "$tmpd/openclaw.db" "PRAGMA integrity_check;" | head -1 | grep -q "^ok$"; rm -rf "$tmpd"'
+        remediation: "latest backup is corrupted; try the weekly backup instead"
+
+  - name: Network
+    checks:
+      - name: tailnet-port-80-bound
+        cmd: bash -c 'TS_IP=$(tailscale ip -4 | head -1); curl -sf -o /dev/null "http://$TS_IP/api/system/status"'
+        remediation: "check ACL allows operator devices to reach tag:edgecitadel-aggregator:80"
+      - name: tailnet-port-4222-open
+        cmd: bash -c 'TS_IP=$(tailscale ip -4 | head -1); nc -z -w2 "$TS_IP" 4222'
+        remediation: "ACL or firewall blocking — check setup-linux guide § Tailnet ACL"
+
+  - name: Round-trip smoke
+    checks:
+      - name: gemma-reasoning-chat
+        cmd: python3 /opt/edgecitadel/deploy/lib/smoke.py
+        remediation: "see smoke.py output for which step failed"
