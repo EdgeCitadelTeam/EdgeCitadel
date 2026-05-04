@@ -37,7 +37,9 @@ source /etc/edgecitadel/env
 set +a
 
 DB_SRC="/root/snap/EdgeCitadel/data/openclaw.db"
-NATS_URL="nats://localhost:4222"
+# nats CLI 0.1.5 doesn't accept --token; use URL-embedded auth
+# (server-list URL of the form nats://TOKEN@host:port).
+NATS_URL_AUTHED="nats://${NATS_TOKEN}@localhost:4222"
 
 # 1. SQLite hot snapshot (atomic via online backup API).
 # .timeout=30s makes sqlite3 wait for an exclusive write lock held by the
@@ -48,12 +50,12 @@ sqlite3 "$DB_SRC" ".timeout 30000" ".backup '${DEST}/openclaw.db'"
 
 # 2. JetStream stream
 echo "[backup] backing up JetStream stream CONVERSATIONS"
-nats --server="$NATS_URL" --token="$NATS_TOKEN" \
+nats --server="$NATS_URL_AUTHED" \
      stream backup CONVERSATIONS "${DEST}/jetstream-CONVERSATIONS" --force
 
 # 3. JetStream KV
 echo "[backup] backing up JetStream KV AGENT_STATE"
-nats --server="$NATS_URL" --token="$NATS_TOKEN" \
+nats --server="$NATS_URL_AUTHED" \
      kv backup AGENT_STATE "${DEST}/kv-AGENT_STATE" --force
 
 # 4. Encrypted env (skip with WARN if no GPG key configured)

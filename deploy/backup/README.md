@@ -64,9 +64,9 @@ until curl -sf http://localhost:8222/healthz >/dev/null; do sleep 1; done
 
 # 5. Restore JetStream stream + KV
 source /etc/edgecitadel/env
-nats --server=nats://localhost:4222 --token="$NATS_TOKEN" \
+nats --server="nats://${NATS_TOKEN}@localhost:4222" \
      stream restore CONVERSATIONS "${BACKUP}/jetstream-CONVERSATIONS" --force
-nats --server=nats://localhost:4222 --token="$NATS_TOKEN" \
+nats --server="nats://${NATS_TOKEN}@localhost:4222" \
      kv restore AGENT_STATE "${BACKUP}/kv-AGENT_STATE" --force
 
 # 6. Bring everything else back

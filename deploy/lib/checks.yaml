@@ -122,10 +122,10 @@ categories:
   - name: Broker
     checks:
       - name: jetstream-stream-CONVERSATIONS
-        cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server=nats://localhost:4222 --token="$NATS_TOKEN" stream info CONVERSATIONS >/dev/null 2>&1'
+        cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server="nats://${NATS_TOKEN}@localhost:4222" stream info CONVERSATIONS >/dev/null 2>&1'
         remediation: "stream missing — JetStream may not have initialized; restart aggregator container"
       - name: jetstream-kv-AGENT_STATE
-        cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server=nats://localhost:4222 --token="$NATS_TOKEN" kv ls 2>/dev/null | grep -q AGENT_STATE'
+        cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server="nats://${NATS_TOKEN}@localhost:4222" kv ls 2>/dev/null | grep -q AGENT_STATE'
         remediation: "KV bucket missing; aggregator should re-create on startup"
 
   - name: Agents
