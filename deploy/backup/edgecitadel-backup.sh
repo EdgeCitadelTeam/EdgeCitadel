@@ -39,9 +39,12 @@ set +a
 DB_SRC="/root/snap/EdgeCitadel/data/openclaw.db"
 NATS_URL="nats://localhost:4222"
 
-# 1. SQLite hot snapshot (atomic via online backup API)
+# 1. SQLite hot snapshot (atomic via online backup API).
+# .timeout=30s makes sqlite3 wait for an exclusive write lock held by the
+# aggregator during heartbeat persistence — otherwise sqlite3 errors out
+# immediately with "database is locked" on a hot DB.
 echo "[backup] snapshotting SQLite from ${DB_SRC}"
-sqlite3 "$DB_SRC" ".backup '${DEST}/openclaw.db'"
+sqlite3 "$DB_SRC" ".timeout 30000" ".backup '${DEST}/openclaw.db'"
 
 # 2. JetStream stream
 echo "[backup] backing up JetStream stream CONVERSATIONS"
