@@ -25,6 +25,7 @@ nats/data/
 # Claude Code local settings
 .claude/.claude/
 .claude/settings.local.json
+CLAUDE.local.md
 
 # Environment
 .env

@@ -22,6 +22,7 @@
 
 ## Documentation
 
+- [ ] `CLAUDE.md` updated if workflow changed (commands, dirs, gates), or "no spine impact"
 - [ ] `docs/` updated (if new feature or API change)
 - [ ] `docs/CHANGELOG.md` updated
 - [ ] ADR written (if architectural decision)
