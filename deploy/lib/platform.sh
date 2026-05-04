@@ -4,17 +4,27 @@
 #
 # Provides:
 #   detect_platform   → echoes "linux" or "macos"; exits 1 on other OSes
-#   require_root      → exits 1 if EUID != 0 (with helpful message)
+#   require_root      → exits 1 if EUID != 0 (with helpful message);
+#                       callers should pass "$@" so the suggested rerun
+#                       includes the calling script's own args
 #   require_command   → exits 1 if a named command is missing
-#   log_info / log_warn / log_err — colored prefix output
+#   log_info / log_warn / log_err — colored prefix output (colors auto-disabled
+#                       when stderr is not a TTY, e.g. piped or under systemd)
 #   run               → if DRY_RUN=1, print "DRY-RUN: <cmd>"; else exec
 
 set -euo pipefail
 
-readonly _PLATFORM_RED='\033[0;31m'
-readonly _PLATFORM_YELLOW='\033[0;33m'
-readonly _PLATFORM_GREEN='\033[0;32m'
-readonly _PLATFORM_NC='\033[0m'
+if [[ -t 2 ]]; then
+  readonly _PLATFORM_RED='\033[0;31m'
+  readonly _PLATFORM_YELLOW='\033[0;33m'
+  readonly _PLATFORM_GREEN='\033[0;32m'
+  readonly _PLATFORM_NC='\033[0m'
+else
+  readonly _PLATFORM_RED=''
+  readonly _PLATFORM_YELLOW=''
+  readonly _PLATFORM_GREEN=''
+  readonly _PLATFORM_NC=''
+fi
 
 detect_platform() {
   case "$(uname -s)" in
@@ -30,6 +40,8 @@ detect_platform() {
 is_linux() { [[ "$(detect_platform)" == "linux" ]]; }
 is_macos() { [[ "$(detect_platform)" == "macos" ]]; }
 
+# Pass "$@" from the calling script so the suggestion includes the script's own args:
+#   require_root "$@"
 require_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
     log_err "this script must be run as root (try: sudo $0 $*)"
