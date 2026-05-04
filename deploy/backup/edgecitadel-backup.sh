@@ -49,14 +49,18 @@ echo "[backup] snapshotting SQLite from ${DB_SRC}"
 sqlite3 "$DB_SRC" ".timeout 30000" ".backup '${DEST}/openclaw.db'"
 
 # 2. JetStream stream
+# nats CLI 0.1.5 doesn't accept --force on `stream backup`; rely on the
+# timestamped DEST dir being unique so the target subdir doesn't pre-exist.
 echo "[backup] backing up JetStream stream CONVERSATIONS"
 nats --server="$NATS_URL_AUTHED" \
-     stream backup CONVERSATIONS "${DEST}/jetstream-CONVERSATIONS" --force
+     stream backup CONVERSATIONS "${DEST}/jetstream-CONVERSATIONS"
 
-# 3. JetStream KV
-echo "[backup] backing up JetStream KV AGENT_STATE"
-nats --server="$NATS_URL_AUTHED" \
-     kv backup AGENT_STATE "${DEST}/kv-AGENT_STATE" --force
+# 3. JetStream KV (skipped on nats CLI 0.1.5 — `kv backup` was added in 0.2+).
+# The AGENT_STATE bucket is operational telemetry (last_heartbeat, cpu, memory)
+# that the aggregator rebuilds from agent heartbeats within ~60s. Acceptable
+# to skip; bump nats_cli.version to 0.2+ in deploy/manifest.toml when KV
+# backup/restore becomes critical.
+echo "[backup] WARN: skipping JetStream KV AGENT_STATE backup (nats CLI 0.1.5 lacks 'kv backup'; rebuilt from heartbeats)" >&2
 
 # 4. Encrypted env (skip with WARN if no GPG key configured)
 if gpg --list-keys edgecitadel-backup >/dev/null 2>&1; then
@@ -79,7 +83,6 @@ cat >"${DEST}/manifest.json" <<EOF
   "components": {
     "openclaw_db": "openclaw.db",
     "jetstream_conversations": "jetstream-CONVERSATIONS",
-    "kv_agent_state": "kv-AGENT_STATE",
     "env": "env.gpg"
   }
 }
