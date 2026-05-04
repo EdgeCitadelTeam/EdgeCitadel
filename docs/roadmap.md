@@ -5,7 +5,7 @@ This file tracks deferred work and the path forward beyond what's currently impl
 1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
 2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
 
-Last updated: 2026-05-02.
+Last updated: 2026-05-04.
 
 ---
 
@@ -130,17 +130,32 @@ Refuse delegations at `hop_count >= 8`. Cancel returns `task_state: rejected, pa
 
 Spec file: `docs/superpowers/specs/<date>-ag2-a2a-wrapper-design.md` (TBD).
 
-### Phase 5 — Mac Mini deploy
+### Phase 5 — Host deploy
 
-One session, one plan. Production-shaped deployment to the dedicated host.
+One session, one plan. Production-shaped deployment to the central
+EdgeCitadel host. Linux (Ubuntu) is the primary, validated path; macOS
+(Mac Mini) is a forward-looking variant of the same design.
 
 Items:
-- `deploy-mac-mini.sh` script (preflight: `.env` over tailnet, `BROKER_HOST` set, operator verifies `NATS_TOKEN` has JetStream perms via `nats consumer add` smoke).
-- launchd / systemd-style services for Ollama + Gemma adapter + watchdog adapter (Phase 3) + openclaw browser launcher.
-- Backup strategy for `data/openclaw.db` and `nats/data/jetstream/`.
-- Tailnet ACLs for inter-host access.
+- `deploy/deploy-host.sh` script (manifest-driven, idempotent,
+  reversible, with `--check`/`--dry-run`/`--uninstall`).
+- systemd units for Ollama + Gemma + watchdog adapters, run as a
+  dedicated `edgecitadel` system user with full hardening (ADR-0009).
+  launchd plists for the macOS variant.
+- Backup strategy for `openclaw.db` (sqlite3 .backup) and JetStream
+  (nats stream/kv backup), local-only with documented upgrade path.
+- Tailnet ACL stanza in the platform setup guides.
+- Two parallel-structured setup guides: linux + macOS.
+- Python 3.12 baseline (matches aggregator Dockerfile; bump aspiration
+  to 3.13 deferred — no functional benefit identified).
 
-Spec file: `docs/superpowers/specs/<date>-mac-mini-deploy-design.md` (TBD).
+Spec file: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`.
+Plan file: `docs/superpowers/plans/2026-05-04-phase-5-host-deploy.md`.
+
+(Note: the original "openclaw browser launcher" deliverable was dropped
+during brainstorming. The standalone `~/.openclaw/` tool is a separate
+product Phase 5 doesn't manage; the browser-launcher concept also
+contradicts ADR-0005's bounded-blast-radius design.)
 
 ### Optional / parking lot
 

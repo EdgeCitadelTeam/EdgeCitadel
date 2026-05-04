@@ -37,6 +37,7 @@
 - No secrets, tokens, or local config in committed files.
 - Schema/messaging changes update `docs/05-messaging.md` in the same PR.
 - Config changes update `.env.example` and relevant setup docs.
+- New host-level dependency (Phase 5+): edit `deploy/manifest.toml` only — deploy script and platform setup guides consume it. Do not embed dependency lists in prose.
 - Verification: invoke the relevant `verify-*` skill (`verify-frontend`, `verify-backend`, `verify-infra`). Default smoke: `curl http://localhost:8222/healthz` and `curl http://localhost/api/system/status`.
 - Curl-only checks are NOT sufficient for UI or workflow changes — Playwright via `cd e2e && npm test` is the gate.
 
