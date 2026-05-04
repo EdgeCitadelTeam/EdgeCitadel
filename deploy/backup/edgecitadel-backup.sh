@@ -88,8 +88,9 @@ cat >"${DEST}/manifest.json" <<EOF
 }
 EOF
 
-# 6. Checksums
-( cd "${DEST}" && sha256sum * > checksums.sha256 )
+# 6. Checksums (files only — jetstream-CONVERSATIONS is a directory; recurse into it).
+( cd "${DEST}" && find . -type f -not -name checksums.sha256 -print0 \
+                  | sort -z | xargs -0 sha256sum > checksums.sha256 )
 
 # 7. Sanity: SQLite copy is readable + has an agents row
 sqlite3 "${DEST}/openclaw.db" "SELECT COUNT(*) FROM agents;" >/dev/null
