@@ -88,7 +88,9 @@ for adapter in "${ALL_ADAPTERS[@]}"; do
   log_info "$adapter: pip install -r $REQ"
   run sudo -u edgecitadel "${VENV}/bin/pip" install --upgrade --quiet pip
   run sudo -u edgecitadel "${VENV}/bin/pip" install --quiet -r "$REQ"
-  run sudo -u edgecitadel "${VENV}/bin/pip" install --quiet -e "$SOURCE_DIR"
+  # Adapters are NOT pip-installed: the repo has no setup.py/pyproject.toml.
+  # Adapter modules are imported via `python -m adapters.<name>.adapter` from
+  # the systemd unit's WorkingDirectory=/opt/edgecitadel (cwd on sys.path).
 
   if [[ "$DRY_RUN" != "1" ]]; then
     echo -n "$CURRENT_SHA" | sudo -u edgecitadel tee "${VENV}/.requirements.sha" >/dev/null
