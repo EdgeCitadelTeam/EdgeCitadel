@@ -27,6 +27,22 @@ fi
 
 PLATFORM="$(detect_platform)"
 
+_read_manifest() {
+  # Usage: _read_manifest <dotted.key> -> populates _OUT array
+  # Exits non-zero on parse-manifest failure (e.g. missing key).
+  # Filters empty lines so an empty manifest list yields an empty array.
+  local key="$1"
+  local out
+  if ! out=$(python3 "$PARSE_MANIFEST" get "$key" --format lines); then
+    log_err "manifest read failed for $key"
+    exit 1
+  fi
+  _OUT=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && _OUT+=("$line")
+  done <<<"$out"
+}
+
 _apt_install() {
   local pkgs=("$@")
   local missing=()
@@ -61,13 +77,13 @@ _brew_install() {
 }
 
 if [[ "$PLATFORM" == "linux" ]]; then
-  mapfile -t apt_common < <(python3 "$PARSE_MANIFEST" get apt_packages.common --format lines)
-  mapfile -t apt_python < <(python3 "$PARSE_MANIFEST" get python.packages_ubuntu --format lines)
-  _apt_install "${apt_common[@]}" "${apt_python[@]}"
+  _read_manifest apt_packages.common;     apt_common=("${_OUT[@]:-}")
+  _read_manifest python.packages_ubuntu;  apt_python=("${_OUT[@]:-}")
+  _apt_install "${apt_common[@]:-}" "${apt_python[@]:-}"
 elif [[ "$PLATFORM" == "macos" ]]; then
-  mapfile -t brew_common < <(python3 "$PARSE_MANIFEST" get brew_packages.common --format lines)
-  mapfile -t brew_python < <(python3 "$PARSE_MANIFEST" get python.packages_macos --format lines)
-  _brew_install "${brew_common[@]}" "${brew_python[@]}"
+  _read_manifest brew_packages.common;    brew_common=("${_OUT[@]:-}")
+  _read_manifest python.packages_macos;   brew_python=("${_OUT[@]:-}")
+  _brew_install "${brew_common[@]:-}" "${brew_python[@]:-}"
 fi
 
 log_info "install-deps.sh: complete"
