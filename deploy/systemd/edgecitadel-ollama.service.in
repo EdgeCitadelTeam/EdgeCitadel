@@ -1,0 +1,49 @@
+[Unit]
+Description=EdgeCitadel — Ollama runtime (Phase 5)
+Documentation=https://github.com/ollama/ollama
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=edgecitadel
+Group=edgecitadel
+
+Environment="OLLAMA_HOST=127.0.0.1:11434"
+Environment="OLLAMA_MODELS=/var/lib/edgecitadel/ollama"
+Environment="OLLAMA_KEEP_ALIVE=24h"
+
+ExecStart=/usr/local/bin/ollama serve
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Hardening — see ADR-0009 for rationale.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/edgecitadel/ollama /var/log/edgecitadel
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Ollama uses CPU heavily; allow normal I/O scheduling.
+IOSchedulingClass=best-effort
+Nice=0
+
+# Memory limits — prevents Ollama OOM'ing other host services.
+# N150 box has 16GB total; leave headroom for docker stack + system.
+MemoryMax=6G
+MemoryHigh=5G
+
+[Install]
+WantedBy=multi-user.target
