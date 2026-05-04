@@ -20,10 +20,14 @@ phase_4_cutover() {
   fi
 
   log_info "stopping current docker stack"
+  # --profile mqtt-ingress is also passed for `down` to clean up any leftover
+  # nats-mqtt container from previous attempts (the profile is no longer used
+  # in the current docker-compose.yml — folded into `nats` — but keeping the
+  # flag here is harmless and helps clean up partial state on re-run).
   ( cd "$SOURCE_DIR" && run docker compose --profile mqtt-ingress down )
 
-  log_info "starting docker stack with --profile mqtt-ingress (rebuild)"
-  ( cd "$SOURCE_DIR" && run docker compose --profile mqtt-ingress up -d --build )
+  log_info "starting docker stack (rebuild)"
+  ( cd "$SOURCE_DIR" && run docker compose up -d --build )
 
   # Wait for healthchecks
   log_info "waiting for nats:8222/healthz to become healthy (max 60s)"
