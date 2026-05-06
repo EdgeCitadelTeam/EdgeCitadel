@@ -45,7 +45,9 @@ optional_disabled = ["shell"]   # installed but not enabled (executes arbitrary 
 
 [verification]
 # Time budget for the round-trip smoke test (Phase 6 of deploy-host.sh).
-round_trip_timeout_sec = 30
+# 120s accommodates first-call cold-start on CPU-only inference (model load
+# into RAM + first token). Steady-state gemma4:e2b on N150 is ~30-90s/req.
+round_trip_timeout_sec = 120
 # Adapter heartbeat staleness threshold for `--check`.
 heartbeat_max_age_sec = 60
 # Backup recency budget — fail check if latest daily is older than this.

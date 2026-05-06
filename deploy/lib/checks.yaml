@@ -175,5 +175,7 @@ categories:
   - name: Round-trip smoke
     checks:
       - name: gemma-reasoning-chat
-        cmd: python3 /opt/edgecitadel/deploy/lib/smoke.py
+        # Pass timeout from manifest so CPU-only inference (slow first-call)
+        # has enough budget. ~80s typical on N150; 120s default budget.
+        cmd: bash -c 'tmout=$(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get verification.round_trip_timeout_sec); python3 /opt/edgecitadel/deploy/lib/smoke.py --timeout "$tmout"'
         remediation: "see smoke.py output for which step failed"
