@@ -230,3 +230,75 @@ async def test_connect_error_raises_hermes_error():
     with pytest.raises(HermesError):
         await call_hermes_streaming(
             prompt="x", session_id=None, publish_progress=publish)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_session_id_header_set_when_context_id_present():
+    from adapters.hermes.hermes_client import call_hermes_streaming
+
+    captured_request = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured_request["headers"] = dict(request.headers)
+        return httpx.Response(
+            200, content=_sse_chunk("ok") + _sse_done(),
+            headers={"Content-Type": "text/event-stream"})
+
+    respx.post("http://localhost:8642/v1/chat/completions").mock(
+        side_effect=_capture)
+
+    async def publish(_): pass
+
+    await call_hermes_streaming(
+        prompt="x", session_id="ctx-abc-123", publish_progress=publish)
+
+    assert captured_request["headers"].get("x-hermes-session-id") == "ctx-abc-123"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_session_id_header_omitted_when_none():
+    from adapters.hermes.hermes_client import call_hermes_streaming
+
+    captured_request = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured_request["headers"] = dict(request.headers)
+        return httpx.Response(
+            200, content=_sse_chunk("ok") + _sse_done(),
+            headers={"Content-Type": "text/event-stream"})
+
+    respx.post("http://localhost:8642/v1/chat/completions").mock(
+        side_effect=_capture)
+
+    async def publish(_): pass
+
+    await call_hermes_streaming(
+        prompt="x", session_id=None, publish_progress=publish)
+
+    assert "x-hermes-session-id" not in captured_request["headers"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_authorization_bearer_header_set():
+    from adapters.hermes.hermes_client import call_hermes_streaming
+
+    captured_request = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured_request["auth"] = request.headers.get("authorization")
+        return httpx.Response(
+            200, content=_sse_chunk("ok") + _sse_done(),
+            headers={"Content-Type": "text/event-stream"})
+
+    respx.post("http://localhost:8642/v1/chat/completions").mock(
+        side_effect=_capture)
+
+    async def publish(_): pass
+
+    await call_hermes_streaming(
+        prompt="x", session_id=None, publish_progress=publish)
+
+    assert captured_request["auth"] == "Bearer test-token"
