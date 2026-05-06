@@ -157,9 +157,22 @@ during brainstorming. The standalone `~/.openclaw/` tool is a separate
 product Phase 5 doesn't manage; the browser-launcher concept also
 contradicts ADR-0005's bounded-blast-radius design.)
 
+### Phase 6 — Hermes bridge
+
+Plan: `docs/superpowers/plans/2026-05-06-hermes-bridge.md`. Spec: `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md`.
+
+Onboards Nous Research's Hermes Agent as the first `runtime.kind: bridge` adapter. Hermes runs locally on the Mac, keeps its own memory under `~/.hermes/`, and is exposed on the NATS fabric as `hermes-1` via a thin SSE-translating adapter at `adapters/hermes/`. ADR-0009 locks the rule that bridge adapters retain upstream memory ownership (no `memory.turns.*` traffic).
+
+Items:
+- New `adapters/hermes/` (config + client + handler + tests).
+- New `scripts/launchd/com.edgecitadel.hermes-{bridge,server}.plist`.
+- New ADR-0009.
+- Doc updates: `agent-contract.md` (bridge subsection), `03-agent-registration.md` (local-adapter onboarding), `05-messaging.md` (`task.progress.payload.extra.upstream`), `agent-setup.md`, this file.
+- E2E spec: `e2e/tests/phase6-hermes-bridge.spec.js`.
+
 ### Optional / parking lot
 
-- **Bridge adapter for Hermes / ACP.** Spec rev 7 §"Bridge pattern" already covers the design. Plan when Nous Research's Hermes Agent is first onboarded.
+- **MCP server exposing edge-research tools to Hermes.** Symmetric half of the Phase 6 Hermes bridge. Lets Hermes call into edge-research (publish to NATS, query the agent roster, trigger watchdog actions). v0.3+; design hook reserved in `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md` §Non-goals.
 - **Per-agent JWT auth** (replaces shared `NATS_TOKEN`). v0.2+. Necessary for multi-tenant deployments.
 - **JetStream clustering.** Single-node broker is fine until a second persistent host joins (likely v0.3+).
 - **P2P transport (Zenoh).** v0.3+ exploration; only relevant if we want agent-to-agent communication that doesn't traverse the central broker.
