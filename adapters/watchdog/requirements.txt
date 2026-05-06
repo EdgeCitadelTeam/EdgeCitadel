@@ -1,3 +1,7 @@
-# Watchdog adapter has no deps beyond what aggregator + _common pulls in.
-# All transports (nats-py, jsonschema) come from aggregator/requirements.txt
-# via the host process; the watchdog runs as a sibling.
+# Watchdog uses the same NATS + envelope-validation stack as the other
+# adapters. The original "sibling-of-aggregator" framing assumed a shared
+# venv; Phase 5 isolates each adapter to its own venv so deps are listed
+# explicitly here.
+nats-py>=2.9.0
+pyyaml>=6.0
+jsonschema>=4.20
