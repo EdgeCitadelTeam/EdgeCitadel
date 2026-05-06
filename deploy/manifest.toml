@@ -14,7 +14,9 @@ packages_macos  = ["python@3.12"]
 
 [ollama]
 # Pinned. Bump in a focused PR; deploy-host.sh will upgrade idempotently.
-version = "0.5.7"
+# 0.23.0 (2026-05-03) — gemma3:4b requires ≥ ~0.6; older versions reject the
+# manifest with HTTP 412 "requires a newer version of Ollama".
+version = "0.23.0"
 install_url_linux = "https://ollama.com/install.sh"
 install_url_macos = "https://ollama.com/download/Ollama-darwin.zip"
 # Models pulled post-install via `ollama pull`.
