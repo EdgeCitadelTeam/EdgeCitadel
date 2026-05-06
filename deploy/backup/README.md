@@ -27,9 +27,9 @@ NATS JetStream stream + KV.
 
 Each backup dir contains:
 - `openclaw.db` — SQLite snapshot (atomic via `sqlite3 .backup`)
-- `jetstream-CONVERSATIONS/` — JetStream stream archive (from `nats stream backup`)
-- `kv-AGENT_STATE/` — JetStream KV archive
+- `jetstream-AGENT_INBOX/` — JetStream stream archive (from `nats stream backup AGENT_INBOX`)
 - `env.gpg` — encrypted secrets (skipped if no GPG key configured)
+- (Note: KV bucket backup deferred — `nats kv backup` was added in nats-cli 0.2; the AGENT_STATE bucket from pre-Phase-3 deployments is no longer used by the current aggregator code.)
 - `manifest.json` — what's in this snapshot + version metadata
 - `checksums.sha256` — sha256 of every file in the dir
 
@@ -62,12 +62,12 @@ docker compose -f /root/snap/EdgeCitadel/docker-compose.yml --profile mqtt-ingre
 # Wait for NATS to become healthy
 until curl -sf http://localhost:8222/healthz >/dev/null; do sleep 1; done
 
-# 5. Restore JetStream stream + KV
+# 5. Restore JetStream stream
+# (KV restore not applicable — see "What's NOT backed up" below; the
+# aggregator's AGENT_STATE bucket from pre-Phase-3 is no longer used.)
 source /etc/edgecitadel/env
 nats --server="nats://${NATS_TOKEN}@localhost:4222" \
-     stream restore CONVERSATIONS "${BACKUP}/jetstream-CONVERSATIONS" --force
-nats --server="nats://${NATS_TOKEN}@localhost:4222" \
-     kv restore AGENT_STATE "${BACKUP}/kv-AGENT_STATE" --force
+     stream restore AGENT_INBOX "${BACKUP}/jetstream-AGENT_INBOX"
 
 # 6. Bring everything else back
 docker compose -f /root/snap/EdgeCitadel/docker-compose.yml --profile mqtt-ingress up -d

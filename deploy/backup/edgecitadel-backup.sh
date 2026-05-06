@@ -51,9 +51,11 @@ sqlite3 "$DB_SRC" ".timeout 30000" ".backup '${DEST}/openclaw.db'"
 # 2. JetStream stream
 # nats CLI 0.1.5 doesn't accept --force on `stream backup`; rely on the
 # timestamped DEST dir being unique so the target subdir doesn't pre-exist.
-echo "[backup] backing up JetStream stream CONVERSATIONS"
+# Stream is AGENT_INBOX (per aggregator/jetstream_bootstrap.py); the legacy
+# CONVERSATIONS stream from pre-Phase-3 deployments is no longer used.
+echo "[backup] backing up JetStream stream AGENT_INBOX"
 nats --server="$NATS_URL_AUTHED" \
-     stream backup CONVERSATIONS "${DEST}/jetstream-CONVERSATIONS"
+     stream backup AGENT_INBOX "${DEST}/jetstream-AGENT_INBOX"
 
 # 3. JetStream KV (skipped on nats CLI 0.1.5 — `kv backup` was added in 0.2+).
 # The AGENT_STATE bucket is operational telemetry (last_heartbeat, cpu, memory)
@@ -82,13 +84,13 @@ cat >"${DEST}/manifest.json" <<EOF
   "ollama_model": "${OLLAMA_MODEL}",
   "components": {
     "openclaw_db": "openclaw.db",
-    "jetstream_conversations": "jetstream-CONVERSATIONS",
+    "jetstream_agent_inbox": "jetstream-AGENT_INBOX",
     "env": "env.gpg"
   }
 }
 EOF
 
-# 6. Checksums (files only — jetstream-CONVERSATIONS is a directory; recurse into it).
+# 6. Checksums (files only — jetstream-AGENT_INBOX is a directory; recurse into it).
 ( cd "${DEST}" && find . -type f -not -name checksums.sha256 -print0 \
                   | sort -z | xargs -0 sha256sum > checksums.sha256 )
 
