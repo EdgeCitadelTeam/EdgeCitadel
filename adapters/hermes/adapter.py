@@ -18,8 +18,11 @@ from pathlib import Path
 
 import httpx
 
+from adapters._common.pull_consumer import Context
 from adapters.hermes.hermes_client import (
-    HERMES_BASE_URL, HERMES_TIMEOUT_SEC, _token)
+    HERMES_BASE_URL, HERMES_TIMEOUT_SEC, HermesError,
+    call_hermes_streaming, _token,
+)
 
 log = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
@@ -48,3 +51,38 @@ async def preflight() -> None:
     if resp.status_code != 200:
         raise PreflightError(
             f"hermes_unhealthy: /v1/models status {resp.status_code}")
+
+
+async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
+    """Translate a `command` envelope into a Hermes Chat Completions call.
+    Stream SSE deltas as `task.progress` envelopes; return the joined text
+    in a `result`-shaped payload."""
+    if env.get("type") != "command":
+        return ({"error": "unsupported_type"}, "rejected")
+
+    payload = env.get("payload") or {}
+    body = (payload.get("body") or "").strip()
+    if not body:
+        return ({"error": "empty_prompt"}, "rejected")
+
+    task_id = env.get("task_id") or ""
+    context_id = env.get("context_id") or ""
+
+    async def publish_delta(delta: str) -> None:
+        if task_id:
+            await ctx.publish_progress(
+                task_id, body=delta,
+                extra={"upstream": "hermes-agent"})
+
+    try:
+        full_text = await call_hermes_streaming(
+            prompt=body,
+            session_id=context_id or None,
+            publish_progress=publish_delta,
+        )
+    except HermesError as e:
+        log.warning("hermes call failed (%s)", e)
+        return ({"error": "hermes_request_failed",
+                 "detail": str(e)}, "failed")
+
+    return ({"body": full_text, "upstream": "hermes-agent"}, "completed")
