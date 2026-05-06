@@ -66,3 +66,38 @@ async def test_handle_missing_payload_rejected(fake_ctx, cmd):
 
     assert state == "rejected"
     assert payload["error"] == "empty_prompt"
+
+
+@pytest.mark.asyncio
+async def test_handle_hermes_failure_returns_failed(fake_ctx, cmd):
+    from adapters.hermes.adapter import handle
+    from adapters.hermes.hermes_client import HermesError
+    env = cmd(body="hi")
+
+    async def fake_call(**_):
+        raise HermesError("http_500")
+
+    with patch("adapters.hermes.adapter.call_hermes_streaming",
+               side_effect=fake_call):
+        payload, state = await handle(env, fake_ctx)
+
+    assert state == "failed"
+    assert payload["error"] == "hermes_request_failed"
+    assert "http_500" in payload["detail"]
+
+
+@pytest.mark.asyncio
+async def test_handle_hermes_connect_error_returns_failed(fake_ctx, cmd):
+    from adapters.hermes.adapter import handle
+    from adapters.hermes.hermes_client import HermesError
+    env = cmd(body="hi")
+
+    async def fake_call(**_):
+        raise HermesError("ConnectError(refused)")
+
+    with patch("adapters.hermes.adapter.call_hermes_streaming",
+               side_effect=fake_call):
+        payload, state = await handle(env, fake_ctx)
+
+    assert state == "failed"
+    assert payload["error"] == "hermes_request_failed"
