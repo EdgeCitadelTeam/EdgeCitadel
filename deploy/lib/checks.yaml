@@ -53,8 +53,8 @@ categories:
         cmd: bash -c '[[ "$(nats --version 2>/dev/null | head -1 | grep -oE "[0-9]+\\.[0-9]+\\.[0-9]+")" == "$(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get nats_cli.version)" ]]'
         remediation: "sudo /opt/edgecitadel/deploy/lib/install-nats-cli.sh"
       - name: ollama-model-pulled
-        cmd: bash -c 'ollama list | grep -q "gemma3:4b"'
-        remediation: "sudo -u edgecitadel ollama pull gemma3:4b"
+        cmd: bash -c 'model=$(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.models --format lines | head -1); ollama list | awk "{print \$1}" | grep -qx "$model"'
+        remediation: "sudo -u edgecitadel ollama pull $(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.models --format lines | head -1)"
 
   - name: Adapter venvs
     checks:
@@ -121,29 +121,39 @@ categories:
 
   - name: Broker
     checks:
-      - name: jetstream-stream-CONVERSATIONS
-        cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server="nats://${NATS_TOKEN}@localhost:4222" stream info CONVERSATIONS >/dev/null 2>&1'
+      - name: jetstream-stream-AGENT_INBOX
+        cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server="nats://${NATS_TOKEN}@localhost:4222" stream info AGENT_INBOX >/dev/null 2>&1'
         remediation: "stream missing — JetStream may not have initialized; restart aggregator container"
+      # KV bucket AGENT_STATE was used by pre-Phase-3 aggregator; current
+      # aggregator (jetstream_bootstrap.py) only creates AGENT_INBOX. This
+      # check is warn-only as a signal for any future code that re-introduces
+      # the bucket.
       - name: jetstream-kv-AGENT_STATE
+        level: warn
         cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server="nats://${NATS_TOKEN}@localhost:4222" kv ls 2>/dev/null | grep -q AGENT_STATE'
-        remediation: "KV bucket missing; aggregator should re-create on startup"
+        remediation: "KV bucket not used by current aggregator code (warn-only)"
 
   - name: Agents
     checks:
+      # API field names: agent_id (not id), agent_state (not status). Schema
+      # confirmed in aggregator/main.py /api/agents response.
       - name: gemma-1-heartbeat-fresh
-        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x['id']=='gemma-1'),None); assert a and a['status']=='online', 'gemma-1 not online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<60, 'heartbeat too old'"
+        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x.get('agent_id')=='gemma-1'),None); assert a and a.get('agent_state')=='online', 'gemma-1 not online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<60, 'heartbeat too old'"
         remediation: "sudo journalctl -u edgecitadel-gemma --since '2 min ago'"
       - name: watchdog-1-heartbeat-fresh
-        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x['id']=='watchdog-1'),None); assert a and a['status']=='online', 'watchdog-1 not online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<60"
+        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x.get('agent_id')=='watchdog-1'),None); assert a and a.get('agent_state')=='online', 'watchdog-1 not online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<60"
         remediation: "sudo journalctl -u edgecitadel-watchdog --since '2 min ago'"
       - name: us-openclaw-heartbeat-fresh
         level: warn   # not our agent, just observe
-        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x['id']=='us-openclaw'),None); assert a and a['status']=='online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<300"
+        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x.get('agent_id')=='us-openclaw'),None); assert a is not None, 'us-openclaw not registered (cutover may have lost it)'; assert a.get('agent_state')=='online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<300"
         remediation: "openclaw tool may need to reconnect; we don't manage its lifecycle"
 
   - name: Backups
     checks:
+      # warn-only on first install: cron runs at 06:25 UTC, so the daily
+      # backup may not exist yet. Hard-fail after the first successful run.
       - name: latest-daily-fresh
+        level: warn
         cmd: bash -c 'latest=$(ls -1t /var/lib/edgecitadel/backups/daily/ 2>/dev/null | head -1); [[ -n "$latest" ]] && age=$(( $(date +%s) - $(stat -c %Y "/var/lib/edgecitadel/backups/daily/$latest") )); [[ -n "$latest" && $age -lt $(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get verification.backup_max_age_sec) ]]'
         remediation: "no recent daily backup; check /etc/cron.daily/edgecitadel-backup and journalctl -t edgecitadel-backup"
       - name: backup-cron-installed

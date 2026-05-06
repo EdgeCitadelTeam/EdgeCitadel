@@ -14,7 +14,6 @@ import json
 import sys
 import time
 import urllib.request
-import uuid
 
 
 def main() -> int:
@@ -24,14 +23,11 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=30)
     args = ap.parse_args()
 
-    task_id = str(uuid.uuid4())
     cmd_url = f"{args.base_url}/api/command/{args.agent}?sender_id=deploy-smoke"
-    msgs_url = f"{args.base_url}/api/messages?task_id={task_id}"
 
-    body = {
-        "task_id": task_id,
-        "payload": {"skill_id": "reasoning.chat", "body": "ping"}
-    }
+    # CommandRequest schema (aggregator/models.py): {body, args?, skill_id?, context_id?}
+    # Server generates task_id and returns it in CommandResponse.
+    body = {"skill_id": "reasoning.chat", "body": "ping"}
     req = urllib.request.Request(
         cmd_url,
         data=json.dumps(body).encode(),
@@ -41,11 +37,17 @@ def main() -> int:
 
     t0 = time.time()
     try:
-        urllib.request.urlopen(req, timeout=5).read()
+        with urllib.request.urlopen(req, timeout=5) as r:
+            resp = json.loads(r.read())
     except Exception as e:
         print(f"  round-trip ✗ POST failed: {e}", file=sys.stderr)
         return 1
+    task_id = resp.get("task_id")
+    if not task_id:
+        print(f"  round-trip ✗ no task_id in response: {resp}", file=sys.stderr)
+        return 1
 
+    msgs_url = f"{args.base_url}/api/messages?task_id={task_id}"
     deadline = t0 + args.timeout
     while time.time() < deadline:
         try:
