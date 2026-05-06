@@ -87,10 +87,22 @@ Concretely:
 - Bad, because Ollama in a container loses simple host CPU/GPU passthrough on Linux (CDI works but is more setup).
 - Bad, because diverges the macOS variant (where host-Ollama is the well-trodden path).
 
+## Amendment to ADR-0004 (MQTT opt-in)
+
+ADR-0004 stipulated that the MQTT listener on `:1883` is off by default and only enabled via `docker compose --profile mqtt-ingress up`. Phase 5 implementation (commit `4b4031c`) discovered that the original profile-based pattern was structurally broken — both the default `nats` service and the optional `nats-mqtt` service declared `4222:4222`, so `--profile mqtt-ingress` activated both and the second container failed with "port already allocated."
+
+Phase 5 consolidates them into a single `nats` service that always exposes `1883:1883` on the host. The MQTT *listener inside the broker* is still controlled by `nats.conf` (the `mqtt {}` block, which `scripts/render-nats-conf.sh` toggles via `EC_ENABLE_MQTT`). When MQTT is disabled at the broker level, the host port is bound by docker-proxy but accepts no MQTT traffic.
+
+This is a deliberate amendment to ADR-0004:
+
+- **Production posture**: MQTT is required for IoT-shaped clients (e.g., the operator's standalone OpenClaw tool publishing as `us-openclaw`). Production deploy needs MQTT on; the always-bind matches that intent.
+- **Test/dev posture unchanged**: developers running `docker compose up` get the same default-listening behavior; the `EC_ENABLE_MQTT=0` toggle still suppresses the in-broker listener so traffic is rejected at the application layer.
+- **Trade-off acknowledged**: a tailnet scanner sees `:1883` as a TCP-open port even when no MQTT is being served. Documented in `docs/02-server-setup-linux.md` § Known trade-offs. Operators wanting to suppress the bind can revert to a profile-based or two-compose-file pattern; the current implementation prioritizes reachability simplicity.
+
 ## Links
 
 - Phase 5 spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`
-- ADR-0004 (MQTT opt-in — deploy enables `--profile mqtt-ingress` for production)
+- ADR-0004 (MQTT opt-in — amended above; deploy now consolidates `nats`/`nats-mqtt` into one always-listening service to fix a port-collision bug)
 - ADR-0005 (browser-scoped token — informs why we don't add an "openclaw browser launcher")
 - systemd hardening reference: `man systemd.exec`
 - Tailscale ACL pattern: `https://tailscale.com/kb/1068/acl-tags`

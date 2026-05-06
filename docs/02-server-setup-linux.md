@@ -72,7 +72,7 @@ sudo systemctl restart edgecitadel-gemma
 
 # Drain + restart the docker stack (preserves data, ~30s downtime)
 cd /root/snap/EdgeCitadel
-docker compose --profile mqtt-ingress restart
+docker compose restart
 
 # List backups
 ls /var/lib/edgecitadel/backups/{daily,weekly}/

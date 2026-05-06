@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the 41 checks defined in checks.yaml and produce a table + exit code.
+"""Run the checks defined in checks.yaml and produce a table + exit code.
 
 Usage:
   run-checks.py [--quiet] [--report-via-nats]

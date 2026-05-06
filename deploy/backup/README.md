@@ -46,7 +46,7 @@ If you need to roll back to a backup:
 ls -1 /var/lib/edgecitadel/backups/{daily,weekly,cutover}/
 
 # 1. Stop everything that writes to the data stores
-docker compose -f /root/snap/EdgeCitadel/docker-compose.yml --profile mqtt-ingress down
+docker compose -f /root/snap/EdgeCitadel/docker-compose.yml down
 sudo systemctl stop edgecitadel-{ollama,gemma,watchdog}
 
 # 2. Pick the backup
@@ -57,7 +57,7 @@ sudo cp "${BACKUP}/openclaw.db" /root/snap/EdgeCitadel/data/openclaw.db
 sudo chown root:root /root/snap/EdgeCitadel/data/openclaw.db
 
 # 4. Bring NATS back up (broker only — stream restore needs a running broker)
-docker compose -f /root/snap/EdgeCitadel/docker-compose.yml --profile mqtt-ingress up -d nats
+docker compose -f /root/snap/EdgeCitadel/docker-compose.yml up -d nats
 
 # Wait for NATS to become healthy
 until curl -sf http://localhost:8222/healthz >/dev/null; do sleep 1; done
@@ -70,7 +70,7 @@ nats --server="nats://${NATS_TOKEN}@localhost:4222" \
      stream restore AGENT_INBOX "${BACKUP}/jetstream-AGENT_INBOX"
 
 # 6. Bring everything else back
-docker compose -f /root/snap/EdgeCitadel/docker-compose.yml --profile mqtt-ingress up -d
+docker compose -f /root/snap/EdgeCitadel/docker-compose.yml up -d
 sudo systemctl start edgecitadel-{ollama,gemma,watchdog}
 
 # 7. Verify

@@ -96,7 +96,7 @@ categories:
     checks:
       - name: nats-container-up
         cmd: bash -c 'docker ps --format "{{.Names}}\t{{.Status}}" | grep -q "nats.*Up.*healthy"'
-        remediation: "cd /root/snap/EdgeCitadel && docker compose --profile mqtt-ingress up -d"
+        remediation: "cd /root/snap/EdgeCitadel && docker compose up -d"
       - name: aggregator-container-up
         cmd: bash -c 'docker ps --format "{{.Names}}\t{{.Status}}" | grep -q "aggregator.*Up"'
         remediation: "cd /root/snap/EdgeCitadel && docker compose up -d"
@@ -105,7 +105,7 @@ categories:
         remediation: "cd /root/snap/EdgeCitadel && docker compose up -d"
       - name: mqtt-profile-active
         cmd: bash -c 'ss -tnl | grep -q ":1883"'
-        remediation: "cd /root/snap/EdgeCitadel && docker compose --profile mqtt-ingress up -d"
+        remediation: "cd /root/snap/EdgeCitadel && docker compose up -d"
 
   - name: HTTP endpoints
     checks:

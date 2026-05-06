@@ -15,6 +15,13 @@ phase_1_install_deps() {
   # Create dirs
   run mkdir -p /var/lib/edgecitadel/{ollama,venvs,backups/{daily,weekly,cutover}}
   run mkdir -p /var/log/edgecitadel /etc/edgecitadel
+  # /home/edgecitadel must exist on disk even though we used --no-create-home
+  # above. The ollama daemon (under ProtectHome=true) redirects HOME to
+  # /var/lib/edgecitadel via systemd Environment=, but other ad-hoc operator
+  # invocations of ollama as edgecitadel (e.g. `sudo -u edgecitadel ollama
+  # pull` from Phase 5) read the real /etc/passwd HOME, which would be
+  # missing without this mkdir.
+  run install -d -m 0750 -o edgecitadel -g edgecitadel /home/edgecitadel
   run chown -R edgecitadel:edgecitadel /var/lib/edgecitadel /var/log/edgecitadel
   run chmod 0750 /var/lib/edgecitadel/backups
   run chgrp edgecitadel /var/lib/edgecitadel/backups

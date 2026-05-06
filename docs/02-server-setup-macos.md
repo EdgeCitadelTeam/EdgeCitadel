@@ -69,7 +69,7 @@ sudo launchctl kickstart -k system/io.edgecitadel.gemma
 
 # Drain + restart the docker stack
 cd /root/snap/EdgeCitadel
-docker compose --profile mqtt-ingress restart
+docker compose restart
 ```
 
 ## 6. Tailnet ACL setup
