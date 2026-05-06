@@ -22,12 +22,25 @@ Conversational continuity per `context_id`. Adapter fetches prior turns from the
 
 Ollama `stream: true`. Adapter publishes `task.progress` envelopes on hybrid 8-tokens-or-100ms cadence. Final `result` envelope still emits with full text. Frontend renders streaming text as a synthetic bubble; replaced by the canonical bubble at completion.
 
+## Model selection
+
+`OLLAMA_MODEL` selects the variant; default is `gemma4:e2b` (smallest "efficient" build, ~2B params). Pull a tag once with `ollama pull <tag>`, then export `OLLAMA_MODEL=<tag>`.
+
+| Tag | Params | Notes |
+|---|---|---|
+| `gemma4:e2b` (default) | ~2B | Lowest VRAM; runs on a Mac Mini comfortably alongside the dev stack. |
+| `gemma4:e4b` | ~4B | Stronger reasoning; ~2× memory of `e2b`. |
+| `gemma4:26b` | 26B | Mac Mini-class with sufficient unified memory; closer-to-frontier quality. |
+| `gemma4:31b` | 31B | Workstation/datacenter-class; not recommended on a Mac Mini. |
+
+Switching is a runtime swap — restart the adapter after changing `OLLAMA_MODEL`. Skill definitions in `config.yaml` are model-agnostic.
+
 ## Running (dev)
 
 ```bash
 docker compose up --build -d
 NATS_URL=nats://localhost:4222 NATS_TOKEN=$NATS_TOKEN \
-  OLLAMA_HOST=localhost OLLAMA_PORT=11434 OLLAMA_MODEL=gemma3:4b \
+  OLLAMA_HOST=localhost OLLAMA_PORT=11434 OLLAMA_MODEL=gemma4:e2b \
   python -m adapters.gemma.adapter
 ```
 

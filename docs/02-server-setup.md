@@ -33,7 +33,7 @@ The dashboard is available at `http://localhost`.
 | `NATS_TOKEN` | Auth token the aggregator and host adapters present to NATS | `change-me` |
 | `OPENCLAW_TOKEN` | Account-scoped token for the openclaw browser client (per ADR-0005) | `change-me-scoped` |
 | `EC_ENABLE_MQTT` | `1` to expose MQTT ingress on port 1883 (ADR-0004); off by default | `0` |
-| `OLLAMA_HOST` / `OLLAMA_PORT` / `OLLAMA_MODEL` / `OLLAMA_TIMEOUT_SEC` | Gemma adapter Ollama config; see `adapters/gemma/README.md` | localhost / 11434 / `gemma3:4b` / 120 |
+| `OLLAMA_HOST` / `OLLAMA_PORT` / `OLLAMA_MODEL` / `OLLAMA_TIMEOUT_SEC` | Gemma adapter Ollama config; see `adapters/gemma/README.md` for the variant table (`gemma4:e2b` / `e4b` / `26b` / `31b`) | localhost / 11434 / `gemma4:e2b` / 120 |
 
 ### Aggregator (set in docker-compose.yml)
 
