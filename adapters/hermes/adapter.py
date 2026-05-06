@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 
 from adapters._common.pull_consumer import Context
+from adapters._common.template import main as run_adapter
 from adapters.hermes.hermes_client import (
     HERMES_BASE_URL, HERMES_TIMEOUT_SEC, HermesError,
     call_hermes_streaming, _token,
@@ -86,3 +87,17 @@ async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
                  "detail": str(e)}, "failed")
 
     return ({"body": full_text, "upstream": "hermes-agent"}, "completed")
+
+
+async def _run() -> None:
+    await preflight()
+    await run_adapter(CONFIG_PATH)
+
+
+def _entrypoint() -> None:
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+    asyncio.run(_run())
+
+
+if __name__ == "__main__":
+    _entrypoint()
