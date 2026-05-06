@@ -8,7 +8,12 @@ phase_5_start() {
   if [[ "${DRY_RUN:-0}" != "1" ]]; then
     local i=0
     until curl -sf http://localhost:11434/api/version >/dev/null 2>&1; do
-      ((i++)); ((i > 30)) && { log_err "ollama HTTP did not come up"; exit 1; }
+      # Use pre-increment + arithmetic-true-only return; ((i++)) returns the
+      # OLD value (0 on first iter) which is falsy and set -e aborts the script.
+      i=$((i + 1))
+      if (( i > 30 )); then
+        log_err "ollama HTTP did not come up"; exit 1
+      fi
       sleep 1
     done
     log_info "ollama HTTP ready after ${i}s"

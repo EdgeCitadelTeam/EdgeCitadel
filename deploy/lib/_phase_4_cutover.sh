@@ -29,12 +29,15 @@ phase_4_cutover() {
   log_info "starting docker stack (rebuild)"
   ( cd "$SOURCE_DIR" && run docker compose up -d --build )
 
-  # Wait for healthchecks
+  # Wait for healthchecks. Uses i=$((i+1)) instead of ((i++)) — the latter
+  # returns the OLD value of i (0 on first iter) which is falsy and aborts
+  # under set -e.
   log_info "waiting for nats:8222/healthz to become healthy (max 60s)"
   if [[ "${DRY_RUN:-0}" != "1" ]]; then
     local i=0
     until curl -sf http://localhost:8222/healthz >/dev/null 2>&1; do
-      ((i++)); ((i > 60)) && { log_err "nats healthcheck timed out"; exit 1; }
+      i=$((i + 1))
+      if (( i > 60 )); then log_err "nats healthcheck timed out"; exit 1; fi
       sleep 1
     done
     log_info "nats healthy after ${i}s"
@@ -44,7 +47,8 @@ phase_4_cutover() {
   if [[ "${DRY_RUN:-0}" != "1" ]]; then
     local i=0
     until curl -sf http://localhost/api/system/status >/dev/null 2>&1; do
-      ((i++)); ((i > 60)) && { log_err "aggregator healthcheck timed out"; exit 1; }
+      i=$((i + 1))
+      if (( i > 60 )); then log_err "aggregator healthcheck timed out"; exit 1; fi
       sleep 1
     done
     log_info "aggregator healthy after ${i}s"
