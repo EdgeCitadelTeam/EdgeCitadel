@@ -16,7 +16,7 @@ EnvironmentFile=/etc/edgecitadel/env
 Environment="NATS_URL=nats://localhost:4222"
 Environment="OLLAMA_HOST=localhost"
 Environment="OLLAMA_PORT=11434"
-Environment="OLLAMA_MODEL=gemma3:4b"
+Environment="OLLAMA_MODEL=gemma4:e2b"
 Environment="OLLAMA_TIMEOUT_SEC=120"
 Environment="PYTHONUNBUFFERED=1"
 

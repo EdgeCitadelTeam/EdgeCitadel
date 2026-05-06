@@ -20,7 +20,10 @@ version = "0.23.0"
 install_url_linux = "https://ollama.com/install.sh"
 install_url_macos = "https://ollama.com/download/Ollama-darwin.zip"
 # Models pulled post-install via `ollama pull`.
-models = ["gemma3:4b"]
+# gemma4:e2b — effective 2.3B params, 7.2GB on disk, ~10-12GB RAM at inference.
+# Safe fit on 16GB hosts (this Beelink has docker stack using ~2GB + OS ~2GB).
+# For more capable hardware: bump to gemma4:e4b (4B effective, ~13-15GB RAM).
+models = ["gemma4:e2b"]
 
 [nats_cli]
 # For preflight `nats consumer add` smoke and operator inspection.
