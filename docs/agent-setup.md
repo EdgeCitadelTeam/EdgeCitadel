@@ -34,8 +34,9 @@ Quick path (Mac):
 ```bash
 # Install Hermes Agent
 curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
-hermes setup
-hermes serve --port 8642 &
+hermes setup            # pick a model provider
+hermes gateway setup    # enable the API Server platform (port 8642)
+hermes gateway run &    # foreground gateway exposing OpenAI-compat HTTP on :8642
 
 # On the aggregator host:
 ./add-agent.sh hermes-1   # prints broker IP and NATS_TOKEN

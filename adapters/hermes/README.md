@@ -6,15 +6,18 @@ This is a **bridge** adapter — Hermes Agent itself owns reasoning, tool-callin
 
 ## Three-step onboarding (Mac)
 
-### Step 1 — Install Hermes Agent
+### Step 1 — Install Hermes Agent and enable the API Server platform
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
-hermes setup                  # interactive: pick provider, write SOUL.md, configure tools
-hermes serve --port 8642 &    # OpenAI-compat server with bearer auth
+hermes setup                  # interactive: pick model provider, configure SOUL.md
+hermes gateway setup          # interactive: enable the "API Server" platform (port 8642)
+hermes gateway run &          # foreground gateway with API Server active
 ```
 
-The startup logs print the bearer token; copy it for `HERMES_TOKEN` in step 3.
+The API Server platform exposes Hermes over OpenAI-compatible HTTP at `http://localhost:8642/v1` (`POST /v1/chat/completions`, `GET /v1/models`, `POST /v1/runs`, SSE streaming, `X-Hermes-Session-Id` for session continuity). It uses Bearer auth — the token is configured via `hermes config set` or shown by `hermes gateway run`. Copy it for `HERMES_TOKEN` in step 3.
+
+For production / auto-start at login, use `hermes gateway install` to register a launchd service instead of `hermes gateway run &`.
 
 ### Step 2 — Get NATS broker host + token
 
@@ -95,18 +98,18 @@ Hermes' memory store lives under `~/.hermes/`. Operators are responsible for bac
 ## Logs and observability
 
 - Adapter lifecycle / errors: `agents.hermes-1.log` envelopes (visible in the dashboard's LogViewer panel).
-- Hermes server logs: wherever `hermes serve` writes them (default: stdout; redirected by the launchd plist to `/var/log/edgecitadel/hermes-server.log`).
+- Hermes server logs: wherever `hermes gateway run` writes them (default: stdout; redirected by the launchd plist to `/var/log/edgecitadel/hermes-server.log`).
 - Bridge adapter stdout/stderr: under launchd, `/var/log/edgecitadel/hermes-bridge.{log,err}`.
 
 ## Common errors
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `PreflightError: hermes_unreachable` at startup | `hermes serve` not running | `hermes serve --port 8642 &` |
-| `PreflightError: hermes_auth_failed` at startup | Wrong `HERMES_TOKEN` | Re-copy from `hermes serve` startup logs |
+| `PreflightError: hermes_unreachable` at startup | `hermes gateway run` not running | `hermes serve --port 8642 &` |
+| `PreflightError: hermes_auth_failed` at startup | Wrong `HERMES_TOKEN` | Re-copy from `hermes gateway run` startup logs |
 | Adapter starts but `hermes-1` doesn't appear on dashboard | Wrong `NATS_URL` or `NATS_TOKEN` | `./add-agent.sh hermes-1` on the aggregator host, copy the printed values |
-| Commands return `task_state: failed, error: hermes_request_failed` | Hermes died mid-session, or Hermes' upstream provider is down | Restart `hermes serve`; check Hermes' own provider config |
-| Streamed bubble never finalizes in the dashboard | Hermes stream stalled | Check `hermes serve` logs; bridge will time out after `HERMES_TIMEOUT_SEC` |
+| Commands return `task_state: failed, error: hermes_request_failed` | Hermes died mid-session, or Hermes' upstream provider is down | Restart `hermes gateway run`; check Hermes' own provider config |
+| Streamed bubble never finalizes in the dashboard | Hermes stream stalled | Check `hermes gateway run` logs; bridge will time out after `HERMES_TIMEOUT_SEC` |
 
 ## Customizing the personality
 
