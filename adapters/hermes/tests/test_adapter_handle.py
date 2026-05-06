@@ -101,3 +101,27 @@ async def test_handle_hermes_connect_error_returns_failed(fake_ctx, cmd):
 
     assert state == "failed"
     assert payload["error"] == "hermes_request_failed"
+
+
+@pytest.mark.asyncio
+async def test_handle_does_not_publish_to_memory_turns(fake_ctx, cmd):
+    """Regression guard for ADR-0009: bridge adapters MUST NOT call
+    memory.turns.{get,put,delete}."""
+    from adapters.hermes.adapter import handle
+    env = cmd(body="remember teal", context_id="ctx-test")
+
+    async def fake_call(*, prompt, session_id, publish_progress):
+        await publish_progress("ok")
+        return "ok"
+
+    with patch("adapters.hermes.adapter.call_hermes_streaming",
+               side_effect=fake_call):
+        await handle(env, fake_ctx)
+
+    # nc.publish must never be called with a memory.turns.* subject
+    publish_calls = fake_ctx.nc.publish.await_args_list
+    request_calls = getattr(fake_ctx.nc, "request", AsyncMock()).await_args_list
+    for call in list(publish_calls) + list(request_calls):
+        subject = call.args[0] if call.args else call.kwargs.get("subject", "")
+        assert not subject.startswith("memory.turns."), (
+            f"Bridge adapter must not touch memory.turns.* (got {subject})")
