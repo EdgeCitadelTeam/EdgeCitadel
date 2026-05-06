@@ -118,10 +118,8 @@ async def test_handle_does_not_publish_to_memory_turns(fake_ctx, cmd):
                side_effect=fake_call):
         await handle(env, fake_ctx)
 
-    # nc.publish must never be called with a memory.turns.* subject
-    publish_calls = fake_ctx.nc.publish.await_args_list
-    request_calls = getattr(fake_ctx.nc, "request", AsyncMock()).await_args_list
-    for call in list(publish_calls) + list(request_calls):
+    for call in (list(fake_ctx.nc.publish.await_args_list)
+                 + list(fake_ctx.nc.request.await_args_list)):
         subject = call.args[0] if call.args else call.kwargs.get("subject", "")
         assert not subject.startswith("memory.turns."), (
             f"Bridge adapter must not touch memory.turns.* (got {subject})")
@@ -147,6 +145,28 @@ async def test_handle_publishes_progress_with_upstream_tag(fake_ctx, cmd):
         assert call["extra"]["upstream"] == "hermes-agent"
     assert fake_ctx.progress_calls[0]["body"] == "first-"
     assert fake_ctx.progress_calls[1]["body"] == "second"
+
+
+@pytest.mark.asyncio
+async def test_run_wires_handle_into_template():
+    """Without this wiring, PullConsumer would invoke template.py's stub
+    handler instead of the Hermes adapter's. Regression guard for a real
+    bug found in code review on 2026-05-06."""
+    from adapters._common import template
+    from adapters.hermes import adapter
+
+    # Save and restore template.handle so this test doesn't pollute others
+    original = template.handle
+    try:
+        # Stub out preflight + run_adapter to isolate the wiring step
+        with patch("adapters.hermes.adapter.preflight",
+                   new=AsyncMock(return_value=None)), \
+             patch("adapters.hermes.adapter.run_adapter",
+                   new=AsyncMock(return_value=None)):
+            await adapter._run()
+        assert template.handle is adapter.handle
+    finally:
+        template.handle = original
 
 
 @pytest.mark.asyncio

@@ -35,6 +35,12 @@ class FakeContext:
         self.agent_id = agent_id
         self.nc = MagicMock()
         self.nc.publish = AsyncMock()
+        # Make request a proper AsyncMock returning a Msg-shaped reply,
+        # so any handler that uses request-reply against memory.turns.* gets
+        # tracked by the regression guard.
+        reply_msg = MagicMock()
+        reply_msg.data = b"{}"
+        self.nc.request = AsyncMock(return_value=reply_msg)
         self.js = MagicMock()
         self.msg = MagicMock()
         self.msg.in_progress = AsyncMock()

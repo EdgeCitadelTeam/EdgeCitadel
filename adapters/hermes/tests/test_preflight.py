@@ -45,6 +45,16 @@ async def test_preflight_fails_on_401():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_preflight_fails_on_403():
+    from adapters.hermes.adapter import preflight, PreflightError
+    respx.get("http://localhost:8642/v1/models").mock(
+        return_value=httpx.Response(403, json={"error": "forbidden"}))
+    with pytest.raises(PreflightError, match="hermes_auth_failed"):
+        await preflight()
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_preflight_fails_on_500():
     from adapters.hermes.adapter import preflight, PreflightError
     respx.get("http://localhost:8642/v1/models").mock(

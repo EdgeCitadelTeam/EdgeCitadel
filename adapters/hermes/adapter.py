@@ -21,8 +21,7 @@ import httpx
 from adapters._common.pull_consumer import Context
 from adapters._common.template import main as run_adapter
 from adapters.hermes.hermes_client import (
-    HERMES_BASE_URL, HERMES_TIMEOUT_SEC, HermesError,
-    call_hermes_streaming, _token,
+    HERMES_BASE_URL, HermesError, call_hermes_streaming,
 )
 
 log = logging.getLogger(__name__)
@@ -37,18 +36,19 @@ async def preflight() -> None:
     """Check Hermes Agent is reachable on HERMES_BASE_URL with a valid token.
     Calls GET /v1/models — same OpenAI-compat surface, cheap, returns the
     configured model list. Raises PreflightError with a tagged reason."""
-    headers = {"Authorization": f"Bearer {_token()}"}
+    headers = {"Authorization": f"Bearer {os.environ['HERMES_TOKEN']}"}
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(f"{HERMES_BASE_URL}/v1/models",
-                                    headers=headers, timeout=5)
+                                    headers=headers)
     except httpx.ConnectError as e:
         raise PreflightError(f"hermes_unreachable: {e}") from e
     except (httpx.ReadTimeout, httpx.WriteTimeout):
         raise PreflightError("hermes_unreachable: timeout reading /v1/models")
 
-    if resp.status_code == 401:
-        raise PreflightError("hermes_auth_failed: bearer token rejected")
+    if resp.status_code in (401, 403):
+        raise PreflightError(
+            f"hermes_auth_failed: bearer token rejected (status {resp.status_code})")
     if resp.status_code != 200:
         raise PreflightError(
             f"hermes_unhealthy: /v1/models status {resp.status_code}")
@@ -91,6 +91,8 @@ async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
 
 async def _run() -> None:
     await preflight()
+    from adapters._common import template
+    template.handle = handle
     await run_adapter(CONFIG_PATH)
 
 
