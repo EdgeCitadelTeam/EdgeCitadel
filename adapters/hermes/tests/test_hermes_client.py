@@ -170,3 +170,63 @@ async def test_malformed_data_line_skipped():
         prompt="x", session_id=None, publish_progress=publish)
 
     assert full == "good"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_400_raises_hermes_error():
+    from adapters.hermes.hermes_client import (
+        call_hermes_streaming, HermesError)
+    respx.post("http://localhost:8642/v1/chat/completions").mock(
+        return_value=httpx.Response(400, json={"error": "bad request"}))
+
+    async def publish(_): pass
+
+    with pytest.raises(HermesError, match="http_400"):
+        await call_hermes_streaming(
+            prompt="x", session_id=None, publish_progress=publish)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_401_raises_hermes_error():
+    from adapters.hermes.hermes_client import (
+        call_hermes_streaming, HermesError)
+    respx.post("http://localhost:8642/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"error": "unauthorized"}))
+
+    async def publish(_): pass
+
+    with pytest.raises(HermesError, match="http_401"):
+        await call_hermes_streaming(
+            prompt="x", session_id=None, publish_progress=publish)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_500_raises_hermes_error():
+    from adapters.hermes.hermes_client import (
+        call_hermes_streaming, HermesError)
+    respx.post("http://localhost:8642/v1/chat/completions").mock(
+        return_value=httpx.Response(500))
+
+    async def publish(_): pass
+
+    with pytest.raises(HermesError, match="http_500"):
+        await call_hermes_streaming(
+            prompt="x", session_id=None, publish_progress=publish)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_connect_error_raises_hermes_error():
+    from adapters.hermes.hermes_client import (
+        call_hermes_streaming, HermesError)
+    respx.post("http://localhost:8642/v1/chat/completions").mock(
+        side_effect=httpx.ConnectError("connection refused"))
+
+    async def publish(_): pass
+
+    with pytest.raises(HermesError):
+        await call_hermes_streaming(
+            prompt="x", session_id=None, publish_progress=publish)
