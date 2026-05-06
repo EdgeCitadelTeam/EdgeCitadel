@@ -125,3 +125,44 @@ async def test_handle_does_not_publish_to_memory_turns(fake_ctx, cmd):
         subject = call.args[0] if call.args else call.kwargs.get("subject", "")
         assert not subject.startswith("memory.turns."), (
             f"Bridge adapter must not touch memory.turns.* (got {subject})")
+
+
+@pytest.mark.asyncio
+async def test_handle_publishes_progress_with_upstream_tag(fake_ctx, cmd):
+    from adapters.hermes.adapter import handle
+    env = cmd(body="long prompt", task_id="t-1")
+
+    async def fake_call(*, prompt, session_id, publish_progress):
+        await publish_progress("first-")
+        await publish_progress("second")
+        return "first-second"
+
+    with patch("adapters.hermes.adapter.call_hermes_streaming",
+               side_effect=fake_call):
+        await handle(env, fake_ctx)
+
+    assert len(fake_ctx.progress_calls) == 2
+    for call in fake_ctx.progress_calls:
+        assert call["task_id"] == "t-1"
+        assert call["extra"]["upstream"] == "hermes-agent"
+    assert fake_ctx.progress_calls[0]["body"] == "first-"
+    assert fake_ctx.progress_calls[1]["body"] == "second"
+
+
+@pytest.mark.asyncio
+async def test_handle_skips_progress_publish_when_no_task_id(fake_ctx, cmd):
+    """If the inbound command has no task_id, suppress task.progress
+    publishes (the dashboard would have no key to bind them to)."""
+    from adapters.hermes.adapter import handle
+    env = cmd(body="hi")
+    env["task_id"] = ""
+
+    async def fake_call(*, prompt, session_id, publish_progress):
+        await publish_progress("delta")
+        return "delta"
+
+    with patch("adapters.hermes.adapter.call_hermes_streaming",
+               side_effect=fake_call):
+        await handle(env, fake_ctx)
+
+    assert fake_ctx.progress_calls == []
