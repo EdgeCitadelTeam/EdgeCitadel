@@ -31,3 +31,38 @@ async def test_handle_command_returns_completed(fake_ctx, cmd):
     assert state == "completed"
     assert payload["body"] == "delta-rest"
     assert payload["upstream"] == "hermes-agent"
+
+
+@pytest.mark.asyncio
+async def test_handle_empty_body_rejected(fake_ctx, cmd):
+    from adapters.hermes.adapter import handle
+    env = cmd(body="   ")  # whitespace only
+
+    payload, state = await handle(env, fake_ctx)
+
+    assert state == "rejected"
+    assert payload["error"] == "empty_prompt"
+
+
+@pytest.mark.asyncio
+async def test_handle_non_command_rejected(fake_ctx, cmd):
+    from adapters.hermes.adapter import handle
+    env = cmd(body="hi")
+    env["type"] = "heartbeat"
+
+    payload, state = await handle(env, fake_ctx)
+
+    assert state == "rejected"
+    assert payload["error"] == "unsupported_type"
+
+
+@pytest.mark.asyncio
+async def test_handle_missing_payload_rejected(fake_ctx, cmd):
+    from adapters.hermes.adapter import handle
+    env = cmd(body="hi")
+    env.pop("payload")
+
+    payload, state = await handle(env, fake_ctx)
+
+    assert state == "rejected"
+    assert payload["error"] == "empty_prompt"
