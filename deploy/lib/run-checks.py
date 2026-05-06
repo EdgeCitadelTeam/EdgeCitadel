@@ -44,16 +44,18 @@ def run_check(check: dict, category: str) -> CheckResult:
     cmd = check["cmd"]
     level = check.get("level", "error")
     remediation = check.get("remediation", "")
+    # Per-check timeout override (default 30s); round-trip smoke needs more.
+    timeout = check.get("timeout_sec", 30)
 
     t0 = time.monotonic()
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=30
+            cmd, shell=True, capture_output=True, text=True, timeout=timeout
         )
     except subprocess.TimeoutExpired:
         elapsed = int((time.monotonic() - t0) * 1000)
         return CheckResult(name, category, "fail", elapsed,
-                           reason="timed out (30s)", remediation=remediation)
+                           reason=f"timed out ({timeout}s)", remediation=remediation)
     elapsed = int((time.monotonic() - t0) * 1000)
 
     if result.returncode == 0:
