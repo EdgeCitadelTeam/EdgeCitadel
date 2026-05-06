@@ -1,6 +1,5 @@
 """Shared fixtures for Hermes adapter tests."""
 from __future__ import annotations
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -60,12 +59,3 @@ def fake_ctx():
 @pytest.fixture
 def cmd():
     return make_command
-
-
-@pytest.fixture(autouse=True)
-def _hermes_env(monkeypatch):
-    """Default env so importing hermes_client doesn't blow up."""
-    monkeypatch.setenv("HERMES_BASE_URL", "http://localhost:8642")
-    monkeypatch.setenv("HERMES_TOKEN", "test-token")
-    monkeypatch.setenv("HERMES_MODEL", "hermes-test")
-    monkeypatch.setenv("HERMES_TIMEOUT_SEC", "10")

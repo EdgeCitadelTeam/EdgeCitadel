@@ -7,6 +7,14 @@ import pytest
 import respx
 
 
+@pytest.fixture(autouse=True)
+def _hermes_env(monkeypatch):
+    monkeypatch.setenv("HERMES_BASE_URL", "http://localhost:8642")
+    monkeypatch.setenv("HERMES_TOKEN", "test-token")
+    monkeypatch.setenv("HERMES_MODEL", "hermes-test")
+    monkeypatch.setenv("HERMES_TIMEOUT_SEC", "10")
+
+
 # Helper: format an SSE chunk in the OpenAI Chat Completions delta shape
 def _sse_chunk(content: str) -> bytes:
     obj = {"choices": [{"delta": {"content": content}}]}
@@ -67,6 +75,37 @@ async def test_streaming_flushes_on_token_threshold():
     assert len(flushes) == 1
     assert flushes[0] == "t0t1t2t3t4t5t6t7"
     assert full == "t0t1t2t3t4t5t6t7"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_streaming_keepalive_does_not_reset_flush_timer():
+    """Non-content chunks (no delta.content) must not reset the time-flush
+    cadence — the next real content delta should still trigger a time-based
+    flush if enough wall time has elapsed."""
+    from adapters.hermes.hermes_client import call_hermes_streaming
+
+    # 1 keepalive (no content), then 1 real token. We can't easily assert
+    # the exact wall-clock behavior, but we *can* assert that processing
+    # a non-content chunk does not consume the buffer or call publish.
+    keepalive = b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+    body = keepalive + _sse_chunk("hello") + _sse_done()
+    respx.post("http://localhost:8642/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200, content=body,
+            headers={"Content-Type": "text/event-stream"}))
+
+    flushes: list[str] = []
+
+    async def publish(delta: str) -> None:
+        flushes.append(delta)
+
+    full = await call_hermes_streaming(
+        prompt="x", session_id=None, publish_progress=publish)
+
+    # Only the "hello" gets flushed (in the final drain); keepalive contributes nothing
+    assert full == "hello"
+    assert flushes == ["hello"]
 
 
 @pytest.mark.asyncio

@@ -9,11 +9,14 @@ Memory ownership stays upstream — `session_id` is forwarded as
 """
 from __future__ import annotations
 import json
+import logging
 import os
 import time
 from typing import Awaitable, Callable
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 HERMES_BASE_URL = os.environ.get("HERMES_BASE_URL", "http://localhost:8642")
 HERMES_MODEL = os.environ.get("HERMES_MODEL", "hermes")
@@ -64,7 +67,15 @@ async def call_hermes_streaming(*, prompt: str, session_id: str | None,
                                      f"{HERMES_BASE_URL}/v1/chat/completions",
                                      headers=headers, json=body) as resp:
                 if resp.status_code >= 400:
-                    raise HermesError(f"http_{resp.status_code}")
+                    body_preview = ""
+                    try:
+                        body_bytes = await resp.aread()
+                        body_preview = body_bytes[:200].decode(
+                            "utf-8", errors="replace")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise HermesError(
+                        f"http_{resp.status_code}: {body_preview}")
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -74,6 +85,9 @@ async def call_hermes_streaming(*, prompt: str, session_id: str | None,
                     try:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
+                        log.debug(
+                            "hermes SSE: malformed data line skipped (%d bytes)",
+                            len(data))
                         continue
                     delta = (chunk.get("choices", [{}])[0]
                                   .get("delta", {})
@@ -87,9 +101,9 @@ async def call_hermes_streaming(*, prompt: str, session_id: str | None,
                         if delta_buffer:
                             await publish_progress("".join(delta_buffer))
                             delta_buffer.clear()
-                        last_flush = time.monotonic()
+                            last_flush = time.monotonic()
         except httpx.HTTPError as e:
-            raise HermesError(str(e)) from e
+            raise HermesError(f"{type(e).__name__}: {e}") from e
 
     if delta_buffer:
         await publish_progress("".join(delta_buffer))
