@@ -66,6 +66,7 @@ docs/demo-raw.webm
 .superpowers/
 # Design specs and implementation plans (per-developer working artifacts):
 docs/superpowers/
+adapters/*/agent.env
 
 # Phase 5: deploy script's runtime log files (the deploy script writes timestamped logs)
 deploy/*.log
