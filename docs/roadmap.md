@@ -177,6 +177,20 @@ Items shipped:
 
 Hermes upstream provider: `custom` endpoint pointed at OpenAI (`https://api.openai.com/v1`, model `gpt-5-mini`). Switching to local Ollama is a `~/.hermes/config.yaml` edit only — no bridge change needed.
 
+#### Phase 6 follow-up — Hermes streaming renders as multiple cards on the dashboard (BLOCKER for Phase 4)
+
+**Symptom (observed 2026-05-09 against `http://100.97.29.74/`):** sending a single prompt to `us-mac-hermes` ("fetch a recent paper") produces ~30 message cards in the dashboard chat history instead of one growing/finalized bubble. Production `/api/messages` for the affected `task_id` shows 1 `result` envelope (completed) plus ~29 `task.progress` envelopes (working) — that's correct on the wire; the bug is in the client merge.
+
+**Likely scope (debug before Phase 4 to avoid AG2 chains compounding the noise):**
+- Verify the bridge's `task.progress` envelope shape against what Gemma publishes. The bridge calls `ctx.publish_progress(task_id, body=delta, extra={"upstream": "hermes-agent"})`, which produces `payload.message=<delta>` (per `adapters/_common/pull_consumer.py:Context.publish_progress`). Frontend `useWebSocket.js` and `appStore.js:appendStreamDelta` were specced in Phase 2.5 against Gemma's emit — confirm whether they read `payload.delta` (Phase 2.5 spec wording) vs `payload.message` (actual Context publish shape) and whether one path is emitting the wrong field.
+- Verify the WS bridge is actually broadcasting `task.progress` envelopes from `agents.us-mac-hermes.task_progress.{task_id}` (the aggregator's `MessageRouter.on_task_progress` subscription was a Phase 2.5 add). Check `aggregator/main.py` startup logs for the subscription wildcard and the WS hub broadcast path.
+- If WS frames arrive correctly but the reducer doesn't merge: check `task_id` propagation through the WS frame and the synthetic-bubble lookup key in `appStore.js`.
+- Negative test: repeat the same prompt against `gemma-1` on production and confirm Gemma renders as a single growing bubble (proves the reducer works for the canonical case and the Hermes path is different).
+
+**Investigation entry points:** `aggregator/aggregator.py` (router subscriptions, `on_task_progress`), `aggregator/websocket_hub.py` (frame shape), `frontend/src/hooks/useWebSocket.js` (envelope routing), `frontend/src/stores/appStore.js` (`appendStreamDelta` / `finalizeStream`), `adapters/_common/pull_consumer.py` (Context.publish_progress payload shape).
+
+Track separately or fold into Phase 4 prerequisites — operator's call.
+
 ### Optional / parking lot
 
 - **MCP server exposing edge-research tools to Hermes.** Symmetric half of the Phase 6 Hermes bridge. Lets Hermes call into edge-research (publish to NATS, query the agent roster, trigger watchdog actions). v0.3+; design hook reserved in `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md` §Non-goals.
