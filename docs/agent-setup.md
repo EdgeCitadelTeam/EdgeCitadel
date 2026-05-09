@@ -27,7 +27,7 @@
 
 ## Hermes Agent (bridge)
 
-Phase 6. Bridges Nous Research's [Hermes Agent](https://github.com/NousResearch/hermes-agent) onto the fleet as agent `hermes-1`. Hermes owns its own reasoning + memory; this adapter is a transport translator. See [adapters/hermes/README.md](../adapters/hermes/README.md) for the full operator guide.
+Phase 6. Bridges Nous Research's [Hermes Agent](https://github.com/NousResearch/hermes-agent) onto the fleet as agent `us-mac-hermes`. Hermes owns its own reasoning + memory; this adapter is a transport translator. See [adapters/hermes/README.md](../adapters/hermes/README.md) for the full operator guide.
 
 Quick path (Mac):
 
@@ -39,7 +39,7 @@ hermes gateway setup    # enable the API Server platform (port 8642)
 hermes gateway run &    # foreground gateway exposing OpenAI-compat HTTP on :8642
 
 # On the aggregator host:
-./add-agent.sh hermes-1   # prints broker IP and NATS_TOKEN
+./add-agent.sh us-mac-hermes   # prints broker IP and NATS_TOKEN
 
 # Back on the Mac running Hermes:
 cp adapters/hermes/agent.env.example adapters/hermes/agent.env

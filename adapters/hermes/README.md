@@ -1,6 +1,6 @@
 # Hermes Bridge Adapter
 
-Bridges a locally-installed [Hermes Agent](https://github.com/NousResearch/hermes-agent) onto the EdgeCitadel NATS fabric as agent `hermes-1`. Adds a second-personality reasoner to the fleet alongside `gemma-1`.
+Bridges a locally-installed [Hermes Agent](https://github.com/NousResearch/hermes-agent) onto the EdgeCitadel NATS fabric as agent `us-mac-hermes`. Adds a second-personality reasoner to the fleet alongside `gemma-1`.
 
 This is a **bridge** adapter — Hermes Agent itself owns reasoning, tool-calling, and memory (under `~/.hermes/`). The adapter is a pure transport translator: NATS envelope ↔ Hermes' OpenAI-compatible HTTP API on `:8642`. Per [ADR-0009](../../docs/adr/0009-bridge-adapter-memory-ownership.md), this adapter does NOT use the aggregator's `memory.turns.*` service.
 
@@ -24,7 +24,7 @@ For production / auto-start at login, use `hermes gateway install` to register a
 On the aggregator host (or any machine with the repo and a populated `.env`):
 
 ```bash
-./add-agent.sh hermes-1
+./add-agent.sh us-mac-hermes
 ```
 
 The script prints the broker IP and `NATS_TOKEN`. Ignore the `./join.sh ...` line — that's for browser-style agents. We only need the broker + token.
@@ -41,7 +41,7 @@ pip install -r adapters/hermes/requirements.txt
 python -m adapters.hermes.adapter
 ```
 
-The adapter publishes its agent card to `agents.hermes-1.register` and starts heartbeating. Within ~1 second, `hermes-1` appears on the dashboard agent roster.
+The adapter publishes its agent card to `agents.us-mac-hermes.register` and starts heartbeating. Within ~1 second, `us-mac-hermes` appears on the dashboard agent roster.
 
 For production (auto-start at login, restart on crash), use the launchd plist instead — see `scripts/launchd/com.edgecitadel.hermes-bridge.plist`.
 
@@ -49,13 +49,13 @@ For production (auto-start at login, restart on crash), use the launchd plist in
 
 ```bash
 # Card visible in API
-curl http://<aggregator-host>/api/agents/hermes-1/card | jq '.metadata."runtime.kind"'   # → "bridge"
+curl http://<aggregator-host>/api/agents/us-mac-hermes/card | jq '.metadata."runtime.kind"'   # → "bridge"
 
 # Heartbeat flowing
-nats sub 'agents.hermes-1.heartbeat' --token "$NATS_TOKEN"      # one envelope every 30s
+nats sub 'agents.us-mac-hermes.heartbeat' --token "$NATS_TOKEN"      # one envelope every 30s
 
 # Send a smoke command (through the dashboard's chat UI; or via NATS):
-nats req 'agents.hermes-1.inbox' '{"v":1,"type":"command","sender_id":"smoke","payload":{"body":"hello"}}'
+nats req 'agents.us-mac-hermes.inbox' '{"v":1,"type":"command","sender_id":"smoke","payload":{"body":"hello"}}'
 ```
 
 ## Fully-local inference (recommended)
@@ -97,7 +97,7 @@ Hermes' memory store lives under `~/.hermes/`. Operators are responsible for bac
 
 ## Logs and observability
 
-- Adapter lifecycle / errors: `agents.hermes-1.log` envelopes (visible in the dashboard's LogViewer panel).
+- Adapter lifecycle / errors: `agents.us-mac-hermes.log` envelopes (visible in the dashboard's LogViewer panel).
 - Hermes server logs: wherever `hermes gateway run` writes them (default: stdout; redirected by the launchd plist to `/var/log/edgecitadel/hermes-server.log`).
 - Bridge adapter stdout/stderr: under launchd, `/var/log/edgecitadel/hermes-bridge.{log,err}`.
 
@@ -105,9 +105,9 @@ Hermes' memory store lives under `~/.hermes/`. Operators are responsible for bac
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `PreflightError: hermes_unreachable` at startup | `hermes gateway run` not running | `hermes serve --port 8642 &` |
+| `PreflightError: hermes_unreachable` at startup | `hermes gateway run` not running | `hermes gateway run &` |
 | `PreflightError: hermes_auth_failed` at startup | Wrong `HERMES_TOKEN` | Re-copy from `hermes gateway run` startup logs |
-| Adapter starts but `hermes-1` doesn't appear on dashboard | Wrong `NATS_URL` or `NATS_TOKEN` | `./add-agent.sh hermes-1` on the aggregator host, copy the printed values |
+| Adapter starts but `us-mac-hermes` doesn't appear on dashboard | Wrong `NATS_URL` or `NATS_TOKEN` | `./add-agent.sh us-mac-hermes` on the aggregator host, copy the printed values |
 | Commands return `task_state: failed, error: hermes_request_failed` | Hermes died mid-session, or Hermes' upstream provider is down | Restart `hermes gateway run`; check Hermes' own provider config |
 | Streamed bubble never finalizes in the dashboard | Hermes stream stalled | Check `hermes gateway run` logs; bridge will time out after `HERMES_TIMEOUT_SEC` |
 
@@ -118,4 +118,4 @@ The adapter forwards prompts as-is; Hermes' personality is configured by:
 2. **Hermes' tools** (`hermes tools`) — 68 built-in tools.
 3. **Hermes' provider config** (`hermes model`) — picks the upstream LLM.
 
-To run multiple Hermes personalities, install multiple Hermes instances on different ports (`8642`, `8643`, ...) and start one bridge adapter per instance with distinct `agent_id` values (`hermes-1`, `hermes-2`, ...). Each gets its own `config.yaml` + `agent.env`.
+To run multiple Hermes personalities, install multiple Hermes instances on different ports (`8642`, `8643`, ...) and start one bridge adapter per instance with distinct `agent_id` values (`us-mac-hermes`, `hermes-2`, ...). Each gets its own `config.yaml` + `agent.env`.

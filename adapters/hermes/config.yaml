@@ -1,5 +1,5 @@
-agent_id: hermes-1
-name: hermes-1
+agent_id: us-mac-hermes
+name: us-mac-hermes
 description: Hermes Agent (Nous Research) bridged onto the EdgeCitadel NATS fabric.
 version: 0.1.0
 runtime:

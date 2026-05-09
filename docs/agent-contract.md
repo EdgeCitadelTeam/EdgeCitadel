@@ -369,7 +369,7 @@ Each adapter is small on purpose. If an adapter is more than ~500 lines, the con
 
 ## Bridge adapters
 
-Adapters with `runtime.kind: bridge` front a third-party agent product that already owns reasoning + memory + tool-calling — Nous Research's Hermes Agent (`hermes-1`, Phase 6) is the reference implementation.
+Adapters with `runtime.kind: bridge` front a third-party agent product that already owns reasoning + memory + tool-calling — Nous Research's Hermes Agent (`us-mac-hermes`, Phase 6) is the reference implementation.
 
 ### Required card metadata
 

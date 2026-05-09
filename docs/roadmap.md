@@ -161,7 +161,7 @@ contradicts ADR-0005's bounded-blast-radius design.)
 
 Plan: `docs/superpowers/plans/2026-05-06-hermes-bridge.md`. Spec: `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md`.
 
-Onboards Nous Research's Hermes Agent as the first `runtime.kind: bridge` adapter. Hermes runs locally on the Mac, keeps its own memory under `~/.hermes/`, and is exposed on the NATS fabric as `hermes-1` via a thin SSE-translating adapter at `adapters/hermes/`. ADR-0009 locks the rule that bridge adapters retain upstream memory ownership (no `memory.turns.*` traffic).
+Onboards Nous Research's Hermes Agent as the first `runtime.kind: bridge` adapter. Hermes runs locally on the Mac, keeps its own memory under `~/.hermes/`, and is exposed on the NATS fabric as `us-mac-hermes` via a thin SSE-translating adapter at `adapters/hermes/`. ADR-0009 locks the rule that bridge adapters retain upstream memory ownership (no `memory.turns.*` traffic).
 
 Items:
 - New `adapters/hermes/` (config + client + handler + tests).

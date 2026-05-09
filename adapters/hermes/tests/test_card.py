@@ -13,8 +13,8 @@ def card():
     return build_card(CONFIG_PATH)
 
 
-def test_card_name_is_hermes_1(card):
-    assert card["name"] == "hermes-1"
+def test_card_name_is_us_mac_hermes(card):
+    assert card["name"] == "us-mac-hermes"
 
 
 def test_card_runtime_kind_bridge(card):
@@ -39,7 +39,7 @@ def test_card_has_single_chat_skill(card):
 
 
 def test_card_url_uses_nats_inbox(card):
-    assert card["url"] == "nats://edgecitadel/agents.hermes-1.inbox"
+    assert card["url"] == "nats://edgecitadel/agents.us-mac-hermes.inbox"
 
 
 def test_card_validates_against_a2a_schema():

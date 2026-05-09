@@ -31,7 +31,7 @@ def make_command(*, body: str = "hello", task_id: str | None = None,
 class FakeContext:
     """Stand-in for adapters._common.pull_consumer.Context."""
 
-    def __init__(self, agent_id: str = "hermes-1"):
+    def __init__(self, agent_id: str = "us-mac-hermes"):
         self.agent_id = agent_id
         self.nc = MagicMock()
         self.nc.publish = AsyncMock()
