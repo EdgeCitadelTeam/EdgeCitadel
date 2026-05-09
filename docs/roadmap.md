@@ -5,7 +5,7 @@ This file tracks deferred work and the path forward beyond what's currently impl
 1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
 2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
 
-Last updated: 2026-05-04.
+Last updated: 2026-05-09.
 
 ---
 
@@ -130,13 +130,17 @@ Refuse delegations at `hop_count >= 8`. Cancel returns `task_state: rejected, pa
 
 Spec file: `docs/superpowers/specs/<date>-ag2-a2a-wrapper-design.md` (TBD).
 
-### Phase 5 — Host deploy
+### Phase 5 — Host deploy ✅ shipped 2026-05-09
 
-One session, one plan. Production-shaped deployment to the central
-EdgeCitadel host. Linux (Ubuntu) is the primary, validated path; macOS
-(Mac Mini) is a forward-looking variant of the same design.
+Production deployment is live at `http://100.97.29.74/` (tailnet IP).
+Aggregator + NATS broker + dashboard run on the central EdgeCitadel host
+(Linux Ubuntu, the primary validated path; macOS is a forward-looking
+variant of the same design). `gemma-1` and `watchdog-1` registered as
+production agents; `us-mac-hermes` (Phase 6 bridge) registered from this
+Mac as the first cross-host agent. End-to-end NATS roundtrip verified
+through the production aggregator on 2026-05-09.
 
-Items:
+Items shipped (PR #11):
 - `deploy/deploy-host.sh` script (manifest-driven, idempotent,
   reversible, with `--check`/`--dry-run`/`--uninstall`).
 - systemd units for Ollama + Gemma + watchdog adapters, run as a
@@ -157,18 +161,21 @@ during brainstorming. The standalone `~/.openclaw/` tool is a separate
 product Phase 5 doesn't manage; the browser-launcher concept also
 contradicts ADR-0005's bounded-blast-radius design.)
 
-### Phase 6 — Hermes bridge
+### Phase 6 — Hermes bridge ✅ shipped 2026-05-09
 
-Plan: `docs/superpowers/plans/2026-05-06-hermes-bridge.md`. Spec: `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md`.
+Plan: `docs/superpowers/plans/2026-05-06-hermes-bridge.md`. Spec: `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md`. Branch: `feat/phase6-hermes-bridge`.
 
-Onboards Nous Research's Hermes Agent as the first `runtime.kind: bridge` adapter. Hermes runs locally on the Mac, keeps its own memory under `~/.hermes/`, and is exposed on the NATS fabric as `us-mac-hermes` via a thin SSE-translating adapter at `adapters/hermes/`. ADR-0009 locks the rule that bridge adapters retain upstream memory ownership (no `memory.turns.*` traffic).
+Onboards Nous Research's Hermes Agent as the first `runtime.kind: bridge` adapter. Hermes runs locally on this Mac (`100.68.254.1` on the tailnet), keeps its own memory under `~/.hermes/`, and is exposed on the production NATS fabric (broker at `100.97.29.74:4222`) as `us-mac-hermes` via a thin SSE-translating adapter at `adapters/hermes/`. ADR-0009 locks the rule that bridge adapters retain upstream memory ownership (no `memory.turns.*` traffic). End-to-end roundtrip verified through the production aggregator on 2026-05-09.
 
-Items:
-- New `adapters/hermes/` (config + client + handler + tests).
-- New `scripts/launchd/com.edgecitadel.hermes-{bridge,server}.plist`.
-- New ADR-0009.
+Items shipped:
+- `adapters/hermes/` (config + client + handler + tests + README; 38 unit tests).
+- `scripts/launchd/com.edgecitadel.hermes-{bridge,server}.plist`.
+- ADR-0009 (bridge adapters retain upstream memory ownership).
 - Doc updates: `agent-contract.md` (bridge subsection), `03-agent-registration.md` (local-adapter onboarding), `05-messaging.md` (`task.progress.payload.extra.upstream`), `agent-setup.md`, this file.
 - E2E spec: `e2e/tests/phase6-hermes-bridge.spec.js`.
+- `add-agent.sh` fix: prints both MQTT (1883) and NATS (4222) brokers with adapter-vs-browser guidance — closes a recurring footgun.
+
+Hermes upstream provider: `custom` endpoint pointed at OpenAI (`https://api.openai.com/v1`, model `gpt-5-mini`). Switching to local Ollama is a `~/.hermes/config.yaml` edit only — no bridge change needed.
 
 ### Optional / parking lot
 
