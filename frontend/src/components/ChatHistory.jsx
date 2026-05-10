@@ -25,6 +25,7 @@ export default function ChatHistory() {
   const showTestAgents = useAppStore((s) => s.showTestAgents)
   const pendingCommands = useAppStore((s) => s.pendingCommands)
   const removePendingCommand = useAppStore((s) => s.removePendingCommand)
+  const seedStreamFromHistory = useAppStore((s) => s.seedStreamFromHistory)
 
   const [historicalMessages, setHistoricalMessages] = useState([])
   const [loading, setLoading] = useState(false)
@@ -107,6 +108,41 @@ export default function ChatHistory() {
     }
   }, [historicalMessages, pendingCommands, removePendingCommand])
 
+  // Page-refresh recovery: scan polled history for tasks with persisted
+  // task.progress chunks but no result envelope, and seed a synthetic
+  // streaming bubble from the concatenated chunks. The seed runs through
+  // the same reducer that live deltas use, so subsequent WebSocket frames
+  // for the same task extend the same bubble (no separate reconstructed
+  // view racing the live one).
+  useEffect(() => {
+    if (messageTypeFilter === 'task.progress') return
+    const tasksWithResult = new Set()
+    const progressByTask = new Map()
+    for (const m of historicalMessages) {
+      if (!m.task_id) continue
+      if (m.type === 'result') tasksWithResult.add(m.task_id)
+      else if (m.type === 'task.progress') {
+        if (!progressByTask.has(m.task_id)) progressByTask.set(m.task_id, [])
+        progressByTask.get(m.task_id).push(m)
+      }
+    }
+    for (const [taskId, chunks] of progressByTask) {
+      if (tasksWithResult.has(taskId)) continue
+      const sorted = chunks.slice().sort(
+        (a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+      const content = sorted.map((c) => c.payload?.message || '').join('')
+      if (!content) continue
+      const last = sorted[sorted.length - 1]
+      seedStreamFromHistory(
+        taskId,
+        sorted[0].sender_id,
+        content,
+        sorted[0].payload?.skill_id,
+        last.timestamp,
+      )
+    }
+  }, [historicalMessages, messageTypeFilter, seedStreamFromHistory])
+
   // Auto-scroll
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
@@ -138,9 +174,24 @@ export default function ChatHistory() {
     setAutoScroll(nearBottom)
   }
 
-  // Combine historical + realtime, filter for selected agent
-  const merged = [...historicalMessages]
+  // task.progress envelopes are streaming chunks, not standalone chat
+  // messages. The synthetic streaming bubble (built from live WS frames in
+  // appStore.appendStreamDelta) is the user-visible representation; rendering
+  // every persisted progress envelope as its own MessageBubble would produce
+  // tens-to-hundreds of fragmented cards per task. Persistence stays intact
+  // for ConversationThread / MessageInspector. Operators who want to inspect
+  // the raw progress stream can pick task.progress from the type filter.
+  const showProgressEnvelopes = messageTypeFilter === 'task.progress'
+  const dropProgress = (m) => showProgressEnvelopes || m.type !== 'task.progress'
+
+  // Combine historical + realtime, filter for selected agent.
+  // Page-refresh recovery for in-flight streams is handled in a useEffect
+  // below — it seeds a single synthetic streaming bubble in zustand from
+  // any persisted task.progress chunks, so subsequent live deltas extend
+  // the same bubble (rather than racing a separate reconstructed view).
+  const merged = historicalMessages.filter(dropProgress)
   const realtimeFiltered = realtimeMessages.filter((m) => {
+    if (!dropProgress(m)) return false
     if (selectedAgent) {
       return m.sender_id === selectedAgent || m.recipient_id === selectedAgent
     }

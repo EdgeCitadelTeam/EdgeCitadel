@@ -45,7 +45,11 @@ export default function useWebSocket(agentName = null) {
         if (data.event === 'message') {
           const env = data.data
           if (env?.type === 'task.progress') {
-            const delta = env.payload?.delta || ''
+            // Canonical streaming chunk lives at payload.message (per
+            // adapters/_common/pull_consumer.py:Context.publish_progress).
+            // Gemma redundantly mirrors it to payload.delta; non-Gemma
+            // adapters (e.g. the Hermes bridge) only set payload.message.
+            const delta = env.payload?.message ?? env.payload?.delta ?? ''
             const skill = env.payload?.skill_id
             useAppStore.getState().appendStreamDelta(
               env.task_id, env.sender_id, delta, skill)

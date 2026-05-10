@@ -3,6 +3,63 @@ import { X } from 'lucide-react'
 import { api } from '../api/client'
 import MessageBubble from './MessageBubble'
 
+// Collapse multiple persisted task.progress envelopes for the same task_id
+// into a single synthetic STREAMING bubble. Without this, a streamed task
+// renders one tiny bubble per chunk in the trace panel — useless for
+// reading the assistant's reply. The synthetic bubble's content is the
+// concatenation of payload.message across chunks (chronological order),
+// keyed off the earliest chunk's metadata. If the task has a result
+// envelope (terminal), the progress chunks are dropped entirely — the
+// result carries the full text.
+function collapseProgressChunks(messages) {
+  const tasksWithResult = new Set()
+  for (const m of messages) {
+    if (m.task_id && m.type === 'result') tasksWithResult.add(m.task_id)
+  }
+  const progressByTask = new Map()
+  for (const m of messages) {
+    if (m.task_id && m.type === 'task.progress' && !tasksWithResult.has(m.task_id)) {
+      if (!progressByTask.has(m.task_id)) progressByTask.set(m.task_id, [])
+      progressByTask.get(m.task_id).push(m)
+    }
+  }
+  const collapsed = []
+  const insertedTaskBubble = new Set()
+  for (const m of messages) {
+    if (m.type === 'task.progress' && m.task_id) {
+      // Drop progress envelopes for tasks that have a result (the result
+      // carries the full text already).
+      if (tasksWithResult.has(m.task_id)) continue
+      // For in-flight tasks, emit one merged bubble at the position of the
+      // earliest progress chunk; skip subsequent chunks for the same task.
+      if (insertedTaskBubble.has(m.task_id)) continue
+      const chunks = progressByTask.get(m.task_id)
+      const sorted = chunks.slice().sort(
+        (a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+      const content = sorted.map((c) => c.payload?.message || '').join('')
+      const first = sorted[0]
+      const last = sorted[sorted.length - 1]
+      collapsed.push({
+        id: `trace-stream-${m.task_id}`,
+        task_id: m.task_id,
+        sender_id: first.sender_id,
+        recipient_id: first.recipient_id,
+        type: 'result',
+        streaming: true,
+        skill_id: first.payload?.skill_id,
+        content: content || '(no chunks captured)',
+        payload: { message: content },
+        timestamp: first.timestamp,
+        last_delta_at: new Date(last.timestamp).getTime(),
+      })
+      insertedTaskBubble.add(m.task_id)
+      continue
+    }
+    collapsed.push(m)
+  }
+  return collapsed
+}
+
 // Renders a single trace. Pass either taskId (preferred — single A2A task)
 // or contextId (multi-task chain). Falls back to taskId if both supplied.
 export default function ConversationThread({ taskId, contextId, onClose }) {
@@ -65,7 +122,7 @@ export default function ConversationThread({ taskId, contextId, onClose }) {
               No messages found
             </p>
           ) : (
-            messages.map((msg) => (
+            collapseProgressChunks(messages).map((msg) => (
               <MessageBubble key={msg.id} message={msg} highlighted />
             ))
           )}
