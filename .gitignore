@@ -25,6 +25,7 @@ nats/data/
 # Claude Code local settings
 .claude/.claude/
 .claude/settings.local.json
+.claude/*.local.md
 CLAUDE.local.md
 
 # Environment
@@ -73,3 +74,13 @@ deploy/*.log
 
 # Operator note: scheduled tasks lock from claude harness
 .claude/scheduled_tasks.lock
+
+# Frontend dev-only configs (developer working artifacts; not part of the
+# canonical vite config). e.g. vite.config.prodproxy.js — points the local
+# dev server at a remote aggregator for ad-hoc verification.
+frontend/vite.config.*.js
+!frontend/vite.config.js
+
+# E2E manual probes — one-off browser-driven scripts that target real
+# (often production) data. Not part of the regular Playwright suite.
+e2e/scripts/
