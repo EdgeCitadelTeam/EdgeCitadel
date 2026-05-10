@@ -364,3 +364,31 @@ Each adapter is small on purpose. If an adapter is more than ~500 lines, the con
 - [`schemas/agent-card.v1.json`](../schemas/agent-card.v1.json) — A2A v1.0 Agent Card schema (rewritten in Task 2).
 - [`docs/05-messaging.md`](05-messaging.md) — operational view of subjects and persistence.
 - [`docs/superpowers/specs/2026-04-23-agent-messaging-design.md`](superpowers/specs/2026-04-23-agent-messaging-design.md) — full design spec underlying this contract.
+
+---
+
+## Bridge adapters
+
+Adapters with `runtime.kind: bridge` front a third-party agent product that already owns reasoning + memory + tool-calling — Nous Research's Hermes Agent (`us-mac-hermes`, Phase 6) is the reference implementation.
+
+### Required card metadata
+
+- `metadata.runtime.kind: "bridge"`
+- `metadata.runtime.upstream`: identifier of the upstream agent product (e.g., `hermes-agent`). The agent-card factory (`adapters/_common/agent_card.py`) refuses to build a card with `kind: bridge` and an empty `upstream`.
+- `metadata.runtime.tags`: SHOULD include `external-memory` if the upstream owns memory; this surfaces on the dashboard so operators know not to query `memory.turns.*` for this agent.
+
+### Memory ownership rule
+
+Per [ADR-0009](adr/0009-bridge-adapter-memory-ownership.md):
+
+- **Bridge adapters MUST NOT publish to `memory.turns.{get,put,delete}`.**
+- Bridge adapters MAY pass `context_id` to the upstream as an opaque session token (HTTP header, query param, etc.). The upstream is responsible for any continuity semantics that follow.
+- The aggregator's envelope ledger (`messages` table, fed by `agents.{id}.{outbox,log,heartbeat,status}`) remains the canonical cross-agent audit record for bridge agents.
+
+### `task.progress.payload.extra.upstream`
+
+Bridge adapters SHOULD include `payload.extra.upstream: <upstream-id>` on every `task.progress` envelope they publish, so consumers (dashboard, future analytics) can attribute streaming activity to the correct upstream product. Hermes' bridge sets `upstream: "hermes-agent"`.
+
+### Onboarding pattern
+
+Local bridge adapters follow the three-step onboarding in [03-agent-registration.md §"Local adapter onboarding"](03-agent-registration.md#local-adapter-onboarding) — install the upstream, get NATS broker info from `add-agent.sh`, configure `agent.env`, run the adapter (or load its launchd plist).

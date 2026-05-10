@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 6)
+- New `adapters/hermes/` — bridge adapter for Nous Research's Hermes Agent (`us-mac-hermes`).
+- ADR-0009: bridge adapters retain upstream memory ownership.
+- `scripts/launchd/com.edgecitadel.hermes-{bridge,server}.plist` for Mac auto-start.
+- E2E spec `e2e/tests/phase6-hermes-bridge.spec.js`.
+- Docs: `agent-contract.md` Bridge subsection, `03-agent-registration.md` Local adapter onboarding, `agent-setup.md` Hermes quickstart.
+
+### Changed
+- `task.progress.payload.extra.upstream` — bridge adapters SHOULD set this; native adapters omit it. (`docs/05-messaging.md`).
+- `docs/roadmap.md`: Hermes promoted from parking lot to Phase 6; "MCP server exposing edge-research tools to Hermes" logged as v0.3.
+
 ### Added (Phase 2.5)
 
 - **Multi-skill dispatch** in Gemma adapter. Four skills routed by

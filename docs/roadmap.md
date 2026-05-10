@@ -5,7 +5,7 @@ This file tracks deferred work and the path forward beyond what's currently impl
 1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
 2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
 
-Last updated: 2026-05-04.
+Last updated: 2026-05-09.
 
 ---
 
@@ -130,13 +130,17 @@ Refuse delegations at `hop_count >= 8`. Cancel returns `task_state: rejected, pa
 
 Spec file: `docs/superpowers/specs/<date>-ag2-a2a-wrapper-design.md` (TBD).
 
-### Phase 5 — Host deploy
+### Phase 5 — Host deploy ✅ shipped 2026-05-09
 
-One session, one plan. Production-shaped deployment to the central
-EdgeCitadel host. Linux (Ubuntu) is the primary, validated path; macOS
-(Mac Mini) is a forward-looking variant of the same design.
+Production deployment is live at `http://100.97.29.74/` (tailnet IP).
+Aggregator + NATS broker + dashboard run on the central EdgeCitadel host
+(Linux Ubuntu, the primary validated path; macOS is a forward-looking
+variant of the same design). `gemma-1` and `watchdog-1` registered as
+production agents; `us-mac-hermes` (Phase 6 bridge) registered from this
+Mac as the first cross-host agent. End-to-end NATS roundtrip verified
+through the production aggregator on 2026-05-09.
 
-Items:
+Items shipped (PR #11):
 - `deploy/deploy-host.sh` script (manifest-driven, idempotent,
   reversible, with `--check`/`--dry-run`/`--uninstall`).
 - systemd units for Ollama + Gemma + watchdog adapters, run as a
@@ -157,9 +161,44 @@ during brainstorming. The standalone `~/.openclaw/` tool is a separate
 product Phase 5 doesn't manage; the browser-launcher concept also
 contradicts ADR-0005's bounded-blast-radius design.)
 
+### Phase 6 — Hermes bridge ✅ shipped 2026-05-09
+
+Plan: `docs/superpowers/plans/2026-05-06-hermes-bridge.md`. Spec: `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md`. Branch: `feat/phase6-hermes-bridge`.
+
+Onboards Nous Research's Hermes Agent as the first `runtime.kind: bridge` adapter. Hermes runs locally on this Mac (`100.68.254.1` on the tailnet), keeps its own memory under `~/.hermes/`, and is exposed on the production NATS fabric (broker at `100.97.29.74:4222`) as `us-mac-hermes` via a thin SSE-translating adapter at `adapters/hermes/`. ADR-0009 locks the rule that bridge adapters retain upstream memory ownership (no `memory.turns.*` traffic). End-to-end roundtrip verified through the production aggregator on 2026-05-09.
+
+Items shipped:
+- `adapters/hermes/` (config + client + handler + tests + README; 38 unit tests).
+- `scripts/launchd/com.edgecitadel.hermes-{bridge,server}.plist`.
+- ADR-0009 (bridge adapters retain upstream memory ownership).
+- Doc updates: `agent-contract.md` (bridge subsection), `03-agent-registration.md` (local-adapter onboarding), `05-messaging.md` (`task.progress.payload.extra.upstream`), `agent-setup.md`, this file.
+- E2E spec: `e2e/tests/phase6-hermes-bridge.spec.js`.
+- `add-agent.sh` fix: prints both MQTT (1883) and NATS (4222) brokers with adapter-vs-browser guidance — closes a recurring footgun.
+
+Hermes upstream provider: `custom` endpoint pointed at OpenAI (`https://api.openai.com/v1`, model `gpt-5-mini`). Switching to local Ollama is a `~/.hermes/config.yaml` edit only — no bridge change needed.
+
+#### Phase 6 follow-up — streaming renders as multiple cards on the dashboard (RESOLVED 2026-05-09)
+
+**Symptom (observed 2026-05-09 against `http://100.97.29.74/`):** sending a single prompt to `us-mac-hermes` ("fetch a recent paper") produced ~30 message cards in the dashboard chat history instead of one growing/finalized bubble. Production `/api/messages` for the affected `task_id` showed 1 `result` envelope plus ~29 `task.progress` envelopes — that's correct on the wire; the bug was in the client merge.
+
+**Negative-test result:** the original hypothesis ("Gemma renders cleanly, Hermes fragments") was **falsified**. Gemma fragmented worse — a four-paragraph prompt produced 52 cards (capped by ChatHistory's page size; production held 500+ persisted progress envelopes for the same task). The bug was universal and latent since Phase 2.5; only became user-visible when Hermes started producing long-form replies through this path.
+
+**Root cause (two issues, both frontend):**
+1. `frontend/src/hooks/useWebSocket.js` read `env.payload?.delta`. The canonical streaming-chunk shape from `adapters/_common/pull_consumer.py:Context.publish_progress` is `payload.message`. Gemma's adapter happened to redundantly mirror the chunk to `payload.delta` via `extra={"delta": delta, ...}`; the Hermes bridge did not. So Hermes' synthetic streaming bubble stayed empty during streaming.
+2. `frontend/src/components/ChatHistory.jsx` merged the `/api/messages` poll results 1:1 with realtime envelopes and rendered every row as its own `MessageBubble`. Persisted `task.progress` rows therefore each became a bubble — fragmentation at the rendering layer, irrespective of the synthetic-bubble reducer working correctly.
+
+**Fix (frontend-only, no schema/wire changes):**
+- `useWebSocket.js`: read `env.payload?.message ?? env.payload?.delta ?? ''` so any adapter using the canonical `Context.publish_progress` works without each one having to remember to add `extra={"delta": ...}`.
+- `ChatHistory.jsx`: drop `type === 'task.progress'` from both `historicalMessages` and `realtimeMessages` before merging into the timeline, **unless** the operator selects `task.progress` from the type-filter dropdown (forensic opt-in). The synthetic streaming bubble built by `appStore.appendStreamDelta` remains the user-visible representation. Persistence is unchanged — `ConversationThread` and `MessageInspector` continue to see the raw rows.
+- `ChatHistory.jsx`: page-refresh recovery — when persisted `task.progress` rows exist for a task that has no `result` envelope yet **and** no live synthetic streaming bubble, build one collapsed `STREAMING` bubble per task by concatenating `payload.message` across the persisted chunks (chronologically). When the WebSocket reconnects and the live synthetic appears, the reconstructed bubble is suppressed in favor of the live one. The result envelope (when it lands) replaces both with the canonical full-text bubble.
+- `MessageBubble.jsx`: synthetic streaming bubbles now wear a distinct `STREAMING` badge (amber Activity icon) while live, falling back to the underlying type once `finalizeStream` lands or the stall timer fires.
+- Regression coverage: `e2e/tests/streaming-fragmentation-regression.spec.js`. Manual browser-driven verification scripts live under `e2e/scripts/` (not part of the regular suite — they target production data).
+
+**Verification:** ran a fresh long-response prompt through the production aggregator at `100.97.29.74` (NATS + persistence + WS broadcast all real) for both `gemma-1` and `us-mac-hermes`, observed via a local dev frontend (`vite.config.prodproxy.js`) with the fix loaded. Result for both: exactly **2 cards per task** (command + growing assistant bubble with live cursor `▍`), 0 fragmentation. Production wire data unchanged — Hermes task `941bd6c5…` still persisted 94 `task.progress` envelopes plus the final `result`. Production frontend bundle still ships the pre-fix code; deploy is operator-gated.
+
 ### Optional / parking lot
 
-- **Bridge adapter for Hermes / ACP.** Spec rev 7 §"Bridge pattern" already covers the design. Plan when Nous Research's Hermes Agent is first onboarded.
+- **MCP server exposing edge-research tools to Hermes.** Symmetric half of the Phase 6 Hermes bridge. Lets Hermes call into edge-research (publish to NATS, query the agent roster, trigger watchdog actions). v0.3+; design hook reserved in `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md` §Non-goals.
 - **Per-agent JWT auth** (replaces shared `NATS_TOKEN`). v0.2+. Necessary for multi-tenant deployments.
 - **JetStream clustering.** Single-node broker is fine until a second persistent host joins (likely v0.3+).
 - **P2P transport (Zenoh).** v0.3+ exploration; only relevant if we want agent-to-agent communication that doesn't traverse the central broker.

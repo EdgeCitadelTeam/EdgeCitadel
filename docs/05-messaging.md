@@ -31,6 +31,8 @@ All envelopes are JSON objects validated against [`schemas/envelope.v1.json`](..
 
 **Routing rule:** only `agents.{id}.inbox` is durable (JetStream). Everything else is plain NATS fire-and-forget.
 
+**`payload.extra.upstream`** (optional). Bridge adapters (`runtime.kind: bridge`) SHOULD set this to the upstream agent product identifier — e.g., Hermes' bridge sets `"hermes-agent"`. Native adapters (Gemma, Watchdog) omit this field. See [agent-contract.md §"Bridge adapters"](agent-contract.md#bridge-adapters).
+
 **Watchdog (`watchdog-1`) subject summary:**
 
 | Role | Subjects |

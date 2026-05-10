@@ -1,0 +1,19 @@
+agent_id: us-mac-hermes
+name: us-mac-hermes
+description: Hermes Agent (Nous Research) bridged onto the EdgeCitadel NATS fabric.
+version: 0.1.0
+runtime:
+  kind: bridge
+  upstream: hermes-agent
+  roles: [reasoner]
+  heartbeat_interval_sec: 30
+  tags: [external-memory, openai-compat]
+capabilities:
+  streaming: true
+skills:
+  - id: reasoning.chat
+    name: hermes-reasoner
+    description: Forward a free-text prompt to a locally-installed Hermes Agent.
+    tags: [chat, reasoning, bridge]
+defaultInputModes: [text/plain]
+defaultOutputModes: [text/plain]
