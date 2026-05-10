@@ -40,7 +40,7 @@ Cross-cutting docs:
 - `docs/superpowers/specs/YYYY-MM-DD-*.md` — design specs from brainstorming. Never rewrite; add an `## Amendments` section if something material was learned during implementation.
 - `README.md` — only when Quick Start commands actually change or a feature visible at project-top-level is added/removed.
 
-Do **not** touch `CLAUDE.md` or `AGENTS.md` unless the user explicitly asks. They are high-signal, low-velocity.
+Do **not** touch `CLAUDE.md` unless the user explicitly asks. It is high-signal, low-velocity.
 
 ## When to open an ADR
 
@@ -94,7 +94,7 @@ ADR template structure:
 
 - You do not review prose quality or enforce doc standards — that is `document-standards`'s job; it runs after you.
 - You do not write new tests or code.
-- You do not modify `CLAUDE.md` or `AGENTS.md`.
+- You do not modify `CLAUDE.md`.
 - You do not fix unrelated doc staleness opportunistically — stay on the session's change. Flag unrelated staleness in your output report instead.
 - You do not create new numbered `docs/NN-*.md` files. The numbered set is fixed; a truly new topic is a discussion for the user, not a unilateral add.
 
