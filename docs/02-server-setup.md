@@ -1,135 +1,34 @@
 # Server Setup & Deployment
 
-## Prerequisites
+EdgeCitadel runs in two distinct configurations on the same code:
 
-- Docker and Docker Compose
-- Git
+- **Dev stack** — Docker Compose, all services in containers. Quick start in `01-architecture.md` § Dev Stack. For development, smoke testing, and CI.
+- **Production deploy** — Hybrid (Docker for the broker + aggregator + dashboard; systemd/launchd for the adapter services on the host). Phase 5 design at `superpowers/specs/2026-05-04-host-deploy-design.md`.
 
-## Quick Start
+## Choose your platform for production deploy
 
-```bash
-git clone <repo> EdgeCitadel && cd EdgeCitadel
-
-# Configure secrets
-cp .env.example .env
-# Edit .env — set NATS_TOKEN and OPENCLAW_TOKEN
-
-# Start the stack
-docker compose up -d --build
-
-# Verify
-curl http://localhost/api/health          # {"status":"ok"}
-curl http://localhost:8222/healthz        # NATS health
-```
-
-The dashboard is available at `http://localhost`.
-
-## Environment Variables
-
-### Server (.env)
-
-| Variable | Description | Default |
+| Platform | Guide | Status |
 |---|---|---|
-| `NATS_TOKEN` | Auth token the aggregator and host adapters present to NATS | `change-me` |
-| `OPENCLAW_TOKEN` | Account-scoped token for the openclaw browser client (per ADR-0005) | `change-me-scoped` |
-| `EC_ENABLE_MQTT` | `1` to expose MQTT ingress on port 1883 (ADR-0004); off by default | `0` |
-| `OLLAMA_HOST` / `OLLAMA_PORT` / `OLLAMA_MODEL` / `OLLAMA_TIMEOUT_SEC` | Gemma adapter Ollama config; see `adapters/gemma/README.md` for the variant table (`gemma4:e2b` / `e4b` / `26b` / `31b`) | localhost / 11434 / `gemma4:e2b` / 120 |
+| Linux (Ubuntu/Debian) | [02-server-setup-linux.md](02-server-setup-linux.md) | Validated |
+| macOS (Mac Mini) | [02-server-setup-macos.md](02-server-setup-macos.md) | Forward-looking — not yet executed end-to-end |
 
-### Aggregator (set in docker-compose.yml)
+The two guides have identical structure (11 sections in the same order). Pick by platform, follow §2's five commands, then walk down the rest.
 
-| Variable | Description | Default |
-|---|---|---|
-| `NATS_URL` | NATS server URL | `nats://nats:4222` |
-| `NATS_TOKEN` | NATS auth token | from .env |
-| `DB_PATH` | SQLite database path | `/data/openclaw.db` |
+## Cross-platform invariants
 
-> v0.1 has no HTTP-level auth (write endpoints are gated by NATS-token + the
-> aggregator-mediated openclaw translator). HTTP auth is a v0.2 design topic;
-> the legacy `API_KEY` / `OPENCLAW_API_KEY` env was retired in commit
-> [phase1-followups] because nothing read it anymore.
+- Single source of truth for dependencies: `deploy/manifest.toml`. Edit there; do not duplicate dependency lists into prose.
+- Single source of truth for secrets: `/etc/edgecitadel/env` (mode `0640`).
+- Backups: local-only nightly to `/var/lib/edgecitadel/backups/`. Mirror to another host or off-host storage is a Phase 5.x follow-up; restore procedure in `deploy/backup/README.md`.
+- See ADR-0009 for the dedicated-user / systemd-hardening rationale.
+- See ADR-0004 for the MQTT-opt-in design intent and ADR-0009 § Amendment for why Phase 5 deploy supersedes that design (single `nats` service binds 1883 unconditionally; MQTT listener inside the broker still gated via `EC_ENABLE_MQTT` in `nats.conf.tpl`).
 
-## Ports
-
-| Port | Service | Protocol |
-|---|---|---|
-| 80 | Nginx (dashboard + API) | HTTP |
-| 4222 | NATS client | NATS |
-| 1883 | NATS MQTT adapter | MQTT |
-| 8222 | NATS monitoring | HTTP |
-
-## NATS Configuration
-
-The NATS server config is at `nats/nats.conf`:
-
-```
-server_name: "edgecitadel"
-listen: 0.0.0.0:4222
-http_port: 8222
-
-jetstream {
-    store_dir: "/data/jetstream"
-    max_mem: 256MB
-    max_file: 1GB
-}
-
-mqtt {
-    port: 1883
-    ack_wait: "30s"
-    max_ack_pending: 1024
-}
-
-authorization {
-    token: $NATS_TOKEN
-}
-```
-
-## Persistent Data
-
-| Path | Contents |
-|---|---|
-| `./data/openclaw.db` | SQLite database (agents, messages, logs, tasks) |
-| `./nats/data/jetstream/` | JetStream stream and K/V storage |
-
-## Rebuilding
+## Operating the dev stack
 
 ```bash
-# Rebuild a single service
-docker compose up -d --build aggregator
-
-# Rebuild everything
-docker compose up -d --build
-
-# Nginx may need a restart after aggregator rebuild
-docker restart edgecitadel-nginx-1
+cd /path/to/EdgeCitadel
+docker compose up --build -d
+# Dashboard: http://localhost
+# Stop: docker compose down
 ```
 
-## Monitoring
-
-```bash
-# NATS server health
-curl http://localhost:8222/healthz
-
-# NATS server info
-curl http://localhost:8222/varz
-
-# System status
-curl http://localhost/api/system/status
-
-# Container logs
-docker compose logs -f aggregator
-docker compose logs -f nats
-```
-
-## Remote Access via Tailscale
-
-If using Tailscale for agent connectivity:
-
-```bash
-# Get Tailscale IP
-tailscale ip -4
-
-# Agents connect to this IP on port 1883 (MQTT)
-# Dashboard accessible at http://<tailscale-ip>
-```
-
-Port 1883 must be reachable from agent machines. Tailscale handles this automatically within the tailnet.
+The dev stack is independent of the production deploy. You can run the dev stack on a different machine for local development while production runs on the deploy target.

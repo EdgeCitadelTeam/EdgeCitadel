@@ -2,29 +2,23 @@
 
 ## Canonical Layout
 
-- `AGENTS.md` is the canonical, team-shared instruction file for coding agents.
-- `CLAUDE.md` remains in the repo root only so Claude Code can load the shared guidance through an import.
-- Nested `AGENTS.md` files in active subprojects add local rules without duplicating the root file.
+- `CLAUDE.md` (repo root) is the team-shared coding-agent instruction file. Hard ceiling 200 lines.
+- Nested `CLAUDE.md` files in active subprojects (`aggregator/`, `frontend/`, `openclaw-client/`, `e2e/`) add local rules without duplicating the root file.
+- Per-subsystem verification recipes live in `.claude/skills/verify-*` and load on demand.
 
 ## Claude Files
 
 - Shared Claude project settings live in `.claude/settings.json`.
 - Personal Claude overrides belong in `.claude/settings.local.json`, which is intentionally not committed.
-- Existing project subagents remain in `.claude/agents/`.
-
-## Codex Files
-
-- Codex reads `AGENTS.md` from the repo root down to the current working directory.
-- No repo-tracked Codex rules are required for this project.
-- Personal Codex fallback or home-level preferences should stay in each developer's local Codex config.
+- `CLAUDE.local.md` is reserved for personal overrides and is gitignored.
+- Project subagents remain in `.claude/agents/`.
 
 ## Verification
 
-- Codex from repo root: `codex --ask-for-approval never "Summarize the current instructions."`
-- Codex from a subdirectory: `codex --cd frontend --ask-for-approval never "Show which instruction files are active."`
-- Claude Code: open the repo and confirm `CLAUDE.md` loads the imported `AGENTS.md` guidance and still exposes `.claude/agents/`.
+- Claude Code: open the repo and confirm the root `CLAUDE.md` loads and `.claude/agents/` is visible.
 - For repo-structure, shared config, Docker wiring, or agent-workflow changes, restart the stack with `docker compose down && docker compose up --build -d` and run at least one smoke check such as `curl http://localhost:8222/healthz` or `curl http://localhost/api/system/status`.
 - For frontend, browser-flow, or operator-workflow changes, also run actual Playwright verification from `e2e/`, for example `npm test -- tests/health.spec.js tests/dashboard-command-pipeline.spec.js` or the narrowest relevant spec set.
+- Per-subsystem deeper recipes: invoke `verify-frontend`, `verify-backend`, or `verify-infra` skills.
 
 ## Notes
 

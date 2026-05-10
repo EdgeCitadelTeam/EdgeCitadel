@@ -160,14 +160,11 @@ P2P delegation has built-in guardrails: max 3 rounds, 90s timeout, loop detectio
 
 ## Coding Agent Compatibility
 
-This repo is structured to work with both Codex and Claude Code.
+This repo is set up for Claude Code.
 
-- Shared coding-agent instructions live in `AGENTS.md`.
-- `CLAUDE.md` is a thin Claude compatibility wrapper that imports the shared instructions.
-- Subproject-specific guidance lives in nested `AGENTS.md` files under active paths such as `aggregator/`, `frontend/`, `openclaw-client/`, and `e2e/`.
+- Coding-agent instructions live in `CLAUDE.md` (root) with subproject-specific rules in nested `CLAUDE.md` files under `aggregator/`, `frontend/`, `openclaw-client/`, and `e2e/`.
 - Shared Claude project settings live in `.claude/settings.json`; local-only Claude overrides belong in `.claude/settings.local.json`.
-
-For setup and verification details, see `docs/agent-setup.md`.
+- Per-subsystem verification recipes are in `.claude/skills/verify-*` (loaded on demand).
 
 ### Verification Expectations
 

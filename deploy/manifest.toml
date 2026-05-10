@@ -1,0 +1,54 @@
+# deploy/manifest.toml
+#
+# Single source of truth for Phase 5 host deploy dependencies.
+# The deploy script and platform setup guides consume this file.
+# Edit here; do not duplicate dependency lists into prose elsewhere.
+#
+# See deploy/README.md for the schema reference and how to add a dep.
+
+[python]
+# Adapter venvs use this Python version. Matches aggregator/Dockerfile baseline.
+version = "3.12"
+packages_ubuntu = ["python3.12", "python3.12-venv", "python3.12-dev"]
+packages_macos  = ["python@3.12"]
+
+[ollama]
+# Pinned. Bump in a focused PR; deploy-host.sh will upgrade idempotently.
+# 0.23.0 (2026-05-03) — gemma3:4b requires ≥ ~0.6; older versions reject the
+# manifest with HTTP 412 "requires a newer version of Ollama".
+version = "0.23.0"
+install_url_linux = "https://ollama.com/install.sh"
+install_url_macos = "https://ollama.com/download/Ollama-darwin.zip"
+# Models pulled post-install via `ollama pull`.
+# gemma4:e2b — effective 2.3B params, 7.2GB on disk, ~10-12GB RAM at inference.
+# Safe fit on 16GB hosts (this Beelink has docker stack using ~2GB + OS ~2GB).
+# For more capable hardware: bump to gemma4:e4b (4B effective, ~13-15GB RAM).
+models = ["gemma4:e2b"]
+
+[nats_cli]
+# For preflight `nats consumer add` smoke and operator inspection.
+version = "0.1.5"
+install_url_template = "https://github.com/nats-io/natscli/releases/download/v{version}/nats-{version}-{platform}.zip"
+
+[apt_packages]
+common = ["curl", "jq", "sqlite3", "tar", "gzip", "cron", "gpg"]
+
+[brew_packages]
+common = ["jq", "sqlite", "gnu-tar", "coreutils", "gnupg"]
+
+[adapters]
+# Each entry produces:
+#   - venv at /var/lib/edgecitadel/venvs/<name>/
+#   - systemd unit edgecitadel-<name>.service (rendered from systemd/<name>.service.in)
+enabled           = ["gemma", "watchdog"]
+optional_disabled = ["shell"]   # installed but not enabled (executes arbitrary host commands)
+
+[verification]
+# Time budget for the round-trip smoke test (Phase 6 of deploy-host.sh).
+# 120s accommodates first-call cold-start on CPU-only inference (model load
+# into RAM + first token). Steady-state gemma4:e2b on N150 is ~30-90s/req.
+round_trip_timeout_sec = 120
+# Adapter heartbeat staleness threshold for `--check`.
+heartbeat_max_age_sec = 60
+# Backup recency budget — fail check if latest daily is older than this.
+backup_max_age_sec = 93600   # 26 hours

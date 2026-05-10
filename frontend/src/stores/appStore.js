@@ -136,6 +136,35 @@ const useAppStore = create((set, get) => ({
     }
   }),
 
+  // Page-refresh recovery: seed a synthetic streaming bubble from
+  // already-persisted task.progress chunks when no live one exists yet.
+  // Idempotent — does nothing if a synthetic for this task is already in
+  // realtimeMessages, so subsequent live deltas extend the same bubble via
+  // appendStreamDelta. `lastDeltaIso` is the timestamp of the freshest
+  // chunk used for stall detection.
+  seedStreamFromHistory: (taskId, senderId, content, skillId, lastDeltaIso) =>
+    set((state) => {
+      const exists = state.realtimeMessages.some(
+        (m) => m.task_id === taskId && m.streaming === true
+      )
+      if (exists || !content) return {}
+      const synth = {
+        id: `stream-${taskId}`,
+        task_id: taskId,
+        sender_id: senderId,
+        type: 'result',
+        streaming: true,
+        skill_id: skillId,
+        content,
+        timestamp: lastDeltaIso || new Date().toISOString(),
+        last_delta_at: lastDeltaIso ? new Date(lastDeltaIso).getTime() : Date.now(),
+      }
+      return {
+        realtimeMessages: [synth, ...state.realtimeMessages]
+          .slice(0, MAX_REALTIME_MESSAGES),
+      }
+    }),
+
   finalizeStream: (taskId, resultEnvelope) => set((state) => ({
     realtimeMessages: state.realtimeMessages.map((m) =>
       m.task_id === taskId && m.streaming

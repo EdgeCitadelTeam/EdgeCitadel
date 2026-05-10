@@ -5,6 +5,13 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"
+      # 1883 is bound unconditionally; the MQTT listener inside the broker
+      # is gated by the `mqtt {}` block in nats.conf (rendered from
+      # nats.conf.tpl by scripts/render-nats-conf.sh based on EC_ENABLE_MQTT).
+      # If MQTT is disabled in nats.conf, the bound port refuses connections
+      # but does not conflict with anything. Phase 5 superseded the broken
+      # `nats-mqtt` profile pattern (both services tried to bind 4222).
+      - "1883:1883"
     volumes:
       - ./nats/nats.conf:/etc/nats/nats.conf:ro
       - ./nats/data:/data
@@ -16,23 +23,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-    restart: unless-stopped
-
-  nats-mqtt:
-    # Activated only with --profile mqtt-ingress.
-    profiles: ["mqtt-ingress"]
-    image: nats:2.10-alpine
-    command: ["-c", "/etc/nats/nats.conf"]
-    ports:
-      - "4222:4222"
-      - "8222:8222"
-      - "1883:1883"
-    volumes:
-      - ./nats/nats.conf:/etc/nats/nats.conf:ro
-      - ./nats/data:/data
-    environment:
-      - NATS_TOKEN=${NATS_TOKEN}
-      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
     restart: unless-stopped
 
   aggregator:

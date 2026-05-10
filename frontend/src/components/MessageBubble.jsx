@@ -27,6 +27,9 @@ const typeConfig = {
   cancel: { icon: XCircle, color: 'text-red-400' },
   broadcast: { icon: Radio, color: 'text-cyan-400' },
   'task.progress': { icon: Activity, color: 'text-yellow-400' },
+  // Synthetic streaming bubble (appStore.appendStreamDelta) — distinct
+  // visual treatment from RESULT so the in-flight state is unambiguous.
+  streaming: { icon: Activity, color: 'text-amber-300' },
   register: { icon: Info, color: 'text-gray-400' },
   heartbeat: { icon: Info, color: 'text-gray-400' },
 }
@@ -133,7 +136,12 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
   const [inspecting, setInspecting] = useState(false)
 
   const type = message.type || 'unknown'
-  const config = typeConfig[type] || { icon: Info, color: 'text-gray-400' }
+  // While the synthetic streaming bubble is live (appStore.appendStreamDelta
+  // builds it with type='result' so finalizeStream can swap-in-place), wear
+  // a STREAMING badge instead of RESULT — the underlying type is structural,
+  // but the user-facing label should reflect the in-flight state.
+  const displayType = message.streaming && !message.stalled ? 'streaming' : type
+  const config = typeConfig[displayType] || typeConfig[type] || { icon: Info, color: 'text-gray-400' }
   const Icon = config.icon
   const senderColor = getAgentColor(message.sender_id)
   const content = extractContent(message.payload) ?? message.content ?? null
@@ -189,7 +197,7 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
               config.color
             )}
           >
-            {type}
+            {displayType}
           </span>
           {taskState && (
             <span

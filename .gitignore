@@ -66,3 +66,9 @@ docs/demo-raw.webm
 .superpowers/
 # Design specs and implementation plans (per-developer working artifacts):
 docs/superpowers/
+
+# Phase 5: deploy script's runtime log files (the deploy script writes timestamped logs)
+deploy/*.log
+
+# Operator note: scheduled tasks lock from claude harness
+.claude/scheduled_tasks.lock
