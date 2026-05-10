@@ -6,11 +6,13 @@
 // testMatch covers both naming styles: legacy `phaseN-...-smoke.spec.js`
 // (Phase 1 + 2) and `phase3+` specs without the -smoke suffix. The
 // `[\d.]+` shape also accepts decimal phase numbers (e.g. phase2.5).
+// Also accepts `*-regression.spec.js` so per-bug regression coverage
+// is reachable from the smoke runner without needing a phase prefix.
 const { defineConfig } = require('@playwright/test');
 
 module.exports = defineConfig({
   testDir: './tests',
-  testMatch: /phase[\d.]+-.*\.spec\.js/,
+  testMatch: [/phase[\d.]+-.*\.spec\.js/, /-regression\.spec\.js$/],
   workers: 1,
   retries: 0,
   timeout: 120_000,

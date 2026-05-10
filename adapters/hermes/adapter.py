@@ -16,6 +16,14 @@ import logging
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load adapters/hermes/agent.env so `python -m adapters.hermes.adapter` works
+# without external `set -a; source agent.env`. Done before importing
+# hermes_client because that module reads HERMES_BASE_URL/MODEL/TIMEOUT at
+# import time. override=False keeps launchd-supplied env winning.
+load_dotenv(Path(__file__).resolve().parent / "agent.env", override=False)
+
 import httpx
 
 from adapters._common.pull_consumer import Context

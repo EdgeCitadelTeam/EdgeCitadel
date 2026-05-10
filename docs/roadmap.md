@@ -177,19 +177,24 @@ Items shipped:
 
 Hermes upstream provider: `custom` endpoint pointed at OpenAI (`https://api.openai.com/v1`, model `gpt-5-mini`). Switching to local Ollama is a `~/.hermes/config.yaml` edit only — no bridge change needed.
 
-#### Phase 6 follow-up — Hermes streaming renders as multiple cards on the dashboard (BLOCKER for Phase 4)
+#### Phase 6 follow-up — streaming renders as multiple cards on the dashboard (RESOLVED 2026-05-09)
 
-**Symptom (observed 2026-05-09 against `http://100.97.29.74/`):** sending a single prompt to `us-mac-hermes` ("fetch a recent paper") produces ~30 message cards in the dashboard chat history instead of one growing/finalized bubble. Production `/api/messages` for the affected `task_id` shows 1 `result` envelope (completed) plus ~29 `task.progress` envelopes (working) — that's correct on the wire; the bug is in the client merge.
+**Symptom (observed 2026-05-09 against `http://100.97.29.74/`):** sending a single prompt to `us-mac-hermes` ("fetch a recent paper") produced ~30 message cards in the dashboard chat history instead of one growing/finalized bubble. Production `/api/messages` for the affected `task_id` showed 1 `result` envelope plus ~29 `task.progress` envelopes — that's correct on the wire; the bug was in the client merge.
 
-**Likely scope (debug before Phase 4 to avoid AG2 chains compounding the noise):**
-- Verify the bridge's `task.progress` envelope shape against what Gemma publishes. The bridge calls `ctx.publish_progress(task_id, body=delta, extra={"upstream": "hermes-agent"})`, which produces `payload.message=<delta>` (per `adapters/_common/pull_consumer.py:Context.publish_progress`). Frontend `useWebSocket.js` and `appStore.js:appendStreamDelta` were specced in Phase 2.5 against Gemma's emit — confirm whether they read `payload.delta` (Phase 2.5 spec wording) vs `payload.message` (actual Context publish shape) and whether one path is emitting the wrong field.
-- Verify the WS bridge is actually broadcasting `task.progress` envelopes from `agents.us-mac-hermes.task_progress.{task_id}` (the aggregator's `MessageRouter.on_task_progress` subscription was a Phase 2.5 add). Check `aggregator/main.py` startup logs for the subscription wildcard and the WS hub broadcast path.
-- If WS frames arrive correctly but the reducer doesn't merge: check `task_id` propagation through the WS frame and the synthetic-bubble lookup key in `appStore.js`.
-- Negative test: repeat the same prompt against `gemma-1` on production and confirm Gemma renders as a single growing bubble (proves the reducer works for the canonical case and the Hermes path is different).
+**Negative-test result:** the original hypothesis ("Gemma renders cleanly, Hermes fragments") was **falsified**. Gemma fragmented worse — a four-paragraph prompt produced 52 cards (capped by ChatHistory's page size; production held 500+ persisted progress envelopes for the same task). The bug was universal and latent since Phase 2.5; only became user-visible when Hermes started producing long-form replies through this path.
 
-**Investigation entry points:** `aggregator/aggregator.py` (router subscriptions, `on_task_progress`), `aggregator/websocket_hub.py` (frame shape), `frontend/src/hooks/useWebSocket.js` (envelope routing), `frontend/src/stores/appStore.js` (`appendStreamDelta` / `finalizeStream`), `adapters/_common/pull_consumer.py` (Context.publish_progress payload shape).
+**Root cause (two issues, both frontend):**
+1. `frontend/src/hooks/useWebSocket.js` read `env.payload?.delta`. The canonical streaming-chunk shape from `adapters/_common/pull_consumer.py:Context.publish_progress` is `payload.message`. Gemma's adapter happened to redundantly mirror the chunk to `payload.delta` via `extra={"delta": delta, ...}`; the Hermes bridge did not. So Hermes' synthetic streaming bubble stayed empty during streaming.
+2. `frontend/src/components/ChatHistory.jsx` merged the `/api/messages` poll results 1:1 with realtime envelopes and rendered every row as its own `MessageBubble`. Persisted `task.progress` rows therefore each became a bubble — fragmentation at the rendering layer, irrespective of the synthetic-bubble reducer working correctly.
 
-Track separately or fold into Phase 4 prerequisites — operator's call.
+**Fix (frontend-only, no schema/wire changes):**
+- `useWebSocket.js`: read `env.payload?.message ?? env.payload?.delta ?? ''` so any adapter using the canonical `Context.publish_progress` works without each one having to remember to add `extra={"delta": ...}`.
+- `ChatHistory.jsx`: drop `type === 'task.progress'` from both `historicalMessages` and `realtimeMessages` before merging into the timeline, **unless** the operator selects `task.progress` from the type-filter dropdown (forensic opt-in). The synthetic streaming bubble built by `appStore.appendStreamDelta` remains the user-visible representation. Persistence is unchanged — `ConversationThread` and `MessageInspector` continue to see the raw rows.
+- `ChatHistory.jsx`: page-refresh recovery — when persisted `task.progress` rows exist for a task that has no `result` envelope yet **and** no live synthetic streaming bubble, build one collapsed `STREAMING` bubble per task by concatenating `payload.message` across the persisted chunks (chronologically). When the WebSocket reconnects and the live synthetic appears, the reconstructed bubble is suppressed in favor of the live one. The result envelope (when it lands) replaces both with the canonical full-text bubble.
+- `MessageBubble.jsx`: synthetic streaming bubbles now wear a distinct `STREAMING` badge (amber Activity icon) while live, falling back to the underlying type once `finalizeStream` lands or the stall timer fires.
+- Regression coverage: `e2e/tests/streaming-fragmentation-regression.spec.js`. Manual browser-driven verification scripts live under `e2e/scripts/` (not part of the regular suite — they target production data).
+
+**Verification:** ran a fresh long-response prompt through the production aggregator at `100.97.29.74` (NATS + persistence + WS broadcast all real) for both `gemma-1` and `us-mac-hermes`, observed via a local dev frontend (`vite.config.prodproxy.js`) with the fix loaded. Result for both: exactly **2 cards per task** (command + growing assistant bubble with live cursor `▍`), 0 fragmentation. Production wire data unchanged — Hermes task `941bd6c5…` still persisted 94 `task.progress` envelopes plus the final `result`. Production frontend bundle still ships the pre-fix code; deploy is operator-gated.
 
 ### Optional / parking lot
 
