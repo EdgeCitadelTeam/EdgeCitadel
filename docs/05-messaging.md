@@ -181,6 +181,12 @@ How an operator confirms messaging is healthy:
 
 ---
 
+## Phase 4 surfaces
+
+**Phase 4 binding location** (per ADR-0010 and ADR-0011): the A2A HTTP+SSE binding (reserved in ADR-0003) is implemented by the external A2A ingress gateway (`a2a-gateway/`, Phase 4.4) — purely an external-edge surface. In-fleet delegation does not traverse A2A HTTP; it uses the NATS-native `delegation` envelope on `agents.{recipient}.inbox` via the shared L2 helpers at `adapters/_common/l2_orchestrator.py`. Tool exposure to MCP-aware clients (Claude Desktop, Cursor, Hermes, AG2's MCPToolkit) is provided by the MCP server (`mcp-server/`, Phase 4.3, agent `mcp-1`).
+
+---
+
 ## References
 
 - [`docs/agent-contract.md`](agent-contract.md) — the v0.1 wire contract (envelope, lifecycle, Agent Card).
