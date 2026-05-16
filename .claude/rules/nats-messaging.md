@@ -11,7 +11,8 @@ paths:
 
 > Authoritative sources: `docs/agent-contract.md`, `schemas/envelope.v1.json`,
 > ADR-0002 (JetStream WorkQueue), ADR-0003 (A2A vocabulary), ADR-0004 (MQTT
-> opt-in), ADR-0005 (browser-scoped token), ADR-0006 (outbox mirror).
+> opt-in), ADR-0005 (browser-scoped token), ADR-0006 (outbox mirror),
+> ADR-0010 (NATS-native L2 delegation), ADR-0011 (MCP for tool exposure).
 > This file is short-form guidance for tools; conflicts in favor of the docs.
 
 ## Transport
@@ -94,6 +95,20 @@ the strict schema at `schemas/envelope.v1.json`:
   `agents.{self}.outbox` via plain NATS (per ADR-0006).
 - Plain-NATS publishes (heartbeat, status, log, broadcast, task_progress)
   do not need `Nats-Msg-Id`.
+
+## Phase 4 surfaces
+
+- In-fleet `delegation` envelopes stay on NATS. Use the L2 helpers at
+  `adapters/_common/l2_orchestrator.py` (Phase 4.2) — do not route in-fleet
+  delegation through A2A HTTP+SSE (ADR-0010).
+- External A2A v1.0 HTTP+SSE traffic enters the fabric only through the
+  `a2a-gateway` service (Phase 4.4). Adapters MUST NOT serve A2A HTTP
+  endpoints directly.
+- Tool exposure to MCP-aware clients (Claude Desktop, Cursor, Hermes,
+  AG2 MCPToolkit) is provided by the `mcp-server` service (Phase 4.3,
+  registered as agent `mcp-1`, `runtime.kind: gateway`). Tools surface
+  fleet primitives 1:1 with NATS / aggregator — no business logic is
+  duplicated (ADR-0011).
 
 ## Auth
 
