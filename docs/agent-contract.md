@@ -302,7 +302,8 @@ This is a legitimate use of A2A's documented extension mechanism, not a deviatio
 | `runtime.roles` | yes | Array of role strings: `worker`, `reasoner`, `watchdog`, `orchestrator` |
 | `runtime.tags` | no | Free-form tags (model family, deployment, capabilities) |
 | `runtime.deployment` | no | Deployment identifier, e.g., `mac-mini-studio-01` |
-| `runtime.kind` | yes | `native` (speaks A2A/NATS directly) or `bridge` (facade for an external runtime) |
+| `runtime.kind` | yes | `native` (speaks A2A/NATS directly), `bridge` (facade for an external runtime), or `gateway` (multiplexing surface like the MCP server or external A2A gateway; see §"A2A and MCP surfaces") |
+| `runtime.conformance` | yes | `L1` (reachable), `L2` (collaborative — handles delegation, refuses at `hop_count >= 8`, propagates `context_id`), or `L3` (typed — A2A skill schemas + MCP). See §4. |
 | `runtime.upstream` | required if `runtime.kind = bridge` | Identifier of the upstream runtime |
 | `runtime.heartbeat_interval_sec` | no | Heartbeat interval (default 30 s; range 10–300 s) |
 | `runtime.listens_broadcast` | no | Boolean; defaults to `true` |
@@ -330,7 +331,7 @@ v0.2 replaces this with a JetStream KV bucket (`AGENT_CARDS`).
 | **L2 — Collaborative** | L1 + handles `delegation`, enforces `hop_count >= 8` refusal, propagates `context_id`. | AG2 agents, LangGraph agents, anything that delegates to peers. |
 | **L3 — Typed** | L2 + publishes A2A skill schemas + runs an MCP endpoint. | Agents whose capabilities need to be invoked programmatically by planners. |
 
-An implementation declares its level in `metadata["runtime.conformance"] = "L1" | "L2" | "L3"` (optional; default L1).
+An implementation declares its level in `metadata["runtime.conformance"]`. The field is **mandatory** in v0.2+ (`schemas/agent-card.v1.json` enforces it). Adapters that previously shipped without it default to `"L1"` (gemma, hermes, watchdog, shell). The AG2 adapter ships at `"L2"` after Phase 4.2; `mcp-1` and `a2a-gateway` ship at `"L1"`.
 
 ---
 
@@ -364,6 +365,31 @@ Each adapter is small on purpose. If an adapter is more than ~500 lines, the con
 - [`schemas/agent-card.v1.json`](../schemas/agent-card.v1.json) — A2A v1.0 Agent Card schema (rewritten in Task 2).
 - [`docs/05-messaging.md`](05-messaging.md) — operational view of subjects and persistence.
 - [`docs/superpowers/specs/2026-04-23-agent-messaging-design.md`](superpowers/specs/2026-04-23-agent-messaging-design.md) — full design spec underlying this contract.
+
+---
+
+## 8. A2A and MCP surfaces (Phase 4+)
+
+Phase 4 introduces three new surfaces beyond the v0.1 contract. None changes the envelope schema; they extend the runtime vocabulary.
+
+### 8.1 L2 conformance reference
+
+L2 means the agent handles `delegation` envelopes, enforces `hop_count >= 8` refusal, and propagates `context_id` across hops. The reference implementation is the AG2 adapter (`adapters/ag2/`, Phase 4.2). Shared helpers at `adapters/_common/l2_orchestrator.py` provide:
+
+- `publish_delegation(nc, *, recipient, body, sender_id, context_id, parent_task_id, hop_count, skill_id=None)` — emits a `delegation` envelope on `agents.{recipient}.inbox` with the dedup contract.
+- `await_result_for_task(consumer, task_id, *, timeout)` — awaits the matching `result` on the sender's inbox.
+- `refuse_if_hop_limit(env)` — pre-built rejection envelope when `hop_count >= 8`.
+- `propagate_context(inbound_env, *, new_task_id)` — extracts fields a child delegation must echo.
+
+Future framework adapters (LangGraph, CrewAI, Pydantic-AI, Google ADK) reuse these helpers; ADR-0010 locks NATS-native delegation as the in-fleet transport.
+
+### 8.2 MCP exposure
+
+The MCP server at `mcp-server/` (Phase 4.3) speaks the Model Context Protocol over stdio (Claude Desktop / Cursor mounts) and HTTP+SSE (remote clients including Hermes' built-in MCP client and AG2's `MCPToolkit`). It is a first-class fleet subscriber registered as agent `mcp-1` (`runtime.kind: gateway`, `runtime.roles: [orchestrator]`, `runtime.conformance: L1`). Tools surfaced (1:1 with NATS / aggregator primitives): `publish_command`, `list_agents`, `query_messages`, `cancel_task`, `delegate`. Per-caller attribution lives in `payload.metadata.caller`. See ADR-0011.
+
+### 8.3 External A2A ingress
+
+The A2A gateway at `a2a-gateway/` (Phase 4.4) is a slim FastAPI service exposing A2A v1.0 HTTP+SSE endpoints for any agent whose `runtime.roles` overlaps `{reasoner, worker}`. It is registered as agent `a2a-gateway` (`runtime.kind: gateway`). The gateway is purely external-edge — it never participates in in-fleet delegation (ADR-0010). Per-session attribution lives in `payload.metadata.origin_session`.
 
 ---
 
