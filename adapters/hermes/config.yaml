@@ -6,6 +6,7 @@ runtime:
   kind: bridge
   upstream: hermes-agent
   roles: [reasoner]
+  conformance: L1
   heartbeat_interval_sec: 30
   tags: [external-memory, openai-compat]
 capabilities:

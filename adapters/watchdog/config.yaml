@@ -5,6 +5,7 @@ version: 0.1.0
 runtime:
   kind: native
   roles: [watchdog]
+  conformance: L1
   tags: [observer, infrastructure]
   heartbeat_interval_sec: 30
 skills: []
