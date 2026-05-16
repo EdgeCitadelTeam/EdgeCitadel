@@ -18,11 +18,18 @@ def build_card(config_path: str | Path) -> dict:
     if kind == "bridge" and not runtime.get("upstream"):
         raise ValueError("bridge agents require runtime.upstream")
 
+    conformance = runtime.get("conformance", "L1")
+    if conformance not in ("L1", "L2", "L3"):
+        raise ValueError(
+            f"runtime.conformance must be L1, L2, or L3 (got {conformance!r})"
+        )
+
     metadata = {
         "runtime.kind": kind,
         "runtime.roles": runtime.get("roles", ["worker"]),
         "runtime.heartbeat_interval_sec":
             runtime.get("heartbeat_interval_sec", 30),
+        "runtime.conformance": conformance,
     }
     if runtime.get("tags"):
         metadata["runtime.tags"] = runtime["tags"]
