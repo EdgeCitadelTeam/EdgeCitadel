@@ -38,6 +38,7 @@ def _card(**over):
         "metadata": {
             "runtime.kind": "native",
             "runtime.roles": ["worker"],
+            "runtime.conformance": "L1",
             "runtime.heartbeat_interval_sec": 30
         }
     }
@@ -53,6 +54,21 @@ class TestAccepts:
         c = _card()
         c["metadata"] = {**c["metadata"], "runtime.kind": "bridge",
                          "runtime.upstream": "nous-hermes-agent"}
+        validator.validate(c)
+
+    def test_gateway_kind_accepted(self, validator):
+        c = _card()
+        c["metadata"] = {**c["metadata"], "runtime.kind": "gateway"}
+        validator.validate(c)
+
+    def test_conformance_l2_accepted(self, validator):
+        c = _card()
+        c["metadata"] = {**c["metadata"], "runtime.conformance": "L2"}
+        validator.validate(c)
+
+    def test_conformance_l3_accepted(self, validator):
+        c = _card()
+        c["metadata"] = {**c["metadata"], "runtime.conformance": "L3"}
         validator.validate(c)
 
 
@@ -77,5 +93,19 @@ class TestRejects:
     def test_heartbeat_out_of_range(self, validator):
         c = _card()
         c["metadata"] = {**c["metadata"], "runtime.heartbeat_interval_sec": 5}
+        with pytest.raises(ValidationError):
+            validator.validate(c)
+
+    def test_missing_conformance(self, validator):
+        c = _card()
+        m = dict(c["metadata"])
+        m.pop("runtime.conformance")
+        c["metadata"] = m
+        with pytest.raises(ValidationError):
+            validator.validate(c)
+
+    def test_bad_conformance_value(self, validator):
+        c = _card()
+        c["metadata"] = {**c["metadata"], "runtime.conformance": "L4"}
         with pytest.raises(ValidationError):
             validator.validate(c)

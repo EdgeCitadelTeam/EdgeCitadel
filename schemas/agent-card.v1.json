@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://edgecitadel.dev/schemas/agent-card.v1.json",
   "title": "A2A v1.0 Agent Card (EdgeCitadel profile)",
-  "description": "Payload of agents.{id}.register. Full A2A v1.0 Agent Card shape with EdgeCitadel metadata vocabulary (runtime.kind, runtime.roles, runtime.upstream, runtime.heartbeat_interval_sec).",
+  "description": "Payload of agents.{id}.register. Full A2A v1.0 Agent Card shape with EdgeCitadel metadata vocabulary (runtime.kind ∈ {native,bridge,gateway}, runtime.roles, runtime.upstream, runtime.conformance ∈ {L1,L2,L3}, runtime.heartbeat_interval_sec).",
   "type": "object",
   "additionalProperties": true,
   "required": ["name", "description", "version", "url", "provider",
@@ -69,9 +69,11 @@
     "metadata": {
       "type": "object",
       "required": ["runtime.kind", "runtime.roles",
+                   "runtime.conformance",
                    "runtime.heartbeat_interval_sec"],
       "properties": {
-        "runtime.kind": {"type": "string", "enum": ["native", "bridge"]},
+        "runtime.kind": {"type": "string", "enum": ["native", "bridge", "gateway"]},
+        "runtime.conformance": {"type": "string", "enum": ["L1", "L2", "L3"]},
         "runtime.roles": {
           "type": "array",
           "minItems": 1,
