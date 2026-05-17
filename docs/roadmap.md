@@ -5,7 +5,9 @@ This file tracks deferred work and the path forward beyond what's currently impl
 1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
 2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
 
-Last updated: 2026-05-16.
+Last updated: 2026-05-17.
+
+**Workflow:** in-flight phases are tracked as [GitHub Issues](https://github.com/zhonghaozhan/EdgeCitadel/issues): one `epic` issue per phase + one `sub-spec` issue per sub-phase. This file remains the canonical narrative; issues are the operational tracker. See the epic / sub-spec links beside each phase below.
 
 ---
 
@@ -110,25 +112,27 @@ agents only appear in Registry, not Chat.
 
 ### Phase 4 — Fleet orchestration & protocol extensions
 
+**Epic:** [#13](https://github.com/zhonghaozhan/EdgeCitadel/issues/13)
+
 Four sub-specs under one umbrella. Adds the first L2-conformant orchestrator (AG2), an MCP server exposing fleet primitives as tools, and an external A2A ingress gateway. ADR-0010 locks in-fleet delegation as NATS-native; ADR-0011 establishes MCP as the canonical tool-exposure protocol. Original roadmap ordering restored: 4.1 → 4.2 → 4.3 → 4.4.
 
-#### Phase 4.1 — AG2 adapter scaffold
+#### Phase 4.1 — AG2 adapter scaffold ([#14](https://github.com/zhonghaozhan/EdgeCitadel/issues/14))
 
 Pin `ag2>=0.12,<0.13`. Native runtime, single `reasoning.chat` skill, uses `memory.turns.*` like Gemma. Validates AG2 imports against the pinned wheel. `runtime.conformance: L1`. Indistinguishable from `gemma-1` on the fabric except for the `ag2` tag.
 
-#### Phase 4.2 — AG2 as L2 orchestrator + L2 substrate
+#### Phase 4.2 — AG2 as L2 orchestrator + L2 substrate ([#15](https://github.com/zhonghaozhan/EdgeCitadel/issues/15))
 
 Custom AG2 function-tool `delegate(...)` publishes NATS-native `delegation` envelopes. Shared helpers extracted into `adapters/_common/l2_orchestrator.py` so future framework adapters (LangGraph, CrewAI, …) reuse the L2 contract without re-deriving it. Refuses delegations pre-emptively at `hop_count >= 7` (inbound). Cancel returns `task_state: rejected, payload.reason: "ag2_cancel_not_supported"`. `runtime.conformance` bumps to L2. `docs/06-p2p-delegation.md` rewritten in the same PR.
 
-#### Phase 4.3 — MCP server (first-class subscriber)
+#### Phase 4.3 — MCP server (first-class subscriber) ([#16](https://github.com/zhonghaozhan/EdgeCitadel/issues/16))
 
 New `mcp-server/` service. First-class NATS subscriber registered as `mcp-1` (`runtime.kind: gateway`). Speaks MCP over both stdio (Claude Desktop / Cursor) and HTTP+SSE (remote, including Hermes' built-in MCP client and AG2's `MCPToolkit`). Tools: `publish_command`, `list_agents`, `query_messages`, `cancel_task`, `delegate`. AG2's L2 orchestrator drinks own champagne via the MCP server.
 
-#### Phase 4.4 — External A2A ingress gateway
+#### Phase 4.4 — External A2A ingress gateway ([#17](https://github.com/zhonghaozhan/EdgeCitadel/issues/17))
 
 Slim FastAPI service translating external A2A v1.0 HTTP+SSE into internal NATS commands. Role filter (`runtime.roles ∩ {reasoner, worker}`) gates which agents are exposed. Registered as `a2a-gateway` (`runtime.kind: gateway`). Strictly external-edge — never on the in-fleet delegation path (ADR-0010).
 
-Umbrella spec: `docs/superpowers/specs/2026-05-10-phase4-fleet-orchestration-umbrella-design.md`. Sub-spec files land per-sub-phase.
+Umbrella spec: `docs/superpowers/specs/2026-05-10-phase4-fleet-orchestration-umbrella-design.md` (gitignored — local). Sub-spec files land per-sub-phase.
 
 ### Phase 5 — Host deploy ✅ shipped 2026-05-09
 
