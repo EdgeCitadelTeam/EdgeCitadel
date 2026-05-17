@@ -5,7 +5,7 @@ This file tracks deferred work and the path forward beyond what's currently impl
 1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
 2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
 
-Last updated: 2026-05-09.
+Last updated: 2026-05-16.
 
 ---
 
@@ -108,27 +108,27 @@ New `Registry` top-level tab + `GET /api/registry` snapshot endpoint +
 `agent_deleted` WS event + sidebar roles-based filter so infrastructure
 agents only appear in Registry, not Chat.
 
-### Phase 4 — AG2 + A2A wrapper
+### Phase 4 — Fleet orchestration & protocol extensions
 
-Four sessions, one plan. The first phase that exercises the **bridge** pattern (`runtime.kind: bridge`).
+Four sub-specs under one umbrella. Adds the first L2-conformant orchestrator (AG2), an MCP server exposing fleet primitives as tools, and an external A2A ingress gateway. ADR-0010 locks in-fleet delegation as NATS-native; ADR-0011 establishes MCP as the canonical tool-exposure protocol. Original roadmap ordering restored: 4.1 → 4.2 → 4.3 → 4.4.
 
-#### Phase 4.1 — AG2 adapter L1 scaffold
+#### Phase 4.1 — AG2 adapter scaffold
 
-Pin `ag2>=0.12,<0.13`. Spend 15 minutes verifying imports (`A2aRemoteAgent`, `A2aAgentServer`, `autogen.agentchat.group.AutoPattern`) against the pinned wheel before writing code. Use `a_run` async-only.
+Pin `ag2>=0.12,<0.13`. Native runtime, single `reasoning.chat` skill, uses `memory.turns.*` like Gemma. Validates AG2 imports against the pinned wheel. `runtime.conformance: L1`. Indistinguishable from `gemma-1` on the fabric except for the `ag2` tag.
 
-#### Phase 4.2 — AG2 L2 delegation + hop_count loop protection
+#### Phase 4.2 — AG2 as L2 orchestrator + L2 substrate
 
-Refuse delegations at `hop_count >= 8`. Cancel returns `task_state: rejected, payload.reason: "ag2_cancel_not_supported"` (v0.2 limitation; revisit if/when AG2 ships cancel).
+Custom AG2 function-tool `delegate(...)` publishes NATS-native `delegation` envelopes. Shared helpers extracted into `adapters/_common/l2_orchestrator.py` so future framework adapters (LangGraph, CrewAI, …) reuse the L2 contract without re-deriving it. Refuses delegations pre-emptively at `hop_count >= 7` (inbound). Cancel returns `task_state: rejected, payload.reason: "ag2_cancel_not_supported"`. `runtime.conformance` bumps to L2. `docs/06-p2p-delegation.md` rewritten in the same PR.
 
-#### Phase 4.3 — Dashboard delegation-chain view
+#### Phase 4.3 — MCP server (first-class subscriber)
 
-`GET /api/chains/{context_id}` endpoint + chain timeline UI. Visualizes a delegation cascade across multiple agents.
+New `mcp-server/` service. First-class NATS subscriber registered as `mcp-1` (`runtime.kind: gateway`). Speaks MCP over both stdio (Claude Desktop / Cursor) and HTTP+SSE (remote, including Hermes' built-in MCP client and AG2's `MCPToolkit`). Tools: `publish_command`, `list_agents`, `query_messages`, `cancel_task`, `delegate`. AG2's L2 orchestrator drinks own champagne via the MCP server.
 
-#### Phase 4.4 — A2A HTTP wrapper
+#### Phase 4.4 — External A2A ingress gateway
 
-`A2aAgentServer(agent, agent_card=card)` serving `/.well-known/agent-card.json`. NATS bridge translates SSE → `task.progress` envelopes. Decide `.build()` vs `.serve()` vs `.run()` at pin time.
+Slim FastAPI service translating external A2A v1.0 HTTP+SSE into internal NATS commands. Role filter (`runtime.roles ∩ {reasoner, worker}`) gates which agents are exposed. Registered as `a2a-gateway` (`runtime.kind: gateway`). Strictly external-edge — never on the in-fleet delegation path (ADR-0010).
 
-Spec file: `docs/superpowers/specs/<date>-ag2-a2a-wrapper-design.md` (TBD).
+Umbrella spec: `docs/superpowers/specs/2026-05-10-phase4-fleet-orchestration-umbrella-design.md`. Sub-spec files land per-sub-phase.
 
 ### Phase 5 — Host deploy ✅ shipped 2026-05-09
 
@@ -198,7 +198,6 @@ Hermes upstream provider: `custom` endpoint pointed at OpenAI (`https://api.open
 
 ### Optional / parking lot
 
-- **MCP server exposing edge-research tools to Hermes.** Symmetric half of the Phase 6 Hermes bridge. Lets Hermes call into edge-research (publish to NATS, query the agent roster, trigger watchdog actions). v0.3+; design hook reserved in `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md` §Non-goals.
 - **Per-agent JWT auth** (replaces shared `NATS_TOKEN`). v0.2+. Necessary for multi-tenant deployments.
 - **JetStream clustering.** Single-node broker is fine until a second persistent host joins (likely v0.3+).
 - **P2P transport (Zenoh).** v0.3+ exploration; only relevant if we want agent-to-agent communication that doesn't traverse the central broker.

@@ -55,3 +55,31 @@ def test_bridge_requires_upstream(tmp_path):
     p = tmp_path / "c.yaml"; p.write_text(bridge_yaml)
     with pytest.raises(ValueError, match="upstream"):
         build_card(p)
+
+
+def test_card_emits_conformance_default_l1(tmp_path):
+    p = tmp_path / "config.yaml"; p.write_text(YAML)
+    card = build_card(p)
+    assert card["metadata"]["runtime.conformance"] == "L1"
+
+
+def test_card_emits_conformance_when_declared(tmp_path):
+    yaml_with_l2 = YAML.replace(
+        "heartbeat_interval_sec: 30\n",
+        "heartbeat_interval_sec: 30\n  conformance: L2\n",
+    )
+    assert yaml_with_l2 != YAML, "replace target not found in YAML fixture"
+    p = tmp_path / "config.yaml"; p.write_text(yaml_with_l2)
+    card = build_card(p)
+    assert card["metadata"]["runtime.conformance"] == "L2"
+
+
+def test_card_rejects_invalid_conformance(tmp_path):
+    yaml_bad = YAML.replace(
+        "heartbeat_interval_sec: 30\n",
+        "heartbeat_interval_sec: 30\n  conformance: L4\n",
+    )
+    assert yaml_bad != YAML, "replace target not found in YAML fixture"
+    p = tmp_path / "config.yaml"; p.write_text(yaml_bad)
+    with pytest.raises(ValueError, match="runtime.conformance"):
+        build_card(p)

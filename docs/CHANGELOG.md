@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `task.progress.payload.extra.upstream` — bridge adapters SHOULD set this; native adapters omit it. (`docs/05-messaging.md`).
 - `docs/roadmap.md`: Hermes promoted from parking lot to Phase 6; "MCP server exposing edge-research tools to Hermes" logged as v0.3.
 
+### Phase 4 umbrella (design + contract changes; no runtime code yet)
+
+- Added ADR-0010 (in-fleet delegation is NATS-native; HTTP+SSE A2A is external-only).
+- Added ADR-0011 (MCP is the canonical tool-exposure protocol; promoted from v0.3 parking-lot).
+- `schemas/agent-card.v1.json`: `runtime.kind` enum extends to include `gateway`; `runtime.conformance` becomes mandatory (`L1` | `L2` | `L3`).
+- `adapters/_common/agent_card.py`: factory reads `runtime.conformance` from config; rejects invalid values; defaults to `L1`.
+- All shipped adapters (gemma, hermes, watchdog, shell) annotated `runtime.conformance: L1` in their configs.
+- `docs/agent-contract.md` §3.4 documents the new fields; §4 makes conformance mandatory; §8 (new) introduces the L2 / MCP / external A2A surfaces that land in Phase 4.1–4.4.
+- `docs/roadmap.md`: Phase 4 entries rewritten to match the umbrella spec; "MCP server exposing edge-research tools to Hermes" removed from the parking-lot (now Phase 4.3).
+
+Spec: `docs/superpowers/specs/2026-05-10-phase4-fleet-orchestration-umbrella-design.md`.
+
 ### Added (Phase 2.5)
 
 - **Multi-skill dispatch** in Gemma adapter. Four skills routed by

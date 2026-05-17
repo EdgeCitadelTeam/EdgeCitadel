@@ -5,6 +5,7 @@ version: 0.2.5
 runtime:
   kind: native
   roles: [reasoner]
+  conformance: L1
   heartbeat_interval_sec: 30
 capabilities:
   streaming: true
