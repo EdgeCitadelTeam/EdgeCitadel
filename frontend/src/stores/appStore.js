@@ -10,7 +10,7 @@ const useAppStore = create((set, get) => ({
   selectedAgent: null,
 
   // Navigation
-  activeTab: 'chat',
+  activeTab: 'research',
 
   // Real-time messages — canonical envelopes
   realtimeMessages: [],

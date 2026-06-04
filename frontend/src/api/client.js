@@ -4,6 +4,16 @@
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
+
+function buildQuery(params = {}) {
+  const filtered = Object.fromEntries(
+    Object.entries(params)
+      .filter(([, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : v])
+  )
+  return new URLSearchParams(filtered).toString()
+}
+
 async function req(path, opts = {}) {
   const r = await fetch(`${API_BASE}${path}`, opts)
   if (!r.ok) {
@@ -14,9 +24,23 @@ async function req(path, opts = {}) {
   return r.json()
 }
 
+export function getCandles(symbol, range, interval) {
+  const qs = buildQuery({ symbol, range, interval })
+  return req(`/market/candles${qs ? `?${qs}` : ''}`)
+}
+
+export function getTechnicalIndicators(symbol, range, indicators = []) {
+  const qs = buildQuery({ symbol, range, indicators })
+  return req(`/market/technical-indicators${qs ? `?${qs}` : ''}`)
+}
+
 export const api = {
   // System
   systemStatus: () => req('/system/status'),
+
+  // Market data
+  getCandles,
+  getTechnicalIndicators,
 
   // Agents
   listAgents: () => req('/agents'),
@@ -40,7 +64,7 @@ export const api = {
     const filtered = Object.fromEntries(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
     )
-    const qs = new URLSearchParams(filtered).toString()
+    const qs = buildQuery(filtered)
     return req(`/messages${qs ? `?${qs}` : ''}`)
   },
 
@@ -48,7 +72,7 @@ export const api = {
   queryPoison: (agentId, limit = 100) => {
     const params = { limit }
     if (agentId) params.agent_id = agentId
-    const qs = new URLSearchParams(params).toString()
+    const qs = buildQuery(params)
     return req(`/poison?${qs}`)
   },
 
