@@ -10,7 +10,7 @@ const useAppStore = create((set, get) => ({
   selectedAgent: null,
 
   // Navigation
-  activeTab: 'chat',
+  activeTab: 'market',
 
   // Real-time messages — canonical envelopes
   realtimeMessages: [],
@@ -37,6 +37,22 @@ const useAppStore = create((set, get) => ({
   // Mobile sidebar
   sidebarOpen: false,
 
+  // Finance workspace state — demo-first surfaces that can be backed by
+  // live market-data endpoints as they become available.
+  selectedSymbol: 'NVDA',
+  watchlist: ['NVDA', 'AAPL', 'MSFT', 'TSLA'],
+  quotes: {},
+  candles: {},
+  chartRange: '1Y',
+  chartInterval: '1w',
+  latestAnalysis: null,
+  fundamentals: {},
+  valuations: {},
+  newsEvents: {},
+  portfolio: null,
+  positions: [],
+  alerts: [],
+
   // v0.1 messaging surfaces
   agentQueue: {}, // agentQueue[agentId] = {pending, ack_pending, num_waiting}
   poisonEvents: {}, // poisonEvents[agentId] = [advisories]
@@ -57,6 +73,29 @@ const useAppStore = create((set, get) => ({
   setAgents: (agents) => set({ agents }),
 
   setSelectedAgent: (agent) => set({ selectedAgent: agent }),
+  setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
+  setWatchlist: (watchlist) => set({ watchlist: watchlist || [] }),
+  setQuote: (symbol, quote) => set((state) => ({
+    quotes: { ...state.quotes, [symbol]: quote },
+  })),
+  setCandles: (symbol, candles) => set((state) => ({
+    candles: { ...state.candles, [symbol]: candles || [] },
+  })),
+  setChartRange: (range) => set({ chartRange: range }),
+  setChartInterval: (interval) => set({ chartInterval: interval }),
+  setLatestAnalysis: (analysis) => set({ latestAnalysis: analysis }),
+  setFundamentals: (symbol, rows) => set((state) => ({
+    fundamentals: { ...state.fundamentals, [symbol]: rows || [] },
+  })),
+  setValuation: (symbol, value) => set((state) => ({
+    valuations: { ...state.valuations, [symbol]: value },
+  })),
+  setNewsEvents: (symbol, events) => set((state) => ({
+    newsEvents: { ...state.newsEvents, [symbol]: events || [] },
+  })),
+  setPortfolio: (portfolio) => set({ portfolio }),
+  setPositions: (positions) => set({ positions: positions || [] }),
+  setAlerts: (alerts) => set({ alerts: alerts || [] }),
 
   updateAgentStatus: (agentId, agentState) =>
     set((state) => ({

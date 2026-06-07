@@ -17,7 +17,7 @@ export default function App() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Tab switching with 1-5
+      // Product tab switching with 1-5
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         const target = e.target
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
@@ -25,19 +25,19 @@ export default function App() {
         }
         switch (e.key) {
           case '1':
-            setActiveTab('chat')
+            setActiveTab('market')
             break
           case '2':
-            setActiveTab('flow')
+            setActiveTab('research')
             break
           case '3':
-            setActiveTab('logs')
+            setActiveTab('portfolio')
             break
           case '4':
-            setActiveTab('tasks')
+            setActiveTab('alerts')
             break
           case '5':
-            setActiveTab('registry')
+            setActiveTab('agents')
             break
         }
       }

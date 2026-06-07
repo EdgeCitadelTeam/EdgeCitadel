@@ -54,6 +54,23 @@ export const api = {
 
   // Registry — fleet snapshot used by the Registry tab
   getRegistry: () => req('/registry'),
+
+  // Finance research endpoints. These are intentionally thin wrappers so the
+  // frontend can move from demo data to live market providers without changing
+  // component code.
+  getQuote: (symbol) => req(`/market/quote/${encodeURIComponent(symbol)}`),
+  getBatchQuotes: (symbols) => req(`/market/quotes?symbols=${encodeURIComponent(symbols.join(','))}`),
+  getCandles: (symbol, range = '1Y', interval = '1w') =>
+    req(`/market/candles/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}`),
+  getFundamentals: (symbol) => req(`/research/fundamentals/${encodeURIComponent(symbol)}`),
+  getValuation: (symbol) => req(`/research/valuation/${encodeURIComponent(symbol)}`),
+  getNewsEvents: (symbol) => req(`/research/events/${encodeURIComponent(symbol)}`),
+  getPortfolio: () => req('/portfolio'),
+  getPositions: () => req('/portfolio/positions'),
+  getAlerts: (params = {}) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString()
+    return req(`/alerts${qs ? `?${qs}` : ''}`)
+  },
 }
 
 export default api

@@ -51,8 +51,8 @@ export default function HeaderBar() {
 
         <Radio size={18} className="text-accent shrink-0" />
         <h1 className="text-sm font-semibold text-gray-100 truncate">
-          <span className="hidden sm:inline">OpenClaw Swarm Control</span>
-          <span className="sm:hidden">OpenClaw</span>
+          <span className="hidden sm:inline">EdgeCitadel Research Agent</span>
+          <span className="sm:hidden">EdgeCitadel</span>
         </h1>
         <StatusBadge
           status={wsConnected ? 'online' : 'error'}

@@ -1,55 +1,70 @@
-import { MessageSquare, GitBranch, FileText, ListTodo, Server } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import {
+  Bell,
+  Briefcase,
+  LayoutDashboard,
+  LineChart,
+  MessageSquare,
+  Search,
+} from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from './stores/appStore'
 import HeaderBar from './components/HeaderBar'
-import AgentSidebar from './components/AgentSidebar'
-import ChatHistory from './components/ChatHistory'
-import CommFlow from './components/CommFlow'
-import LogViewer from './components/LogViewer'
-import TaskBoard from './components/TaskBoard'
-import AgentDetail from './components/AgentDetail'
-import AgentRegistry from './components/AgentRegistry'
+import StockWorkspace from './components/StockWorkspace'
+import MarketOverview from './components/MarketOverview'
+import PortfolioWorkspace from './components/PortfolioWorkspace'
+import AlertCenter from './components/AlertCenter'
+import AgentsConsole from './components/AgentsConsole'
 
 const TABS = [
-  { key: 'chat', label: 'Chat', icon: MessageSquare, shortcut: '1' },
-  { key: 'flow', label: 'Flow', icon: GitBranch, shortcut: '2' },
-  { key: 'logs', label: 'Logs', icon: FileText, shortcut: '3' },
-  { key: 'tasks', label: 'Tasks', icon: ListTodo, shortcut: '4' },
-  { key: 'registry', label: 'Registry', icon: Server, shortcut: '5' },
+  { key: 'market', label: 'Market', icon: LayoutDashboard, shortcut: '1' },
+  { key: 'research', label: 'Research', icon: Search, shortcut: '2' },
+  { key: 'portfolio', label: 'Portfolio', icon: Briefcase, shortcut: '3' },
+  { key: 'alerts', label: 'Alerts', icon: Bell, shortcut: '4' },
+  { key: 'agents', label: 'Agents', icon: MessageSquare, shortcut: '5' },
 ]
 
 export default function Layout() {
   const activeTab = useAppStore((s) => s.activeTab)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
   const selectedAgent = useAppStore((s) => s.selectedAgent)
-  const setSelectedAgent = useAppStore((s) => s.setSelectedAgent)
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const setSidebarOpen = useAppStore((s) => s.setSidebarOpen)
+  const [agentConsoleTab, setAgentConsoleTab] = useState('chat')
 
-  const showDetail = activeTab === 'detail' && selectedAgent
+  // Legacy deep links still used by agent rows and keyboard regression tests.
+  useEffect(() => {
+    if (['chat', 'flow', 'logs', 'tasks', 'registry', 'detail'].includes(activeTab)) {
+      setAgentConsoleTab(activeTab === 'detail' ? 'chat' : activeTab)
+    }
+  }, [activeTab])
+
+  const normalizedActiveTab = ['chat', 'flow', 'logs', 'tasks', 'registry', 'detail'].includes(activeTab)
+    ? 'agents'
+    : activeTab
 
   const renderContent = () => {
-    if (showDetail) {
-      return (
-        <AgentDetail
-          agentId={selectedAgent}
-          onBack={() => setActiveTab('chat')}
-        />
-      )
-    }
-    switch (activeTab) {
-      case 'chat':
-        return <ChatHistory />
-      case 'flow':
-        return <CommFlow />
-      case 'logs':
-        return <LogViewer />
-      case 'tasks':
-        return <TaskBoard />
-      case 'registry':
-        return <AgentRegistry />
+    switch (normalizedActiveTab) {
+      case 'market':
+        return <MarketOverview />
+      case 'research':
+        return <StockWorkspace />
+      case 'portfolio':
+        return <PortfolioWorkspace />
+      case 'alerts':
+        return <AlertCenter />
+      case 'agents':
+        return (
+          <AgentsConsole
+            activeSubTab={activeTab === 'detail' && selectedAgent ? 'detail' : agentConsoleTab}
+            onSubTabChange={(tab) => {
+              setAgentConsoleTab(tab)
+              setActiveTab(tab)
+            }}
+          />
+        )
       default:
-        return <ChatHistory />
+        return <MarketOverview />
     }
   }
 
@@ -57,7 +72,6 @@ export default function Layout() {
     <div className="h-screen flex flex-col bg-surface">
       <HeaderBar />
       <div className="flex flex-1 min-h-0">
-        {/* Mobile sidebar backdrop */}
         {sidebarOpen && (
           <div
             className="fixed inset-0 bg-black/50 z-30 md:hidden"
@@ -65,21 +79,12 @@ export default function Layout() {
           />
         )}
 
-        {/* Sidebar: fixed overlay on mobile, static in flex on desktop */}
-        <div
-          className={clsx(
-            'fixed top-12 bottom-0 left-0 z-40 w-64 transition-transform duration-200 ease-in-out',
-            'md:static md:w-60 md:translate-x-0 md:transition-none',
-            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-          )}
-        >
-          <AgentSidebar />
-        </div>
-
-        {/* Main content */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          {/* Tab bar */}
           <div className="flex items-center border-b border-surface-200 bg-surface-50 overflow-x-auto">
+            <div className="hidden md:flex items-center gap-1 px-3 py-2 text-xs text-gray-500 border-r border-surface-200">
+              <LineChart size={14} className="text-accent" />
+              Research Terminal
+            </div>
             {TABS.map((tab) => {
               const Icon = tab.icon
               return (
@@ -89,7 +94,7 @@ export default function Layout() {
                   className={clsx(
                     'flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors border-b-2 whitespace-nowrap',
                     'md:px-4',
-                    activeTab === tab.key
+                    normalizedActiveTab === tab.key
                       ? 'text-accent-light border-accent'
                       : 'text-gray-500 border-transparent hover:text-gray-300'
                   )}
@@ -104,7 +109,6 @@ export default function Layout() {
             })}
           </div>
 
-          {/* Content */}
           <div className="flex-1 min-h-0 flex flex-col">{renderContent()}</div>
         </div>
       </div>

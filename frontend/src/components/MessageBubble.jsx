@@ -17,6 +17,7 @@ import {
 import { getAgentColor } from '../utils/agentColors'
 import { relativeTime, fullTimestamp } from '../utils/formatTime'
 import MessageInspector from './MessageInspector'
+import StockAnalysisCard from './StockAnalysisCard'
 
 const typeConfig = {
   command: { icon: Terminal, color: 'text-blue-400' },
@@ -144,6 +145,11 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
   const config = typeConfig[displayType] || typeConfig[type] || { icon: Info, color: 'text-gray-400' }
   const Icon = config.icon
   const senderColor = getAgentColor(message.sender_id)
+  const stockAnalysis = message.payload?.type === 'stock_analysis'
+    ? message.payload
+    : message.payload?.result?.type === 'stock_analysis'
+      ? message.payload.result
+      : null
   const content = extractContent(message.payload) ?? message.content ?? null
   const taskState = message.task_state
 
@@ -243,8 +249,14 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
           </span>
         </div>
 
+        {stockAnalysis && (
+          <div className="mt-2">
+            <StockAnalysisCard analysis={stockAnalysis} />
+          </div>
+        )}
+
         {/* Content with truncation affordance */}
-        {displayed && (
+        {!stockAnalysis && displayed && (
           <div
             className={clsx(
               'mt-1.5 text-[13px] text-gray-300 leading-relaxed',
