@@ -11,12 +11,13 @@ import subprocess
 import sys
 import warnings
 from collections.abc import Callable, Sequence
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from packaging.requirements import InvalidRequirement, Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
 REQUIREMENTS_IN = ROOT / "scripts" / "research" / "requirements.in"
@@ -50,6 +51,7 @@ EXPECTED_DIRECT_REQUIREMENTS = [
     "websockets",
 ]
 OWNER_LABEL = "ai.edgecitadel.owner=test-nats"
+LOCK_HASH_PREFIX = "--hash=sha256:"
 
 
 def _assert_file(path: Path) -> None:
@@ -61,25 +63,60 @@ def _assert_file(path: Path) -> None:
 def _logical_requirements(lock_path: Path) -> list[list[str]]:
     requirements: list[list[str]] = []
     current: list[str] = []
+    expects_continuation = False
 
     for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
 
+        continues = stripped.endswith("\\")
         part = stripped.removesuffix("\\").rstrip()
         if raw_line[:1].isspace():
-            assert current, f"orphaned lock continuation: {stripped}"
+            assert current and expects_continuation, (
+                f"orphaned lock continuation: {stripped}"
+            )
             current.append(part)
-            continue
+        else:
+            assert not current, f"unfinished lock requirement before: {stripped}"
+            current = [part]
 
-        if current:
+        expects_continuation = continues
+        if not continues:
+            _validate_locked_requirement(current)
             requirements.append(current)
-        current = [part]
+            current = []
 
-    if current:
-        requirements.append(current)
+    assert not current and not expects_continuation, (
+        "unfinished lock requirement at EOF"
+    )
     return requirements
+
+
+def _validate_locked_requirement(requirement: list[str]) -> None:
+    try:
+        parsed = Requirement(requirement[0])
+    except InvalidRequirement as error:
+        raise AssertionError(f"invalid locked requirement: {requirement[0]}") from error
+
+    specifiers = list(parsed.specifier)
+    assert parsed.url is None, f"URL requirement is not an exact pin: {requirement[0]}"
+    assert len(specifiers) == 1, f"requirement is not exact: {requirement[0]}"
+    assert specifiers[0].operator == "==", (
+        f"requirement is not pinned with ==: {requirement[0]}"
+    )
+    assert "*" not in specifiers[0].version, (
+        f"wildcard requirement is not exact: {requirement[0]}"
+    )
+    assert len(requirement) > 1, f"requirement has no hashes: {requirement[0]}"
+    for hash_entry in requirement[1:]:
+        assert hash_entry.startswith(LOCK_HASH_PREFIX), (
+            f"unsupported lock continuation: {hash_entry}"
+        )
+        digest = hash_entry.removeprefix(LOCK_HASH_PREFIX)
+        assert len(digest) == 64 and all(
+            character in "0123456789abcdef" for character in digest
+        ), f"invalid SHA-256 hash: {hash_entry}"
 
 
 def _load_nats_helper() -> ModuleType:
@@ -115,6 +152,199 @@ def test_every_locked_requirement_is_exact_and_hashed() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "lock_text",
+    [
+        (f"demo==1.0\n    --hash=sha256:{'a' * 64}\n"),
+        (f"demo ; python_version == '3.12' \\\n    --hash=sha256:{'a' * 64}\n"),
+        (f"demo @ https://example.invalid/demo.whl \\\n    --hash=sha256:{'a' * 64}\n"),
+        ("demo==1.0 \\\n    --hash=sha256:ABC123\n"),
+    ],
+    ids=[
+        "continuation-without-backslash",
+        "marker-equality-is-not-a-pin",
+        "url-is-not-a-pin",
+        "hash-must-be-lowercase-64-hex",
+    ],
+)
+def test_lock_parser_rejects_malformed_logical_records(
+    tmp_path: Path,
+    lock_text: str,
+) -> None:
+    lock_path = tmp_path / "malformed.lock"
+    lock_path.write_text(lock_text, encoding="utf-8")
+
+    with pytest.raises(AssertionError):
+        _logical_requirements(lock_path)
+
+
+def test_lock_parser_accepts_a_well_formed_logical_record(tmp_path: Path) -> None:
+    lock_path = tmp_path / "valid.lock"
+    lock_path.write_text(
+        (
+            "demo==1.0 \\\n"
+            f"    --hash=sha256:{'a' * 64} \\\n"
+            f"    --hash=sha256:{'b' * 64}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    assert _logical_requirements(lock_path) == [
+        [
+            "demo==1.0",
+            f"--hash=sha256:{'a' * 64}",
+            f"--hash=sha256:{'b' * 64}",
+        ]
+    ]
+
+
+def _write_nonwriting_uv(fake_bin: Path, log: Path) -> None:
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "--version" ]]; then
+  printf 'uv 0.8.13 (containment-probe)\\n'
+  exit 0
+fi
+printf '%s\\n' "$*" >>"$FAKE_UV_LOG"
+printf 'stateful uv invocation rejected by probe\\n' >&2
+exit 97
+""",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+    assert not log.exists()
+
+
+@pytest.mark.parametrize(
+    "alias_kind",
+    [
+        "venv-dot-segment",
+        "venv-symlink-ancestor",
+        "venv-symlink-parent-segment",
+        "tmp-dot-segment",
+        "tmp-symlink-ancestor",
+    ],
+)
+def test_launcher_rejects_checkout_aliases_without_creating_state(
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    log = tmp_path / "uv.log"
+    _write_nonwriting_uv(fake_bin, log)
+    external_tmp = tmp_path / "runtime"
+    external_tmp.mkdir()
+    protected_name = f".contract-rejected-{alias_kind}-{tmp_path.name}"
+    protected_path = ROOT / protected_name
+    env = {
+        **os.environ,
+        "FAKE_UV_LOG": str(log),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "TMPDIR": str(external_tmp),
+    }
+    env.pop("EC_RESEARCH_VENV", None)
+
+    if alias_kind == "venv-dot-segment":
+        env["EC_RESEARCH_VENV"] = f"{ROOT.parent}/./{ROOT.name}/{protected_name}"
+    elif alias_kind == "venv-symlink-ancestor":
+        alias = tmp_path / "checkout-alias"
+        alias.symlink_to(ROOT, target_is_directory=True)
+        env["EC_RESEARCH_VENV"] = str(alias / protected_name)
+    elif alias_kind == "venv-symlink-parent-segment":
+        alias = tmp_path / "checkout-subdirectory-alias"
+        alias.symlink_to(ROOT / "tests", target_is_directory=True)
+        env["EC_RESEARCH_VENV"] = str(alias / ".." / protected_name)
+    elif alias_kind == "tmp-dot-segment":
+        env["TMPDIR"] = f"{ROOT.parent}/./{ROOT.name}/{protected_name}"
+    else:
+        alias = tmp_path / "checkout-alias"
+        alias.symlink_to(ROOT, target_is_directory=True)
+        env["TMPDIR"] = str(alias / protected_name)
+
+    result = subprocess.run(
+        [str(RUN_PYTHON), "-c", "raise AssertionError('payload must not run')"],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "outside the checkout" in result.stderr
+    assert not log.exists(), "rejected path reached a stateful uv command"
+    assert not protected_path.exists()
+
+
+@pytest.mark.parametrize(
+    "existing_kind",
+    ["not-uv-managed", "wrong-python", "wrong-uv-version"],
+)
+def test_launcher_rejects_an_invalid_existing_environment_before_sync(
+    tmp_path: Path,
+    existing_kind: str,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    log = tmp_path / "uv.log"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "--version" ]]; then
+  printf 'uv 0.8.13 (existing-environment-probe)\\n'
+else
+  printf '%s\\n' "$*" >>"$FAKE_UV_LOG"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+
+    venv = tmp_path / "existing-venv"
+    (venv / "bin").mkdir(parents=True)
+    python = venv / "bin" / "python"
+    if existing_kind == "not-uv-managed":
+        python.symlink_to(sys.executable)
+    elif existing_kind == "wrong-python":
+        (venv / "pyvenv.cfg").write_text("uv = 0.8.13\n", encoding="utf-8")
+        python.write_text(
+            "#!/usr/bin/env bash\nprintf '3.11\\n'\n",
+            encoding="utf-8",
+        )
+        python.chmod(0o755)
+    else:
+        (venv / "pyvenv.cfg").write_text("uv = 0.8.12\n", encoding="utf-8")
+        python.write_text(
+            "#!/usr/bin/env bash\nprintf '3.12\\n'\n",
+            encoding="utf-8",
+        )
+        python.chmod(0o755)
+
+    runtime_tmp = tmp_path / "runtime"
+    runtime_tmp.mkdir()
+    result = subprocess.run(
+        [str(RUN_PYTHON), "-c", "raise AssertionError('payload must not run')"],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "EC_RESEARCH_VENV": str(venv),
+            "FAKE_UV_LOG": str(log),
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "TMPDIR": str(runtime_tmp),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert not log.exists(), "invalid existing environment was synced or mutated"
+
+
 def test_launcher_uses_exact_uv_semver_and_external_hash_keyed_venv(
     tmp_path: Path,
 ) -> None:
@@ -133,6 +363,7 @@ elif [[ "$1" == "venv" ]]; then
   printf '%s\\n' "$*" >>"$FAKE_UV_LOG"
   venv="${!#}"
   mkdir -p "$venv/bin"
+  printf 'uv = 0.8.13\\n' >"$venv/pyvenv.cfg"
   ln -s "$FAKE_UV_PYTHON" "$venv/bin/python"
 elif [[ "$1" == "pip" && "$2" == "sync" ]]; then
   printf '%s\\n' "$*" >>"$FAKE_UV_LOG"
@@ -156,6 +387,8 @@ fi
         "FAKE_UV_PYTHON": sys.executable,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "TMPDIR": str(runtime_tmp),
+        "UV_PYTHON_INSTALL_DIR": str(ROOT / ".forbidden-uv-python-install"),
+        "XDG_DATA_HOME": str(ROOT / ".forbidden-xdg-data"),
     }
     env.pop("EC_RESEARCH_VENV", None)
     command = [
@@ -166,6 +399,9 @@ fi
             "assert os.environ['PYTHONDONTWRITEBYTECODE'] == '1'; "
             "assert os.environ['PYTHONPYCACHEPREFIX'].startswith("
             "os.environ['TMPDIR']); "
+            "assert os.environ['UV_PYTHON_INSTALL_DIR'] == "
+            "os.path.join(os.environ['TMPDIR'], "
+            "'edgecitadel-research-uv-python'); "
             "assert sys.pycache_prefix == os.environ['PYTHONPYCACHEPREFIX']; "
             "assert sys.argv[1] == 'argument with spaces;$(false)'"
         ),
@@ -250,6 +486,135 @@ class _FakeRunner:
             stdout = f"{normalized[-1]}\n"
 
         return subprocess.CompletedProcess(list(argv), 0, stdout=stdout, stderr="")
+
+
+class _LifecycleRunner(_FakeRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.containers: dict[str, str] = {}
+        self.volumes: set[str] = set()
+        self.run_create_then_raise = False
+        self.fail_next_volume_create = False
+        self.container_remove_outcomes: list[str] = []
+        self.volume_remove_outcomes: list[str] = []
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        **kwargs: Any,
+    ) -> subprocess.CompletedProcess[str]:
+        assert isinstance(argv, list), "Docker commands must use argv form"
+        normalized = tuple(argv)
+        self.calls.append((normalized, kwargs))
+
+        if normalized[:3] == ("docker", "volume", "create"):
+            volume_name = normalized[-1]
+            if self.fail_next_volume_create:
+                self.fail_next_volume_create = False
+                raise subprocess.CalledProcessError(
+                    1,
+                    list(argv),
+                    stderr="injected volume creation failure",
+                )
+            self.volumes.add(volume_name)
+            return subprocess.CompletedProcess(
+                list(argv),
+                0,
+                stdout=f"{volume_name}\n",
+                stderr="",
+            )
+
+        if normalized[:2] == ("docker", "run"):
+            self.container_count += 1
+            container_name = normalized[normalized.index("--name") + 1]
+            container_id = f"container-{self.container_count}"
+            self.containers[container_name] = container_id
+            if self.run_create_then_raise:
+                self.run_create_then_raise = False
+                raise subprocess.CalledProcessError(
+                    127,
+                    list(argv),
+                    stderr="injected OCI start failure after create",
+                )
+            return subprocess.CompletedProcess(
+                list(argv),
+                0,
+                stdout=f"{container_id}\n",
+                stderr="",
+            )
+
+        if normalized[:2] == ("docker", "port"):
+            container_id = normalized[2]
+            container_number = int(container_id.rsplit("-", 1)[1])
+            return subprocess.CompletedProcess(
+                list(argv),
+                0,
+                stdout=f"127.0.0.1:{43000 + container_number}\n",
+                stderr="",
+            )
+
+        if normalized[:3] == ("docker", "rm", "--force"):
+            outcome = (
+                self.container_remove_outcomes.pop(0)
+                if self.container_remove_outcomes
+                else "default"
+            )
+            target = normalized[-1]
+            container_name = next(
+                (
+                    name
+                    for name, container_id in self.containers.items()
+                    if target in (name, container_id)
+                ),
+                None,
+            )
+            if outcome == "error":
+                return subprocess.CompletedProcess(
+                    list(argv),
+                    1,
+                    stdout="",
+                    stderr="injected daemon removal failure",
+                )
+            if outcome == "absent" or container_name is None:
+                return subprocess.CompletedProcess(
+                    list(argv),
+                    1,
+                    stdout="",
+                    stderr=f"Error: No such container: {target}",
+                )
+            del self.containers[container_name]
+            return subprocess.CompletedProcess(list(argv), 0, stdout=target, stderr="")
+
+        if normalized[:4] == ("docker", "volume", "rm", "--force"):
+            outcome = (
+                self.volume_remove_outcomes.pop(0)
+                if self.volume_remove_outcomes
+                else "default"
+            )
+            volume_name = normalized[-1]
+            if outcome == "error":
+                return subprocess.CompletedProcess(
+                    list(argv),
+                    1,
+                    stdout="",
+                    stderr="injected volume removal failure",
+                )
+            if outcome == "absent" or volume_name not in self.volumes:
+                return subprocess.CompletedProcess(
+                    list(argv),
+                    1,
+                    stdout="",
+                    stderr=f"Error: No such volume: {volume_name}",
+                )
+            self.volumes.remove(volume_name)
+            return subprocess.CompletedProcess(
+                list(argv),
+                0,
+                stdout=volume_name,
+                stderr="",
+            )
+
+        return subprocess.CompletedProcess(list(argv), 0, stdout="", stderr="")
 
 
 class _FakeNatsClient:
@@ -376,6 +741,189 @@ def test_nats_server_owns_commands_credentials_and_cleanup(
     )
 
 
+def test_nats_server_cleans_exact_name_when_run_creates_then_raises() -> None:
+    module = _load_nats_helper()
+    runner = _LifecycleRunner()
+    runner.run_create_then_raise = True
+    server = module.NatsServer(
+        token="create-then-raise-token",
+        jetstream=False,
+        runner=runner,
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        server.start()
+
+    run_call = _calls_with_prefix(runner, ("docker", "run"))[0]
+    attempted_name = run_call[run_call.index("--name") + 1]
+    assert not runner.containers
+    assert _calls_with_prefix(runner, ("docker", "rm", "--force")) == [
+        ("docker", "rm", "--force", attempted_name)
+    ]
+    assert not any(
+        argv[:2] in {("docker", "ps"), ("docker", "container")}
+        for argv, _ in runner.calls
+    )
+    calls_after_rollback = list(runner.calls)
+    server.close()
+    assert runner.calls == calls_after_rollback
+
+
+def test_nats_server_retries_transient_owned_cleanup_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_nats_helper()
+    runner = _LifecycleRunner()
+
+    async def fake_connect(*_args: Any, **_kwargs: Any) -> _FakeNatsClient:
+        return _FakeNatsClient()
+
+    monkeypatch.setattr(module.nats, "connect", fake_connect)
+    server = module.NatsServer(
+        token="transient-cleanup-token",
+        jetstream=True,
+        runner=runner,
+    ).start()
+    run_call = _calls_with_prefix(runner, ("docker", "run"))[0]
+    temp_dir = _mount_source(run_call, "/etc/nats/nats.conf").parent
+    real_rmtree: Callable[..., None] = module.shutil.rmtree
+    rmtree_calls = 0
+
+    def flaky_rmtree(path: Any, *args: Any, **kwargs: Any) -> None:
+        nonlocal rmtree_calls
+        rmtree_calls += 1
+        if rmtree_calls == 1:
+            raise OSError("injected temporary-directory removal failure")
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(module.shutil, "rmtree", flaky_rmtree)
+    runner.container_remove_outcomes.append("error")
+    runner.volume_remove_outcomes.append("error")
+
+    try:
+        with pytest.raises(RuntimeError, match="cleanup"):
+            server.close()
+
+        assert runner.containers
+        assert runner.volumes
+        assert temp_dir.exists()
+        assert rmtree_calls == 1
+
+        server.close()
+        assert not runner.containers
+        assert not runner.volumes
+        assert not temp_dir.exists()
+        assert rmtree_calls == 2
+    finally:
+        runner.container_remove_outcomes.clear()
+        runner.volume_remove_outcomes.clear()
+        with suppress(RuntimeError):
+            server.close()
+        if temp_dir.exists():
+            real_rmtree(temp_dir, ignore_errors=True)
+
+
+def test_nats_server_treats_exact_external_absence_as_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_nats_helper()
+    runner = _LifecycleRunner()
+
+    async def fake_connect(*_args: Any, **_kwargs: Any) -> _FakeNatsClient:
+        return _FakeNatsClient()
+
+    monkeypatch.setattr(module.nats, "connect", fake_connect)
+    server = module.NatsServer(
+        token="external-absence-token",
+        jetstream=True,
+        runner=runner,
+    ).start()
+    run_call = _calls_with_prefix(runner, ("docker", "run"))[0]
+    temp_dir = _mount_source(run_call, "/etc/nats/nats.conf").parent
+    runner.containers.clear()
+    runner.volumes.clear()
+
+    server.close()
+    assert not temp_dir.exists()
+    calls_after_close = list(runner.calls)
+    server.close()
+    assert runner.calls == calls_after_close
+
+
+def test_nats_server_rolls_back_a_fresh_volume_restart_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_nats_helper()
+    runner = _LifecycleRunner()
+
+    async def fake_connect(*_args: Any, **_kwargs: Any) -> _FakeNatsClient:
+        return _FakeNatsClient()
+
+    monkeypatch.setattr(module.nats, "connect", fake_connect)
+    server = module.NatsServer(
+        token="restart-volume-failure-token",
+        jetstream=True,
+        runner=runner,
+    ).start()
+    run_call = _calls_with_prefix(runner, ("docker", "run"))[0]
+    temp_dir = _mount_source(run_call, "/etc/nats/nats.conf").parent
+    runner.fail_next_volume_create = True
+
+    try:
+        with pytest.raises(subprocess.CalledProcessError):
+            server.restart(preserve_storage=False)
+
+        assert not runner.containers
+        assert not runner.volumes
+        assert not temp_dir.exists()
+        volume_removals = _calls_with_prefix(
+            runner,
+            ("docker", "volume", "rm", "--force"),
+        )
+        assert len(volume_removals) == 2
+        server.close()
+    finally:
+        with suppress(RuntimeError):
+            server.close()
+        if temp_dir.exists():
+            module.shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_nats_server_rolls_back_a_restart_removal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_nats_helper()
+    runner = _LifecycleRunner()
+
+    async def fake_connect(*_args: Any, **_kwargs: Any) -> _FakeNatsClient:
+        return _FakeNatsClient()
+
+    monkeypatch.setattr(module.nats, "connect", fake_connect)
+    server = module.NatsServer(
+        token="restart-removal-failure-token",
+        jetstream=True,
+        runner=runner,
+    ).start()
+    run_call = _calls_with_prefix(runner, ("docker", "run"))[0]
+    temp_dir = _mount_source(run_call, "/etc/nats/nats.conf").parent
+    runner.container_remove_outcomes.append("error")
+
+    try:
+        with pytest.raises(RuntimeError, match="remove container"):
+            server.restart(preserve_storage=False)
+
+        assert not runner.containers
+        assert not runner.volumes
+        assert not temp_dir.exists()
+        server.close()
+    finally:
+        runner.container_remove_outcomes.clear()
+        with suppress(RuntimeError):
+            server.close()
+        if temp_dir.exists():
+            module.shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_nats_server_start_is_safe_inside_a_running_event_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -467,6 +1015,26 @@ def _owned_docker_resources(kind: str) -> set[str]:
     return {line for line in result.stdout.splitlines() if line}
 
 
+def _container_data_mount_sources(container_ids: set[str]) -> set[str]:
+    result = subprocess.run(
+        ["docker", "inspect", *sorted(container_ids)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    inspected = json.loads(result.stdout)
+    sources: set[str] = set()
+    for container in inspected:
+        data_mounts = [
+            mount
+            for mount in container["Mounts"]
+            if mount["Destination"] == "/data" and mount["Type"] == "volume"
+        ]
+        assert len(data_mounts) == 1
+        sources.add(data_mounts[0]["Name"])
+    return sources
+
+
 async def _prove_nats_authentication(url: str, token: str) -> None:
     from nats.errors import Error as NatsError
 
@@ -543,8 +1111,13 @@ def test_two_live_nats_servers_are_authenticated_isolated_and_cleaned(
         second.start()
 
         assert first.url != second.url
-        assert len(_owned_docker_resources("container")) == 2
-        assert len(_owned_docker_resources("volume")) == 2
+        containers = _owned_docker_resources("container")
+        volumes = _owned_docker_resources("volume")
+        assert len(containers) == 2
+        assert len(volumes) == 2
+        data_mount_sources = _container_data_mount_sources(containers)
+        assert len(data_mount_sources) == 2
+        assert data_mount_sources == volumes
         asyncio.run(_prove_nats_authentication(first.url, first_token))
         asyncio.run(_prove_nats_authentication(second.url, second_token))
         assert (

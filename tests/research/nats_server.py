@@ -44,9 +44,17 @@ class NatsServer:
     _temp_dir: Path | None = field(default=None, init=False, repr=False)
     _config_path: Path | None = field(default=None, init=False, repr=False)
     _port: int | None = field(default=None, init=False, repr=False)
+    _launch_attempted: bool = field(default=False, init=False, repr=False)
 
     def start(self) -> NatsServer:
-        if self._temp_dir is not None or self._container_id is not None:
+        if any(
+            (
+                self._temp_dir is not None,
+                self._container_id is not None,
+                self._volume_name is not None,
+                self._launch_attempted,
+            )
+        ):
             raise RuntimeError("NATS server is already started")
 
         self._container_name = f"edgecitadel-test-nats-{uuid.uuid4().hex}"
@@ -56,8 +64,11 @@ class NatsServer:
                 self._create_volume()
             self._launch_container()
             self._wait_until_ready()
-        except BaseException:
-            self.close()
+        except BaseException as error:
+            try:
+                self.close()
+            except BaseException as cleanup_error:  # noqa: BLE001
+                error.add_note(f"rollback cleanup failed: {cleanup_error!r}")
             raise
         return self
 
@@ -75,30 +86,43 @@ class NatsServer:
         ):
             raise RuntimeError("NATS server is not started")
 
-        self._remove_container()
-        if self.jetstream and not preserve_storage:
-            self._remove_volume()
-            self._create_volume()
         try:
+            self._remove_container()
+            if self.jetstream and not preserve_storage:
+                self._remove_volume()
+                self._create_volume()
             self._launch_container()
             self._wait_until_ready()
-        except BaseException:
-            self.close()
+        except BaseException as error:
+            try:
+                self.close()
+            except BaseException as cleanup_error:  # noqa: BLE001
+                error.add_note(f"rollback cleanup failed: {cleanup_error!r}")
             raise
 
     def close(self) -> None:
-        try:
-            self._remove_container()
-        finally:
+        errors: list[Exception] = []
+        for cleanup in (
+            self._remove_container,
+            self._remove_volume,
+            self._remove_temp_directory,
+        ):
             try:
-                self._remove_volume()
-            finally:
-                if self._temp_dir is not None:
-                    shutil.rmtree(self._temp_dir, ignore_errors=True)
-                self._temp_dir = None
-                self._config_path = None
-                self._container_name = None
-                self._port = None
+                cleanup()
+            except Exception as cleanup_error:  # noqa: BLE001
+                errors.append(cleanup_error)
+
+        if self._container_id is None and not self._launch_attempted:
+            self._container_name = None
+            self._port = None
+        if errors:
+            failure = RuntimeError(
+                "NATS cleanup failed: "
+                + "; ".join(str(cleanup_error) for cleanup_error in errors)
+            )
+            for additional_error in errors[1:]:
+                failure.add_note(repr(additional_error))
+            raise failure from errors[0]
 
     def _docker(
         self,
@@ -175,6 +199,7 @@ class NatsServer:
             )
         arguments.extend([_nats_image(), "-c", "/etc/nats/nats.conf"])
 
+        self._launch_attempted = True
         result = self._docker(*arguments)
         container_id = result.stdout.strip()
         if not container_id:
@@ -254,20 +279,49 @@ class NatsServer:
             ) from error
 
     def _remove_container(self) -> None:
-        if self._container_id is None:
+        if self._container_id is None and not self._launch_attempted:
             return
-        container_id = self._container_id
-        try:
-            self._docker("rm", "--force", container_id, check=False)
-        finally:
-            self._container_id = None
-            self._port = None
+        target = self._container_id or self._container_name
+        if target is None:
+            raise RuntimeError("cannot remove container without an exact identifier")
+
+        result = self._docker("rm", "--force", target, check=False)
+        self._require_removed(result, resource="container", target=target)
+        self._container_id = None
+        self._launch_attempted = False
+        self._port = None
 
     def _remove_volume(self) -> None:
         if self._volume_name is None:
             return
         volume_name = self._volume_name
+
+        result = self._docker("volume", "rm", "--force", volume_name, check=False)
+        self._require_removed(result, resource="volume", target=volume_name)
+        self._volume_name = None
+
+    def _remove_temp_directory(self) -> None:
+        if self._temp_dir is None:
+            return
+        directory = self._temp_dir
         try:
-            self._docker("volume", "rm", "--force", volume_name, check=False)
-        finally:
-            self._volume_name = None
+            shutil.rmtree(directory)
+        except FileNotFoundError:
+            pass
+        self._temp_dir = None
+        self._config_path = None
+
+    @staticmethod
+    def _require_removed(
+        result: subprocess.CompletedProcess[str],
+        *,
+        resource: str,
+        target: str,
+    ) -> None:
+        if result.returncode == 0:
+            return
+        output = f"{result.stdout or ''}\n{result.stderr or ''}".casefold()
+        if f"no such {resource}" in output and target.casefold() in output:
+            return
+        detail = (result.stderr or result.stdout or "unknown Docker error").strip()
+        raise RuntimeError(f"failed to remove {resource} {target}: {detail}")
