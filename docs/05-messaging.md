@@ -6,7 +6,7 @@ v0.1 messaging is **NATS JetStream over the canonical envelope** at [`schemas/en
 
 MQTT ingress is **deploy-time opt-in only** (default off). When enabled, it exists exclusively to onboard constrained IoT devices that cannot speak NATS; the internal fleet (aggregator, native adapters, openclaw browser client) does not use MQTT under any deployment. See ADR-0004 (forthcoming, Task 15) and the `EC_ENABLE_MQTT` flag below.
 
-This document is the **operational reference** — what subjects exist, how the stream and per-agent consumer are configured, how operators verify the system is healthy. The **wire contract** (envelope shape, required-by-type matrix, lifecycle rules) lives in [`docs/agent-contract.md`](agent-contract.md). When the two disagree, the contract wins.
+This document is the **operational reference** — what subjects exist, how the stream and per-agent consumer are configured, how operators verify the system is healthy. The **base wire contract** (envelope shape, required-by-type matrix, lifecycle rules) lives in [`docs/agent-contract.md`](agent-contract.md). When the two disagree, the base contract wins except for the task-correlation projection explicitly defined as a normative supplement below.
 
 ---
 
@@ -86,9 +86,26 @@ Every message published to `agents.*`, `tasks.*`, or `system.*` is a JSON object
 
 Baseline required fields (every envelope): `v` (= `1`), `id` (UUID4), `type`, `sender_id`, `timestamp` (ISO 8601 UTC, ms precision, `Z` suffix), `payload` (object).
 
-Type-specific required fields (e.g., `recipient_id` and `task_id` on `command`, `agent_state` on `status`, `hop_count` and `context_id` on `delegation`) live in the **required-by-type matrix** in [`docs/agent-contract.md`](agent-contract.md) §1.6. The contract document is the single source of truth for envelope grammar; this doc deliberately does not duplicate it.
+Type-specific required fields (e.g., `recipient_id` and `task_id` on `command`, `agent_state` on `status`, `hop_count` and `context_id` on `delegation`) live in the **required-by-type matrix** in [`docs/agent-contract.md`](agent-contract.md) §1.6. That contract and `envelope.v1.json` remain the source of truth for base envelope grammar. The correlation projection below is the narrow exception for `command`, `delegation`, `cancel`, and `result`.
 
 Hard size limit: 1 MiB per envelope (NATS default + stream `max_msg_size`).
+
+### Task correlation supplement
+
+For `command`, `delegation`, `cancel`, and `result`, [`schemas/task-correlation.v1.json`](../schemas/task-correlation.v1.json) is a normative supplement to the base envelope contract and prevails for correlation-projection constraints. A receiver first validates the complete wire document against `envelope.v1.json`, then validates only the seven-field correlation projection: `type`, `sender_id`, `recipient_id`, `task_id`, `context_id`, `hop_count`, and `payload`. Projection defaults are never written back to the wire document.
+
+- `id` is the UUIDv4 identity of one wire envelope. A transport retry of that envelope retains its `id` for broker deduplication; `id` does not identify the logical task, and repeated terminal publications may have distinct envelope IDs.
+- `task_id` is the UUIDv4 identity of one logical task and remains stable across delivery attempts and semantic retries of that task. Correlated UUIDv4 values (`task_id`, `context_id`, and `payload.parent_task_id`) use canonical lowercase text; validation rejects case aliases rather than normalizing them.
+- `context_id` groups the root request and its descendants. Existing direct `command` and `result` producers may omit it; their validation projection uses `context_id = task_id`.
+- `hop_count` is zero for a direct request. Existing direct `command` and `result` producers may omit it; their validation projection uses `hop_count = 0`.
+- A `command` is direct: its projected `hop_count` is zero and it has no parent. A child receives a `delegation` with a fresh lowercase UUIDv4 `task_id`, preserves its parent's `context_id`, sets `payload.parent_task_id` to the parent task's UUIDv4, and increments `hop_count` by one. Delegations and delegated results must carry all three fields explicitly. A result is delegated when it has `payload.parent_task_id` or a positive `hop_count`; an explicit `context_id` alone remains compatible with a direct result.
+- A direct `cancel` receives the same projection defaults (`context_id = task_id`, `hop_count = 0`) but remains a policy event rather than an executable request.
+
+The normative task-aware executor contract, enforced by the later executor and terminal-publication tasks, requires a worker to accept an executable request only when `recipient_id` equals its configured agent ID. Every canonical worker terminal reverses the request direction: terminal `sender_id` is the worker, terminal `recipient_id` is the request sender, and `task_id` identifies the same logical task. Task 1 does not change the current legacy `PullConsumer` producer: its direct results remain base-compatible, may carry only an optional `context_id`, and still omit `hop_count` and `payload.parent_task_id`. Canonical delegated-terminal lineage and direction enforcement belong to those later tasks.
+
+The canonical request fingerprint is SHA-256 over canonical JSON containing exactly the seven projection fields listed above. Mapping keys are sorted, whitespace is omitted, UTF-8 is preserved, and non-finite numbers are rejected. Wire metadata such as `id`, `timestamp`, and `task_state` is excluded. Fingerprints apply only to executable `command` and `delegation` requests. A `cancel` resolves the existing task record through cancellation policy instead of creating a changed request fingerprint. `task.progress` retains base-envelope validation, is correlated by `task_id` at the observer, and is never request-fingerprinted. Experiment run IDs and trial IDs are harness metadata; they are not envelope correlation fields or logical task identity.
+
+Only `completed`, `failed`, `canceled`, and `rejected` are terminal task states. One logical terminal outcome is identified by `(sender_id, recipient_id, task_id, request_fingerprint, terminal_state, canonical_terminal_payload_hash)`. Repeats with the same logical identity and content are idempotent even when envelope IDs, publication attempts, or wire deliveries differ. The worker outcome key `(worker_agent_id, task_id)` owns one request sender and fingerprint; a second sender or different fingerprint for that key is rejected with `task_state: rejected` and `payload.error: "task_id_collision"`. A later terminal with a different state or payload hash is a contract violation, not another successful outcome.
 
 ---
 
@@ -191,6 +208,7 @@ How an operator confirms messaging is healthy:
 
 - [`docs/agent-contract.md`](agent-contract.md) — the v0.1 wire contract (envelope, lifecycle, Agent Card).
 - [`schemas/envelope.v1.json`](../schemas/envelope.v1.json) — strict JSON Schema for envelopes.
+- [`schemas/task-correlation.v1.json`](../schemas/task-correlation.v1.json) — strict logical task-correlation projection.
 - [`schemas/agent-card.v1.json`](../schemas/agent-card.v1.json) — A2A v1.0 Agent Card schema.
 - [ADR-0002](adr/0002-nats-jetstream-workqueue.md) — JetStream WorkQueue choice and consumer config rationale.
 - [ADR-0006](adr/0006-outbox-mirror-authoritative.md) — outbox mirror on plain NATS as authoritative for dashboard views.

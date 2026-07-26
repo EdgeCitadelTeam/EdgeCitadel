@@ -1,4 +1,12 @@
+import copy
+import hashlib
+import json
+
 import pytest
+
+from adapters._common import validator as adapter_validator
+from adapters._common.pull_consumer import Context, PullConsumer
+from aggregator import validator as validator_module
 from aggregator.validator import EnvelopeValidator, ValidationError
 
 
@@ -40,6 +48,7 @@ def test_register_card_must_match_sender_id(validator):
                         "capabilities": {}, "securitySchemes": {},
                         "metadata": {"runtime.kind": "native",
                                      "runtime.roles": ["worker"],
+                                     "runtime.conformance": "L1",
                                      "runtime.heartbeat_interval_sec": 30}})
     validator.validate_envelope(env)
     validator.validate_register(env)  # name == sender_id
@@ -47,3 +56,460 @@ def test_register_card_must_match_sender_id(validator):
     env["payload"]["name"] = "different"
     with pytest.raises(ValidationError, match="sender_id"):
         validator.validate_register(env)
+
+
+DIRECT_TASK_ID = "899d8a29-8c6c-4fef-b491-1140d8371fef"
+CHILD_TASK_ID = "70209f19-a984-47e3-8637-44428ebd8318"
+CONTEXT_ID = "6e088543-c9de-4459-a0fe-2191d20dfba1"
+PARENT_TASK_ID = "899d8a29-8c6c-4fef-b491-1140d8371fef"
+
+
+def _command(**over):
+    env = _env(
+        type="command",
+        sender_id="sender-1",
+        recipient_id="worker-1",
+        task_id=DIRECT_TASK_ID,
+        payload={"command": "printf spine:nonce"},
+    )
+    env.update(over)
+    return env
+
+
+def _result(**over):
+    env = _env(
+        type="result",
+        sender_id="worker-1",
+        recipient_id="sender-1",
+        task_id=DIRECT_TASK_ID,
+        task_state="completed",
+        payload={"body": "done"},
+    )
+    env.update(over)
+    return env
+
+
+def _delegation(**over):
+    env = _env(
+        type="delegation",
+        sender_id="sender-1",
+        recipient_id="worker-1",
+        task_id=CHILD_TASK_ID,
+        context_id=CONTEXT_ID,
+        hop_count=1,
+        payload={
+            "command": "printf child:nonce",
+            "parent_task_id": PARENT_TASK_ID,
+        },
+    )
+    env.update(over)
+    return env
+
+
+def _helper(name):
+    return getattr(validator_module, name)
+
+
+class TestTaskCorrelation:
+    @pytest.mark.parametrize("factory", [_command, _result])
+    def test_direct_correlation_defaults_do_not_mutate_input(
+            self, validator, factory):
+        env = factory()
+        original = copy.deepcopy(env)
+
+        validator.validate_envelope(env)
+        correlated = _helper("normalize_task_correlation")(env)
+
+        assert correlated["context_id"] == env["task_id"]
+        assert correlated["hop_count"] == 0
+        assert env == original
+        assert "context_id" not in env
+        assert "hop_count" not in env
+
+    def test_direct_result_correlation_preserves_explicit_context(self, validator):
+        env = _result(context_id=CONTEXT_ID)
+
+        validator.validate_envelope(env)
+        correlated = _helper("normalize_task_correlation")(env)
+
+        assert correlated["context_id"] == CONTEXT_ID
+        assert correlated["hop_count"] == 0
+
+    def test_direct_cancel_correlation_uses_compatibility_defaults(self, validator):
+        env = _env(
+            type="cancel",
+            sender_id="sender-1",
+            recipient_id="worker-1",
+            task_id=DIRECT_TASK_ID,
+        )
+
+        validator.validate_envelope(env)
+        correlated = _helper("normalize_task_correlation")(env)
+
+        assert correlated["context_id"] == DIRECT_TASK_ID
+        assert correlated["hop_count"] == 0
+
+    @pytest.mark.parametrize(
+        ("env", "missing"),
+        [
+            (
+                {
+                    key: value
+                    for key, value in _delegation().items()
+                    if key != "context_id"
+                },
+                "context_id",
+            ),
+            (
+                {
+                    key: value
+                    for key, value in _delegation().items()
+                    if key != "hop_count"
+                },
+                "hop_count",
+            ),
+            (
+                _delegation(payload={"command": "missing parent"}),
+                "parent_task_id",
+            ),
+            (
+                _result(
+                    context_id=CONTEXT_ID,
+                    payload={"parent_task_id": PARENT_TASK_ID},
+                ),
+                "hop_count",
+            ),
+            (
+                _result(hop_count=1),
+                "parent_task_id",
+            ),
+        ],
+    )
+    def test_delegated_correlation_requires_explicit_fields(self, env, missing):
+        with pytest.raises(ValidationError, match=missing):
+            _helper("normalize_task_correlation")(env)
+
+    def test_delegated_result_correlation_accepts_explicit_fields(self, validator):
+        env = _result(
+            context_id=CONTEXT_ID,
+            hop_count=1,
+            payload={"body": "done", "parent_task_id": PARENT_TASK_ID},
+        )
+
+        validator.validate_envelope(env)
+
+    def test_delegated_result_correlation_rejects_non_uuid4_parent(self, validator):
+        env = _result(
+            context_id=CONTEXT_ID,
+            hop_count=1,
+            payload={
+                "body": "done",
+                "parent_task_id": "899d8a29-8c6c-1fef-b491-1140d8371fef",
+            },
+        )
+
+        with pytest.raises(ValidationError, match="task_correlation invalid"):
+            validator.validate_envelope(env)
+
+    def test_command_correlation_rejects_positive_hop(self, validator):
+        env = _command(
+            context_id=CONTEXT_ID,
+            hop_count=1,
+            payload={
+                "command": "printf child:nonce",
+                "parent_task_id": PARENT_TASK_ID,
+            },
+        )
+
+        with pytest.raises(ValidationError, match="hop_count"):
+            validator.validate_envelope(env)
+
+    @pytest.mark.parametrize(
+        "hop_count",
+        [0.0, -0.0, False, True, 1.0],
+        ids=["zero-float", "negative-zero-float", "false", "true", "one-float"],
+    )
+    def test_correlation_rejects_non_integer_runtime_hop_values(self, hop_count):
+        env = _command(hop_count=hop_count)
+
+        with pytest.raises(ValidationError, match="hop_count"):
+            _helper("normalize_task_correlation")(env)
+        with pytest.raises(ValidationError, match="hop_count"):
+            _helper("request_fingerprint")(env)
+
+    @pytest.mark.parametrize(
+        "env",
+        [
+            [],
+            {"type": "command"},
+            {
+                "type": "command",
+                "sender_id": "sender-1",
+                "recipient_id": "worker-1",
+                "task_id": DIRECT_TASK_ID,
+                "payload": [],
+            },
+        ],
+        ids=["non-mapping-envelope", "missing-fields", "non-mapping-payload"],
+    )
+    def test_correlation_normalization_fails_closed_for_malformed_input(self, env):
+        with pytest.raises(ValidationError, match="task_correlation invalid"):
+            _helper("normalize_task_correlation")(env)
+
+    @pytest.mark.parametrize(
+        "env",
+        [
+            _env(type="register"),
+            _env(type="status", agent_state="online"),
+            _env(type="heartbeat"),
+            _env(type="log"),
+            _env(type="broadcast"),
+            _env(
+                type="task.progress",
+                task_id=DIRECT_TASK_ID,
+                task_state="working",
+            ),
+        ],
+        ids=["register", "status", "heartbeat", "log", "broadcast", "progress"],
+    )
+    def test_non_request_correlation_types_keep_base_validation(
+            self, validator, env):
+        validator.validate_envelope(env)
+
+    def test_correlation_validation_error_is_stable(self, validator):
+        env = _delegation(
+            payload={"parent_task_id": "not-a-uuid"},
+        )
+
+        with pytest.raises(ValidationError) as first:
+            validator.validate_envelope(env)
+        with pytest.raises(ValidationError) as second:
+            validator.validate_envelope(env)
+
+        assert str(first.value) == str(second.value)
+        assert str(first.value) == (
+            "task_correlation invalid: 'not-a-uuid' is not a 'uuid' "
+            "at ['payload', 'parent_task_id']"
+        )
+
+    def test_canonical_json_correlation_is_mapping_order_independent(self):
+        canonical_json = _helper("canonical_json")
+
+        assert canonical_json({"b": 2, "a": 1}) == canonical_json({"a": 1, "b": 2})
+        assert canonical_json({"text": "cafe\u0301"}) == (
+            b'{"text":"cafe\xcc\x81"}'
+        )
+
+    @pytest.mark.parametrize(
+        "non_finite",
+        [float("nan"), float("inf"), float("-inf")],
+        ids=["nan", "positive-infinity", "negative-infinity"],
+    )
+    def test_canonical_json_correlation_rejects_non_finite_values(
+            self, non_finite):
+        with pytest.raises(ValueError):
+            _helper("canonical_json")({"value": non_finite})
+
+    def test_canonical_json_correlation_rejects_lone_surrogate(self):
+        with pytest.raises(UnicodeEncodeError):
+            _helper("canonical_json")({"value": "\ud800"})
+
+    def test_direct_correlation_fingerprints_match_explicit_defaults(self):
+        request_fingerprint = _helper("request_fingerprint")
+        implicit = _command()
+        explicit = _command(context_id=DIRECT_TASK_ID, hop_count=0)
+
+        assert request_fingerprint(implicit) == request_fingerprint(explicit)
+
+    @pytest.mark.parametrize("envelope_type", ["cancel", "result", "heartbeat"])
+    def test_request_correlation_fingerprint_rejects_non_executable_types(
+            self, envelope_type):
+        with pytest.raises(ValidationError, match="command or delegation"):
+            _helper("request_fingerprint")(_command(type=envelope_type))
+
+    def test_request_correlation_fingerprint_rejects_invalid_projection(self):
+        with pytest.raises(ValidationError, match="task_correlation invalid"):
+            _helper("request_fingerprint")(
+                _command(task_id=DIRECT_TASK_ID.upper())
+            )
+
+    @pytest.mark.parametrize(
+        ("field", "replacement"),
+        [
+            ("sender_id", "sender-2"),
+            ("recipient_id", "worker-2"),
+            ("task_id", "0ca89e20-d62e-426d-9a45-70e1406cf615"),
+            ("context_id", "5a63afca-b94b-414a-bd6b-d3a6b4b61c05"),
+            ("hop_count", 2),
+            (
+                "payload",
+                {
+                    "command": "printf changed:nonce",
+                    "parent_task_id": PARENT_TASK_ID,
+                },
+            ),
+        ],
+    )
+    def test_request_correlation_fingerprint_includes_exact_projection_fields(
+            self, field, replacement):
+        request_fingerprint = _helper("request_fingerprint")
+        env = _delegation()
+        changed = copy.deepcopy(env)
+        changed[field] = replacement
+
+        assert request_fingerprint(env) != request_fingerprint(changed)
+
+    def test_request_correlation_fingerprint_includes_type(self):
+        normalize = _helper("normalize_task_correlation")
+        canonical_json = _helper("canonical_json")
+        request_fingerprint = _helper("request_fingerprint")
+        correlated = normalize(_command())
+        value = {
+            field: correlated[field]
+            for field in (
+                "type",
+                "sender_id",
+                "recipient_id",
+                "task_id",
+                "context_id",
+                "hop_count",
+                "payload",
+            )
+        }
+
+        changed_type_hash = hashlib.sha256(
+            canonical_json({**value, "type": "delegation"})
+        ).hexdigest()
+        expected_hash = hashlib.sha256(canonical_json(value)).hexdigest()
+
+        assert request_fingerprint(_command()) == expected_hash
+        assert expected_hash != changed_type_hash
+
+    def test_request_correlation_fingerprint_preserves_payload_number_types(self):
+        request_fingerprint = _helper("request_fingerprint")
+
+        assert request_fingerprint(
+            _command(payload={"value": 1})
+        ) != request_fingerprint(
+            _command(payload={"value": 1.0})
+        )
+
+    def test_request_correlation_fingerprint_excludes_wire_metadata(self):
+        request_fingerprint = _helper("request_fingerprint")
+        env = _command()
+        changed = {
+            **env,
+            "id": "f4a34c4c-2b37-4694-b648-8d5bbde8fc77",
+            "timestamp": "2026-07-25T11:22:33.444Z",
+        }
+
+        assert request_fingerprint(env) == request_fingerprint(changed)
+
+    def test_adapter_validator_reexports_correlation_api(self):
+        for name in (
+            "CORRELATED_TYPES",
+            "normalize_task_correlation",
+            "canonical_json",
+            "request_fingerprint",
+        ):
+            assert getattr(adapter_validator, name) is getattr(validator_module, name)
+
+
+class _CaptureJetStream:
+    def __init__(self):
+        self.published = []
+
+    async def publish(self, subject, data, headers=None):
+        self.published.append((subject, data, headers))
+
+
+class _CaptureNats:
+    def __init__(self):
+        self.published = []
+        self.js = _CaptureJetStream()
+
+    def jetstream(self):
+        return self.js
+
+    async def publish(self, subject, data):
+        self.published.append((subject, data))
+
+
+class TestTaskCorrelationProducerCompatibility:
+    @pytest.mark.asyncio
+    async def test_progress_correlation_preserves_actual_producer_shape(
+            self, validator):
+        nc = _CaptureNats()
+        context = Context(agent_id="worker-1", nc=nc, js=nc.js, msg=object())
+
+        await context.publish_progress(
+            DIRECT_TASK_ID,
+            body="partial",
+            progress=50,
+            extra={"skill_id": "shell.exec"},
+        )
+
+        subject, data = nc.published[0]
+        env = json.loads(data)
+        assert subject == f"agents.worker-1.task_progress.{DIRECT_TASK_ID}"
+        assert set(env) == {
+            "v",
+            "id",
+            "type",
+            "sender_id",
+            "task_id",
+            "task_state",
+            "timestamp",
+            "payload",
+        }
+        validator.validate_envelope(env)
+
+    @pytest.mark.parametrize(
+        "context_id",
+        [None, CONTEXT_ID],
+        ids=["implicit-context", "explicit-context"],
+    )
+    @pytest.mark.asyncio
+    async def test_pull_result_correlation_preserves_actual_producer_shape(
+            self, validator, context_id):
+        nc = _CaptureNats()
+
+        async def handler(_env, _context):
+            return {"body": "done"}, "completed"
+
+        consumer = PullConsumer(
+            agent_id="worker-1",
+            nc=nc,
+            handler=handler,
+        )
+        inbound = _command()
+        if context_id is not None:
+            inbound["context_id"] = context_id
+        await consumer._publish_result(
+            inbound,
+            task_state="completed",
+            payload={"body": "done"},
+        )
+
+        subject, data, headers = nc.js.published[0]
+        env = json.loads(data)
+        assert subject == "agents.sender-1.inbox"
+        assert headers == {"Nats-Msg-Id": env["id"]}
+        expected_fields = {
+            "v",
+            "id",
+            "type",
+            "sender_id",
+            "recipient_id",
+            "task_id",
+            "task_state",
+            "timestamp",
+            "payload",
+        }
+        if context_id is not None:
+            expected_fields.add("context_id")
+        assert set(env) == expected_fields
+        validator.validate_envelope(env)
+        correlated = _helper("normalize_task_correlation")(env)
+        assert correlated["context_id"] == (context_id or DIRECT_TASK_ID)
+        assert correlated["hop_count"] == 0

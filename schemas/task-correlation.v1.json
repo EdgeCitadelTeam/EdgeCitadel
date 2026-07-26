@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/task-correlation.v1.json",
+  "title": "EdgeCitadel Task Correlation Projection",
+  "description": "Strict logical task-correlation fields projected from executable and terminal envelopes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "sender_id",
+    "recipient_id",
+    "task_id",
+    "context_id",
+    "hop_count",
+    "payload"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["command", "delegation", "cancel", "result"]
+    },
+    "sender_id": {
+      "type": "string",
+      "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+    },
+    "recipient_id": {
+      "type": "string",
+      "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+    },
+    "task_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "context_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "hop_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "parent_task_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "hop_count": {
+            "const": 0
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "not": {
+              "required": ["parent_task_id"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "payload": {
+            "required": ["parent_task_id"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "command"
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "hop_count": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "delegation"
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "hop_count": {
+            "minimum": 1
+          }
+        }
+      }
+    }
+  ]
+}

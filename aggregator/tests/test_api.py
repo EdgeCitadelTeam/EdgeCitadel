@@ -1,7 +1,14 @@
 """FastAPI endpoint contracts for v0.1."""
+import inspect
+import json
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
+
+from aggregator import validator as validator_module
 from aggregator.main import make_app
+from aggregator.validator import EnvelopeValidator
 
 
 @pytest.fixture
@@ -45,6 +52,61 @@ def test_post_command_returns_task_id(client, monkeypatch):
 def test_post_command_rejects_invalid_body(client):
     r = client.post("/api/command/shell-1", json={"unknown": 1})
     assert r.status_code == 422
+
+
+class _CapturePublisher:
+    def __init__(self):
+        self.published = []
+
+    async def publish(self, subject, data, headers=None):
+        self.published.append((subject, data, headers))
+
+    async def drain(self):
+        return None
+
+
+def test_post_command_correlation_preserves_actual_producer_shape(
+        client, envelope_schema_path, card_schema_path):
+    js = _CapturePublisher()
+    nc = _CapturePublisher()
+    route = next(
+        route
+        for route in client.app.routes
+        if getattr(route, "path", None) == "/api/command/{agent_id}"
+    )
+    state = inspect.getclosurevars(route.endpoint).nonlocals["state"]
+    state["app"] = SimpleNamespace(
+        router=SimpleNamespace(js=js, nc=nc, cache={}),
+    )
+
+    response = client.post(
+        "/api/command/worker-1",
+        json={"body": "printf spine:nonce"},
+    )
+
+    assert response.status_code == 202
+    subject, data, headers = js.published[0]
+    env = json.loads(data)
+    assert subject == "agents.worker-1.inbox"
+    assert headers == {"Nats-Msg-Id": env["id"]}
+    assert set(env) == {
+        "v",
+        "id",
+        "type",
+        "sender_id",
+        "recipient_id",
+        "task_id",
+        "timestamp",
+        "payload",
+    }
+    assert "context_id" not in env
+    assert "hop_count" not in env
+
+    validator = EnvelopeValidator(envelope_schema_path, card_schema_path)
+    validator.validate_envelope(env)
+    correlated = validator_module.normalize_task_correlation(env)
+    assert correlated["context_id"] == env["task_id"]
+    assert correlated["hop_count"] == 0
 
 
 def test_delete_agent_removes_card(client):
