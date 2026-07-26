@@ -135,7 +135,9 @@ class NativeControlConfig:
             raise ValueError("invalid outcome_db")
         if not _valid_database_path(self.side_effect_db):
             raise ValueError("invalid side_effect_db")
-        if self.side_effect_db == self.outcome_db:
+        if os.path.normcase(os.path.normpath(self.side_effect_db)) == os.path.normcase(
+            os.path.normpath(self.outcome_db)
+        ):
             raise ValueError("invalid side_effect_db")
 
 

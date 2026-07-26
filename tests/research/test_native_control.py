@@ -484,6 +484,70 @@ def test_config_requires_distinct_database_paths(tmp_path: Path) -> None:
         _config(tmp_path, outcome_db=path, side_effect_db=path)
 
 
+@cases(
+    "alias",
+    [
+        "./same.sqlite3",
+        "nested/../same.sqlite3",
+        "/same.sqlite3",
+    ],
+)
+def test_config_rejects_lexically_aliased_database_paths_without_rendering_them(
+    tmp_path: Path,
+    alias: str,
+) -> None:
+    outcome_path = str(tmp_path / "same.sqlite3")
+    side_effect_path = f"{tmp_path}/{alias}"
+
+    with pytest.raises(ValueError, match=r"^invalid side_effect_db$") as raised:
+        _config(
+            tmp_path,
+            outcome_db=outcome_path,
+            side_effect_db=side_effect_path,
+        )
+
+    assert outcome_path not in str(raised.value)
+    assert side_effect_path not in str(raised.value)
+
+
+def test_config_database_alias_check_is_lexical_and_side_effect_free(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outcome_path = str(tmp_path / "missing-parent" / "outcome.sqlite3")
+    side_effect_path = str(tmp_path / "other-missing-parent" / "effects.sqlite3")
+
+    def reject_filesystem_access(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("unexpected filesystem access")
+
+    with monkeypatch.context() as patch:
+        for owner, name in (
+            (Path, "resolve"),
+            (Path, "stat"),
+            (Path, "lstat"),
+            (Path, "samefile"),
+            (Path, "exists"),
+            (Path, "is_file"),
+            (Path, "is_dir"),
+            (os, "stat"),
+            (os, "lstat"),
+            (os.path, "realpath"),
+            (os.path, "samefile"),
+            (os.path, "exists"),
+            (os.path, "lexists"),
+        ):
+            patch.setattr(owner, name, reject_filesystem_access)
+        config = _config(
+            tmp_path,
+            outcome_db=outcome_path,
+            side_effect_db=side_effect_path,
+        )
+
+    assert config.outcome_db == outcome_path
+    assert config.side_effect_db == side_effect_path
+
+
 def test_parse_args_accepts_only_required_config_path(tmp_path: Path) -> None:
     path = tmp_path / "fixture.json"
     args = parse_args(["--config", str(path)])
