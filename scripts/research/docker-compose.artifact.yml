@@ -1,0 +1,78 @@
+name: ${COMPOSE_PROJECT_NAME:?}
+
+x-owner-labels: &owner-labels
+  ai.edgecitadel.owner: artifact
+  ai.edgecitadel.run-id: ${EC_RUN_ID:?}
+
+x-artifact-service: &artifact-service
+  image: ${EC_ARTIFACT_IMAGE:-edgecitadel-research-artifact:local}
+  labels: *owner-labels
+  networks:
+    - artifact
+  volumes:
+    - ${EC_CREDENTIAL_FILE:?}:/run/edgecitadel/transport-token:ro
+    - ${EC_CONFIG_DIR:?}:/run/edgecitadel/config:ro
+    - ${EC_STATE_DIR:?}:/state
+    - ${EC_OUTPUT_DIR:?}:/output
+    - topology-metadata:/topology-metadata
+
+services:
+  nats:
+    image: nats@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - export NATS_TOKEN="$$(cat /run/edgecitadel/transport-token)"; exec nats-server -c "$$EC_NATS_CONFIG"
+    environment:
+      EC_NATS_CONFIG: ${EC_NATS_CONFIG:?}
+    labels: *owner-labels
+    networks:
+      - artifact
+    volumes:
+      - ./configs/nats/core.conf:/etc/nats/core.conf:ro
+      - ./configs/nats/jetstream.conf:/etc/nats/jetstream.conf:ro
+      - ${EC_CREDENTIAL_FILE:?}:/run/edgecitadel/transport-token:ro
+      - ${EC_STATE_DIR:?}:/state
+      - topology-metadata:/topology-metadata
+
+  controller:
+    <<: *artifact-service
+    profiles: [central-relay, core-only, edgecitadel, all-durable]
+    command: [sleep, infinity]
+
+  native-control:
+    <<: *artifact-service
+    profiles: [central-relay, core-only, edgecitadel, all-durable]
+    command:
+      - /bin/sh
+      - -ec
+      - if [ "$$EC_MODE" = central-relay ]; then exec sleep infinity; fi; exec python -m scripts.research.fixtures.native_control --config /run/edgecitadel/config/native-control.json
+    environment:
+      EC_CREDENTIAL_FILE: /run/edgecitadel/transport-token
+      EC_MODE: ${EC_MODE:?}
+      NATS_URL: nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_started
+
+  direct-observer:
+    <<: *artifact-service
+    profiles: [central-relay, core-only, edgecitadel, all-durable]
+    cap_add:
+      - NET_ADMIN
+    command: [sleep, infinity]
+
+  runner:
+    <<: *artifact-service
+    profiles: [central-relay, core-only, edgecitadel, all-durable]
+    cap_add:
+      - NET_ADMIN
+    command: [sleep, infinity]
+
+networks:
+  artifact:
+    labels: *owner-labels
+
+volumes:
+  topology-metadata:
+    labels: *owner-labels

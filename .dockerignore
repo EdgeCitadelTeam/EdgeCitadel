@@ -1,0 +1,12 @@
+.git
+.env*
+data/
+tmp/
+docs/research/results/raw/
+**/*credential*
+**/*token*
+**/*.webm
+**/*.mp4
+test-artifacts/
+e2e/test-results/
+e2e/playwright-report/
