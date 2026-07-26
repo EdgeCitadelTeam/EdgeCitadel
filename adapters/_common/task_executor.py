@@ -696,7 +696,7 @@ class TaskExecutor:
                         raise ValueError("invalid handler state")
                     payload = _canonical_mapping(raw_payload)
                     state = cast(TerminalState, raw_state)
-                except (TypeError, ValueError, UnicodeError, RecursionError):
+                except Exception:  # noqa: BLE001
                     state = "failed"
                     payload = {"error": "handler_failed"}
         else:

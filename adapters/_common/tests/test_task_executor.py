@@ -377,6 +377,19 @@ class FakeHandler:
         return cast(tuple[Mapping[str, object], str], self.result)
 
 
+class IterationFailureMapping(Mapping[str, object]):
+    def __getitem__(self, key: str) -> object:
+        if key == "body":
+            return "unreachable"
+        raise KeyError(key)
+
+    def __iter__(self) -> NoReturn:
+        raise RuntimeError("mapping iteration failed")
+
+    def __len__(self) -> int:
+        return 1
+
+
 class MutatingHandler(FakeHandler):
     async def __call__(
         self,
@@ -957,6 +970,45 @@ async def test_handler_states_and_contract_failures_are_deterministic(
     assert result.terminal_envelope["payload"] == payload
     assert "private detail" not in canonical_json(result.terminal_envelope).decode()
     assert len(cast(FakeStore, store).rows) == 1
+
+
+@async_test
+async def test_handler_mapping_iteration_failure_is_a_stable_ledgered_terminal() -> (
+    None
+):
+    handler = FakeHandler((IterationFailureMapping(), "completed"))
+    executor, _, store, publisher, _, _, sink, crash = make_executor(handler=handler)
+    delivery = FakeDelivery(encode(command()))
+
+    result = await executor.execute(delivery)
+
+    assert result.classification == "failed"
+    assert result.ledger_decision == "miss"
+    assert result.terminal_envelope is not None
+    assert result.terminal_envelope["payload"] == {"error": "handler_failed"}
+    assert result.receipt == receipt(TERMINAL_1)
+    assert handler.calls == 1
+    fake_store = cast(FakeStore, store)
+    key = OutcomeKey("worker-1", TASK_1)
+    assert len(fake_store.prepare_calls) == 1
+    assert fake_store.prepare_calls[0].terminal_envelope == result.terminal_envelope
+    assert fake_store.rows[key].terminal_envelope == result.terminal_envelope
+    assert fake_store.rows[key].publish_state == "published"
+    assert fake_store.mark_calls == [(key, result.receipt)]
+    assert publisher.envelopes == [result.terminal_envelope]
+    assert delivery.commit_count == 1
+    assert delivery.retry_count == delivery.terminate_count == 0
+    assert [event["event"] for event in sink.events] == [
+        "task.request_attempt",
+        "task.ledger_decision",
+    ]
+    assert cast(Mapping[str, object], sink.events[-1]["data"])["decision"] == "miss"
+    assert crash.hits == [
+        "after-receive-before-handler",
+        "after-ledger-prepare-before-result-publish",
+        "after-result-publish-before-publish-mark",
+        "after-publish-mark-before-inbound-commit",
+    ]
 
 
 @async_test
