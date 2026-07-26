@@ -68,6 +68,9 @@ def _logical_requirements(lock_path: Path) -> list[list[str]]:
     for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
+            assert not expects_continuation, (
+                f"lock continuation interrupted by physical line: {raw_line!r}"
+            )
             continue
 
         continues = stripped.endswith("\\")
@@ -159,12 +162,20 @@ def test_every_locked_requirement_is_exact_and_hashed() -> None:
         (f"demo ; python_version == '3.12' \\\n    --hash=sha256:{'a' * 64}\n"),
         (f"demo @ https://example.invalid/demo.whl \\\n    --hash=sha256:{'a' * 64}\n"),
         ("demo==1.0 \\\n    --hash=sha256:ABC123\n"),
+        (f"demo==1.0 \\\n\n    --hash=sha256:{'a' * 64}\n"),
+        (
+            "demo==1.0 \\\n"
+            "    # interrupted continuation\n"
+            f"    --hash=sha256:{'a' * 64}\n"
+        ),
     ],
     ids=[
         "continuation-without-backslash",
         "marker-equality-is-not-a-pin",
         "url-is-not-a-pin",
         "hash-must-be-lowercase-64-hex",
+        "blank-line-interrupts-continuation",
+        "comment-interrupts-continuation",
     ],
 )
 def test_lock_parser_rejects_malformed_logical_records(
