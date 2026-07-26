@@ -1,14 +1,19 @@
 """Tests for the task-correlation projection schema."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "task-correlation.v1.json"
 
-VALID_DIRECT = {
+Document = dict[str, Any]
+
+VALID_DIRECT: Document = {
     "type": "command",
     "sender_id": "sender-1",
     "recipient_id": "worker-1",
@@ -17,7 +22,7 @@ VALID_DIRECT = {
     "hop_count": 0,
     "payload": {"command": "printf spine:nonce"},
 }
-VALID_CHILD = {
+VALID_CHILD: Document = {
     "type": "delegation",
     "sender_id": "sender-1",
     "recipient_id": "worker-1",
@@ -29,7 +34,7 @@ VALID_CHILD = {
         "parent_task_id": "899d8a29-8c6c-4fef-b491-1140d8371fef",
     },
 }
-INVALID = [
+INVALID: list[Document] = [
     {**VALID_DIRECT, "task_id": "not-a-uuid"},
     {**VALID_DIRECT, "hop_count": 1},
     {**VALID_CHILD, "hop_count": 0},
@@ -38,24 +43,30 @@ INVALID = [
 
 
 @pytest.fixture(scope="module")
-def validator():
+def validator() -> Draft202012Validator:
     schema = json.loads(SCHEMA_PATH.read_text())
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
 @pytest.mark.parametrize("document", [VALID_DIRECT, VALID_CHILD])
-def test_task_correlation_schema_accepts_valid_documents(validator, document):
+def test_task_correlation_schema_accepts_valid_documents(
+    validator: Draft202012Validator, document: Document
+) -> None:
     validator.validate(document)
 
 
 @pytest.mark.parametrize("document", INVALID)
-def test_task_correlation_schema_rejects_invalid_documents(validator, document):
+def test_task_correlation_schema_rejects_invalid_documents(
+    validator: Draft202012Validator, document: Document
+) -> None:
     with pytest.raises(ValidationError):
         validator.validate(document)
 
 
-def test_task_correlation_schema_rejects_unknown_projection_field(validator):
+def test_task_correlation_schema_rejects_unknown_projection_field(
+    validator: Draft202012Validator,
+) -> None:
     with pytest.raises(ValidationError):
         validator.validate({**VALID_DIRECT, "timestamp": "not-projected"})
 
@@ -72,7 +83,9 @@ def test_task_correlation_schema_rejects_unknown_projection_field(validator):
         "payload",
     ],
 )
-def test_task_correlation_schema_requires_every_projection_field(validator, field):
+def test_task_correlation_schema_requires_every_projection_field(
+    validator: Draft202012Validator, field: str
+) -> None:
     document = {key: value for key, value in VALID_DIRECT.items() if key != field}
 
     with pytest.raises(ValidationError):
@@ -88,12 +101,16 @@ def test_task_correlation_schema_requires_every_projection_field(validator, fiel
     ],
     ids=["unknown-type", "negative-hop", "non-object-payload"],
 )
-def test_task_correlation_schema_rejects_invalid_field_domains(validator, document):
+def test_task_correlation_schema_rejects_invalid_field_domains(
+    validator: Draft202012Validator, document: Document
+) -> None:
     with pytest.raises(ValidationError):
         validator.validate(document)
 
 
-def test_task_correlation_schema_requires_uuid_version_four(validator):
+def test_task_correlation_schema_requires_uuid_version_four(
+    validator: Draft202012Validator,
+) -> None:
     with pytest.raises(ValidationError):
         validator.validate(
             {
@@ -118,7 +135,9 @@ def test_task_correlation_schema_requires_uuid_version_four(validator):
     ],
     ids=["task-id", "context-id", "parent-task-id"],
 )
-def test_task_correlation_schema_requires_lowercase_uuid4(validator, document):
+def test_task_correlation_schema_requires_lowercase_uuid4(
+    validator: Draft202012Validator, document: Document
+) -> None:
     with pytest.raises(ValidationError):
         validator.validate(document)
 
@@ -126,13 +145,15 @@ def test_task_correlation_schema_requires_lowercase_uuid4(validator, document):
 @pytest.mark.parametrize("field", ["sender_id", "recipient_id"])
 @pytest.mark.parametrize("suffix", ["\n", "\r"], ids=["lf", "cr"])
 def test_task_correlation_schema_rejects_agent_id_trailing_line_ending(
-    validator, field, suffix
-):
+    validator: Draft202012Validator, field: str, suffix: str
+) -> None:
     with pytest.raises(ValidationError):
         validator.validate({**VALID_DIRECT, field: f"{VALID_DIRECT[field]}{suffix}"})
 
 
-def test_task_correlation_schema_rejects_positive_hop_command(validator):
+def test_task_correlation_schema_rejects_positive_hop_command(
+    validator: Draft202012Validator,
+) -> None:
     with pytest.raises(ValidationError):
         validator.validate(
             {
@@ -146,7 +167,9 @@ def test_task_correlation_schema_rejects_positive_hop_command(validator):
         )
 
 
-def test_task_correlation_schema_requires_positive_hop_delegation(validator):
+def test_task_correlation_schema_requires_positive_hop_delegation(
+    validator: Draft202012Validator,
+) -> None:
     with pytest.raises(ValidationError):
         validator.validate(
             {

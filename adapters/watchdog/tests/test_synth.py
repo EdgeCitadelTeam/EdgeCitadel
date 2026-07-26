@@ -1,4 +1,5 @@
 """Unit tests for the watchdog's synthesised-envelope shape."""
+
 import json
 
 import pytest
@@ -54,14 +55,20 @@ def test_envelope_shape_advisory():
 
 
 def test_envelope_id_is_unique_per_call():
-    a = build_synth_envelope(original_sender="aggregator", original_task_id="t1",
-                             original_context_id=None,
-                             offline_agent_id="gemma-1",
-                             trigger="heartbeat_staleness")
-    b = build_synth_envelope(original_sender="aggregator", original_task_id="t1",
-                             original_context_id=None,
-                             offline_agent_id="gemma-1",
-                             trigger="heartbeat_staleness")
+    a = build_synth_envelope(
+        original_sender="aggregator",
+        original_task_id="t1",
+        original_context_id=None,
+        offline_agent_id="gemma-1",
+        trigger="heartbeat_staleness",
+    )
+    b = build_synth_envelope(
+        original_sender="aggregator",
+        original_task_id="t1",
+        original_context_id=None,
+        offline_agent_id="gemma-1",
+        trigger="heartbeat_staleness",
+    )
     assert a["id"] != b["id"]
 
 
@@ -70,7 +77,9 @@ def test_envelope_id_is_unique_per_call():
     [None, "6e088543-c9de-4459-a0fe-2191d20dfba1"],
     ids=["implicit-context", "explicit-context"],
 )
-def test_synth_correlation_preserves_actual_producer_shape(context_id):
+def test_synth_correlation_preserves_actual_producer_shape(
+    context_id: str | None,
+) -> None:
     task_id = "899d8a29-8c6c-4fef-b491-1140d8371fef"
     env = build_synth_envelope(
         original_sender="aggregator",

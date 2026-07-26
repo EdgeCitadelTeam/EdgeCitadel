@@ -1,4 +1,5 @@
 """Envelope and Agent Card validation against vendored schemas."""
+
 from __future__ import annotations
 
 import hashlib
@@ -51,9 +52,7 @@ def _is_delegated(envelope: Mapping[str, object]) -> bool:
     has_parent = isinstance(payload, Mapping) and "parent_task_id" in payload
     hop_count = envelope.get("hop_count")
     has_positive_hop = (
-        isinstance(hop_count, int)
-        and not isinstance(hop_count, bool)
-        and hop_count > 0
+        isinstance(hop_count, int) and not isinstance(hop_count, bool) and hop_count > 0
     )
     return envelope.get("type") == "delegation" or (
         envelope.get("type") == "result" and (has_parent or has_positive_hop)
@@ -64,9 +63,7 @@ def normalize_task_correlation(
     envelope: Mapping[str, object],
 ) -> dict[str, object]:
     if not isinstance(envelope, Mapping):
-        raise ValidationError(
-            "task_correlation invalid: envelope must be a mapping"
-        )
+        raise ValidationError("task_correlation invalid: envelope must be a mapping")
 
     missing = [
         field
@@ -75,31 +72,22 @@ def normalize_task_correlation(
     ]
     if missing:
         raise ValidationError(
-            "task_correlation invalid: missing required "
-            + ", ".join(missing)
+            "task_correlation invalid: missing required " + ", ".join(missing)
         )
 
     payload = envelope["payload"]
     if not isinstance(payload, Mapping):
-        raise ValidationError(
-            "task_correlation invalid: payload must be a mapping"
-        )
+        raise ValidationError("task_correlation invalid: payload must be a mapping")
 
     hop_count = envelope.get("hop_count", 0)
     if type(hop_count) is not int:
-        raise ValidationError(
-            "task_correlation invalid: hop_count must be an integer"
-        )
+        raise ValidationError("task_correlation invalid: hop_count must be an integer")
     if envelope["type"] == "command" and hop_count != 0:
-        raise ValidationError(
-            "task_correlation invalid: command hop_count must be 0"
-        )
+        raise ValidationError("task_correlation invalid: command hop_count must be 0")
 
     if _is_delegated(envelope):
         missing_lineage = [
-            field
-            for field in ("context_id", "hop_count")
-            if field not in envelope
+            field for field in ("context_id", "hop_count") if field not in envelope
         ]
         if "parent_task_id" not in payload:
             missing_lineage.append("parent_task_id")
@@ -156,10 +144,12 @@ def request_fingerprint(envelope: Mapping[str, object]) -> str:
 
 class EnvelopeValidator:
     def __init__(self, envelope_schema_path: Path, card_schema_path: Path):
-        self._env = Draft202012Validator(json.loads(
-            Path(envelope_schema_path).read_text()))
-        self._card = Draft202012Validator(json.loads(
-            Path(card_schema_path).read_text()))
+        self._env = Draft202012Validator(
+            json.loads(Path(envelope_schema_path).read_text())
+        )
+        self._card = Draft202012Validator(
+            json.loads(Path(card_schema_path).read_text())
+        )
 
     def validate_envelope(self, doc: dict) -> None:
         _validate(self._env, doc, "envelope")
@@ -181,4 +171,5 @@ class EnvelopeValidator:
         if card.get("name") != envelope.get("sender_id"):
             raise ValidationError(
                 f"sender_id {envelope.get('sender_id')!r} must match "
-                f"Agent Card name {card.get('name')!r}")
+                f"Agent Card name {card.get('name')!r}"
+            )

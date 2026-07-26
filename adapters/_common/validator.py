@@ -1,4 +1,5 @@
 """Thin re-export of aggregator.validator so adapters don't import aggregator."""
+
 from pathlib import Path
 
 from aggregator.validator import (

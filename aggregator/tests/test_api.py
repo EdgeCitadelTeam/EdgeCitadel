@@ -1,9 +1,14 @@
 """FastAPI endpoint contracts for v0.1."""
+
 import inspect
 import json
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from aggregator import validator as validator_module
@@ -17,7 +22,7 @@ def client(tmp_path, envelope_schema_path, card_schema_path, monkeypatch):
     monkeypatch.setenv("EDGECITADEL_DB_WIPE", "1")
     monkeypatch.setenv("ENVELOPE_SCHEMA_PATH", str(envelope_schema_path))
     monkeypatch.setenv("CARD_SCHEMA_PATH", str(card_schema_path))
-    app = make_app(for_testing=True)   # skips NATS wiring
+    app = make_app(for_testing=True)  # skips NATS wiring
     with TestClient(app) as c:
         yield c
 
@@ -33,15 +38,14 @@ def test_system_status_shape(client):
     assert r.status_code == 200
     body = r.json()
     assert "nats_connected" in body
-    assert "mqtt_connected" not in body          # legacy field gone
+    assert "mqtt_connected" not in body  # legacy field gone
     assert "jetstream_stream_ok" in body
 
 
 def test_post_command_returns_task_id(client, monkeypatch):
     # With testing flag, command dispatch stubs out JetStream publish but
     # synthesizes a task_id.
-    r = client.post("/api/command/shell-1",
-                    json={"body": "echo hi"})
+    r = client.post("/api/command/shell-1", json={"body": "echo hi"})
     assert r.status_code == 202
     body = r.json()
     assert "task_id" in body
@@ -55,26 +59,38 @@ def test_post_command_rejects_invalid_body(client):
 
 
 class _CapturePublisher:
-    def __init__(self):
-        self.published = []
+    def __init__(self) -> None:
+        self.published: list[tuple[str, bytes, dict[str, str] | None]] = []
 
-    async def publish(self, subject, data, headers=None):
+    async def publish(
+        self,
+        subject: str,
+        data: bytes,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.published.append((subject, data, headers))
 
-    async def drain(self):
-        return None
+    async def drain(self) -> None:
+        pass
 
 
 def test_post_command_correlation_preserves_actual_producer_shape(
-        client, envelope_schema_path, card_schema_path):
+    client: TestClient,
+    envelope_schema_path: Path,
+    card_schema_path: Path,
+) -> None:
     js = _CapturePublisher()
     nc = _CapturePublisher()
+    app = cast(FastAPI, client.app)
     route = next(
         route
-        for route in client.app.routes
-        if getattr(route, "path", None) == "/api/command/{agent_id}"
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/api/command/{agent_id}"
     )
-    state = inspect.getclosurevars(route.endpoint).nonlocals["state"]
+    state = cast(
+        dict[str, Any],
+        inspect.getclosurevars(route.endpoint).nonlocals["state"],
+    )
     state["app"] = SimpleNamespace(
         router=SimpleNamespace(js=js, nc=nc, cache={}),
     )
@@ -112,13 +128,24 @@ def test_post_command_correlation_preserves_actual_producer_shape(
 def test_delete_agent_removes_card(client):
     # seed by direct DB insert
     from aggregator import database as db
-    db.upsert_agent_card({
-        "name": "gemma-1", "description": "x", "version": "0",
-        "url": "u", "provider": {"organization": "x"},
-        "capabilities": {}, "securitySchemes": {},
-        "metadata": {"runtime.kind": "native", "runtime.roles": ["worker"],
-                     "runtime.heartbeat_interval_sec": 30}},
-        timestamp="2026-04-23T10:00:00.000Z")
+
+    db.upsert_agent_card(
+        {
+            "name": "gemma-1",
+            "description": "x",
+            "version": "0",
+            "url": "u",
+            "provider": {"organization": "x"},
+            "capabilities": {},
+            "securitySchemes": {},
+            "metadata": {
+                "runtime.kind": "native",
+                "runtime.roles": ["worker"],
+                "runtime.heartbeat_interval_sec": 30,
+            },
+        },
+        timestamp="2026-04-23T10:00:00.000Z",
+    )
     assert client.get("/api/agents/gemma-1/card").status_code == 200
     assert client.delete("/api/agents/gemma-1").status_code == 204
     assert client.get("/api/agents/gemma-1/card").status_code == 404
@@ -131,8 +158,7 @@ def test_get_queue_requires_jetstream(client):
 
 
 def test_openclaw_login_returns_token(client):
-    r = client.post("/api/openclaw/login",
-                    json={"session_id": "sess-abc123"})
+    r = client.post("/api/openclaw/login", json={"session_id": "sess-abc123"})
     assert r.status_code == 200
     body = r.json()
     assert "token" in body
