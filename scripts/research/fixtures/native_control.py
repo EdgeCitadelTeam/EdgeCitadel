@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import importlib
 import json
 import math
 import os
 import re
 import sqlite3
 import stat
+import sys
 import time
 import urllib.parse
 import uuid
@@ -94,6 +96,11 @@ class _InvalidJSON(ValueError):
 
 class _DuplicateKey(ValueError):
     pass
+
+
+class _SilentEventSink:
+    def emit(self, event: Mapping[str, object]) -> None:
+        del event
 
 
 @dataclass(frozen=True)
@@ -197,6 +204,12 @@ class _HeartbeatPublisher(Protocol):
         self,
         envelope: Mapping[str, object],
     ) -> PublicationReceipt: ...
+
+
+TransportFactory = Callable[
+    [NativeControlConfig, Mapping[str, str], str, EventSink],
+    TaskTransport,
+]
 
 
 class _SystemClock:
@@ -800,6 +813,113 @@ def read_transport_token(path: str | Path) -> str:
     return contents[:64].decode("ascii")
 
 
+def build_transport(
+    config: NativeControlConfig,
+    endpoints: Mapping[str, str],
+    token: str,
+    event_sink: EventSink,
+) -> TaskTransport:
+    if config.mode == Mode.CENTRAL_RELAY.value:
+        module = importlib.import_module(
+            "scripts.research.modes.central_relay"
+        )
+        transport_factory = cast(Callable[..., TaskTransport], module.CentralRelayTransport)
+
+        return transport_factory(
+            relay_url=endpoints["RELAY_URL"],
+            run_id=config.run_id,
+            token=token,
+            event_sink=event_sink,
+        )
+
+    agent_card = build_agent_card(config)
+    nats_url = endpoints["NATS_URL"]
+    if config.mode == Mode.CORE_ONLY.value:
+        module = importlib.import_module("scripts.research.modes.core_nats")
+        transport_factory = cast(Callable[..., TaskTransport], module.CoreNatsTransport)
+
+        return transport_factory(
+            nats_url=nats_url,
+            run_id=config.run_id,
+            token=token,
+            event_sink=event_sink,
+            agent_card=agent_card,
+        )
+    if config.mode == Mode.EDGECITADEL.value:
+        module = importlib.import_module("scripts.research.modes.edgecitadel")
+        transport_factory = cast(Callable[..., TaskTransport], module.EdgeCitadelTransport)
+
+        return transport_factory(
+            nats_url=nats_url,
+            run_id=config.run_id,
+            token=token,
+            event_sink=event_sink,
+            agent_card=agent_card,
+        )
+    if config.mode == Mode.ALL_DURABLE.value:
+        module = importlib.import_module("scripts.research.modes.all_durable")
+        transport_factory = cast(Callable[..., TaskTransport], module.AllDurableTransport)
+
+        return transport_factory(
+            nats_url=nats_url,
+            run_id=config.run_id,
+            token=token,
+            event_sink=event_sink,
+            agent_card=agent_card,
+        )
+    raise ValueError("invalid mode")
+
+
+async def main(
+    argv: Sequence[str],
+    environ: Mapping[str, str] = os.environ,
+    transport_factory: TransportFactory = build_transport,
+) -> None:
+    try:
+        arguments = parse_args(argv)
+        config = load_native_config(arguments.config)
+        endpoints = runtime_endpoints(config, environ)
+        credential_path = environ.get("EC_CREDENTIAL_FILE", "")
+        token = read_transport_token(credential_path)
+    except ValueError:
+        raise SystemExit("native control failed") from None
+    event_sink = _SilentEventSink()
+    transport: TaskTransport | None = None
+    loop: asyncio.AbstractEventLoop | None = None
+    installed_signals: list[int] = []
+    try:
+        transport = transport_factory(config, endpoints, token, event_sink)
+        loop = asyncio.get_running_loop()
+        current_task = asyncio.current_task()
+        signal_module = __import__("signal")
+
+        def cancel_fixture() -> None:
+            if current_task is not None:
+                current_task.cancel()
+
+        for current_signal in (signal_module.SIGINT, signal_module.SIGTERM):
+            try:
+                loop.add_signal_handler(current_signal, cancel_fixture)
+            except (NotImplementedError, RuntimeError):
+                continue
+            installed_signals.append(current_signal)
+        await run_fixture(config, transport, event_sink)
+    except asyncio.CancelledError:
+        return
+    except Exception:  # noqa: BLE001 - CLI errors must be secret-free and stable.
+        raise SystemExit("native control failed") from None
+    finally:
+        if loop is not None:
+            for current_signal in installed_signals:
+                loop.remove_signal_handler(current_signal)
+        if transport is not None:
+            try:
+                await transport.close()
+            except Exception:  # noqa: BLE001 - close failures share the CLI boundary.
+                if sys.exc_info()[0] is None:
+                    raise SystemExit("native control failed") from None
+
+
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value: dict[str, object] = {}
     for key, item in pairs:
@@ -918,9 +1038,15 @@ __all__ = (  # noqa: RUF022 - public contract order is frozen.
     "BEHAVIORS",
     "CRASH_POINTS",
     "build_agent_card",
+    "build_transport",
+    "main",
     "run_fixture",
     "parse_args",
     "load_native_config",
     "runtime_endpoints",
     "read_transport_token",
 )
+
+
+if __name__ == "__main__":
+    asyncio.run(main(sys.argv[1:]))

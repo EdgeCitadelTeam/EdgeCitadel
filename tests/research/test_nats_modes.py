@@ -13,6 +13,7 @@ import traceback
 import typing
 import warnings
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import TypeVar, cast
 
@@ -2746,3 +2747,897 @@ async def test_core_docker_wrong_token_is_exact_and_secret_free(
         finally:
             server.close()
             _assert_owned_docker_inventory_empty()
+
+
+def test_jetstream_config_is_exact_and_durable_names_are_role_hashed() -> None:
+    from scripts.research.modes.jetstream_config import (
+        durable_name,
+        task_stream_config,
+        transient_stream_config,
+    )
+
+    assert task_stream_config("run-1") == {
+        "name": "AGENT_INBOX",
+        "subjects": ["agents.*.inbox"],
+        "retention": "workqueue",
+        "storage": "file",
+        "max_age_ns": 86_400_000_000_000,
+        "max_bytes": 1_073_741_824,
+        "max_msg_size": 1_048_576,
+        "discard": "new",
+        "duplicate_window_ns": 300_000_000_000,
+    }
+    assert transient_stream_config("run-1") == {
+        "name": "TRANSIENT_EVENTS",
+        "subjects": [
+            "agents.*.task_progress.>",
+            "agents.*.heartbeat",
+            "agents.*.status",
+        ],
+        "retention": "limits",
+        "storage": "file",
+        "max_age_ns": 3_600_000_000_000,
+        "max_bytes": 1_073_741_824,
+        "max_msg_size": 1_048_576,
+        "discard": "old",
+        "duplicate_window_ns": 300_000_000_000,
+    }
+    assert durable_name("task", "run-1", "worker-1") == "ec_task_975199eb4b31d34b70d5b90b"
+    assert durable_name("result", "run-1", "worker-1") == "ec_result_ef6835bd04ff28ddeb7242cb"
+    assert durable_name("transient", "run-1", "observer-1") == (
+        "ec_transient_cbcd7085c8510080924d6137"
+    )
+
+
+def test_durable_mode_public_exports_and_constructor_seams_are_exact() -> None:
+    import scripts.research.modes.all_durable as durable_module
+    import scripts.research.modes.edgecitadel as edge_module
+
+    assert list(edge_module.__all__) == ["ABLATIONS", "EdgeCitadelTransport"]
+    assert list(durable_module.__all__) == ["AllDurableTransport"]
+    assert edge_module.ABLATIONS == {
+        "none": {"nats_msg_id": False, "outcome_ledger": False},
+        "broker-only": {"nats_msg_id": True, "outcome_ledger": False},
+        "full-contract": {"nats_msg_id": True, "outcome_ledger": True},
+    }
+
+    edge_signature = inspect.signature(edge_module.EdgeCitadelTransport)
+    durable_signature = inspect.signature(durable_module.AllDurableTransport)
+    assert tuple(edge_signature.parameters) == (
+        "nats_url",
+        "run_id",
+        "token",
+        "event_sink",
+        "agent_card",
+        "observer_agent_id",
+        "ablation",
+        "coordinator_restart",
+        "worker_stop",
+        "worker_start",
+        "connection_factory",
+        "evidence_clock_ns",
+        "epoch_now",
+        "uuid4",
+        "sleep",
+    )
+    assert tuple(durable_signature.parameters) == tuple(
+        parameter
+        for parameter in edge_signature.parameters
+        if parameter != "ablation"
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in edge_signature.parameters.values()
+    )
+
+
+def test_durable_modes_supply_the_complete_task_transport_surface() -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+    from scripts.research.modes.edgecitadel import EdgeCitadelTransport
+
+    required = {
+        "start_terminal_observer",
+        "start_progress_observer",
+        "start_receiver",
+        "wait_receiver_ready",
+        "submit_task",
+        "publish_progress",
+        "publish_terminal",
+        "publish_heartbeat",
+        "observe_terminal",
+        "inspect_state",
+        "close",
+    }
+    for transport_type in (EdgeCitadelTransport, AllDurableTransport):
+        assert all(callable(getattr(transport_type, name, None)) for name in required)
+
+
+@_asyncio_test
+async def test_durable_publications_use_exact_puback_headers_and_receipts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+    from scripts.research.modes.edgecitadel import EdgeCitadelTransport
+
+    class AcknowledgingJetStream:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, bytes, Mapping[str, str]]] = []
+
+        async def publish(
+            self,
+            subject: str,
+            data: bytes,
+            **kwargs: Mapping[str, str],
+        ) -> SimpleNamespace:
+            self.calls.append((subject, data, dict(kwargs)))
+            stream = (
+                "TRANSIENT_EVENTS"
+                if subject.endswith("heartbeat")
+                else "AGENT_INBOX"
+            )
+            return SimpleNamespace(stream=stream, seq=len(self.calls), duplicate=True)
+
+    class Connection:
+        def __init__(self) -> None:
+            self.js = AcknowledgingJetStream()
+            self.core_calls: list[tuple[str, bytes]] = []
+            self.flushes = 0
+            self.stats: dict[str, int] = {}
+
+        def jetstream(self) -> AcknowledgingJetStream:
+            return self.js
+
+        async def publish(self, subject: str, data: bytes) -> None:
+            self.core_calls.append((subject, data))
+
+        async def flush(self) -> None:
+            self.flushes += 1
+
+    connection = Connection()
+
+    async def connect(**kwargs: object) -> object:
+        del kwargs
+        return connection
+
+    async def streams() -> None:
+        return None
+
+    edge_none = EdgeCitadelTransport(
+        nats_url="nats://127.0.0.1:4222",
+        run_id="run-1",
+        token=TOKEN,
+        event_sink=_EventSink(),
+        ablation="none",
+        connection_factory=_as_connection_factory(connect),
+    )
+    monkeypatch.setattr(edge_none, "_ensure_streams", streams)
+    receipt = await edge_none.submit_task(_command())
+    assert connection.js.calls == [
+        ("agents.worker-1.inbox", canonical_json(_command()), {})
+    ]
+    assert receipt.stream == "AGENT_INBOX"
+    assert receipt.stream_sequence == 1
+    assert receipt.duplicate is None
+
+    edge_full = EdgeCitadelTransport(
+        nats_url="nats://127.0.0.1:4222",
+        run_id="run-1",
+        token=TOKEN,
+        event_sink=_EventSink(),
+        connection_factory=_as_connection_factory(connect),
+    )
+    monkeypatch.setattr(edge_full, "_ensure_streams", streams)
+    await edge_full.submit_task(_command(envelope_id="10000000-0000-4000-8000-000000000002"))
+    assert connection.js.calls[-1] == (
+        "agents.worker-1.inbox",
+        canonical_json(_command(envelope_id="10000000-0000-4000-8000-000000000002")),
+        {"headers": {"Nats-Msg-Id": "10000000-0000-4000-8000-000000000002"}},
+    )
+
+    durable = AllDurableTransport(
+        nats_url="nats://127.0.0.1:4222",
+        run_id="run-1",
+        token=TOKEN,
+        event_sink=_EventSink(),
+        connection_factory=_as_connection_factory(connect),
+    )
+    monkeypatch.setattr(durable, "_ensure_streams", streams)
+    durable_receipt = await durable.publish_heartbeat(_heartbeat())
+    assert connection.js.calls[-1] == (
+        "agents.worker-1.heartbeat",
+        canonical_json(_heartbeat()),
+        {"headers": {"Nats-Msg-Id": "50000000-0000-4000-8000-000000000001"}},
+    )
+    assert durable_receipt.stream == "TRANSIENT_EVENTS"
+    assert durable_receipt.duplicate is True
+
+    edge_receipt = await edge_full.publish_progress(_progress())
+    assert connection.core_calls == [
+        ("agents.worker-1.task_progress.20000000-0000-4000-8000-000000000001", canonical_json(_progress()))
+    ]
+    assert edge_receipt.stream is None
+    assert edge_receipt.duplicate is None
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_result_observer_uses_the_precreated_durable(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+    try:
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=_EventSink(),
+            observer_agent_id="requester-1",
+        )
+        await transport.start_terminal_observer()
+        receipt = await transport.publish_terminal(_terminal())
+        observed = await transport.observe_terminal(
+            "20000000-0000-4000-8000-000000000001",
+            2,
+        )
+        assert receipt.stream == "AGENT_INBOX"
+        assert observed is not None
+        assert observed.stream_sequence == receipt.stream_sequence
+        assert observed.delivery is not None
+        await observed.delivery.ack()
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_replays_transient_frames_published_while_disconnected(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+    sink = _RecordingEventSink()
+
+    async def wait_for_observations(count: int) -> list[Mapping[str, object]]:
+        for _ in range(100):
+            observed = [
+                event["data"]
+                for event in sink.events
+                if event["event"] == "transport.transient_observed"
+            ]
+            if len(observed) >= count:
+                return observed
+            await asyncio.sleep(0.02)
+        raise AssertionError("transient observation timed out")
+
+    try:
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=sink,
+            observer_agent_id="observer-1",
+        )
+        await transport.start_progress_observer()
+        await transport.publish_heartbeat(_heartbeat())
+        await wait_for_observations(1)
+        await transport.faults.disconnect_progress_observer()
+        await transport.publish_heartbeat(
+            _heartbeat(envelope_id="50000000-0000-4000-8000-000000000002")
+        )
+        await transport.faults.reconnect_progress_observer()
+        observations = await wait_for_observations(2)
+        assert observations[-1]["envelope_id"] == "50000000-0000-4000-8000-000000000002"
+        assert observations[-1]["replayed"] is True
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_w3_replays_exactly_the_disconnected_transient_phase(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+    sink = _RecordingEventSink()
+
+    def heartbeat(index: int) -> dict[str, object]:
+        return _heartbeat(
+            envelope_id=f"50000000-0000-4000-8000-{index:012d}",
+        )
+
+    async def wait_for_observations(count: int) -> list[Mapping[str, object]]:
+        for _ in range(200):
+            observed = [
+                event["data"]
+                for event in sink.events
+                if event["event"] == "transport.transient_observed"
+            ]
+            if len(observed) >= count:
+                return observed
+            await asyncio.sleep(0.02)
+        raise AssertionError("transient observation timed out")
+
+    try:
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=sink,
+            observer_agent_id="observer-1",
+        )
+        await transport.start_progress_observer()
+        for index in range(1, 6):
+            await transport.publish_heartbeat(heartbeat(index))
+        await wait_for_observations(5)
+        await transport.faults.disconnect_progress_observer()
+        for index in range(6, 16):
+            await transport.publish_heartbeat(heartbeat(index))
+        await transport.faults.reconnect_progress_observer()
+        await wait_for_observations(15)
+        for index in range(16, 21):
+            await transport.publish_heartbeat(heartbeat(index))
+        observations = await wait_for_observations(20)
+        assert [item["envelope_id"] for item in observations] == [
+            heartbeat(index)["id"] for index in range(1, 21)
+        ]
+        assert [item["replayed"] for item in observations] == (
+            [False] * 5 + [True] * 10 + [False] * 5
+        )
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_edgecitadel_loses_transient_frames_published_while_disconnected(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.edgecitadel import EdgeCitadelTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: EdgeCitadelTransport | None = None
+    sink = _RecordingEventSink()
+
+    async def wait_for_observations(count: int) -> list[Mapping[str, object]]:
+        for _ in range(100):
+            observed = [
+                event["data"]
+                for event in sink.events
+                if event["event"] == "transport.transient_observed"
+            ]
+            if len(observed) >= count:
+                return observed
+            await asyncio.sleep(0.02)
+        raise AssertionError("transient observation timed out")
+
+    try:
+        transport = EdgeCitadelTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=sink,
+        )
+        await transport.start_progress_observer()
+        await transport.publish_heartbeat(_heartbeat())
+        await wait_for_observations(1)
+        await transport.faults.disconnect_progress_observer()
+        await transport.publish_heartbeat(
+            _heartbeat(envelope_id="50000000-0000-4000-8000-000000000002")
+        )
+        await asyncio.sleep(0.1)
+        await transport.faults.reconnect_progress_observer()
+        await transport.publish_heartbeat(
+            _heartbeat(envelope_id="50000000-0000-4000-8000-000000000003")
+        )
+        observations = await wait_for_observations(2)
+        assert [item["envelope_id"] for item in observations] == [
+            "50000000-0000-4000-8000-000000000001",
+            "50000000-0000-4000-8000-000000000003",
+        ]
+        assert all(item["replayed"] is False for item in observations)
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_edgecitadel_w3_loses_exactly_the_disconnected_transient_phase(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.edgecitadel import EdgeCitadelTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: EdgeCitadelTransport | None = None
+    sink = _RecordingEventSink()
+
+    def heartbeat(index: int) -> dict[str, object]:
+        return _heartbeat(
+            envelope_id=f"50000000-0000-4000-8000-{index:012d}",
+        )
+
+    async def wait_for_observations(count: int) -> list[Mapping[str, object]]:
+        for _ in range(200):
+            observed = [
+                event["data"]
+                for event in sink.events
+                if event["event"] == "transport.transient_observed"
+            ]
+            if len(observed) >= count:
+                return observed
+            await asyncio.sleep(0.02)
+        raise AssertionError("transient observation timed out")
+
+    try:
+        transport = EdgeCitadelTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=sink,
+        )
+        await transport.start_progress_observer()
+        for index in range(1, 6):
+            await transport.publish_heartbeat(heartbeat(index))
+        await wait_for_observations(5)
+        await transport.faults.disconnect_progress_observer()
+        for index in range(6, 16):
+            await transport.publish_heartbeat(heartbeat(index))
+        await asyncio.sleep(0.1)
+        await transport.faults.reconnect_progress_observer()
+        for index in range(16, 21):
+            await transport.publish_heartbeat(heartbeat(index))
+        observations = await wait_for_observations(10)
+        assert [item["envelope_id"] for item in observations] == [
+            heartbeat(index)["id"] for index in [*range(1, 6), *range(16, 21)]
+        ]
+        assert all(item["replayed"] is False for item in observations)
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_edgecitadel_ablations_report_real_jetstream_deduplication(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.edgecitadel import EdgeCitadelTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    full: EdgeCitadelTransport | None = None
+    none: EdgeCitadelTransport | None = None
+    try:
+        full = EdgeCitadelTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=_EventSink(),
+        )
+        first = await full.submit_task(_command())
+        duplicate = await full.submit_task(_command())
+        assert first.duplicate is False
+        assert duplicate.duplicate is True
+        assert duplicate.stream_sequence == first.stream_sequence
+
+        none = EdgeCitadelTransport(
+            nats_url=server.url,
+            run_id="run-2",
+            token=TOKEN,
+            event_sink=_EventSink(),
+            ablation="none",
+        )
+        first_without_dedup = await none.submit_task(
+            _command(envelope_id="10000000-0000-4000-8000-000000000002")
+        )
+        second_without_dedup = await none.submit_task(
+            _command(envelope_id="10000000-0000-4000-8000-000000000002")
+        )
+        assert first_without_dedup.duplicate is None
+        assert second_without_dedup.duplicate is None
+        assert second_without_dedup.stream_sequence == first_without_dedup.stream_sequence + 1
+    finally:
+        if full is not None:
+            await full.close()
+        if none is not None:
+            await none.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_edgecitadel_rejects_jetstream_that_captures_a_transient_subject(
+    request: pytest.FixtureRequest,
+) -> None:
+    from nats.js.api import StreamConfig
+
+    from scripts.research.modes.edgecitadel import EdgeCitadelTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    connection: NATS | None = None
+    transport: EdgeCitadelTransport | None = None
+    try:
+        connection = await nats.connect(
+            servers=[server.url],
+            token=TOKEN,
+            allow_reconnect=False,
+            max_reconnect_attempts=0,
+        )
+        await connection.jetstream().add_stream(
+            StreamConfig(name="CAPTURES_HEARTBEAT", subjects=["agents.*.heartbeat"])
+        )
+        transport = EdgeCitadelTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=_EventSink(),
+        )
+        with pytest.raises(RuntimeError, match="transient subject"):
+            await transport.start_progress_observer()
+    finally:
+        if transport is not None:
+            await transport.close()
+        if connection is not None:
+            await connection.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_snapshot_uses_live_stream_message_and_storage_counts(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+    try:
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=_EventSink(),
+        )
+        await transport.publish_heartbeat(_heartbeat())
+        snapshot = await transport.inspect_state()
+        assert set(snapshot.streams) == {"AGENT_INBOX", "TRANSIENT_EVENTS"}
+        assert snapshot.message_count == 1
+        assert snapshot.storage_bytes >= len(canonical_json(_heartbeat()))
+        assert snapshot.pending is None
+        assert snapshot.ack_pending is None
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_snapshot_includes_live_consumer_pending_counts(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+    from scripts.research.modes.jetstream_config import durable_name
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+    try:
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=_EventSink(),
+            observer_agent_id="requester-1",
+        )
+        await transport.start_terminal_observer()
+        snapshot = await transport.inspect_state()
+        consumer = snapshot.consumers[durable_name("result", "run-1", "requester-1")]
+        assert consumer["pending"] == 0
+        assert consumer["ack_pending"] == 0
+        assert snapshot.pending == 0
+        assert snapshot.ack_pending == 0
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_restart_restores_terminal_observer_with_preserved_storage(
+    request: pytest.FixtureRequest,
+) -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+
+    async def restart() -> str:
+        server.restart(preserve_storage=True)
+        return server.url
+
+    try:
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=_EventSink(),
+            observer_agent_id="requester-1",
+            coordinator_restart=restart,
+        )
+        await transport.start_terminal_observer()
+        await transport.faults.restart_coordinator()
+        receipt = await transport.publish_terminal(_terminal())
+        observed = await transport.observe_terminal(
+            "20000000-0000-4000-8000-000000000001",
+            2,
+        )
+        assert receipt.stream == "AGENT_INBOX"
+        assert observed is not None
+        assert observed.stream_sequence == receipt.stream_sequence
+        assert observed.delivery is not None
+        await observed.delivery.ack()
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_worker_stop_start_retains_its_task_consumer(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> None:
+    from scripts.research.fixtures.native_control import (
+        NativeControlConfig,
+        build_agent_card,
+    )
+    from scripts.research.modes.all_durable import AllDurableTransport
+    from scripts.research.modes.jetstream_config import durable_name
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+    try:
+        config = NativeControlConfig(
+            run_id="run-1",
+            agent_id="worker-1",
+            mode="all-durable",
+            behavior="echo",
+            delay_ms=0,
+            crash_point=None,
+            heartbeat_interval_ms=1000,
+            outcome_db=str(tmp_path / "outcomes.sqlite3"),
+            side_effect_db=str(tmp_path / "effects.sqlite3"),
+        )
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=_EventSink(),
+            agent_card=build_agent_card(config),
+        )
+        await transport.start_receiver("worker-1", _as_task_executor(object()))
+        await transport.wait_receiver_ready("worker-1", 2)
+        consumer_name = durable_name("task", "run-1", "worker-1")
+        first = await transport.inspect_state()
+        assert consumer_name in first.consumers
+        await transport.faults.stop_worker("worker-1")
+        await transport.faults.start_worker("worker-1")
+        await transport.wait_receiver_ready("worker-1", 2)
+        second = await transport.inspect_state()
+        assert consumer_name in second.consumers
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_receiver_binds_production_pull_consumer_to_task_durable(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> None:
+    from scripts.research.fixtures.native_control import (
+        NativeControlConfig,
+        build_agent_card,
+    )
+    from scripts.research.modes.all_durable import AllDurableTransport
+
+    class RecordingExecutor:
+        def __init__(self) -> None:
+            self.deliveries: list[object] = []
+
+        async def execute(self, delivery: object) -> None:
+            self.deliveries.append(delivery)
+            await cast(typing.Any, delivery).commit()
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+    sink = _RecordingEventSink()
+    try:
+        config = NativeControlConfig(
+            run_id="run-1",
+            agent_id="worker-1",
+            mode="all-durable",
+            behavior="echo",
+            delay_ms=0,
+            crash_point=None,
+            heartbeat_interval_ms=1000,
+            outcome_db=str(tmp_path / "outcomes.sqlite3"),
+            side_effect_db=str(tmp_path / "effects.sqlite3"),
+        )
+        executor = RecordingExecutor()
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=sink,
+            agent_card=build_agent_card(config),
+        )
+        await transport.start_receiver(
+            "worker-1",
+            _as_task_executor(executor),
+        )
+        await transport.wait_receiver_ready("worker-1", 2)
+        await transport.submit_task(_command())
+        await _wait_for_event_count(sink, "transport.worker_delivery", 1)
+        assert len(executor.deliveries) == 1
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+@docker_test
+@_asyncio_test
+async def test_all_durable_receiver_registration_stays_outside_jetstream(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> None:
+    from scripts.research.fixtures.native_control import (
+        NativeControlConfig,
+        build_agent_card,
+    )
+    from scripts.research.modes.all_durable import AllDurableTransport
+
+    _require_explicit_docker(request)
+    server = NatsServer(token=TOKEN, jetstream=True).start()
+    transport: AllDurableTransport | None = None
+    try:
+        config = NativeControlConfig(
+            run_id="run-1",
+            agent_id="worker-1",
+            mode="all-durable",
+            behavior="echo",
+            delay_ms=0,
+            crash_point=None,
+            heartbeat_interval_ms=1000,
+            outcome_db=str(tmp_path / "outcomes.sqlite3"),
+            side_effect_db=str(tmp_path / "effects.sqlite3"),
+        )
+        transport = AllDurableTransport(
+            nats_url=server.url,
+            run_id="run-1",
+            token=TOKEN,
+            event_sink=_EventSink(),
+            agent_card=build_agent_card(config),
+        )
+        await transport.start_receiver("worker-1", _as_task_executor(object()))
+        await transport.wait_receiver_ready("worker-1", 2)
+        snapshot = await transport.inspect_state()
+        assert snapshot.message_count == 0
+        assert snapshot.storage_bytes == 0
+    finally:
+        if transport is not None:
+            await transport.close()
+        server.close()
+        _assert_owned_docker_inventory_empty()
+
+
+def test_durable_mode_resolved_configs_are_exact_fresh_and_transport_compatible() -> None:
+    from scripts.research.modes.all_durable import AllDurableTransport
+    from scripts.research.modes.edgecitadel import EdgeCitadelTransport
+
+    edge_none = EdgeCitadelTransport(
+        nats_url="nats://127.0.0.1:4222",
+        run_id="run-1",
+        token=TOKEN,
+        event_sink=_EventSink(),
+        ablation="none",
+        connection_factory=_as_connection_factory(_unused_connection_factory),
+    )
+    edge_broker = EdgeCitadelTransport(
+        nats_url="nats://127.0.0.1:4222",
+        run_id="run-1",
+        token=TOKEN,
+        event_sink=_EventSink(),
+        ablation="broker-only",
+        connection_factory=_as_connection_factory(_unused_connection_factory),
+    )
+    edge_full = EdgeCitadelTransport(
+        nats_url="nats://127.0.0.1:4222",
+        run_id="run-1",
+        token=TOKEN,
+        event_sink=_EventSink(),
+        connection_factory=_as_connection_factory(_unused_connection_factory),
+    )
+    durable = AllDurableTransport(
+        nats_url="nats://127.0.0.1:4222",
+        run_id="run-1",
+        token=TOKEN,
+        event_sink=_EventSink(),
+        connection_factory=_as_connection_factory(_unused_connection_factory),
+    )
+
+    expected = (
+        (edge_none, Mode.EDGECITADEL, False, {
+            "mode": "edgecitadel", "ablation": "none", "nats_msg_id": False,
+            "outcome_ledger": False,
+        }),
+        (edge_broker, Mode.EDGECITADEL, False, {
+            "mode": "edgecitadel", "ablation": "broker-only", "nats_msg_id": True,
+            "outcome_ledger": False,
+        }),
+        (edge_full, Mode.EDGECITADEL, True, {
+            "mode": "edgecitadel", "ablation": "full-contract", "nats_msg_id": True,
+            "outcome_ledger": True,
+        }),
+        (durable, Mode.ALL_DURABLE, True, {
+            "mode": "all-durable", "ablation": "full-contract", "nats_msg_id": True,
+            "outcome_ledger": True,
+        }),
+    )
+    for transport, mode, ledger_enabled, config in expected:
+        assert _accept_task_transport(transport) is transport
+        assert transport.mode is mode
+        assert transport.outcome_ledger_enabled is ledger_enabled
+        assert transport.faults is transport.faults
+        first = transport.resolved_config
+        second = transport.resolved_config
+        assert type(first) is MappingProxyType
+        assert first == config
+        assert first is not second
+        with pytest.raises(TypeError):
+            first["mode"] = "changed"  # type: ignore[index]
+        assert dict(second) == config

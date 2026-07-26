@@ -30,7 +30,9 @@ from scripts.research.fixtures.native_control import (
     CRASH_POINTS,
     NativeControlConfig,
     build_agent_card,
+    build_transport,
     load_native_config,
+    main,
     parse_args,
     read_transport_token,
     run_fixture,
@@ -274,6 +276,8 @@ def test_public_contract_is_exact() -> None:
         "BEHAVIORS",
         "CRASH_POINTS",
         "build_agent_card",
+        "build_transport",
+        "main",
         "run_fixture",
         "parse_args",
         "load_native_config",
@@ -285,6 +289,7 @@ def test_public_contract_is_exact() -> None:
 def test_public_function_signatures_are_exact() -> None:
     expected_parameters: dict[Callable[..., object], list[str]] = {
         build_agent_card: ["config"],
+        build_transport: ["config", "endpoints", "token", "event_sink"],
         run_fixture: ["config", "transport", "event_sink"],
         parse_args: ["argv"],
         load_native_config: ["path"],
@@ -300,10 +305,29 @@ def test_public_function_signatures_are_exact() -> None:
             for parameter in signature.parameters.values()
         )
     assert inspect.iscoroutinefunction(run_fixture)
+    assert inspect.iscoroutinefunction(main)
+    main_signature = inspect.signature(main)
+    assert list(main_signature.parameters) == ["argv", "environ", "transport_factory"]
+    assert main_signature.parameters["argv"].default is inspect.Parameter.empty
+    assert main_signature.parameters["environ"].default is os.environ
+    assert main_signature.parameters["transport_factory"].default is build_transport
 
     assert typing.get_type_hints(build_agent_card) == {
         "config": NativeControlConfig,
         "return": dict[str, object],
+    }
+    assert typing.get_type_hints(build_transport) == {
+        "config": NativeControlConfig,
+        "endpoints": Mapping[str, str],
+        "token": str,
+        "event_sink": EventSink,
+        "return": TaskTransport,
+    }
+    assert typing.get_type_hints(main) == {
+        "argv": Sequence[str],
+        "environ": Mapping[str, str],
+        "transport_factory": native_control.TransportFactory,
+        "return": type(None),
     }
     assert typing.get_type_hints(run_fixture) == {
         "config": NativeControlConfig,
@@ -367,7 +391,7 @@ def test_fixture_import_direction_and_package_inertness() -> None:
         for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert {"main", "build_transport"}.isdisjoint(defined_functions)
+    assert {"main", "build_transport"} <= defined_functions
     defined_classes = {
         node.name for node in tree.body if isinstance(node, ast.ClassDef)
     }
@@ -377,13 +401,17 @@ def test_fixture_import_direction_and_package_inertness() -> None:
         "TaskTransport",
         "TaskExecutor",
     }.isdisjoint(defined_classes)
-    assert not any(
-        isinstance(node, ast.If)
+    entrypoints = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.If)
         and isinstance(node.test, ast.Compare)
         and isinstance(node.test.left, ast.Name)
         and node.test.left.id == "__name__"
-        for node in tree.body
-    )
+    ]
+    assert len(entrypoints) == 1
+    assert ast.unparse(entrypoints[0].test) == "__name__ == '__main__'"
+    assert ast.unparse(entrypoints[0].body[0]) == "asyncio.run(main(sys.argv[1:]))"
 
 
 def test_config_contract_is_exact_and_frozen(tmp_path: Path) -> None:
@@ -1850,3 +1878,230 @@ async def test_heartbeat_false_receipt_fails_fixture(tmp_path: Path) -> None:
             _UUIDs("b0000000-0000-4000-8000-000000000001"),
             sleep=advance,
         )
+
+
+def test_cli_factory_and_async_entrypoint_have_exact_public_signatures() -> None:
+    factory = native_control.build_transport
+    entrypoint = native_control.main
+
+    factory_signature = inspect.signature(factory)
+    assert tuple(factory_signature.parameters) == (
+        "config",
+        "endpoints",
+        "token",
+        "event_sink",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        for parameter in factory_signature.parameters.values()
+    )
+
+    entrypoint_signature = inspect.signature(entrypoint)
+    assert tuple(entrypoint_signature.parameters) == (
+        "argv",
+        "environ",
+        "transport_factory",
+    )
+    assert entrypoint_signature.parameters["environ"].default is os.environ
+    assert entrypoint_signature.parameters["transport_factory"].default is factory
+    assert inspect.iscoroutinefunction(entrypoint)
+
+
+@cases(
+    ("mode", "expected_mode", "expected_config"),
+    [
+        ("central-relay", Mode.CENTRAL_RELAY, {
+            "mode": "central-relay", "ablation": "full-contract",
+            "nats_msg_id": False, "outcome_ledger": True,
+        }),
+        ("core-only", Mode.CORE_ONLY, {
+            "mode": "core-only", "ablation": "full-contract",
+            "nats_msg_id": False, "outcome_ledger": True,
+        }),
+        ("edgecitadel", Mode.EDGECITADEL, {
+            "mode": "edgecitadel", "ablation": "full-contract",
+            "nats_msg_id": True, "outcome_ledger": True,
+        }),
+        ("all-durable", Mode.ALL_DURABLE, {
+            "mode": "all-durable", "ablation": "full-contract",
+            "nats_msg_id": True, "outcome_ledger": True,
+        }),
+    ],
+)
+def test_build_transport_maps_each_mode_once_with_the_required_endpoint_and_card(
+    tmp_path: Path,
+    mode: str,
+    expected_mode: Mode,
+    expected_config: Mapping[str, object],
+) -> None:
+    config = _config(tmp_path, mode=mode)
+    sink = _EventSink()
+    transport = native_control.build_transport(
+        config,
+        {
+            "RELAY_URL": "http://127.0.0.1:8000",
+            "NATS_URL": "nats://127.0.0.1:4222",
+        },
+        "d" * 64,
+        sink,
+    )
+
+    assert transport.mode is expected_mode
+    assert dict(cast(typing.Any, transport).resolved_config) == expected_config
+
+
+@async_test
+async def test_main_builds_runs_and_closes_one_transport_in_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config_path = tmp_path / "fixture.json"
+    config_path.write_text(json.dumps(asdict(config)))
+    credential_path = tmp_path / "credential"
+    credential_path.write_text("d" * 64 + "\n")
+    credential_path.chmod(0o600)
+    transport = _LifecycleTransport()
+    calls: list[tuple[str, object]] = []
+
+    def factory(
+        supplied_config: NativeControlConfig,
+        endpoints: Mapping[str, str],
+        token: str,
+        event_sink: EventSink,
+    ) -> TaskTransport:
+        assert supplied_config == config
+        assert token == "d" * 64
+        assert event_sink is not None
+        calls.append(("factory", dict(endpoints)))
+        return cast(TaskTransport, transport)
+
+    async def run(
+        supplied_config: NativeControlConfig,
+        supplied_transport: TaskTransport,
+        event_sink: EventSink,
+    ) -> None:
+        assert supplied_config == config
+        assert supplied_transport is transport
+        assert event_sink is not None
+        calls.append(("run", None))
+
+    monkeypatch.setattr(native_control, "run_fixture", run)
+    await main(
+        ["--config", str(config_path)],
+        {
+            "NATS_URL": "nats://127.0.0.1:4222",
+            "EC_CREDENTIAL_FILE": str(credential_path),
+        },
+        factory,
+    )
+
+    assert calls == [
+        ("factory", {"NATS_URL": "nats://127.0.0.1:4222"}),
+        ("run", None),
+    ]
+    assert transport.closed == 1
+
+
+@async_test
+async def test_main_handles_fixture_cancellation_and_closes_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config_path = tmp_path / "fixture.json"
+    config_path.write_text(json.dumps(asdict(config)))
+    credential_path = tmp_path / "credential"
+    credential_path.write_text("d" * 64 + "\n")
+    credential_path.chmod(0o600)
+    transport = _LifecycleTransport()
+
+    def factory(
+        supplied_config: NativeControlConfig,
+        endpoints: Mapping[str, str],
+        token: str,
+        event_sink: EventSink,
+    ) -> TaskTransport:
+        del supplied_config, endpoints, token, event_sink
+        return cast(TaskTransport, transport)
+
+    async def cancelled(
+        supplied_config: NativeControlConfig,
+        supplied_transport: TaskTransport,
+        event_sink: EventSink,
+    ) -> None:
+        del supplied_config, supplied_transport, event_sink
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(native_control, "run_fixture", cancelled)
+    await main(
+        ["--config", str(config_path)],
+        {
+            "NATS_URL": "nats://127.0.0.1:4222",
+            "EC_CREDENTIAL_FILE": str(credential_path),
+        },
+        factory,
+    )
+    assert transport.closed == 1
+
+
+@async_test
+async def test_main_rejects_an_invalid_endpoint_before_reading_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config_path = tmp_path / "fixture.json"
+    config_path.write_text(json.dumps(asdict(config)))
+    credential_reads = 0
+
+    def fail_credential_read(path: str | Path) -> str:
+        nonlocal credential_reads
+        credential_reads += 1
+        del path
+        raise AssertionError("credential read must not occur")
+
+    monkeypatch.setattr(native_control, "read_transport_token", fail_credential_read)
+    with pytest.raises(SystemExit) as raised:
+        await main(
+            ["--config", str(config_path)],
+            {
+                "NATS_URL": "http://invalid.example:4222",
+                "EC_CREDENTIAL_FILE": "/secret/token",
+            },
+        )
+    assert raised.value.code == "native control failed"
+    assert credential_reads == 0
+
+
+@async_test
+async def test_main_hides_runtime_factory_failures(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config_path = tmp_path / "fixture.json"
+    config_path.write_text(json.dumps(asdict(config)))
+    credential_path = tmp_path / "credential"
+    credential_path.write_text("d" * 64 + "\n")
+    credential_path.chmod(0o600)
+
+    def failing_factory(
+        supplied_config: NativeControlConfig,
+        endpoints: Mapping[str, str],
+        token: str,
+        event_sink: EventSink,
+    ) -> TaskTransport:
+        del supplied_config, endpoints, event_sink
+        raise RuntimeError(f"factory failed for {token}")
+
+    with pytest.raises(SystemExit) as raised:
+        await main(
+            ["--config", str(config_path)],
+            {
+                "NATS_URL": "nats://127.0.0.1:4222",
+                "EC_CREDENTIAL_FILE": str(credential_path),
+            },
+            failing_factory,
+        )
+    assert raised.value.code == "native control failed"
+    assert "d" * 64 not in str(raised.value)
