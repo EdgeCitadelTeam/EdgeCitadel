@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+TOOLCHAIN="$ROOT/scripts/research/toolchain.json"
+LOCK="$ROOT/scripts/research/requirements.lock.txt"
+
+expected_uv="$(
+  awk -F'"' '$2 == "uv_version" { print $4 }' "$TOOLCHAIN"
+)"
+expected_python="$(
+  awk -F'"' '$2 == "python_version" { print $4 }' "$TOOLCHAIN"
+)"
+if [[ -z "$expected_uv" || -z "$expected_python" ]]; then
+  printf 'invalid research toolchain metadata: %s\n' "$TOOLCHAIN" >&2
+  exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  printf 'required uv %s is not installed\n' "$expected_uv" >&2
+  exit 1
+fi
+uv_full_version="$(uv --version)"
+read -r uv_name uv_semver _ <<<"$uv_full_version"
+if [[ "$uv_name" != "uv" || "$uv_semver" != "$expected_uv" ]]; then
+  printf 'required uv %s, found %s\n' "$expected_uv" "$uv_full_version" >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  lock_sha="$(sha256sum "$LOCK" | awk '{ print $1 }')"
+else
+  lock_sha="$(shasum -a 256 "$LOCK" | awk '{ print $1 }')"
+fi
+lock_prefix="${lock_sha:0:16}"
+runtime_root="${TMPDIR:-/tmp}"
+runtime_root="${runtime_root%/}"
+VENV="${EC_RESEARCH_VENV:-$runtime_root/edgecitadel-research-py312-$lock_prefix}"
+UV_CACHE_DIR="$runtime_root/edgecitadel-research-uv-cache"
+PYTHONPYCACHEPREFIX="$runtime_root/edgecitadel-research-pycache"
+
+assert_external_path() {
+  local path="$1"
+  local purpose="$2"
+  if [[ "$path" != /* || "$path/" == "$ROOT/"* ]]; then
+    printf '%s must be an absolute path outside the checkout: %s\n' \
+      "$purpose" "$path" >&2
+    exit 1
+  fi
+}
+
+assert_external_path "$VENV" "research virtual environment"
+assert_external_path "$UV_CACHE_DIR" "uv cache"
+assert_external_path "$PYTHONPYCACHEPREFIX" "Python bytecode cache"
+export UV_CACHE_DIR
+export UV_NO_CONFIG=1
+export PYTHONPYCACHEPREFIX
+
+if [[ ! -x "$VENV/bin/python" ]]; then
+  uv venv --managed-python --python "$expected_python" "$VENV"
+fi
+
+uv pip sync --python "$VENV/bin/python" --require-hashes "$LOCK"
+
+actual_python="$(
+  "$VENV/bin/python" -c \
+    'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+)"
+if [[ "$actual_python" != "$expected_python" ]]; then
+  printf 'required Python %s, found %s\n' \
+    "$expected_python" "$actual_python" >&2
+  exit 1
+fi
+
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="$ROOT"
+exec "$VENV/bin/python" "$@"

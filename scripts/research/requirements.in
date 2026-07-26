@@ -1,0 +1,14 @@
+fastapi
+httpx
+jsonschema
+nats-py==2.14.0
+pydantic
+pydantic-settings
+pytest
+pytest-asyncio
+python-dotenv
+pyyaml
+respx
+sqlite-vec
+uvicorn[standard]
+websockets
