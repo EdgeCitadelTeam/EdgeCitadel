@@ -45,6 +45,7 @@ services:
     environment:
       EC_CREDENTIAL_FILE: /run/edgecitadel/transport-token
       EC_MODE: ${EC_MODE:?}
+      EC_RUN_ID: ${EC_RUN_ID:?}
 
   native-control:
     <<: *artifact-service

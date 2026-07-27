@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.research import in_container_runner
 from scripts.research.execution_harness import CollectingEventSink
 from scripts.research.fixtures.native_control import NativeControlConfig
 from scripts.research.in_container_runner import prepare_direct_execution
@@ -61,3 +62,42 @@ def test_direct_runner_refuses_workloads_requiring_external_lifecycle(
 
     with pytest.raises(ValueError, match="external worker lifecycle"):
         prepare_direct_execution(cell, _config(tmp_path), CollectingEventSink())
+
+
+@pytest.mark.parametrize("mode", (Mode.EDGECITADEL.value, Mode.ALL_DURABLE.value))
+def test_direct_runner_assigns_the_durable_observer_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Transport:
+        pass
+
+    def transport_factory(**kwargs: object) -> Transport:
+        seen.update(kwargs)
+        return Transport()
+
+    if mode == Mode.EDGECITADEL.value:
+        monkeypatch.setattr(
+            "scripts.research.modes.edgecitadel.EdgeCitadelTransport",
+            transport_factory,
+        )
+    else:
+        monkeypatch.setattr(
+            "scripts.research.modes.all_durable.AllDurableTransport",
+            transport_factory,
+        )
+    config = _config(tmp_path)
+    object.__setattr__(config, "mode", mode)
+
+    transport = in_container_runner._build_direct_transport(
+        config,
+        {"NATS_URL": "nats://nats:4222"},
+        "a" * 64,
+        CollectingEventSink(),
+    )
+
+    assert isinstance(transport, Transport)
+    assert seen["observer_agent_id"] == "observer-1"

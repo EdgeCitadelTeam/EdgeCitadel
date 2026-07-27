@@ -217,4 +217,5 @@ def test_artifact_compose_starts_the_internal_central_relay_controller() -> None
 
     assert "central_relay_server:create_app_from_environment" in compose
     assert "RELAY_URL: http://controller:8000" in compose
+    assert "EC_RUN_ID: ${EC_RUN_ID:?}" in compose
     assert "ports:" not in compose

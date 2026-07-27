@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
 from typing import cast
 
+from adapters._common.task_publisher import EventSink
 from scripts.research.execution_harness import (
     CollectingEventSink,
     DelegationObserver,
@@ -19,10 +20,13 @@ from scripts.research.execution_harness import (
 )
 from scripts.research.fixtures.native_control import (
     NativeControlConfig,
+    build_agent_card,
+    build_transport,
     load_native_config,
     read_transport_token,
     runtime_endpoints,
 )
+from scripts.research.modes.base import Mode, TaskTransport
 from scripts.research.workload_matrix import MatrixCell, TrialObservation
 
 _DIRECT_WORKLOADS = frozenset({"W1", "W2", "W3", "W4", "W6a"})
@@ -33,6 +37,38 @@ _BEHAVIORS = {
     "W4": "echo",
     "W6a": "echo",
 }
+_DIRECT_OBSERVER_AGENT_ID = "observer-1"
+
+
+def _build_direct_transport(
+    config: NativeControlConfig,
+    endpoints: Mapping[str, str],
+    token: str,
+    event_sink: EventSink,
+) -> TaskTransport:
+    if config.mode == Mode.EDGECITADEL.value:
+        from scripts.research.modes.edgecitadel import EdgeCitadelTransport
+
+        return EdgeCitadelTransport(
+            nats_url=endpoints["NATS_URL"],
+            run_id=config.run_id,
+            token=token,
+            event_sink=event_sink,
+            agent_card=build_agent_card(config),
+            observer_agent_id=_DIRECT_OBSERVER_AGENT_ID,
+        )
+    if config.mode == Mode.ALL_DURABLE.value:
+        from scripts.research.modes.all_durable import AllDurableTransport
+
+        return AllDurableTransport(
+            nats_url=endpoints["NATS_URL"],
+            run_id=config.run_id,
+            token=token,
+            event_sink=event_sink,
+            agent_card=build_agent_card(config),
+            observer_agent_id=_DIRECT_OBSERVER_AGENT_ID,
+        )
+    return build_transport(config, endpoints, token, event_sink)
 
 
 def prepare_direct_execution(
@@ -69,6 +105,7 @@ async def run_direct_cell(
         token,
         observers,
         event_sink,
+        transport_factory=_build_direct_transport,
     )
     return observation, tuple(event_sink.events)
 
