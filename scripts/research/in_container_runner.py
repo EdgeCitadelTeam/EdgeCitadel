@@ -7,12 +7,13 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import cast
 
 from adapters._common.task_publisher import EventSink
+from scripts.research.coordinator_restart import request_restart
 from scripts.research.execution_harness import (
     CollectingEventSink,
     CollisionObserver,
@@ -29,7 +30,6 @@ from scripts.research.external_lifecycle import (
 from scripts.research.fixtures.native_control import (
     NativeControlConfig,
     build_agent_card,
-    build_transport,
     load_native_config,
     read_transport_token,
     runtime_endpoints,
@@ -42,7 +42,7 @@ from scripts.research.workload_matrix import (
     workload_timeout_seconds,
 )
 
-_DIRECT_WORKLOADS = frozenset({"W1", "W2", "W3", "W4", "W6a", "W6c"})
+_DIRECT_WORKLOADS = frozenset({"W1", "W2", "W3", "W4", "W6a", "W6c", "W7"})
 _EXTERNAL_WORKLOADS = frozenset({"W5", "W6b", "W8"})
 _RUNNER_WORKLOADS = _DIRECT_WORKLOADS | _EXTERNAL_WORKLOADS
 _BEHAVIORS = {
@@ -52,8 +52,19 @@ _BEHAVIORS = {
     "W4": "echo",
     "W6a": "echo",
     "W6c": "echo",
+    "W7": "echo",
 }
 _REQUESTER_AGENT_ID = "requester-1"
+
+
+def _coordinator_restart_callback(
+    timeout_seconds: int,
+) -> Callable[[], Awaitable[str | None]]:
+    async def restart() -> str | None:
+        await request_restart(Path("/control"), timeout_seconds)
+        return None
+
+    return restart
 
 
 def _build_direct_transport(
@@ -61,6 +72,7 @@ def _build_direct_transport(
     endpoints: Mapping[str, str],
     token: str,
     event_sink: EventSink,
+    coordinator_restart: Callable[[], Awaitable[str | None]] | None = None,
 ) -> TaskTransport:
     if config.mode == Mode.EDGECITADEL.value:
         from scripts.research.modes.edgecitadel import EdgeCitadelTransport
@@ -72,6 +84,7 @@ def _build_direct_transport(
             event_sink=event_sink,
             agent_card=build_agent_card(config),
             observer_agent_id=_REQUESTER_AGENT_ID,
+            coordinator_restart=coordinator_restart,
         )
     if config.mode == Mode.ALL_DURABLE.value:
         from scripts.research.modes.all_durable import AllDurableTransport
@@ -83,8 +96,28 @@ def _build_direct_transport(
             event_sink=event_sink,
             agent_card=build_agent_card(config),
             observer_agent_id=_REQUESTER_AGENT_ID,
+            coordinator_restart=coordinator_restart,
         )
-    return build_transport(config, endpoints, token, event_sink)
+    if config.mode == Mode.CENTRAL_RELAY.value:
+        from scripts.research.modes.central_relay import CentralRelayTransport
+
+        return CentralRelayTransport(
+            relay_url=endpoints["RELAY_URL"],
+            run_id=config.run_id,
+            token=token,
+            event_sink=event_sink,
+            coordinator_restart=coordinator_restart,
+        )
+    from scripts.research.modes.core_nats import CoreNatsTransport
+
+    return CoreNatsTransport(
+        nats_url=endpoints["NATS_URL"],
+        run_id=config.run_id,
+        token=token,
+        event_sink=event_sink,
+        agent_card=build_agent_card(config),
+        coordinator_restart=coordinator_restart,
+    )
 
 
 def prepare_direct_execution(
@@ -116,6 +149,11 @@ async def run_direct_cell(
 ) -> tuple[TrialObservation, tuple[Mapping[str, object], ...]]:
     event_sink = CollectingEventSink()
     configured, observers = prepare_direct_execution(cell, config, event_sink)
+    coordinator_restart = (
+        _coordinator_restart_callback(cell.timeout_seconds)
+        if cell.workload == "W7"
+        else None
+    )
     observation = await execute_cell(
         cell,
         configured,
@@ -123,7 +161,15 @@ async def run_direct_cell(
         token,
         observers,
         event_sink,
-        transport_factory=_build_direct_transport,
+        transport_factory=lambda configured, configured_endpoints, configured_token, sink: (
+            _build_direct_transport(
+                configured,
+                configured_endpoints,
+                configured_token,
+                sink,
+                coordinator_restart,
+            )
+        ),
     )
     return observation, tuple(event_sink.events)
 

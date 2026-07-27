@@ -549,6 +549,7 @@ class RelayStore:
                 raise ValueError("invalid database_path")
             self._configure()
             self._initialize_or_validate_schema()
+            self._recover_active_leases()
         except ValueError:
             connection = getattr(self, "_connection", None)
             if isinstance(connection, sqlite3.Connection):
@@ -1094,6 +1095,33 @@ class RelayStore:
             )
             if changed.rowcount == 1:
                 self._requeue_expired_task(cast(int, row[1]))
+
+    def _recover_active_leases(self) -> None:
+        """Requeue leases whose coordinator process was replaced."""
+
+        def recover() -> None:
+            now = self._lease_clock_ns()
+            rows = self._connection.execute(
+                """
+                SELECT lease_sequence, task_sequence
+                FROM leases
+                WHERE state = 'active'
+                ORDER BY lease_sequence
+                """
+            ).fetchall()
+            for row in rows:
+                changed = self._connection.execute(
+                    """
+                    UPDATE leases
+                    SET state = 'expired', finalized_ns = ?
+                    WHERE lease_sequence = ? AND state = 'active'
+                    """,
+                    (now, row[0]),
+                )
+                if changed.rowcount == 1:
+                    self._requeue_expired_task(cast(int, row[1]))
+
+        self._transaction(recover)
 
     def _expire_lease(self, lease: _LeaseRecord, now: int) -> None:
         changed = self._connection.execute(

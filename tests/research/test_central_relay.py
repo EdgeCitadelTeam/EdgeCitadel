@@ -846,7 +846,6 @@ def test_relay_store_lease_is_oldest_exclusive_and_reopens_for_redelivery(
         uuid4=uuids,
     )
     try:
-        lease_clock.value += 3_000_000
         redelivered = store._acquire_lease("worker-1")
         assert redelivered == {
             "delivery_count": 2,

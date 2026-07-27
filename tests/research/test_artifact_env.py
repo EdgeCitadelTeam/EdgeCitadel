@@ -17,6 +17,10 @@ import pytest
 
 from scripts.research import artifact_env
 from scripts.research.artifact_env import ArtifactEnvironment, OwnedResource
+from scripts.research.coordinator_restart import (
+    acknowledge_restart,
+    wait_for_restart_request,
+)
 
 _F = TypeVar("_F", bound=Callable[..., object])
 
@@ -143,6 +147,54 @@ def test_create_canonicalizes_a_symlinked_scratch_root_for_recovery(
     assert created.scratch_dir == backing / "ec-20260727-canonical"
     assert recovered.scratch_dir == created.scratch_dir
     assert recovered.owner_record == created.owner_record
+
+
+@pytest.mark.parametrize(
+    ("mode", "service"),
+    (
+        ("central-relay", "controller"),
+        ("core-only", "nats"),
+        ("edgecitadel", "nats"),
+        ("all-durable", "nats"),
+    ),
+)
+def test_restart_coordinator_recreates_only_the_mode_coordinator(
+    mode: str,
+    service: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = ArtifactEnvironment.create(
+        "ec-20260727-restart", mode, tmp_path / "raw"
+    )
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    object.__setattr__(environment, "command_runner", runner)
+
+    environment.restart_coordinator()
+
+    assert calls == [
+        [
+            "docker",
+            "compose",
+            "--project-name",
+            environment.project,
+            "--file",
+            str(environment.compose_file),
+            "up",
+            "--detach",
+            "--no-build",
+            "--force-recreate",
+            "--no-deps",
+            "--wait",
+            service,
+        ]
+    ]
 
 
 def test_cleanup_is_idempotent_and_preserves_raw_output(
@@ -482,6 +534,85 @@ def test_docker_runner_executes_a_direct_w1_cell(
         observation = json.loads(result.stdout)["observation"]
         assert observation["timed_out"] is False
         assert observation["logical_terminals"] == 1
+    finally:
+        assert environment.cleanup().completed is True
+
+
+@pytest.mark.parametrize(
+    ("mode", "timeout_seconds", "logical_terminals", "timed_out"),
+    (
+        ("central-relay", 5, 1, False),
+        ("core-only", 5, 0, True),
+        ("edgecitadel", 35, 1, False),
+        ("all-durable", 35, 1, False),
+    ),
+)
+@_docker_test
+def test_docker_runner_executes_w7_with_a_host_owned_restart(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    timeout_seconds: int,
+    logical_terminals: int,
+    timed_out: bool,
+) -> None:
+    _require_explicit_docker(request)
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [
+            "docker",
+            "build",
+            "--file",
+            str(root / "scripts/research/Dockerfile"),
+            "--tag",
+            "edgecitadel-research-artifact:local",
+            str(root),
+        ],
+        check=True,
+    )
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = ArtifactEnvironment.create(
+        f"ec-20260727-runner-w7-{mode}", mode, tmp_path / "raw"
+    )
+
+    try:
+        environment.start()
+        runner = subprocess.Popen(
+            [
+                "docker",
+                "compose",
+                "--project-name",
+                environment.project,
+                "--file",
+                str(environment.compose_file),
+                "exec",
+                "--no-TTY",
+                "runner",
+                "python",
+                "-m",
+                "scripts.research.in_container_runner",
+                "--config",
+                "/run/edgecitadel/config/native-control.json",
+                "--workload",
+                "W7",
+                "--timeout-seconds",
+                str(timeout_seconds),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={"PATH": os.environ["PATH"], **environment.compose_env},
+        )
+        wait_for_restart_request(environment.control_dir, 10)
+        environment.restart_coordinator()
+        acknowledge_restart(environment.control_dir)
+        stdout, stderr = runner.communicate(timeout=45)
+        assert runner.returncode == 0, stderr
+        observation = json.loads(stdout)["observation"]
+        assert observation["accepted"] == 1, stdout
+        assert observation["logical_terminals"] == logical_terminals, stdout
+        assert observation["timed_out"] is timed_out, stdout
     finally:
         assert environment.cleanup().completed is True
 

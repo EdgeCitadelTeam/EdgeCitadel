@@ -336,6 +336,29 @@ class ArtifactEnvironment:
     def start(self) -> None:
         self.start_topology(self.compose_file, {})
 
+    def restart_coordinator(self) -> None:
+        """Recreate only W7's declared coordinator without removing run volumes."""
+        service = "controller" if self.mode == Mode.CENTRAL_RELAY.value else "nats"
+        self.command_runner(
+            [
+                "docker",
+                "compose",
+                "--project-name",
+                self.project,
+                "--file",
+                str(self.compose_file),
+                "up",
+                "--detach",
+                "--no-build",
+                "--force-recreate",
+                "--no-deps",
+                "--wait",
+                service,
+            ],
+            check=True,
+            env=_compose_environment(self.compose_env),
+        )
+
     def stop(self) -> None:
         self.command_runner(
             [

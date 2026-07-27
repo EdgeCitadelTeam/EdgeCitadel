@@ -117,7 +117,7 @@ class _WorkerFaults(Protocol):
 _WORKLOADS = ("W1", "W2", "W3", "W4", "W5", "W6a", "W6b", "W6c", "W7", "W8")
 _ABLATION_WORKLOADS = frozenset({"W6a", "W6b", "W8"})
 _TIMEOUT_SECONDS = 30
-_WORKLOAD_TIMEOUTS = {"W6b": 330}
+_WORKLOAD_TIMEOUTS = {"W6b": 330, "W7": 35}
 
 
 def workload_timeout_seconds(workload: str) -> int:
@@ -172,19 +172,31 @@ def _fixture_value(
     return value
 
 
+def _snapshot_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _snapshot_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_snapshot_value(item) for item in value)
+    if isinstance(value, list):
+        return [_snapshot_value(item) for item in value]
+    return value
+
+
 def _snapshot_mapping(snapshot: object) -> Mapping[str, object]:
     if isinstance(snapshot, Mapping):
-        return dict(snapshot)
-    return {
-        "mode": getattr(getattr(snapshot, "mode", None), "value", None),
-        "streams": dict(getattr(snapshot, "streams", {})),
-        "consumers": dict(getattr(snapshot, "consumers", {})),
-        "pending": getattr(snapshot, "pending", None),
-        "ack_pending": getattr(snapshot, "ack_pending", None),
-        "connection_bytes": dict(getattr(snapshot, "connection_bytes", {})),
-        "storage_bytes": getattr(snapshot, "storage_bytes", None),
-        "message_count": getattr(snapshot, "message_count", None),
-    }
+        return _snapshot_value(snapshot)  # type: ignore[return-value]
+    return _snapshot_value(
+        {
+            "mode": getattr(getattr(snapshot, "mode", None), "value", None),
+            "streams": getattr(snapshot, "streams", {}),
+            "consumers": getattr(snapshot, "consumers", {}),
+            "pending": getattr(snapshot, "pending", None),
+            "ack_pending": getattr(snapshot, "ack_pending", None),
+            "connection_bytes": getattr(snapshot, "connection_bytes", {}),
+            "storage_bytes": getattr(snapshot, "storage_bytes", None),
+            "message_count": getattr(snapshot, "message_count", None),
+        }
+    )  # type: ignore[return-value]
 
 
 def _require_nonnegative_metrics(

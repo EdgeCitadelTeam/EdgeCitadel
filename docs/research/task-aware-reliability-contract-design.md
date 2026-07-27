@@ -350,7 +350,10 @@ The initial paper artifact covers this predeclared matrix:
 In JetStream modes, W6b waits 301 seconds after observing the first terminal
 before submitting its new-envelope retry: this exceeds the configured five-minute
 broker duplicate window while remaining inside the one-hour outcome-ledger
-retention. Its predeclared timeout is therefore 330 seconds; all other initial
+retention. Its predeclared timeout is therefore 330 seconds. W7 has a 35-second
+budget: JetStream retains an in-flight explicit-ack delivery for its 30-second
+acknowledgement window across broker replacement, and the remaining margin covers
+the restarted worker's redelivery and terminal publication. All other initial
 workloads retain the 30-second timeout unless a later campaign revision changes
 the contract.
 
@@ -363,7 +366,9 @@ broker. The report names these faults separately and compares recovery outcomes
 rather than pretending they are the same implementation event. The restart occurs
 after transport acceptance while the worker is disconnected. Process/container
 state is replaced, but the central SQLite file and JetStream volume are retained;
-no volume is deleted during the fault.
+no volume is deleted during the fault. The host-owned actuator waits for a
+runner request in the per-run control mount, force-recreates only that declared
+service, and acknowledges completion before the runner reconnects.
 
 Model inference latency is not part of the transport mechanism evaluation.
 Deterministic workers isolate messaging behavior. A model-backed demonstration may

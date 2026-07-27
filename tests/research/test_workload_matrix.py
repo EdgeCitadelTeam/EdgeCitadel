@@ -72,8 +72,14 @@ def test_required_matrix_has_exactly_the_predeclared_primary_and_ablation_cells(
         for ablation in ("none", "broker-only")
     }
     assert {cell.timeout_seconds for cell in cells if cell.workload == "W6b"} == {330}
-    assert all(cell.timeout_seconds == 30 for cell in cells if cell.workload != "W6b")
+    assert {cell.timeout_seconds for cell in cells if cell.workload == "W7"} == {35}
+    assert all(
+        cell.timeout_seconds == 30
+        for cell in cells
+        if cell.workload not in {"W6b", "W7"}
+    )
     assert workload_timeout_seconds("W6b") == 330
+    assert workload_timeout_seconds("W7") == 35
     assert workload_timeout_seconds("W1") == 30
     with pytest.raises(ValueError, match="invalid workload"):
         workload_timeout_seconds("W9")
