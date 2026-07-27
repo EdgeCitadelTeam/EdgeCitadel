@@ -467,6 +467,67 @@ def test_docker_runner_executes_a_direct_w1_cell(
 
 
 @_docker_test
+def test_docker_runner_executes_supervised_w5_crash_points(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_explicit_docker(request)
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [
+            "docker",
+            "build",
+            "--file",
+            str(root / "scripts/research/Dockerfile"),
+            "--tag",
+            "edgecitadel-research-artifact:local",
+            str(root),
+        ],
+        check=True,
+    )
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = ArtifactEnvironment.create(
+        "ec-20260727-runner-w5", "core-only", tmp_path / "raw"
+    )
+
+    try:
+        environment.start()
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--project-name",
+                environment.project,
+                "--file",
+                str(environment.compose_file),
+                "exec",
+                "--no-TTY",
+                "runner",
+                "python",
+                "-m",
+                "scripts.research.in_container_runner",
+                "--config",
+                "/run/edgecitadel/config/native-control.json",
+                "--workload",
+                "W5",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], **environment.compose_env},
+        )
+        observation = json.loads(result.stdout)["observation"]
+        assert observation["initiated"] == 6
+        assert observation["timed_out"] is False
+        assert observation["inapplicable_crash_points"] == [
+            "after-publish-mark-before-inbound-commit"
+        ]
+    finally:
+        assert environment.cleanup().completed is True
+
+
+@_docker_test
 def test_docker_supervisor_activates_the_external_native_worker(
     request: pytest.FixtureRequest,
     tmp_path: Path,

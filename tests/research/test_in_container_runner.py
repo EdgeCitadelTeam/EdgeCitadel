@@ -9,7 +9,10 @@ import pytest
 from scripts.research import in_container_runner
 from scripts.research.execution_harness import CollectingEventSink
 from scripts.research.fixtures.native_control import NativeControlConfig
-from scripts.research.in_container_runner import prepare_direct_execution
+from scripts.research.in_container_runner import (
+    _argument_parser,
+    prepare_direct_execution,
+)
 from scripts.research.modes.base import Mode
 from scripts.research.workload_matrix import MatrixCell
 
@@ -62,6 +65,15 @@ def test_direct_runner_refuses_workloads_requiring_external_lifecycle(
 
     with pytest.raises(ValueError, match="external worker lifecycle"):
         prepare_direct_execution(cell, _config(tmp_path), CollectingEventSink())
+
+
+def test_runner_accepts_w5_for_the_supervised_external_fixture() -> None:
+    assert (
+        _argument_parser()
+        .parse_args(["--config", "/state/native-control.json", "--workload", "W5"])
+        .workload
+        == "W5"
+    )
 
 
 @pytest.mark.parametrize("mode", (Mode.EDGECITADEL.value, Mode.ALL_DURABLE.value))

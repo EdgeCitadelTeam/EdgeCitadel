@@ -9,6 +9,7 @@ import os
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
+from pathlib import Path
 from typing import cast
 
 from adapters._common.task_publisher import EventSink
@@ -17,6 +18,10 @@ from scripts.research.execution_harness import (
     DelegationObserver,
     ProgressObserver,
     execute_cell,
+)
+from scripts.research.external_lifecycle import (
+    ExternalCrashObserver,
+    ExternalWorkerLifecycle,
 )
 from scripts.research.fixtures.native_control import (
     NativeControlConfig,
@@ -27,9 +32,11 @@ from scripts.research.fixtures.native_control import (
     runtime_endpoints,
 )
 from scripts.research.modes.base import Mode, TaskTransport
-from scripts.research.workload_matrix import MatrixCell, TrialObservation
+from scripts.research.workload_matrix import MatrixCell, TrialObservation, run_cell
 
 _DIRECT_WORKLOADS = frozenset({"W1", "W2", "W3", "W4", "W6a"})
+_EXTERNAL_WORKLOADS = frozenset({"W5"})
+_RUNNER_WORKLOADS = _DIRECT_WORKLOADS | _EXTERNAL_WORKLOADS
 _BEHAVIORS = {
     "W1": "echo",
     "W2": "delegate",
@@ -110,13 +117,40 @@ async def run_direct_cell(
     return observation, tuple(event_sink.events)
 
 
+async def run_external_cell(
+    cell: MatrixCell,
+    config: NativeControlConfig,
+    endpoints: Mapping[str, str],
+    token: str,
+) -> tuple[TrialObservation, tuple[Mapping[str, object], ...]]:
+    """Run a workload whose fixture process is owned by the compose supervisor."""
+    if cell.mode != config.mode:
+        raise ValueError("cell mode does not match config")
+    if cell.workload not in _EXTERNAL_WORKLOADS:
+        raise ValueError("workload does not use an external worker lifecycle")
+    event_sink = CollectingEventSink()
+    transport = _build_direct_transport(config, endpoints, token, event_sink)
+    try:
+        lifecycle = ExternalWorkerLifecycle(Path("/control"), Path("/state"))
+        observation = await run_cell(
+            cell,
+            transport,
+            {"sender_id": "requester-1", "worker_id": config.agent_id},
+            {"crash": ExternalCrashObserver(lifecycle, config, transport)},
+            event_sink,
+        )
+    finally:
+        await transport.close()
+    return observation, tuple(event_sink.events)
+
+
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run one directly controlled workload cell."
     )
     parser.add_argument("--config", required=True)
     parser.add_argument(
-        "--workload", choices=tuple(sorted(_DIRECT_WORKLOADS)), required=True
+        "--workload", choices=tuple(sorted(_RUNNER_WORKLOADS)), required=True
     )
     parser.add_argument("--ablation", default="full-contract")
     parser.add_argument("--timeout-seconds", type=int, default=30)
@@ -138,7 +172,12 @@ async def _main(argv: Sequence[str], environ: Mapping[str, str]) -> int:
             ablation=arguments.ablation,
             timeout_seconds=arguments.timeout_seconds,
         )
-        observation, events = await run_direct_cell(cell, config, endpoints, token)
+        if cell.workload in _DIRECT_WORKLOADS:
+            observation, events = await run_direct_cell(cell, config, endpoints, token)
+        else:
+            observation, events = await run_external_cell(
+                cell, config, endpoints, token
+            )
     except (OSError, ValueError, RuntimeError):
         return 2
     print(
@@ -166,4 +205,4 @@ if __name__ == "__main__":
     raise SystemExit(main(cast(Sequence[str], sys.argv[1:])))
 
 
-__all__ = ["prepare_direct_execution", "run_direct_cell"]
+__all__ = ["prepare_direct_execution", "run_direct_cell", "run_external_cell"]
