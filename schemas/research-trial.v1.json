@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/research-trial.v1.json",
+  "title": "EdgeCitadel Research Trial",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id", "trial_id", "matrix_cell", "outcome", "initiated", "accepted", "delivered", "handler_attempts", "executions", "side_effects", "prepared_outcomes", "logical_terminals", "distinct_terminal_ids", "publication_attempts", "wire_deliveries", "poison", "timing", "events_artifact", "resource_artifact", "invariant_results"],
+  "properties": {
+    "run_id": {"type": "string", "minLength": 1},
+    "trial_id": {"type": "string", "minLength": 1},
+    "matrix_cell": {"type": "object", "additionalProperties": false, "required": ["workload", "mode", "variant", "ablation", "timeout_seconds"], "properties": {"workload": {"enum": ["W1", "W2", "W3", "W4", "W5", "W6a", "W6b", "W6c", "W7", "W8"]}, "mode": {"enum": ["central-relay", "core-only", "edgecitadel", "all-durable"]}, "variant": {"type": "string"}, "ablation": {"type": "string"}, "timeout_seconds": {"type": "integer", "minimum": 1}}},
+    "outcome": {"enum": ["completed", "timeout", "transport-inapplicable", "harness-invalid"]},
+    "initiated": {"type": ["integer", "null"], "minimum": 0},
+    "accepted": {"type": ["integer", "null"], "minimum": 0},
+    "delivered": {"type": ["integer", "null"], "minimum": 0},
+    "handler_attempts": {"type": ["integer", "null"], "minimum": 0},
+    "executions": {"type": ["integer", "null"], "minimum": 0},
+    "side_effects": {"type": ["integer", "null"], "minimum": 0},
+    "prepared_outcomes": {"type": ["integer", "null"], "minimum": 0},
+    "logical_terminals": {"type": ["integer", "null"], "minimum": 0},
+    "distinct_terminal_ids": {"type": ["integer", "null"], "minimum": 0},
+    "publication_attempts": {"type": ["integer", "null"], "minimum": 0},
+    "wire_deliveries": {"type": ["integer", "null"], "minimum": 0},
+    "poison": {"type": ["integer", "null"], "minimum": 0},
+    "timing": {"type": "object", "required": ["started_monotonic_ns", "ended_monotonic_ns"], "properties": {"started_monotonic_ns": {"type": "integer", "minimum": 0}, "ended_monotonic_ns": {"type": "integer", "minimum": 0}}},
+    "events_artifact": {"type": "string", "minLength": 1},
+    "resource_artifact": {"type": "string", "minLength": 1},
+    "invariant_results": {"type": "object"},
+    "crash_subtrials": {"type": "array", "items": {"type": "object", "required": ["crash_point", "ledger_state", "inbound_deliveries", "executions", "side_effects", "publication_attempts", "logical_terminals", "wire_deliveries", "final_consumer_state"]}},
+    "wire_retry": {"type": "object", "required": ["first_puback_latency_ns", "second_puback_latency_ns", "duplicate_flags", "stream_sequences", "before_consumer", "after_consumer", "pending", "ack_pending"]},
+    "semantic_retry": {"type": "object", "required": ["first_envelope_id", "second_envelope_id", "fingerprints_equal", "ledger_decision", "executions", "logical_terminals", "wire_deliveries"]},
+    "collision": {"type": "object", "required": ["senders", "fingerprints", "decision", "rejection", "cached_output_exposure", "executions"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"matrix_cell": {"properties": {"workload": {"const": "W5"}}, "required": ["workload"]}}}, "then": {"required": ["crash_subtrials"]}},
+    {"if": {"properties": {"matrix_cell": {"properties": {"workload": {"const": "W6a"}}, "required": ["workload"]}}}, "then": {"required": ["wire_retry"]}},
+    {"if": {"properties": {"matrix_cell": {"properties": {"workload": {"const": "W6b"}}, "required": ["workload"]}}}, "then": {"required": ["semantic_retry"]}},
+    {"if": {"properties": {"matrix_cell": {"properties": {"workload": {"const": "W6c"}}, "required": ["workload"]}}}, "then": {"required": ["collision"]}}
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/research-manifest.v1.json",
+  "title": "EdgeCitadel Research Evidence Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "evidence_kind", "status", "run_id", "source", "command", "timing", "host", "dependencies", "images", "compose_config_sha256", "schemas", "cleanup", "artifacts", "manifest_sha256"],
+  "properties": {
+    "schema_version": {"const": "research-manifest.v1"},
+    "evidence_kind": {"enum": ["benchmark", "operator", "lab"]},
+    "status": {"enum": ["PASS", "INVALID"]},
+    "run_id": {"type": "string", "minLength": 1},
+    "source": {"type": "object", "additionalProperties": false, "required": ["commit", "git_dirty", "source_sha256", "paths"], "properties": {"commit": {"type": "string", "minLength": 1}, "git_dirty": {"type": "boolean"}, "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "paths": {"type": "array", "items": {"type": "string"}}}},
+    "command": {"type": "array", "items": {"type": "string"}},
+    "timing": {"type": "object"},
+    "host": {"type": "object"},
+    "dependencies": {"type": "object"},
+    "images": {"type": "object"},
+    "compose_config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "schemas": {"type": "object"},
+    "cleanup": {"type": "object", "required": ["completed"], "properties": {"completed": {"const": true}}},
+    "artifacts": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "campaign_id": {"type": "string", "minLength": 1},
+    "profile": {"type": "string", "minLength": 1},
+    "transport_config": {"type": "object"},
+    "workload_config": {"type": "object"},
+    "metric_contract": {"type": "object"},
+    "task": {"type": "object"},
+    "media": {"type": "object"},
+    "controller": {"type": "object"},
+    "nodes": {"type": "array"}
+  },
+  "allOf": [
+    {"if": {"properties": {"evidence_kind": {"const": "benchmark"}}}, "then": {"required": ["campaign_id", "profile", "transport_config", "workload_config", "metric_contract"]}},
+    {"if": {"properties": {"evidence_kind": {"const": "operator"}}}, "then": {"required": ["task", "media"]}},
+    {"if": {"properties": {"evidence_kind": {"const": "lab"}}}, "then": {"required": ["controller", "nodes"]}}
+  ]
+}
