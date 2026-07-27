@@ -28,9 +28,6 @@ const useAppStore = create((set, get) => ({
   systemStatus: null,
   notifications: [],
 
-  // Theme
-  darkMode: true,
-
   // Test data toggle (persisted)
   showTestAgents: JSON.parse(localStorage.getItem('showTestAgents') || 'false'),
 
@@ -179,7 +176,6 @@ const useAppStore = create((set, get) => ({
   setTaskStatusFilter: (filter) => set({ taskStatusFilter: filter }),
   setSystemStatus: (status) => set({ systemStatus: status }),
   setWsConnected: (connected) => set({ wsConnected: connected }),
-  setDarkMode: (dark) => set({ darkMode: dark }),
 
   setShowTestAgents: (show) => {
     localStorage.setItem('showTestAgents', JSON.stringify(show))

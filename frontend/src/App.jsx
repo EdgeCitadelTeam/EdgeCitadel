@@ -6,13 +6,12 @@ import Toast from './components/Toast'
 import toast from 'react-hot-toast'
 
 export default function App() {
-  const selectedAgent = useAppStore((s) => s.selectedAgent)
   const activeTab = useAppStore((s) => s.activeTab)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
   const notifications = useAppStore((s) => s.notifications)
 
   // WebSocket connection
-  useWebSocket(selectedAgent)
+  useWebSocket()
 
   // Keyboard shortcuts
   useEffect(() => {
