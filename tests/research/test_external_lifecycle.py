@@ -255,7 +255,7 @@ async def test_actuator_observer_recovers_core_after_a_crashed_side_effect(
         "handler_attempts": 2,
         "delivered": 2,
         "side_effects": 2,
-        "prepared_outcomes": 0,
+        "prepared_outcomes": 1,
         "logical_terminals": 1,
         "distinct_terminal_ids": 1,
         "publication_attempts": 1,

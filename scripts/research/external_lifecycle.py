@@ -276,9 +276,7 @@ class ExternalActuatorObserver:
             "handler_attempts": handler_attempts,
             "delivered": handler_attempts,
             "side_effects": event_names.count("fixture.side_effect_committed"),
-            "prepared_outcomes": (
-                0 if self._config.mode == Mode.CORE_ONLY.value else ledger_decisions
-            ),
+            "prepared_outcomes": ledger_decisions,
             "logical_terminals": int(terminal is not None),
             "distinct_terminal_ids": int(isinstance(terminal_identifier, str)),
             "publication_attempts": int(terminal is not None),
