@@ -421,6 +421,40 @@ def test_start_topology_uses_an_argv_command_and_owned_compose_environment(
 
 
 @_docker_test
+@pytest.mark.parametrize("mode", ("central-relay", "core-only"))
+def test_docker_topology_starts_with_a_numeric_leading_transport_token(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    _require_explicit_docker(request)
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [
+            "docker",
+            "build",
+            "--file",
+            str(root / "scripts/research/Dockerfile"),
+            "--tag",
+            "edgecitadel-research-artifact:local",
+            str(root),
+        ],
+        check=True,
+    )
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = ArtifactEnvironment.create(
+        f"ec-20260727-numeric-token-{mode}", mode, tmp_path / "raw"
+    )
+    environment.credential_file.write_bytes(b"5e" + (b"0" * 62) + b"\n")
+
+    try:
+        environment.start()
+    finally:
+        assert environment.cleanup().completed is True
+
+
+@_docker_test
 def test_docker_topologies_are_isolated_and_leave_no_owned_resources(
     request: pytest.FixtureRequest,
     tmp_path: Path,
