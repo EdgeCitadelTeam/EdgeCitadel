@@ -24,12 +24,16 @@ from scripts.research.coordinator_restart import (
 from scripts.research.evidence import (
     SourceProvenance,
     capture_source_provenance,
+    file_sha256,
+    finalize_bundle,
     verify_source_provenance,
     write_json,
     write_jsonl,
 )
 from scripts.research.preflight import PreflightRequest, run_prestart_preflight
 from scripts.research.workload_matrix import MatrixCell, required_matrix_cells
+
+_MANIFEST_SCHEMA = Path(__file__).parents[2] / "schemas/research-manifest.v1.json"
 
 
 @dataclass(frozen=True)
@@ -386,6 +390,55 @@ def run_repetition(
     )
 
 
+def _compose_config_sha256(environment: _RunEnvironment) -> str:
+    compose_file = getattr(environment, "compose_file", None)
+    if isinstance(compose_file, Path) and compose_file.is_file():
+        return file_sha256(compose_file)
+    return "0" * 64
+
+
+def _bundle_manifest(
+    repetition: Repetition,
+    environment: _RunEnvironment,
+    source: SourceProvenance,
+    profile: str,
+    cleanup: _CleanupReport,
+) -> dict[str, object]:
+    return {
+        "schema_version": "research-manifest.v1",
+        "evidence_kind": "benchmark",
+        "status": "PENDING",
+        "run_id": repetition.run_id,
+        "campaign_id": (
+            f"{profile}-{repetition.run_id.removeprefix('ec-').rsplit('-', 1)[0]}"
+        ),
+        "profile": profile,
+        "source": source.to_dict(),
+        "command": [
+            "scripts/research/run_artifact.py",
+            "run",
+            "--profile",
+            profile,
+        ],
+        "timing": {},
+        "host": {"platform": sys.platform},
+        "dependencies": {},
+        "images": {},
+        "compose_config_sha256": _compose_config_sha256(environment),
+        "schemas": {"manifest": "research-manifest.v1"},
+        "cleanup": {"completed": cleanup.completed},
+        "artifacts": {},
+        "transport_config": {"mode": repetition.cell.mode},
+        "workload_config": {
+            "ablation": repetition.cell.ablation,
+            "timeout_seconds": repetition.cell.timeout_seconds,
+            "variant": repetition.cell.variant,
+            "workload": repetition.cell.workload,
+        },
+        "metric_contract": {"status": "not_collected"},
+    }
+
+
 def main(
     argv: list[str] | None = None,
     environment_factory: Callable[[str, str, Path], _RunEnvironment] | None = None,
@@ -434,16 +487,25 @@ def main(
             environment = factory(
                 repetition.run_id, repetition.cell.mode, campaign_path / "bundles"
             )
-            cleanup_failed = False
+            cleanup: _CleanupReport
             try:
                 runner(repetition, environment, source)
-                bundle_paths.append(str(environment.output_dir))
             finally:
-                cleanup_failed = environment.cleanup().completed is not True
-            if cleanup_failed:
+                cleanup = environment.cleanup()
+            if cleanup.completed is not True:
                 return 2
             if not verify_source_provenance(source_root, source):
                 return 2
+            if (
+                finalize_bundle(
+                    environment.output_dir,
+                    _bundle_manifest(repetition, environment, source, profile, cleanup),
+                    _MANIFEST_SCHEMA,
+                )
+                != "PASS"
+            ):
+                return 2
+            bundle_paths.append(str(environment.output_dir))
         result = {
             "campaign_path": str(campaign_path),
             "bundle_paths": bundle_paths,

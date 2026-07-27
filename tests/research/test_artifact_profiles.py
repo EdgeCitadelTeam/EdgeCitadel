@@ -126,6 +126,18 @@ def test_quick_lifecycle_captures_source_once_and_cleans_every_fresh_environment
     assert len(result["bundle_paths"]) == 22
     assert observed_scratch_roots == [str(scratch_root)] * 22
     assert os.environ.get("EC_ARTIFACT_SCRATCH_ROOT") != str(scratch_root)
+    manifests = [
+        json.loads((environment.output_dir / "manifest.json").read_text())
+        for environment in created
+    ]
+    assert all(manifest["status"] == "PASS" for manifest in manifests)
+    assert {manifest["campaign_id"] for manifest in manifests} == {"quick-20260725"}
+    assert all(manifest["cleanup"] == {"completed": True} for manifest in manifests)
+    assert all(
+        manifest["metric_contract"] == {"status": "not_collected"}
+        for manifest in manifests
+    )
+    assert all(manifest["manifest_sha256"] for manifest in manifests)
 
 
 def test_real_repetition_runner_starts_topology_and_persists_runner_output(
