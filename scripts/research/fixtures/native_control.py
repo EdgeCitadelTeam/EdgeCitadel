@@ -349,6 +349,15 @@ class _NativeHandler:
                     publication.envelope_id,
                     "progress",
                 )
+                self._emit(
+                    "fixture.progress_generated",
+                    {
+                        "task_id": task_id,
+                        "envelope_id": publication.envelope_id,
+                        "progress": index * 5,
+                        "payload_bytes": len(_PROGRESS_MESSAGE.encode("ascii")),
+                    },
+                )
         elif self._config.behavior == "actuator":
             publication = await context.publish_progress(task_id, body="working")
             _require_accepted(publication, publication.envelope_id, "progress")
@@ -820,10 +829,10 @@ def build_transport(
     event_sink: EventSink,
 ) -> TaskTransport:
     if config.mode == Mode.CENTRAL_RELAY.value:
-        module = importlib.import_module(
-            "scripts.research.modes.central_relay"
+        module = importlib.import_module("scripts.research.modes.central_relay")
+        transport_factory = cast(
+            Callable[..., TaskTransport], module.CentralRelayTransport
         )
-        transport_factory = cast(Callable[..., TaskTransport], module.CentralRelayTransport)
 
         return transport_factory(
             relay_url=endpoints["RELAY_URL"],
@@ -847,7 +856,9 @@ def build_transport(
         )
     if config.mode == Mode.EDGECITADEL.value:
         module = importlib.import_module("scripts.research.modes.edgecitadel")
-        transport_factory = cast(Callable[..., TaskTransport], module.EdgeCitadelTransport)
+        transport_factory = cast(
+            Callable[..., TaskTransport], module.EdgeCitadelTransport
+        )
 
         return transport_factory(
             nats_url=nats_url,
@@ -858,7 +869,9 @@ def build_transport(
         )
     if config.mode == Mode.ALL_DURABLE.value:
         module = importlib.import_module("scripts.research.modes.all_durable")
-        transport_factory = cast(Callable[..., TaskTransport], module.AllDurableTransport)
+        transport_factory = cast(
+            Callable[..., TaskTransport], module.AllDurableTransport
+        )
 
         return transport_factory(
             nats_url=nats_url,

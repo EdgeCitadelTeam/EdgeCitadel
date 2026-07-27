@@ -8,7 +8,12 @@ from time import perf_counter_ns
 import pytest
 
 from adapters._common.task_types import PublicationReceipt
-from scripts.research.execution_harness import execute_cell
+from scripts.research.execution_harness import (
+    CollectingEventSink,
+    DelegationObserver,
+    ProgressObserver,
+    execute_cell,
+)
 from scripts.research.fixtures.native_control import NativeControlConfig
 from scripts.research.modes.base import Mode, ObservedEnvelope
 from scripts.research.workload_matrix import MatrixCell
@@ -105,3 +110,56 @@ async def test_execute_cell_waits_for_fixture_readiness_and_always_closes_transp
     assert observation.logical_terminals == 1
     assert transport.closed is True
     assert sink.events[0]["event"] == "fixture.ready"
+
+
+@pytest.mark.asyncio
+async def test_delegation_observer_projects_the_native_fixture_event() -> None:
+    sink = CollectingEventSink()
+    sink.emit(
+        {
+            "event": "fixture.delegation_created",
+            "data": {
+                "parent_task_id": "parent",
+                "child_task_id": "child",
+                "context_id": "context",
+                "hop_count": 1,
+            },
+        }
+    )
+
+    assert await DelegationObserver(sink).wait_for_child("parent") == {
+        "task_id": "child",
+        "context_id": "context",
+        "hop_count": 1,
+        "parent_task_id": "parent",
+    }
+
+
+@pytest.mark.asyncio
+async def test_progress_observer_separates_generated_live_replayed_and_missing() -> (
+    None
+):
+    sink = CollectingEventSink()
+    for _ in range(3):
+        sink.emit({"event": "fixture.progress_generated", "data": {}})
+    sink.emit(
+        {
+            "event": "transport.transient_observed",
+            "data": {"envelope_type": "task.progress", "replayed": False},
+        }
+    )
+    sink.emit(
+        {
+            "event": "transport.transient_observed",
+            "data": {"envelope_type": "task.progress", "replayed": True},
+        }
+    )
+    observer = ProgressObserver(sink)
+
+    await observer.wait_for_generated(3)
+    assert observer.progress_counts() == {
+        "generated": 3,
+        "live": 1,
+        "replayed": 1,
+        "missing": 1,
+    }

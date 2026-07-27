@@ -30,6 +30,84 @@ class _EventBuffer(EventSink, Protocol):
     events: list[Mapping[str, object]]
 
 
+class CollectingEventSink:
+    """In-memory fixture evidence used by direct workload observers."""
+
+    def __init__(self) -> None:
+        self.events: list[Mapping[str, object]] = []
+
+    def emit(self, event: Mapping[str, object]) -> None:
+        self.events.append(dict(event))
+
+
+class DelegationObserver:
+    def __init__(self, event_sink: _EventBuffer) -> None:
+        self._event_sink = event_sink
+
+    async def wait_for_child(self, parent_task_id: str) -> Mapping[str, object]:
+        for _ in range(300):
+            for event in self._event_sink.events:
+                data = event.get("data")
+                if (
+                    event.get("event") == "fixture.delegation_created"
+                    and isinstance(data, Mapping)
+                    and data.get("parent_task_id") == parent_task_id
+                ):
+                    child_task_id = data.get("child_task_id")
+                    context_id = data.get("context_id")
+                    hop_count = data.get("hop_count")
+                    if (
+                        type(child_task_id) is str
+                        and type(context_id) is str
+                        and type(hop_count) is int
+                    ):
+                        return {
+                            "task_id": child_task_id,
+                            "context_id": context_id,
+                            "hop_count": hop_count,
+                            "parent_task_id": parent_task_id,
+                        }
+            await asyncio.sleep(0.01)
+        raise RuntimeError("delegation observation timed out")
+
+
+class ProgressObserver:
+    def __init__(self, event_sink: _EventBuffer) -> None:
+        self._event_sink = event_sink
+
+    async def wait_for_generated(self, count: int) -> None:
+        for _ in range(300):
+            if self.progress_counts()["generated"] >= count:
+                return
+            await asyncio.sleep(0.01)
+        raise RuntimeError("progress generation timed out")
+
+    def progress_counts(self) -> Mapping[str, int]:
+        generated = 0
+        live = 0
+        replayed = 0
+        for event in self._event_sink.events:
+            data = event.get("data")
+            if not isinstance(data, Mapping):
+                continue
+            if event.get("event") == "fixture.progress_generated":
+                generated += 1
+            elif (
+                event.get("event") == "transport.transient_observed"
+                and data.get("envelope_type") == "task.progress"
+            ):
+                if data.get("replayed") is True:
+                    replayed += 1
+                else:
+                    live += 1
+        return {
+            "generated": generated,
+            "live": live,
+            "replayed": replayed,
+            "missing": max(0, generated - live - replayed),
+        }
+
+
 def _fixture_ready(event_sink: _EventBuffer, agent_id: str) -> bool:
     for event in event_sink.events:
         data = event.get("data")
@@ -84,4 +162,9 @@ async def execute_cell(
         await transport.close()
 
 
-__all__ = ["execute_cell"]
+__all__ = [
+    "CollectingEventSink",
+    "DelegationObserver",
+    "ProgressObserver",
+    "execute_cell",
+]

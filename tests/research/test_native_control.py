@@ -1086,6 +1086,11 @@ async def test_progress_frames_preserve_correlation(tmp_path: Path) -> None:
     terminal = transport.terminals[0]
     assert terminal["task_state"] == "completed"
     assert terminal["payload"] == {"body": "edgecitadel:nonce"}
+    generated = [
+        event for event in sink.events if event["event"] == "fixture.progress_generated"
+    ]
+    assert len(generated) == 20
+    assert [event["data"]["payload_bytes"] for event in generated] == [256] * 20
 
 
 @async_test
@@ -1910,22 +1915,46 @@ def test_cli_factory_and_async_entrypoint_have_exact_public_signatures() -> None
 @cases(
     ("mode", "expected_mode", "expected_config"),
     [
-        ("central-relay", Mode.CENTRAL_RELAY, {
-            "mode": "central-relay", "ablation": "full-contract",
-            "nats_msg_id": False, "outcome_ledger": True,
-        }),
-        ("core-only", Mode.CORE_ONLY, {
-            "mode": "core-only", "ablation": "full-contract",
-            "nats_msg_id": False, "outcome_ledger": True,
-        }),
-        ("edgecitadel", Mode.EDGECITADEL, {
-            "mode": "edgecitadel", "ablation": "full-contract",
-            "nats_msg_id": True, "outcome_ledger": True,
-        }),
-        ("all-durable", Mode.ALL_DURABLE, {
-            "mode": "all-durable", "ablation": "full-contract",
-            "nats_msg_id": True, "outcome_ledger": True,
-        }),
+        (
+            "central-relay",
+            Mode.CENTRAL_RELAY,
+            {
+                "mode": "central-relay",
+                "ablation": "full-contract",
+                "nats_msg_id": False,
+                "outcome_ledger": True,
+            },
+        ),
+        (
+            "core-only",
+            Mode.CORE_ONLY,
+            {
+                "mode": "core-only",
+                "ablation": "full-contract",
+                "nats_msg_id": False,
+                "outcome_ledger": True,
+            },
+        ),
+        (
+            "edgecitadel",
+            Mode.EDGECITADEL,
+            {
+                "mode": "edgecitadel",
+                "ablation": "full-contract",
+                "nats_msg_id": True,
+                "outcome_ledger": True,
+            },
+        ),
+        (
+            "all-durable",
+            Mode.ALL_DURABLE,
+            {
+                "mode": "all-durable",
+                "ablation": "full-contract",
+                "nats_msg_id": True,
+                "outcome_ledger": True,
+            },
+        ),
     ],
 )
 def test_build_transport_maps_each_mode_once_with_the_required_endpoint_and_card(
