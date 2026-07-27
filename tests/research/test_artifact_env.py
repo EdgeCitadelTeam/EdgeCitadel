@@ -402,3 +402,61 @@ def test_docker_topologies_are_isolated_and_leave_no_owned_resources(
     finally:
         assert second.cleanup().completed is True
         assert first.cleanup().completed is True
+
+
+@_docker_test
+def test_docker_runner_executes_a_direct_w1_cell(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_explicit_docker(request)
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [
+            "docker",
+            "build",
+            "--file",
+            str(root / "scripts/research/Dockerfile"),
+            "--tag",
+            "edgecitadel-research-artifact:local",
+            str(root),
+        ],
+        check=True,
+    )
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = ArtifactEnvironment.create(
+        "ec-20260726-runner-w1", "core-only", tmp_path / "raw"
+    )
+
+    try:
+        environment.start()
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--project-name",
+                environment.project,
+                "--file",
+                str(environment.compose_file),
+                "exec",
+                "--no-TTY",
+                "runner",
+                "python",
+                "-m",
+                "scripts.research.in_container_runner",
+                "--config",
+                "/run/edgecitadel/config/native-control.json",
+                "--workload",
+                "W1",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], **environment.compose_env},
+        )
+        observation = json.loads(result.stdout)["observation"]
+        assert observation["timed_out"] is False
+        assert observation["logical_terminals"] == 1
+    finally:
+        assert environment.cleanup().completed is True
