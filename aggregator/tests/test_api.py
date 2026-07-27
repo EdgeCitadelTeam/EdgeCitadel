@@ -169,3 +169,30 @@ def test_openclaw_login_returns_token(client):
 def test_openclaw_login_rejects_bad_session(client):
     r = client.post("/api/openclaw/login", json={"session_id": "bad/slash"})
     assert r.status_code == 422
+
+
+def test_messages_exposes_replay_and_observation_metadata(client):
+    from aggregator import database as db
+
+    env = {
+        "v": 1,
+        "id": "audit-wire-1",
+        "type": "result",
+        "sender_id": "shell-1",
+        "recipient_id": "aggregator",
+        "task_id": "audit-task-1",
+        "task_state": "completed",
+        "timestamp": "2026-07-25T12:00:01.000Z",
+        "payload": {"body": "edgecitadel:audit"},
+    }
+    db.insert_message(env)
+    db.insert_message(env)
+
+    response = client.get("/api/messages?task_id=audit-task-1")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["duplicate_count"] == 1
+    assert isinstance(rows[0]["observation_index"], int)
+    assert rows[0]["observation_index"] > 0

@@ -109,6 +109,12 @@ The canonical request fingerprint is SHA-256 over canonical JSON containing exac
 
 Only `completed`, `failed`, `canceled`, and `rejected` are terminal task states. One logical terminal outcome is identified by `(sender_id, recipient_id, task_id, request_fingerprint, terminal_state, canonical_terminal_payload_hash)`. Repeats with the same logical identity and content are idempotent even when envelope IDs, publication attempts, or wire deliveries differ. The worker outcome key `(worker_agent_id, task_id)` owns one request sender and fingerprint; a second sender or different fingerprint for that key is rejected with `task_state: rejected` and `payload.error: "task_id_collision"`. A later terminal with a different state or payload hash is a contract violation, not another successful outcome.
 
+The aggregator audit mirror uses `messages.id` as its idempotency key. A replay
+increments `duplicate_count` and does not add a visible row; this is mirror
+replay metadata, not a broker delivery count. `observation_index` is SQLite
+insertion order and is the only dashboard task-state ordering input. Envelope
+`timestamp` remains display metadata.
+
 ### Task-aware executor ordering
 
 `adapters/_common/task_executor.py` owns the transport-neutral task decision. An injected receiver passes the original delivery bytes to it and performs no acknowledgement or result classification of its own. The executor applies these eight stages:

@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS messages (
     hop_count       INTEGER,
     timestamp       TEXT NOT NULL,
     payload         TEXT NOT NULL,   -- JSON-serialized object
-    deployment      TEXT NOT NULL DEFAULT 'default'
+    deployment      TEXT NOT NULL DEFAULT 'default',
+    duplicate_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_messages_sender      ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient   ON messages(recipient_id);
@@ -109,6 +110,15 @@ def init_db(path: str, wipe: bool = False) -> None:
         if should_wipe:
             c.executescript(_DROP_SQL)
         c.executescript(SCHEMA_SQL)
+        columns = {
+            row[1]
+            for row in c.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "duplicate_count" not in columns:
+            c.execute(
+                "ALTER TABLE messages ADD COLUMN "
+                "duplicate_count INTEGER NOT NULL DEFAULT 0"
+            )
         # Best-effort load of sqlite-vec extension for future semantic memory.
         # Aggregator boots fine without it; v0.3 will populate turn_embedding.
         try:
@@ -130,7 +140,8 @@ def init_db(path: str, wipe: bool = False) -> None:
 
 def insert_message(env: dict, deployment: str = "default") -> None:
     with _conn() as c:
-        c.execute(
+        c.execute("BEGIN IMMEDIATE")
+        cursor = c.execute(
             """INSERT OR IGNORE INTO messages
                (id, v, type, sender_id, recipient_id, task_id, context_id,
                 task_state, agent_state, hop_count, timestamp, payload, deployment)
@@ -139,6 +150,13 @@ def insert_message(env: dict, deployment: str = "default") -> None:
              env.get("recipient_id"), env.get("task_id"), env.get("context_id"),
              env.get("task_state"), env.get("agent_state"), env.get("hop_count"),
              env["timestamp"], json.dumps(env.get("payload", {})), deployment))
+        if cursor.rowcount == 0:
+            c.execute(
+                """UPDATE messages
+                   SET duplicate_count = duplicate_count + 1
+                   WHERE id = ?""",
+                (env["id"],),
+            )
 
 
 def query_messages(*, agent_id: str | None = None, task_id: str | None = None,
@@ -147,7 +165,7 @@ def query_messages(*, agent_id: str | None = None, task_id: str | None = None,
                    deployment: str | None = None,
                    exclude_deployment: str | None = None,
                    limit: int = 500) -> list[dict]:
-    q = "SELECT * FROM messages WHERE 1=1"
+    q = "SELECT messages.rowid AS observation_index, messages.* FROM messages WHERE 1=1"
     params: list = []
     if agent_id:
         q += " AND (sender_id = ? OR recipient_id = ?)"; params += [agent_id, agent_id]
@@ -163,7 +181,7 @@ def query_messages(*, agent_id: str | None = None, task_id: str | None = None,
         q += " AND deployment = ?"; params.append(deployment)
     if exclude_deployment:
         q += " AND deployment != ?"; params.append(exclude_deployment)
-    q += " ORDER BY timestamp DESC LIMIT ?"; params.append(limit)
+    q += " ORDER BY messages.rowid DESC LIMIT ?"; params.append(limit)
     with _conn() as c:
         rows = [dict(r) for r in c.execute(q, params).fetchall()]
     for r in rows:
