@@ -3,6 +3,18 @@ import { api } from '../api/client'
 
 const MAX_REALTIME_MESSAGES = 500
 
+const upsertByAgentId = (rows, incoming) => {
+  const index = rows.findIndex((row) => row.agent_id === incoming.agent_id)
+  if (index < 0) return rows.concat([incoming])
+  return rows.map((row, rowIndex) => {
+    if (rowIndex !== index) return row
+    const merged = Object.assign({}, row, incoming)
+    if (Object.hasOwn(row, 'queue')) merged.queue = row.queue
+    if (Object.hasOwn(row, 'poison_count')) merged.poison_count = row.poison_count
+    return merged
+  })
+}
+
 const useAppStore = create((set, get) => ({
   // Agents — items shaped like {agent_id, card, agent_state, last_heartbeat,
   // last_register, deployment, heartbeat_interval_sec}
@@ -53,14 +65,26 @@ const useAppStore = create((set, get) => ({
   // Actions
   setAgents: (agents) => set({ agents }),
 
+  upsertAgent: (incoming) => set((state) => ({
+    agents: upsertByAgentId(state.agents, incoming),
+  })),
+
+  upsertRegistryRow: (incoming) => set((state) => ({
+    registry: upsertByAgentId(state.registry, incoming),
+  })),
+
   setSelectedAgent: (agent) => set({ selectedAgent: agent }),
 
-  updateAgentStatus: (agentId, agentState) =>
-    set((state) => ({
-      agents: state.agents.map((a) =>
-        a.agent_id === agentId ? { ...a, agent_state: agentState } : a
-      ),
-    })),
+  updateAgentStatus: (agentId, agentState) => set((state) => ({
+    agents: state.agents.map((row) => row.agent_id === agentId ? { ...row, agent_state: agentState } : row),
+    registry: state.registry.map((row) => row.agent_id === agentId ? { ...row, agent_state: agentState } : row),
+  })),
+
+  removeAgent: (agentId) => set((state) => ({
+    agents: state.agents.filter((row) => row.agent_id !== agentId),
+    registry: state.registry.filter((row) => row.agent_id !== agentId),
+    selectedAgent: state.selectedAgent === agentId ? null : state.selectedAgent,
+  })),
 
   addPendingCommand: (taskId, target) =>
     set((state) => ({
