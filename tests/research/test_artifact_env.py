@@ -503,10 +503,12 @@ def test_docker_supervisor_activates_the_external_native_worker(
         while time.monotonic() < deadline:
             status = environment.control_dir / "worker-status.txt"
             events = environment.state_dir / "worker-events.jsonl"
+            status_text = status.read_text() if status.is_file() else ""
             if (
                 status.is_file()
                 and events.is_file()
-                and "status=running\n" in status.read_text()
+                and "status=running\n" in status_text
+                and "generation=\n" not in status_text
             ):
                 break
             time.sleep(0.05)

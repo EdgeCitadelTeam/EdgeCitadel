@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -22,11 +23,19 @@ def _read_config(path: Path) -> bytes:
 
 
 def _write_status(
-    path: Path, status: str, pid: int | None, exit_code: int | None
+    path: Path,
+    status: str,
+    pid: int | None,
+    exit_code: int | None,
+    generation: str | None,
 ) -> None:
     pid_text = "" if pid is None else str(pid)
     exit_text = "" if exit_code is None else str(exit_code)
-    payload = f"status={status}\npid={pid_text}\nexit_code={exit_text}\n"
+    generation_text = "" if generation is None else generation
+    payload = (
+        f"status={status}\npid={pid_text}\nexit_code={exit_text}\n"
+        f"generation={generation_text}\n"
+    )
     temporary = path.with_suffix(".tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -46,11 +55,12 @@ def supervise(
     """Run a child until configuration replacement; never hide a crash by looping."""
     child: subprocess.Popen[bytes] | None = None
     generation: bytes | None = None
+    generation_id: str | None = None
     while True:
         try:
             candidate = _read_config(config_path)
         except (OSError, ValueError):
-            _write_status(status_path, "invalid-config", None, None)
+            _write_status(status_path, "invalid-config", None, None, None)
             time.sleep(_POLL_SECONDS)
             continue
         if candidate != generation:
@@ -70,11 +80,14 @@ def supervise(
                 env=child_environment,
             )
             generation = candidate
-            _write_status(status_path, "running", child.pid, None)
+            generation_id = hashlib.sha256(candidate).hexdigest()
+            _write_status(status_path, "running", child.pid, None, generation_id)
         if child is not None:
             exit_code = child.poll()
             if exit_code is not None:
-                _write_status(status_path, "exited", child.pid, exit_code)
+                _write_status(
+                    status_path, "exited", child.pid, exit_code, generation_id
+                )
                 child = None
         time.sleep(_POLL_SECONDS)
 
