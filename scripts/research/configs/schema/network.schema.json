@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "rtt_ms", "loss_percent", "probe_seconds", "endpoint_qdiscs"],
+  "properties": {
+    "profile": {"enum": ["lan", "50ms-rtt", "1pct-loss"]},
+    "rtt_ms": {"type": "number", "minimum": 0},
+    "loss_percent": {"type": "number", "minimum": 0, "maximum": 100},
+    "probe_seconds": {"const": 5},
+    "endpoint_qdiscs": {"type": "object", "additionalProperties": {"type": "string"}}
+  },
+  "allOf": [
+    {"if": {"properties": {"profile": {"const": "lan"}}}, "then": {"properties": {"rtt_ms": {"const": 0}, "loss_percent": {"const": 0}}}},
+    {"if": {"properties": {"profile": {"const": "50ms-rtt"}}}, "then": {"properties": {"rtt_ms": {"const": 50}}}},
+    {"if": {"properties": {"profile": {"const": "1pct-loss"}}}, "then": {"properties": {"loss_percent": {"const": 1}}}}
+  ]
+}
