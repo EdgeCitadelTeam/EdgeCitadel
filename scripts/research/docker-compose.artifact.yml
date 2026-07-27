@@ -23,7 +23,7 @@ services:
     entrypoint:
       - /bin/sh
       - -ec
-      - export NATS_TOKEN="$$(cat /run/edgecitadel/transport-token)"; exec nats-server -c "$$EC_NATS_CONFIG"
+      - token="$$(cat /run/edgecitadel/transport-token)"; config="$$(mktemp)"; sed "s/@NATS_TOKEN@/$$token/g" "$$EC_NATS_CONFIG" > "$$config"; exec nats-server -c "$$config"
     environment:
       EC_NATS_CONFIG: ${EC_NATS_CONFIG:?}
     labels: *owner-labels

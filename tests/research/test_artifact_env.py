@@ -450,6 +450,44 @@ def test_docker_topology_starts_with_a_numeric_leading_transport_token(
 
     try:
         environment.start()
+        authenticated = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--project-name",
+                environment.project,
+                "--file",
+                str(environment.compose_file),
+                "exec",
+                "--no-TTY",
+                "runner",
+                "python",
+                "-c",
+                (
+                    "import asyncio\n"
+                    "import os\n"
+                    "import nats\n"
+                    "\n"
+                    "async def main():\n"
+                    "    token = open(os.environ['EC_CREDENTIAL_FILE']).read().strip()\n"
+                    "    client = await nats.connect(\n"
+                    "        os.environ['NATS_URL'],\n"
+                    "        token=token,\n"
+                    "        connect_timeout=1,\n"
+                    "        allow_reconnect=False,\n"
+                    "        max_reconnect_attempts=0,\n"
+                    "    )\n"
+                    "    await client.close()\n"
+                    "\n"
+                    "asyncio.run(main())\n"
+                ),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], **environment.compose_env},
+        )
+        assert authenticated.returncode == 0, authenticated.stderr
     finally:
         assert environment.cleanup().completed is True
 
