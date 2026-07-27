@@ -22,6 +22,7 @@ from scripts.research.execution_harness import (
 from scripts.research.external_lifecycle import (
     ExternalActuatorObserver,
     ExternalCrashObserver,
+    ExternalSemanticRetryObserver,
     ExternalWorkerLifecycle,
 )
 from scripts.research.fixtures.native_control import (
@@ -33,10 +34,15 @@ from scripts.research.fixtures.native_control import (
     runtime_endpoints,
 )
 from scripts.research.modes.base import Mode, TaskTransport
-from scripts.research.workload_matrix import MatrixCell, TrialObservation, run_cell
+from scripts.research.workload_matrix import (
+    MatrixCell,
+    TrialObservation,
+    run_cell,
+    workload_timeout_seconds,
+)
 
 _DIRECT_WORKLOADS = frozenset({"W1", "W2", "W3", "W4", "W6a"})
-_EXTERNAL_WORKLOADS = frozenset({"W5", "W8"})
+_EXTERNAL_WORKLOADS = frozenset({"W5", "W6b", "W8"})
 _RUNNER_WORKLOADS = _DIRECT_WORKLOADS | _EXTERNAL_WORKLOADS
 _BEHAVIORS = {
     "W1": "echo",
@@ -45,7 +51,7 @@ _BEHAVIORS = {
     "W4": "echo",
     "W6a": "echo",
 }
-_DIRECT_OBSERVER_AGENT_ID = "observer-1"
+_REQUESTER_AGENT_ID = "requester-1"
 
 
 def _build_direct_transport(
@@ -63,7 +69,7 @@ def _build_direct_transport(
             token=token,
             event_sink=event_sink,
             agent_card=build_agent_card(config),
-            observer_agent_id=_DIRECT_OBSERVER_AGENT_ID,
+            observer_agent_id=_REQUESTER_AGENT_ID,
         )
     if config.mode == Mode.ALL_DURABLE.value:
         from scripts.research.modes.all_durable import AllDurableTransport
@@ -74,7 +80,7 @@ def _build_direct_transport(
             token=token,
             event_sink=event_sink,
             agent_card=build_agent_card(config),
-            observer_agent_id=_DIRECT_OBSERVER_AGENT_ID,
+            observer_agent_id=_REQUESTER_AGENT_ID,
         )
     return build_transport(config, endpoints, token, event_sink)
 
@@ -137,6 +143,10 @@ async def run_external_cell(
             observers: Mapping[str, object] = {
                 "crash": ExternalCrashObserver(lifecycle, config, transport)
             }
+        elif cell.workload == "W6b":
+            semantic_retry = ExternalSemanticRetryObserver(lifecycle, config, transport)
+            await semantic_retry.prepare(float(cell.timeout_seconds))
+            observers = {"semantic_retry": semantic_retry}
         else:
             actuator = ExternalActuatorObserver(lifecycle, config, transport)
             await actuator.prepare(float(cell.timeout_seconds))
@@ -162,7 +172,7 @@ def _argument_parser() -> argparse.ArgumentParser:
         "--workload", choices=tuple(sorted(_RUNNER_WORKLOADS)), required=True
     )
     parser.add_argument("--ablation", default="full-contract")
-    parser.add_argument("--timeout-seconds", type=int, default=30)
+    parser.add_argument("--timeout-seconds", type=int)
     return parser
 
 
@@ -172,14 +182,19 @@ async def _main(argv: Sequence[str], environ: Mapping[str, str]) -> int:
         config = load_native_config(arguments.config)
         endpoints = runtime_endpoints(config, environ)
         token = read_transport_token(environ.get("EC_CREDENTIAL_FILE", ""))
-        if arguments.timeout_seconds <= 0:
+        timeout_seconds = (
+            workload_timeout_seconds(arguments.workload)
+            if arguments.timeout_seconds is None
+            else arguments.timeout_seconds
+        )
+        if timeout_seconds <= 0:
             raise ValueError("invalid timeout")
         cell = MatrixCell(
             workload=arguments.workload,
             mode=config.mode,
             variant="primary",
             ablation=arguments.ablation,
-            timeout_seconds=arguments.timeout_seconds,
+            timeout_seconds=timeout_seconds,
         )
         if cell.workload in _DIRECT_WORKLOADS:
             observation, events = await run_direct_cell(cell, config, endpoints, token)
@@ -187,7 +202,8 @@ async def _main(argv: Sequence[str], environ: Mapping[str, str]) -> int:
             observation, events = await run_external_cell(
                 cell, config, endpoints, token
             )
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"runner failed: {error}", file=sys.stderr)
         return 2
     print(
         json.dumps(

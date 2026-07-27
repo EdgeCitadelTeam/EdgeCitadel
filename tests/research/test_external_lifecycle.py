@@ -16,6 +16,7 @@ from adapters._common.task_types import PublicationReceipt
 from scripts.research.external_lifecycle import (
     ExternalActuatorObserver,
     ExternalCrashObserver,
+    ExternalSemanticRetryObserver,
     ExternalWorkerLifecycle,
 )
 from scripts.research.fixtures.native_control import NativeControlConfig
@@ -263,4 +264,51 @@ async def test_actuator_observer_recovers_core_after_a_crashed_side_effect(
         "poison": 0,
         "timed_out": False,
         "crash_point": CrashPoint.AFTER_SIDE_EFFECT.value,
+    }
+
+
+class _SemanticLifecycle:
+    async def activate(self, config: NativeControlConfig, timeout_s: float) -> str:
+        assert config.behavior == "echo"
+        assert config.crash_point is None
+        assert timeout_s == 30
+        return "a" * 64
+
+
+class _SemanticDelivery:
+    def __init__(self) -> None:
+        self.acknowledged = False
+
+    async def ack(self) -> None:
+        self.acknowledged = True
+
+
+@pytest.mark.asyncio
+async def test_semantic_retry_waits_after_the_initial_terminal(tmp_path: Path) -> None:
+    transport = _Transport()
+    delivery = _SemanticDelivery()
+    transport.terminal = SimpleNamespace(
+        envelope={"id": "terminal-1"}, delivery=delivery
+    )
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    observer = ExternalSemanticRetryObserver(
+        cast(ExternalWorkerLifecycle, _SemanticLifecycle()),
+        _config(tmp_path),
+        transport,
+        sleep=sleep,
+    )
+
+    await observer.prepare(30)
+    result = await observer.wait_for_retry_window("task-1")
+
+    assert delivery.acknowledged is True
+    assert sleeps == [1]
+    assert result == {
+        "broker_duplicate_window_seconds": 0,
+        "retry_elapsed_seconds": 1,
+        "ledger_retention_seconds": 3600,
     }

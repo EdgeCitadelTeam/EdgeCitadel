@@ -347,6 +347,13 @@ The initial paper artifact covers this predeclared matrix:
 | W7 | Restart the mode's task-transport coordinator with work in flight | Required | Required | Required | Required |
 | W8 | Fake non-idempotent actuator with crash after side effect | Required | Required | Required plus ablations | Required |
 
+In JetStream modes, W6b waits 301 seconds after observing the first terminal
+before submitting its new-envelope retry: this exceeds the configured five-minute
+broker duplicate window while remaining inside the one-hour outcome-ledger
+retention. Its predeclared timeout is therefore 330 seconds; all other initial
+workloads retain the 30-second timeout unless a later campaign revision changes
+the contract.
+
 For W4, the benchmark submits through `TaskTransport`, not the production operator
 HTTP endpoint. The operator API's 409 response for an already-declared-offline
 agent remains current product behavior and receives a separate API test.
@@ -513,8 +520,8 @@ The W6a wire-retry record contains:
 - Pending and acknowledgement-pending counts at completion.
 
 The W6b semantic-retry record contains both envelope IDs, equal task/fingerprint
-evidence, ledger hit/miss decision, handler execution count, terminal logical/wire
-counts, and broker duplicate flags. The W6c collision record contains both
+evidence, the elapsed retry interval, ledger hit/miss decision, handler execution
+count, terminal logical/wire counts, and broker duplicate flags. The W6c collision record contains both
 fingerprints and senders, the collision decision, rejection envelope, cached-result
 exposure count, and handler execution count.
 

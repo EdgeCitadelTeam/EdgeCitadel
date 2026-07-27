@@ -125,6 +125,26 @@ def test_recover_reconstructs_only_the_recorded_run_paths(
     assert recovered.resolved_config == created.resolved_config
 
 
+def test_create_canonicalizes_a_symlinked_scratch_root_for_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backing = tmp_path / "backing"
+    backing.mkdir()
+    link = tmp_path / "scratch-link"
+    link.symlink_to(backing, target_is_directory=True)
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(link))
+
+    created = ArtifactEnvironment.create(
+        "ec-20260727-canonical", "core-only", tmp_path / "raw"
+    )
+    recovered = ArtifactEnvironment.recover("ec-20260727-canonical")
+
+    assert created.scratch_dir == backing / "ec-20260727-canonical"
+    assert recovered.scratch_dir == created.scratch_dir
+    assert recovered.owner_record == created.owner_record
+
+
 def test_cleanup_is_idempotent_and_preserves_raw_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -582,6 +602,66 @@ def test_docker_runner_recovers_supervised_w8_actuator_side_effect(
         assert observation["timed_out"] is False
         assert observation["handler_attempts"] == 2
         assert observation["side_effects"] == 2
+        assert observation["logical_terminals"] == 1
+    finally:
+        assert environment.cleanup().completed is True
+
+
+@_docker_test
+def test_docker_runner_executes_supervised_w6b_semantic_retry(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_explicit_docker(request)
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [
+            "docker",
+            "build",
+            "--file",
+            str(root / "scripts/research/Dockerfile"),
+            "--tag",
+            "edgecitadel-research-artifact:local",
+            str(root),
+        ],
+        check=True,
+    )
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = ArtifactEnvironment.create(
+        "ec-20260727-runner-w6b", "core-only", tmp_path / "raw"
+    )
+
+    try:
+        environment.start()
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--project-name",
+                environment.project,
+                "--file",
+                str(environment.compose_file),
+                "exec",
+                "--no-TTY",
+                "runner",
+                "python",
+                "-m",
+                "scripts.research.in_container_runner",
+                "--config",
+                "/run/edgecitadel/config/native-control.json",
+                "--workload",
+                "W6b",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], **environment.compose_env},
+        )
+        observation = json.loads(result.stdout)["observation"]
+        assert observation["timed_out"] is False
+        assert observation["accepted"] == 2
+        assert observation["publication_attempts"] == 2
         assert observation["logical_terminals"] == 1
     finally:
         assert environment.cleanup().completed is True

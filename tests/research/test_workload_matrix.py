@@ -14,6 +14,7 @@ from scripts.research.workload_matrix import (
     MatrixCell,
     required_matrix_cells,
     run_cell,
+    workload_timeout_seconds,
 )
 
 
@@ -70,7 +71,12 @@ def test_required_matrix_has_exactly_the_predeclared_primary_and_ablation_cells(
         for workload in ("W6a", "W6b", "W8")
         for ablation in ("none", "broker-only")
     }
-    assert all(cell.timeout_seconds > 0 for cell in cells)
+    assert {cell.timeout_seconds for cell in cells if cell.workload == "W6b"} == {330}
+    assert all(cell.timeout_seconds == 30 for cell in cells if cell.workload != "W6b")
+    assert workload_timeout_seconds("W6b") == 330
+    assert workload_timeout_seconds("W1") == 30
+    with pytest.raises(ValueError, match="invalid workload"):
+        workload_timeout_seconds("W9")
 
 
 def test_crash_points_are_complete_and_have_stable_paper_labels() -> None:

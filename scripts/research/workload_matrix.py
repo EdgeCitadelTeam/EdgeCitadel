@@ -117,6 +117,13 @@ class _WorkerFaults(Protocol):
 _WORKLOADS = ("W1", "W2", "W3", "W4", "W5", "W6a", "W6b", "W6c", "W7", "W8")
 _ABLATION_WORKLOADS = frozenset({"W6a", "W6b", "W8"})
 _TIMEOUT_SECONDS = 30
+_WORKLOAD_TIMEOUTS = {"W6b": 330}
+
+
+def workload_timeout_seconds(workload: str) -> int:
+    if workload not in _WORKLOADS:
+        raise ValueError("invalid workload")
+    return _WORKLOAD_TIMEOUTS.get(workload, _TIMEOUT_SECONDS)
 
 
 def required_matrix_cells() -> tuple[MatrixCell, ...]:
@@ -126,7 +133,7 @@ def required_matrix_cells() -> tuple[MatrixCell, ...]:
             mode=mode.value,
             variant="primary",
             ablation="full-contract",
-            timeout_seconds=_TIMEOUT_SECONDS,
+            timeout_seconds=workload_timeout_seconds(workload),
         )
         for workload in _WORKLOADS
         for mode in Mode
@@ -137,7 +144,7 @@ def required_matrix_cells() -> tuple[MatrixCell, ...]:
             mode=Mode.EDGECITADEL.value,
             variant="ablation",
             ablation=ablation,
-            timeout_seconds=_TIMEOUT_SECONDS,
+            timeout_seconds=workload_timeout_seconds(workload),
         )
         for workload in _WORKLOADS
         if workload in _ABLATION_WORKLOADS

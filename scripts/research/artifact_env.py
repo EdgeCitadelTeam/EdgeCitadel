@@ -232,7 +232,7 @@ class ArtifactEnvironment:
         output_dir = output_root / validated_run_id
         if output_dir.exists():
             raise ValueError("artifact output already exists")
-        scratch_root = _scratch_root()
+        scratch_root = _scratch_root().resolve()
         scratch_dir = scratch_root / validated_run_id
         if scratch_dir.exists():
             raise ValueError("artifact scratch already exists")

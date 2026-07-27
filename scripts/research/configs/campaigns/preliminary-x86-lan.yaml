@@ -16,7 +16,7 @@ workload_timeouts:
   W4: 30
   W5: 30
   W6a: 30
-  W6b: 30
+  W6b: 330
   W6c: 30
   W7: 30
   W8: 30

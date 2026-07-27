@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Protocol
@@ -287,6 +287,54 @@ class ExternalActuatorObserver:
         }
 
 
+class ExternalSemanticRetryObserver:
+    """Delay a W6b retry until the mode's broker deduplication interval passes."""
+
+    def __init__(
+        self,
+        lifecycle: ExternalWorkerLifecycle,
+        config: NativeControlConfig,
+        transport: _CrashTransport,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._lifecycle = lifecycle
+        self._config = config
+        self._transport = transport
+        self._sleep = sleep
+        self._timeout_s: float | None = None
+
+    async def prepare(self, timeout_s: float) -> None:
+        await self._lifecycle.activate(
+            replace(self._config, behavior="echo", crash_point=None), timeout_s
+        )
+        self._timeout_s = timeout_s
+
+    async def wait_for_retry_window(self, task_id: str) -> Mapping[str, int]:
+        if self._timeout_s is None:
+            raise RuntimeError("semantic retry was not prepared")
+        first_terminal = await self._transport.observe_terminal(
+            task_id, self._timeout_s
+        )
+        if first_terminal is None:
+            raise RuntimeError("semantic retry initial terminal timed out")
+        delivery = getattr(first_terminal, "delivery", None)
+        if delivery is not None:
+            await delivery.ack()
+        duplicate_window = (
+            300
+            if self._config.mode in {Mode.EDGECITADEL.value, Mode.ALL_DURABLE.value}
+            else 0
+        )
+        retry_elapsed = duplicate_window + 1
+        await self._sleep(float(retry_elapsed))
+        return {
+            "broker_duplicate_window_seconds": duplicate_window,
+            "retry_elapsed_seconds": retry_elapsed,
+            "ledger_retention_seconds": 3600,
+        }
+
+
 def _crash_metrics(applicability: str) -> dict[str, object]:
     return {
         "applicability": applicability,
@@ -306,5 +354,6 @@ def _crash_metrics(applicability: str) -> dict[str, object]:
 __all__ = [
     "ExternalActuatorObserver",
     "ExternalCrashObserver",
+    "ExternalSemanticRetryObserver",
     "ExternalWorkerLifecycle",
 ]
