@@ -12,6 +12,7 @@ x-artifact-service: &artifact-service
   volumes:
     - ${EC_CREDENTIAL_FILE:?}:/run/edgecitadel/transport-token:ro
     - ${EC_CONFIG_DIR:?}:/run/edgecitadel/config:ro
+    - ${EC_CONTROL_DIR:?}:/control
     - ${EC_STATE_DIR:?}:/state
     - ${EC_OUTPUT_DIR:?}:/output
     - topology-metadata:/topology-metadata
@@ -53,7 +54,7 @@ services:
     command:
       - /bin/sh
       - -ec
-      - exec sleep infinity
+      - exec python -m scripts.research.external_worker_supervisor --config /control/active-native-control.json --events /state/worker-events.jsonl --status /control/worker-status.txt
     environment:
       EC_CREDENTIAL_FILE: /run/edgecitadel/transport-token
       EC_MODE: ${EC_MODE:?}

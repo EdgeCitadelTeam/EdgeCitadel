@@ -126,6 +126,7 @@ class ArtifactEnvironment:
     mode: str
     output_dir: Path
     scratch_dir: Path
+    control_dir: Path
     state_dir: Path
     credential_file: Path
     owner_record: Path
@@ -159,6 +160,7 @@ class ArtifactEnvironment:
             for key in (
                 "credential_file",
                 "config_dir",
+                "control_dir",
                 "state_dir",
                 "scratch_dir",
                 "output_dir",
@@ -170,7 +172,13 @@ class ArtifactEnvironment:
             if type(value) is not str or not Path(value).is_absolute():
                 raise ValueError("artifact recovery record is invalid")
             paths[key] = Path(value)
-        for key in ("credential_file", "config_dir", "state_dir", "scratch_dir"):
+        for key in (
+            "credential_file",
+            "config_dir",
+            "control_dir",
+            "state_dir",
+            "scratch_dir",
+        ):
             if not paths[key].resolve().is_relative_to(scratch_root):
                 raise ValueError("artifact recovery record is invalid")
         if paths["scratch_dir"] != scratch_root / validated_run_id:
@@ -188,6 +196,7 @@ class ArtifactEnvironment:
             mode=mode,
             output_dir=paths["output_dir"],
             scratch_dir=paths["scratch_dir"],
+            control_dir=paths["control_dir"],
             state_dir=paths["state_dir"],
             credential_file=paths["credential_file"],
             owner_record=owner_record,
@@ -201,6 +210,7 @@ class ArtifactEnvironment:
                 "EC_NATS_CONFIG": nats_config,
                 "EC_CREDENTIAL_FILE": str(paths["credential_file"]),
                 "EC_CONFIG_DIR": str(paths["config_dir"]),
+                "EC_CONTROL_DIR": str(paths["control_dir"]),
                 "EC_STATE_DIR": str(paths["state_dir"]),
                 "EC_OUTPUT_DIR": str(paths["output_dir"]),
             },
@@ -233,6 +243,8 @@ class ArtifactEnvironment:
         state_dir.mkdir(mode=0o700)
         config_dir = scratch_dir / "config"
         config_dir.mkdir(mode=0o700)
+        control_dir = scratch_dir / "control"
+        control_dir.mkdir(mode=0o700)
         credential_file = scratch_dir / "transport-token"
         _write_private(credential_file, f"{secrets.token_hex(32)}\n".encode())
         native_config = config_dir / "native-control.json"
@@ -254,6 +266,10 @@ class ArtifactEnvironment:
                 separators=(",", ":"),
             ).encode(),
         )
+        _write_private(
+            control_dir / "native-control.json",
+            native_config.read_bytes(),
+        )
         project = f"{validated_mode}-artifact-{validated_run_id}"
         nats_config = (
             "/etc/nats/core.conf"
@@ -269,6 +285,7 @@ class ArtifactEnvironment:
             "EC_NATS_CONFIG": nats_config,
             "EC_CREDENTIAL_FILE": str(credential_file),
             "EC_CONFIG_DIR": str(config_dir),
+            "EC_CONTROL_DIR": str(control_dir),
             "EC_STATE_DIR": str(state_dir),
             "EC_OUTPUT_DIR": str(output_dir),
         }
@@ -290,6 +307,7 @@ class ArtifactEnvironment:
                 "compose_file": str(_COMPOSE_FILE),
                 "credential_file": str(credential_file),
                 "config_dir": str(config_dir),
+                "control_dir": str(control_dir),
                 "native_config": str(native_config),
                 "state_dir": str(state_dir),
                 "scratch_dir": str(scratch_dir),
@@ -306,6 +324,7 @@ class ArtifactEnvironment:
             mode=validated_mode,
             output_dir=output_dir,
             scratch_dir=scratch_dir,
+            control_dir=control_dir,
             state_dir=state_dir,
             credential_file=credential_file,
             owner_record=owner_record,
@@ -364,7 +383,12 @@ class ArtifactEnvironment:
     def cleanup(self) -> CleanupReport:
         scratch_root = self.scratch_dir.parent.resolve()
         owners_root = scratch_root / "owners"
-        for path in (self.credential_file, self.state_dir, self.scratch_dir):
+        for path in (
+            self.credential_file,
+            self.control_dir,
+            self.state_dir,
+            self.scratch_dir,
+        ):
             if not path.resolve().is_relative_to(scratch_root):
                 raise RuntimeError("artifact cleanup path is invalid")
         if not self.owner_record.resolve().is_relative_to(owners_root.resolve()):

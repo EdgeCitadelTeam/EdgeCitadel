@@ -103,6 +103,26 @@ class _SilentEventSink:
         del event
 
 
+class _FileEventSink:
+    def __init__(self, path: Path) -> None:
+        if not path.is_absolute():
+            raise ValueError("invalid event log")
+        self._path = path
+
+    def emit(self, event: Mapping[str, object]) -> None:
+        encoded = canonical_json(event) + b"\n"
+        descriptor = os.open(
+            self._path,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        try:
+            os.write(descriptor, encoded)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 @dataclass(frozen=True)
 class NativeControlConfig:
     run_id: str
@@ -896,7 +916,15 @@ async def main(
         token = read_transport_token(credential_path)
     except ValueError:
         raise SystemExit("native control failed") from None
-    event_sink = _SilentEventSink()
+    try:
+        event_log = environ.get("EC_EVENT_LOG")
+        event_sink: EventSink = (
+            _FileEventSink(Path(event_log))
+            if event_log is not None
+            else _SilentEventSink()
+        )
+    except (TypeError, ValueError, OSError):
+        raise SystemExit("native control failed") from None
     transport: TaskTransport | None = None
     loop: asyncio.AbstractEventLoop | None = None
     installed_signals: list[int] = []

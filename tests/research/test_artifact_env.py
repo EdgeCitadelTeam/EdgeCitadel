@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import warnings
 from collections.abc import Callable
 from dataclasses import replace
@@ -62,6 +63,8 @@ def test_create_owns_a_private_run_directory_and_credential(
     assert environment.compose_env["COMPOSE_PROJECT_NAME"] == environment.project
     assert environment.compose_env["EC_RUN_ID"] == "ec-20260725-test-a"
     assert environment.output_dir == tmp_path / "raw" / "ec-20260725-test-a"
+    assert environment.control_dir == environment.scratch_dir / "control"
+    assert (environment.control_dir / "native-control.json").is_file()
     assert environment.resolved_config["freshness_attestation"] == {
         "inventory_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
         "state_dir": str(environment.state_dir),
@@ -116,6 +119,7 @@ def test_recover_reconstructs_only_the_recorded_run_paths(
     assert recovered.run_id == created.run_id
     assert recovered.project == created.project
     assert recovered.credential_file == created.credential_file
+    assert recovered.control_dir == created.control_dir
     assert recovered.state_dir == created.state_dir
     assert recovered.output_dir == created.output_dir
     assert recovered.resolved_config == created.resolved_config
@@ -458,5 +462,56 @@ def test_docker_runner_executes_a_direct_w1_cell(
         observation = json.loads(result.stdout)["observation"]
         assert observation["timed_out"] is False
         assert observation["logical_terminals"] == 1
+    finally:
+        assert environment.cleanup().completed is True
+
+
+@_docker_test
+def test_docker_supervisor_activates_the_external_native_worker(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_explicit_docker(request)
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [
+            "docker",
+            "build",
+            "--file",
+            str(root / "scripts/research/Dockerfile"),
+            "--tag",
+            "edgecitadel-research-artifact:local",
+            str(root),
+        ],
+        check=True,
+    )
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = ArtifactEnvironment.create(
+        "ec-20260727-supervisor", "core-only", tmp_path / "raw"
+    )
+
+    try:
+        environment.start()
+        template = environment.control_dir / "native-control.json"
+        active = environment.control_dir / "active-native-control.json"
+        temporary = active.with_suffix(".tmp")
+        temporary.write_bytes(template.read_bytes())
+        temporary.chmod(0o600)
+        temporary.replace(active)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status = environment.control_dir / "worker-status.txt"
+            events = environment.state_dir / "worker-events.jsonl"
+            if (
+                status.is_file()
+                and events.is_file()
+                and "status=running\n" in status.read_text()
+            ):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("supervised native worker did not become ready")
+        assert "fixture.ready" in events.read_text()
     finally:
         assert environment.cleanup().completed is True
