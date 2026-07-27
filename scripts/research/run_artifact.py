@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import random
@@ -27,6 +28,7 @@ from scripts.research.evidence import (
     write_json,
     write_jsonl,
 )
+from scripts.research.preflight import PreflightRequest, run_prestart_preflight
 from scripts.research.workload_matrix import MatrixCell, required_matrix_cells
 
 
@@ -62,11 +64,15 @@ class _CleanupReport(Protocol):
 
 
 class _RunEnvironment(Protocol):
+    run_id: str
+    mode: str
     output_dir: Path
+    credential_file: Path
     project: str
     compose_file: Path
     compose_env: Mapping[str, str]
     control_dir: Path
+    resolved_config: Mapping[str, object]
 
     def start(self) -> None: ...
 
@@ -338,6 +344,19 @@ def run_repetition(
     _: SourceProvenance,
 ) -> None:
     """Run one cell in its owned topology and persist its raw runner evidence."""
+    prestart = asyncio.run(
+        run_prestart_preflight(
+            PreflightRequest(
+                run_id=environment.run_id,
+                mode=environment.mode,
+                expected_agents=("worker-1", "observer-1"),
+                resolved_config=environment.resolved_config,
+                credential_file=environment.credential_file,
+            )
+        )
+    )
+    write_json(environment.output_dir / "preflight.json", prestart.to_dict())
+    prestart.require_valid()
     environment.start()
     if repetition.cell.workload == "W7":
         stdout = _run_w7(repetition, environment)

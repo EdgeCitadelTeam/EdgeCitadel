@@ -12,6 +12,7 @@ import yaml
 from jsonschema import Draft202012Validator, ValidationError
 
 from scripts.research import run_artifact
+from scripts.research.preflight import PreflightReport
 from scripts.research.run_artifact import main
 
 
@@ -132,6 +133,7 @@ def test_real_repetition_runner_starts_topology_and_persists_runner_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Environment:
+        run_id = "ec-20260725-00000"
         mode = "core-only"
         project = "core-only-artifact-ec-20260725-00000"
         compose_file = tmp_path / "compose.yml"
@@ -141,6 +143,8 @@ def test_real_repetition_runner_starts_topology_and_persists_runner_output(
             self.output_dir = tmp_path / "bundle"
             self.output_dir.mkdir()
             self.compose_env = {"COMPOSE_PROJECT_NAME": self.project}
+            self.credential_file = tmp_path / "credential"
+            self.resolved_config = {"mode": self.mode}
             self.started = False
 
         def start(self) -> None:
@@ -161,7 +165,11 @@ def test_real_repetition_runner_starts_topology_and_persists_runner_output(
         calls.append(command)
         return completed
 
+    async def preflight(_: object) -> PreflightReport:
+        return PreflightReport(True, "2026-07-27T00:00:00Z", (), (), {})
+
     monkeypatch.setattr(run_artifact.subprocess, "run", run)
+    monkeypatch.setattr(run_artifact, "run_prestart_preflight", preflight)
 
     run_artifact.run_repetition(repetition, environment, object())
 
@@ -198,6 +206,40 @@ def test_real_repetition_runner_starts_topology_and_persists_runner_output(
         "measured": True,
         "observation": {"accepted": 1},
         "run_id": repetition.run_id,
+    }
+
+
+def test_real_repetition_runner_records_valid_prestart_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = run_artifact.ArtifactEnvironment.create(
+        "ec-20260727-preflight", "core-only", tmp_path / "raw"
+    )
+    cell = run_artifact.build_schedule(profile="quick").repetitions[1].cell
+    repetition = run_artifact.Repetition(environment.run_id, 0, True, cell)
+    completed = subprocess.CompletedProcess(
+        ["docker"],
+        0,
+        '{"events":[],"observation":{"accepted":1},"workload":"W1"}',
+        "",
+    )
+    monkeypatch.setattr(run_artifact.ArtifactEnvironment, "start", lambda _: None)
+    monkeypatch.setattr(
+        run_artifact.subprocess, "run", lambda *_args, **_kwargs: completed
+    )
+
+    run_artifact.run_repetition(repetition, environment, object())
+
+    preflight = json.loads((environment.output_dir / "preflight.json").read_text())
+    assert preflight["valid"] is True
+    assert {check["name"] for check in preflight["checks"]} == {
+        "credential",
+        "mode",
+        "agents",
+        "freshness_attestation",
+        "resolved_config_mode",
     }
 
 
