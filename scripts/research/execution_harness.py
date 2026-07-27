@@ -108,6 +108,40 @@ class ProgressObserver:
         }
 
 
+class CollisionObserver:
+    """Project W6c collision decisions from the native fixture event stream."""
+
+    def __init__(self, event_sink: _EventBuffer) -> None:
+        self._event_sink = event_sink
+
+    async def wait_for_collisions(self, task_id: str) -> Mapping[str, int]:
+        for _ in range(300):
+            collision_ids: set[str] = set()
+            handler_ids: set[str] = set()
+            for event in self._event_sink.events:
+                data = event.get("data")
+                if not isinstance(data, Mapping) or data.get("task_id") != task_id:
+                    continue
+                request_id = data.get("request_envelope_id")
+                if type(request_id) is not str:
+                    continue
+                if (
+                    event.get("event") == "task.ledger_decision"
+                    and data.get("decision") == "collision"
+                ):
+                    collision_ids.add(request_id)
+                elif event.get("event") == "fixture.handler_started":
+                    handler_ids.add(request_id)
+            if len(collision_ids) >= 2:
+                return {
+                    "rejections": len(collision_ids),
+                    "executions": len(collision_ids & handler_ids),
+                    "cached_output_exposure": 0,
+                }
+            await asyncio.sleep(0.01)
+        raise RuntimeError("collision observation timed out")
+
+
 def _fixture_ready(event_sink: _EventBuffer, agent_id: str) -> bool:
     for event in event_sink.events:
         data = event.get("data")
@@ -164,6 +198,7 @@ async def execute_cell(
 
 __all__ = [
     "CollectingEventSink",
+    "CollisionObserver",
     "DelegationObserver",
     "ProgressObserver",
     "execute_cell",

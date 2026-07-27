@@ -40,6 +40,7 @@ def _config(tmp_path: Path) -> NativeControlConfig:
         ("W3", "progress", "progress"),
         ("W4", "echo", None),
         ("W6a", "echo", None),
+        ("W6c", "echo", "collision"),
     ),
 )
 def test_direct_runner_configures_only_same_process_workloads(
@@ -57,7 +58,7 @@ def test_direct_runner_configures_only_same_process_workloads(
     assert set(observers) == ({observer} if observer else set())
 
 
-@pytest.mark.parametrize("workload", ("W5", "W6b", "W6c", "W7", "W8"))
+@pytest.mark.parametrize("workload", ("W5", "W6b", "W7", "W8"))
 def test_direct_runner_refuses_workloads_requiring_external_lifecycle(
     tmp_path: Path,
     workload: str,

@@ -15,6 +15,7 @@ from typing import cast
 from adapters._common.task_publisher import EventSink
 from scripts.research.execution_harness import (
     CollectingEventSink,
+    CollisionObserver,
     DelegationObserver,
     ProgressObserver,
     execute_cell,
@@ -41,7 +42,7 @@ from scripts.research.workload_matrix import (
     workload_timeout_seconds,
 )
 
-_DIRECT_WORKLOADS = frozenset({"W1", "W2", "W3", "W4", "W6a"})
+_DIRECT_WORKLOADS = frozenset({"W1", "W2", "W3", "W4", "W6a", "W6c"})
 _EXTERNAL_WORKLOADS = frozenset({"W5", "W6b", "W8"})
 _RUNNER_WORKLOADS = _DIRECT_WORKLOADS | _EXTERNAL_WORKLOADS
 _BEHAVIORS = {
@@ -50,6 +51,7 @@ _BEHAVIORS = {
     "W3": "progress",
     "W4": "echo",
     "W6a": "echo",
+    "W6c": "echo",
 }
 _REQUESTER_AGENT_ID = "requester-1"
 
@@ -101,6 +103,8 @@ def prepare_direct_execution(
         observers["delegation"] = DelegationObserver(event_sink)
     elif cell.workload == "W3":
         observers["progress"] = ProgressObserver(event_sink)
+    elif cell.workload == "W6c":
+        observers["collision"] = CollisionObserver(event_sink)
     return configured, observers
 
 

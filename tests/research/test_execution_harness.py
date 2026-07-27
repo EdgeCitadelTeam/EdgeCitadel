@@ -10,6 +10,7 @@ import pytest
 from adapters._common.task_types import PublicationReceipt
 from scripts.research.execution_harness import (
     CollectingEventSink,
+    CollisionObserver,
     DelegationObserver,
     ProgressObserver,
     execute_cell,
@@ -162,4 +163,35 @@ async def test_progress_observer_separates_generated_live_replayed_and_missing()
         "live": 1,
         "replayed": 1,
         "missing": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_collision_observer_requires_two_distinct_collision_decisions() -> None:
+    sink = CollectingEventSink()
+    sink.emit(
+        {
+            "event": "task.ledger_decision",
+            "data": {
+                "task_id": "task-1",
+                "request_envelope_id": "sender-collision",
+                "decision": "collision",
+            },
+        }
+    )
+    sink.emit(
+        {
+            "event": "task.ledger_decision",
+            "data": {
+                "task_id": "task-1",
+                "request_envelope_id": "payload-collision",
+                "decision": "collision",
+            },
+        }
+    )
+
+    assert await CollisionObserver(sink).wait_for_collisions("task-1") == {
+        "rejections": 2,
+        "executions": 0,
+        "cached_output_exposure": 0,
     }
