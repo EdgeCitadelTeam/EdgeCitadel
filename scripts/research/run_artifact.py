@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import random
+import subprocess
 import sys
 from argparse import ArgumentParser, Namespace
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -14,11 +16,16 @@ from typing import Protocol, cast
 import yaml  # type: ignore[import-untyped]
 
 from scripts.research.artifact_env import ArtifactEnvironment
+from scripts.research.coordinator_restart import (
+    acknowledge_restart,
+    wait_for_restart_request,
+)
 from scripts.research.evidence import (
     SourceProvenance,
     capture_source_provenance,
     verify_source_provenance,
     write_json,
+    write_jsonl,
 )
 from scripts.research.workload_matrix import MatrixCell, required_matrix_cells
 
@@ -56,6 +63,14 @@ class _CleanupReport(Protocol):
 
 class _RunEnvironment(Protocol):
     output_dir: Path
+    project: str
+    compose_file: Path
+    compose_env: Mapping[str, str]
+    control_dir: Path
+
+    def start(self) -> None: ...
+
+    def restart_coordinator(self) -> None: ...
 
     def cleanup(self) -> _CleanupReport: ...
 
@@ -239,6 +254,119 @@ def _run_cleanup(arguments: Namespace) -> int:
             os.environ["EC_ARTIFACT_SCRATCH_ROOT"] = previous_scratch_root
 
 
+def _runner_command(repetition: Repetition, environment: _RunEnvironment) -> list[str]:
+    return [
+        "docker",
+        "compose",
+        "--project-name",
+        environment.project,
+        "--file",
+        str(environment.compose_file),
+        "exec",
+        "--no-TTY",
+        "runner",
+        "python",
+        "-m",
+        "scripts.research.in_container_runner",
+        "--config",
+        "/run/edgecitadel/config/native-control.json",
+        "--workload",
+        repetition.cell.workload,
+        "--ablation",
+        repetition.cell.ablation,
+        "--timeout-seconds",
+        str(repetition.cell.timeout_seconds),
+    ]
+
+
+def _runner_environment(environment: _RunEnvironment) -> dict[str, str]:
+    return {"PATH": os.environ["PATH"], **environment.compose_env}
+
+
+def _run_w7(repetition: Repetition, environment: _RunEnvironment) -> str:
+    process = subprocess.Popen(
+        _runner_command(repetition, environment),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_runner_environment(environment),
+    )
+    try:
+        wait_for_restart_request(environment.control_dir, 10)
+        environment.restart_coordinator()
+        acknowledge_restart(environment.control_dir)
+        stdout, stderr = process.communicate(
+            timeout=repetition.cell.timeout_seconds + 10
+        )
+    except BaseException:
+        process.terminate()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+        raise
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(
+            process.returncode or 2,
+            process.args,
+            output=stdout,
+            stderr=stderr,
+        )
+    return stdout
+
+
+def _runner_payload(stdout: str, repetition: Repetition) -> Mapping[str, object]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError("invalid runner output") from error
+    if (
+        not isinstance(payload, dict)
+        or payload.get("workload") != repetition.cell.workload
+        or not isinstance(payload.get("events"), list)
+        or not all(isinstance(event, dict) for event in payload["events"])
+        or not isinstance(payload.get("observation"), dict)
+    ):
+        raise ValueError("invalid runner output")
+    return payload
+
+
+def run_repetition(
+    repetition: Repetition,
+    environment: _RunEnvironment,
+    _: SourceProvenance,
+) -> None:
+    """Run one cell in its owned topology and persist its raw runner evidence."""
+    environment.start()
+    if repetition.cell.workload == "W7":
+        stdout = _run_w7(repetition, environment)
+    else:
+        completed = subprocess.run(
+            _runner_command(repetition, environment),
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_runner_environment(environment),
+        )
+        stdout = completed.stdout
+    payload = _runner_payload(stdout, repetition)
+    events = cast(list[object], payload["events"])
+    observation = cast(Mapping[str, object], payload["observation"])
+    write_jsonl(environment.output_dir / "events.jsonl", events)
+    write_jsonl(
+        environment.output_dir / "trials.jsonl",
+        (
+            {
+                "block": repetition.block,
+                "measured": repetition.measured,
+                "observation": observation,
+                "run_id": repetition.run_id,
+            },
+        ),
+    )
+
+
 def main(
     argv: list[str] | None = None,
     environment_factory: Callable[[str, str, Path], _RunEnvironment] | None = None,
@@ -274,10 +402,14 @@ def main(
             campaign_path / "schedule.json",
             {"repetitions": [rep.run_id for rep in schedule.repetitions]},
         )
-        factory = environment_factory
-        runner = repetition_runner
-        if factory is None or runner is None:
-            return 2
+        factory = cast(
+            Callable[[str, str, Path], _RunEnvironment],
+            environment_factory or ArtifactEnvironment.create,
+        )
+        runner = cast(
+            Callable[[Repetition, _RunEnvironment, SourceProvenance], None],
+            repetition_runner or run_repetition,
+        )
         bundle_paths: list[str] = []
         for repetition in schedule.repetitions:
             environment = factory(
@@ -303,7 +435,7 @@ def main(
         if result_file is not None:
             write_json(result_file, result)
         return 0
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         return 2
     finally:
         if scratch_root_was_overridden:
@@ -317,4 +449,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["Repetition", "Schedule", "build_schedule", "main"]
+__all__ = ["Repetition", "Schedule", "build_schedule", "main", "run_repetition"]

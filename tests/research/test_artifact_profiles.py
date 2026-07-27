@@ -127,6 +127,140 @@ def test_quick_lifecycle_captures_source_once_and_cleans_every_fresh_environment
     assert os.environ.get("EC_ARTIFACT_SCRATCH_ROOT") != str(scratch_root)
 
 
+def test_real_repetition_runner_starts_topology_and_persists_runner_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Environment:
+        mode = "core-only"
+        project = "core-only-artifact-ec-20260725-00000"
+        compose_file = tmp_path / "compose.yml"
+        control_dir = tmp_path / "control"
+
+        def __init__(self) -> None:
+            self.output_dir = tmp_path / "bundle"
+            self.output_dir.mkdir()
+            self.compose_env = {"COMPOSE_PROJECT_NAME": self.project}
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+
+    environment = Environment()
+    cell = run_artifact.build_schedule(profile="quick").repetitions[1].cell
+    repetition = run_artifact.Repetition("ec-20260725-00000", 0, True, cell)
+    completed = subprocess.CompletedProcess(
+        ["docker"],
+        0,
+        '{"events":[{"event":"fixture.ready"}],"observation":{"accepted":1},"workload":"W1"}',
+        "",
+    )
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return completed
+
+    monkeypatch.setattr(run_artifact.subprocess, "run", run)
+
+    run_artifact.run_repetition(repetition, environment, object())
+
+    assert environment.started is True
+    assert calls == [
+        [
+            "docker",
+            "compose",
+            "--project-name",
+            environment.project,
+            "--file",
+            str(environment.compose_file),
+            "exec",
+            "--no-TTY",
+            "runner",
+            "python",
+            "-m",
+            "scripts.research.in_container_runner",
+            "--config",
+            "/run/edgecitadel/config/native-control.json",
+            "--workload",
+            "W1",
+            "--ablation",
+            cell.ablation,
+            "--timeout-seconds",
+            str(cell.timeout_seconds),
+        ]
+    ]
+    assert json.loads((environment.output_dir / "events.jsonl").read_text()) == {
+        "event": "fixture.ready"
+    }
+    assert json.loads((environment.output_dir / "trials.jsonl").read_text()) == {
+        "block": 0,
+        "measured": True,
+        "observation": {"accepted": 1},
+        "run_id": repetition.run_id,
+    }
+
+
+def test_main_uses_real_environment_and_repetition_runner_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=source_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=source_root,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "test"], cwd=source_root, check=True)
+    (source_root / "tracked.py").write_text("VALUE = 1\n")
+    subprocess.run(["git", "add", "."], cwd=source_root, check=True)
+    subprocess.run(
+        ["git", "commit", "--quiet", "-m", "initial"], cwd=source_root, check=True
+    )
+    created: list[object] = []
+    executed: list[str] = []
+
+    class Cleanup:
+        completed = True
+
+    class Environment:
+        def __init__(self, run_id: str, output_root: Path) -> None:
+            self.output_dir = output_root / run_id
+            self.output_dir.mkdir(parents=True)
+
+        def cleanup(self) -> Cleanup:
+            return Cleanup()
+
+    def factory(run_id: str, _: str, output_root: Path) -> Environment:
+        environment = Environment(run_id, output_root)
+        created.append(environment)
+        return environment
+
+    def runner(repetition: object, _: object, __: object) -> None:
+        executed.append(repetition.run_id)
+
+    monkeypatch.setattr(run_artifact.ArtifactEnvironment, "create", factory)
+    monkeypatch.setattr(run_artifact, "run_repetition", runner, raising=False)
+
+    assert (
+        main(
+            [
+                "run",
+                "--profile",
+                "quick",
+                "--source-root",
+                str(source_root),
+                "--output-root",
+                str(tmp_path / "results"),
+            ]
+        )
+        == 0
+    )
+    assert len(created) == len(executed) == 22
+
+
 def test_paper_profile_rejects_dirty_source_before_environment_creation(
     tmp_path: Path,
 ) -> None:
