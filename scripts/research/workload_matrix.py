@@ -101,6 +101,8 @@ class _CrashObserver(Protocol):
 
 
 class _ActuatorObserver(Protocol):
+    async def record_submission(self, envelope: Mapping[str, object]) -> None: ...
+
     async def wait_for_actuator_outcome(self, task_id: str) -> Mapping[str, object]: ...
 
 
@@ -349,10 +351,15 @@ async def run_cell(
         if not isinstance(observers, Mapping):
             raise ValueError("invalid actuator observer")
         actuator_observer = observers.get("actuator")
-        if actuator_observer is None or not callable(
-            getattr(actuator_observer, "wait_for_actuator_outcome", None)
+        if (
+            actuator_observer is None
+            or not callable(
+                getattr(actuator_observer, "wait_for_actuator_outcome", None)
+            )
+            or not callable(getattr(actuator_observer, "record_submission", None))
         ):
             raise ValueError("invalid actuator observer")
+        await cast(_ActuatorObserver, actuator_observer).record_submission(envelope)
         actuator = await cast(
             _ActuatorObserver, actuator_observer
         ).wait_for_actuator_outcome(task_id)

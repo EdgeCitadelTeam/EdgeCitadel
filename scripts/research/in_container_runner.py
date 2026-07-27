@@ -20,6 +20,7 @@ from scripts.research.execution_harness import (
     execute_cell,
 )
 from scripts.research.external_lifecycle import (
+    ExternalActuatorObserver,
     ExternalCrashObserver,
     ExternalWorkerLifecycle,
 )
@@ -35,7 +36,7 @@ from scripts.research.modes.base import Mode, TaskTransport
 from scripts.research.workload_matrix import MatrixCell, TrialObservation, run_cell
 
 _DIRECT_WORKLOADS = frozenset({"W1", "W2", "W3", "W4", "W6a"})
-_EXTERNAL_WORKLOADS = frozenset({"W5"})
+_EXTERNAL_WORKLOADS = frozenset({"W5", "W8"})
 _RUNNER_WORKLOADS = _DIRECT_WORKLOADS | _EXTERNAL_WORKLOADS
 _BEHAVIORS = {
     "W1": "echo",
@@ -132,11 +133,19 @@ async def run_external_cell(
     transport = _build_direct_transport(config, endpoints, token, event_sink)
     try:
         lifecycle = ExternalWorkerLifecycle(Path("/control"), Path("/state"))
+        if cell.workload == "W5":
+            observers: Mapping[str, object] = {
+                "crash": ExternalCrashObserver(lifecycle, config, transport)
+            }
+        else:
+            actuator = ExternalActuatorObserver(lifecycle, config, transport)
+            await actuator.prepare(float(cell.timeout_seconds))
+            observers = {"actuator": actuator}
         observation = await run_cell(
             cell,
             transport,
             {"sender_id": "requester-1", "worker_id": config.agent_id},
-            {"crash": ExternalCrashObserver(lifecycle, config, transport)},
+            observers,
             event_sink,
         )
     finally:

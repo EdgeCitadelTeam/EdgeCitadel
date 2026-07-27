@@ -215,6 +215,80 @@ class ExternalCrashObserver:
         return metrics
 
 
+class ExternalActuatorObserver:
+    """Recover a W8 actuator from the post-side-effect process crash."""
+
+    def __init__(
+        self,
+        lifecycle: ExternalWorkerLifecycle,
+        config: NativeControlConfig,
+        transport: _CrashTransport,
+    ) -> None:
+        self._lifecycle = lifecycle
+        self._config = config
+        self._transport = transport
+        self._crashed_generation: str | None = None
+        self._submission: Mapping[str, object] | None = None
+
+    async def prepare(self, timeout_s: float) -> None:
+        self._crashed_generation = await self._lifecycle.activate(
+            replace(
+                self._config,
+                behavior="actuator",
+                crash_point=CrashPoint.AFTER_SIDE_EFFECT.value,
+            ),
+            timeout_s,
+        )
+
+    async def record_submission(self, envelope: Mapping[str, object]) -> None:
+        task_id = envelope.get("task_id")
+        if type(task_id) is not str or not task_id:
+            raise ValueError("invalid actuator submission")
+        self._submission = dict(envelope)
+
+    async def wait_for_actuator_outcome(self, task_id: str) -> Mapping[str, object]:
+        if self._crashed_generation is None or self._submission is None:
+            raise RuntimeError("actuator recovery was not prepared")
+        if self._submission.get("task_id") != task_id:
+            raise ValueError("actuator task id does not match submission")
+        exit_code = await self._lifecycle.wait_for_exit(self._crashed_generation, 30)
+        await self._lifecycle.activate(
+            replace(self._config, behavior="actuator", crash_point=None), 30
+        )
+        if self._config.mode == Mode.CORE_ONLY.value:
+            await self._transport.submit_task(self._submission)
+        terminal = await self._transport.observe_terminal(task_id, 30)
+        events = self._lifecycle.task_events(task_id)
+        event_names = tuple(
+            event.get("event")
+            for event in events
+            if isinstance(event.get("event"), str)
+        )
+        terminal_envelope = getattr(terminal, "envelope", None)
+        terminal_identifier = (
+            terminal_envelope.get("id")
+            if isinstance(terminal_envelope, Mapping)
+            else None
+        )
+        handler_attempts = event_names.count("fixture.handler_started")
+        ledger_decisions = event_names.count("task.ledger_decision")
+        return {
+            "handler_attempts": handler_attempts,
+            "delivered": handler_attempts,
+            "side_effects": event_names.count("fixture.side_effect_committed"),
+            "prepared_outcomes": (
+                0 if self._config.mode == Mode.CORE_ONLY.value else ledger_decisions
+            ),
+            "logical_terminals": int(terminal is not None),
+            "distinct_terminal_ids": int(isinstance(terminal_identifier, str)),
+            "publication_attempts": int(terminal is not None),
+            "wire_deliveries": int(terminal is not None),
+            "poison": 0,
+            "timed_out": exit_code != 86 or terminal is None,
+            "crash_point": CrashPoint.AFTER_SIDE_EFFECT.value,
+        }
+
+
 def _crash_metrics(applicability: str) -> dict[str, object]:
     return {
         "applicability": applicability,
@@ -231,4 +305,8 @@ def _crash_metrics(applicability: str) -> dict[str, object]:
     }
 
 
-__all__ = ["ExternalCrashObserver", "ExternalWorkerLifecycle"]
+__all__ = [
+    "ExternalActuatorObserver",
+    "ExternalCrashObserver",
+    "ExternalWorkerLifecycle",
+]

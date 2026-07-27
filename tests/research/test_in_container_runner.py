@@ -67,12 +67,13 @@ def test_direct_runner_refuses_workloads_requiring_external_lifecycle(
         prepare_direct_execution(cell, _config(tmp_path), CollectingEventSink())
 
 
-def test_runner_accepts_w5_for_the_supervised_external_fixture() -> None:
+@pytest.mark.parametrize("workload", ("W5", "W8"))
+def test_runner_accepts_supervised_external_fixture_workloads(workload: str) -> None:
     assert (
         _argument_parser()
-        .parse_args(["--config", "/state/native-control.json", "--workload", "W5"])
+        .parse_args(["--config", "/state/native-control.json", "--workload", workload])
         .workload
-        == "W5"
+        == workload
     )
 
 

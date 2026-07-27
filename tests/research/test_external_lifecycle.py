@@ -14,6 +14,7 @@ import pytest
 
 from adapters._common.task_types import PublicationReceipt
 from scripts.research.external_lifecycle import (
+    ExternalActuatorObserver,
     ExternalCrashObserver,
     ExternalWorkerLifecycle,
 )
@@ -146,7 +147,7 @@ class _Transport:
 
     async def observe_terminal(self, task_id: str, timeout_s: float) -> object | None:
         assert task_id == "task-1"
-        assert timeout_s == 1
+        assert timeout_s in (1, 30)
         return self.terminal
 
 
@@ -200,3 +201,66 @@ async def test_crash_observer_counts_mapping_terminal_ids(tmp_path: Path) -> Non
     assert result["logical_terminals"] == 1
     assert result["distinct_terminal_ids"] == 1
     assert result["wire_deliveries"] == 1
+
+
+class _ActuatorLifecycle:
+    def __init__(self) -> None:
+        self.configurations: list[NativeControlConfig] = []
+
+    async def activate(self, config: NativeControlConfig, timeout_s: float) -> str:
+        assert timeout_s == 30
+        self.configurations.append(config)
+        return "a" * 64 if len(self.configurations) == 1 else "b" * 64
+
+    async def wait_for_exit(self, generation: str, timeout_s: float) -> int:
+        assert generation == "a" * 64
+        assert timeout_s == 30
+        return 86
+
+    def task_events(self, task_id: str) -> tuple[dict[str, object], ...]:
+        assert task_id == "task-1"
+        return (
+            {"event": "fixture.handler_started", "data": {"task_id": task_id}},
+            {"event": "fixture.side_effect_committed", "data": {"task_id": task_id}},
+            {"event": "fixture.handler_started", "data": {"task_id": task_id}},
+            {"event": "fixture.side_effect_committed", "data": {"task_id": task_id}},
+            {"event": "task.ledger_decision", "data": {"task_id": task_id}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_actuator_observer_recovers_core_after_a_crashed_side_effect(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _ActuatorLifecycle()
+    transport = _Transport()
+    transport.terminal = SimpleNamespace(envelope={"id": "terminal-1"})
+    observer = ExternalActuatorObserver(
+        cast(ExternalWorkerLifecycle, lifecycle),
+        _config(tmp_path),
+        transport,
+    )
+
+    await observer.prepare(30)
+    await observer.record_submission({"id": "wire-1", "task_id": "task-1"})
+    result = await observer.wait_for_actuator_outcome("task-1")
+
+    assert [config.crash_point for config in lifecycle.configurations] == [
+        CrashPoint.AFTER_SIDE_EFFECT.value,
+        None,
+    ]
+    assert all(config.behavior == "actuator" for config in lifecycle.configurations)
+    assert transport.submissions == [{"id": "wire-1", "task_id": "task-1"}]
+    assert result == {
+        "handler_attempts": 2,
+        "delivered": 2,
+        "side_effects": 2,
+        "prepared_outcomes": 0,
+        "logical_terminals": 1,
+        "distinct_terminal_ids": 1,
+        "publication_attempts": 1,
+        "wire_deliveries": 1,
+        "poison": 0,
+        "timed_out": False,
+        "crash_point": CrashPoint.AFTER_SIDE_EFFECT.value,
+    }

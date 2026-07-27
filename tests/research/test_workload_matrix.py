@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from time import perf_counter_ns
 
 import pytest
@@ -317,6 +318,12 @@ class _CrashObserver:
 class _ActuatorObserver:
     def __init__(self) -> None:
         self.task_ids: list[str] = []
+        self.submission_ids: list[str] = []
+
+    async def record_submission(self, envelope: Mapping[str, object]) -> None:
+        envelope_id = envelope.get("id")
+        assert isinstance(envelope_id, str)
+        self.submission_ids.append(envelope_id)
 
     async def wait_for_actuator_outcome(self, task_id: str) -> dict[str, object]:
         self.task_ids.append(task_id)
@@ -580,6 +587,7 @@ async def test_w8_records_actuator_attempts_effects_prepared_outcomes_and_termin
     )
 
     assert observer.task_ids == [transport.submissions[0]["task_id"]]
+    assert observer.submission_ids == [transport.submissions[0]["id"]]
     assert observation.handler_attempts == 2
     assert observation.executions == 2
     assert observation.side_effects == 2
