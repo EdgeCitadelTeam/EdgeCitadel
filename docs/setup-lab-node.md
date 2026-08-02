@@ -12,7 +12,7 @@ cd /home/lab/edge-research
 test -z "$(git status --porcelain -- \
   .dockerignore aggregator frontend e2e nginx scripts/research schemas \
   docs/setup-lab-node.md \
-  docs/research/task-aware-reliability-contract-design.md)"
+  docs/research/artifact.md)"
 test "$(uv --version)" = "uv 0.8.13"
 scripts/research/run-python -c \
   'import sys; assert sys.version_info[:2] == (3, 12)'
@@ -183,7 +183,7 @@ test -z "$(ssh $SSH_ARGS "$REMOTE_HOST" \
   "git -C '$REMOTE_REPO' status --porcelain -- \
     .dockerignore aggregator frontend e2e nginx scripts/research schemas \
     docs/setup-lab-node.md \
-    docs/research/task-aware-reliability-contract-design.md")"
+    docs/research/artifact.md")"
 ssh $SSH_ARGS "$REMOTE_HOST" \
   "cd '$REMOTE_REPO' && \
    test \"\$(uv --version)\" = 'uv 0.8.13' && \

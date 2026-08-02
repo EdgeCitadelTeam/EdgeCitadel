@@ -1,8 +1,7 @@
 # Research Artifact Guide
 
-This guide runs the task-aware reliability artifact described in
-[`task-aware-reliability-contract-design.md`](task-aware-reliability-contract-design.md).
-It is separate from the development stack and uses run-owned Docker resources.
+This guide describes and runs the task-aware reliability artifact. It is
+separate from the development stack and uses run-owned Docker resources.
 
 ## What To Run
 
@@ -20,9 +19,8 @@ separate evidence gates.
 
 ## Workload Index
 
-Every profile uses the same predeclared W1-W8 workload contract. The table is a
-runbook index; the [reliability design](task-aware-reliability-contract-design.md)
-defines the complete matrix, invariants, and evidence fields.
+Every profile uses the same predeclared W1-W8 workload contract. The table is
+the maintained index for the complete matrix, invariants, and evidence fields.
 
 | Workload | Scenario | Required observation |
 | --- | --- | --- |
@@ -138,9 +136,7 @@ performance result is publication-ready. Real-run manifests declare this partial
 component/cadence contract; `not_collected` is reserved for runs without host
 sampling.
 
-## Related Evidence
+## Related Operations
 
-- [Operator screenshots, video, trace, and API evidence](results/README.md)
 - [Lab controller setup](../setup-lab-controller.md)
 - [Lab node setup](../setup-lab-node.md)
-- [Reliability design and evidence requirements](task-aware-reliability-contract-design.md)
