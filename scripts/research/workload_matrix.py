@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
+from time import perf_counter_ns
 from typing import Protocol, cast
 from uuid import uuid4
 
@@ -51,6 +52,10 @@ class TrialObservation:
     inapplicable_crash_points: tuple[str, ...]
     timed_out: bool
     final_transport: Mapping[str, object]
+    started_monotonic_ns: int = 0
+    ended_monotonic_ns: int = 0
+    initial_transport: Mapping[str, object] = field(default_factory=dict)
+    workload_evidence: Mapping[str, object] = field(default_factory=dict)
 
 
 class _CellTransport(Protocol):
@@ -212,12 +217,85 @@ def _require_nonnegative_metrics(
             raise RuntimeError("invalid workload observation")
 
 
+def classify_outcome(
+    cell: MatrixCell,
+    observation: Mapping[str, object],
+) -> str:
+    """Classify a repetition from its task semantics rather than process exit."""
+    timed_out = observation.get("timed_out") is True
+    if cell.workload == "W6c":
+        collision_passed = (
+            timed_out
+            and observation.get("accepted") == 3
+            and observation.get("delivered") == 0
+            and observation.get("executions") == 0
+            and observation.get("logical_terminals") == 0
+            and observation.get("distinct_terminal_ids") == 0
+            and observation.get("publication_attempts") == 3
+            and observation.get("wire_deliveries") == 0
+            and observation.get("poison") == 2
+        )
+        return "completed" if collision_passed else "failed"
+    if timed_out:
+        return "timeout"
+
+    initiated = observation.get("initiated")
+    logical = observation.get("logical_terminals")
+    executions = observation.get("executions")
+    if cell.workload == "W2":
+        execution_consistent = executions is None or executions == 2
+    elif cell.workload == "W8":
+        execution_consistent = type(executions) is int and executions >= 1
+    else:
+        execution_consistent = executions is None or executions == initiated
+    completed = (
+        type(initiated) is int
+        and initiated > 0
+        and type(observation.get("accepted")) is int
+        and observation["accepted"] >= 1  # type: ignore[operator]
+        and observation.get("delivered") == initiated
+        and logical == initiated
+        and observation.get("distinct_terminal_ids") == logical
+        and observation.get("publication_attempts", 0) >= initiated  # type: ignore[operator]
+        and type(observation.get("wire_deliveries")) is int
+        and observation["wire_deliveries"] >= logical  # type: ignore[operator]
+        and execution_consistent
+    )
+    if cell.workload == "W3":
+        progress = tuple(
+            observation.get(name)
+            for name in (
+                "progress_live_delivered",
+                "progress_replay_delivered",
+                "progress_missing",
+            )
+        )
+        completed = (
+            completed
+            and observation.get("progress_generated") == 20
+            and all(type(value) is int for value in progress)
+            and sum(value for value in progress if type(value) is int) == 20
+        )
+    if cell.workload == "W8":
+        completed = (
+            completed
+            and type(observation.get("side_effects")) is int
+            and observation["side_effects"] >= 1  # type: ignore[operator]
+            and type(observation.get("prepared_outcomes")) is int
+            and observation["prepared_outcomes"] >= 1  # type: ignore[operator]
+        )
+    return "completed" if completed else "failed"
+
+
 async def run_cell(
     cell: MatrixCell,
     transport: _CellTransport,
     fixture: Mapping[str, object],
     observers: object,
     event_sink: object | None,
+    *,
+    clock_ns: Callable[[], int] = perf_counter_ns,
+    before_trial: Callable[[], Awaitable[None]] | None = None,
 ) -> TrialObservation:
     if cell.workload not in {
         "W1",
@@ -250,6 +328,10 @@ async def run_cell(
     }
     await transport.start_terminal_observer()
     if cell.workload == "W5":
+        if before_trial is not None:
+            await before_trial()
+        initial_transport = _snapshot_mapping(await transport.inspect_state())
+        started_ns = clock_ns()
         if not isinstance(observers, Mapping):
             raise ValueError("invalid crash observer")
         crash_observer = observers.get("crash")
@@ -332,6 +414,10 @@ async def run_cell(
             inapplicable_crash_points=inapplicable,
             timed_out=any(cast(bool, result["timed_out"]) for result in crash_results),
             final_transport=_snapshot_mapping(await transport.inspect_state()),
+            started_monotonic_ns=started_ns,
+            ended_monotonic_ns=clock_ns(),
+            initial_transport=initial_transport,
+            workload_evidence={"crash_subtrials": tuple(crash_results)},
         )
     worker_faults: _WorkerFaults | None = None
     if cell.workload in {"W4", "W7"}:
@@ -365,7 +451,12 @@ async def run_cell(
         typed_progress_observer = cast(_ProgressObserver, progress_observer)
         typed_faults = cast(_ProgressFaults, faults)
         await start_progress_observer()
+    if before_trial is not None:
+        await before_trial()
+    initial_transport = _snapshot_mapping(await transport.inspect_state())
+    started_ns = clock_ns()
     receipts = [await transport.submit_task(envelope)]
+    workload_evidence: dict[str, object] = {}
     if cell.workload == "W8":
         if not isinstance(observers, Mapping):
             raise ValueError("invalid actuator observer")
@@ -427,11 +518,23 @@ async def run_cell(
             progress_missing=None,
             poison=cast(int, actuator["poison"]),
             inapplicable_crash_points=(),
-            timed_out=cast(bool, actuator["timed_out"]),
+            timed_out=actuator["timed_out"],
             final_transport=_snapshot_mapping(await transport.inspect_state()),
+            started_monotonic_ns=started_ns,
+            ended_monotonic_ns=clock_ns(),
+            initial_transport=initial_transport,
+            workload_evidence=workload_evidence,
         )
     if cell.workload == "W6a":
         receipts.append(await transport.submit_task(envelope))
+        workload_evidence["wire_retry"] = {
+            "envelope_ids": [getattr(receipt, "envelope_id", None) for receipt in receipts],
+            "accepted": [getattr(receipt, "accepted", None) for receipt in receipts],
+            "stream_sequences": [
+                getattr(receipt, "stream_sequence", None) for receipt in receipts
+            ],
+            "duplicate_flags": [getattr(receipt, "duplicate", None) for receipt in receipts],
+        }
     if cell.workload == "W6b":
         if not isinstance(observers, Mapping):
             raise ValueError("invalid semantic retry observer")
@@ -466,6 +569,12 @@ async def run_cell(
             cast(Mapping[str, object], envelope["payload"])
         )
         receipts.append(await transport.submit_task(semantic_retry))
+        workload_evidence["semantic_retry"] = {
+            "first_envelope_id": envelope["id"],
+            "second_envelope_id": semantic_retry["id"],
+            "task_id": task_id,
+            "retry_window": dict(retry_window),
+        }
     if cell.workload == "W6c":
         sender_mutation = dict(envelope)
         sender_mutation["id"] = str(uuid4())
@@ -523,6 +632,10 @@ async def run_cell(
             inapplicable_crash_points=(),
             timed_out=True,
             final_transport=_snapshot_mapping(await transport.inspect_state()),
+            started_monotonic_ns=started_ns,
+            ended_monotonic_ns=clock_ns(),
+            initial_transport=initial_transport,
+            workload_evidence={"collision": dict(collision)},
         )
     if cell.workload == "W7":
         if worker_faults is None:
@@ -573,7 +686,7 @@ async def run_cell(
             != 20
         ):
             raise RuntimeError("invalid progress observation")
-        progress_counts = cast(Mapping[str, int], candidate_counts)
+        progress_counts = candidate_counts
     terminal = await transport.observe_terminal(
         observed_task_id,
         float(cell.timeout_seconds),
@@ -608,6 +721,10 @@ async def run_cell(
             inapplicable_crash_points=(),
             timed_out=True,
             final_transport=final_transport,
+            started_monotonic_ns=started_ns,
+            ended_monotonic_ns=clock_ns(),
+            initial_transport=initial_transport,
+            workload_evidence=workload_evidence,
         )
     terminal_envelope = getattr(terminal, "envelope", None)
     if not isinstance(terminal_envelope, Mapping):
@@ -623,6 +740,12 @@ async def run_cell(
     if event_sink is not None and hasattr(event_sink, "emit"):
         event_sink.emit({"event": "matrix.w1.terminal", "task_id": task_id})
     terminal_id = terminal_envelope.get("id")
+    observed_ns = getattr(terminal, "observed_ns", None)
+    ended_ns = (
+        observed_ns
+        if type(observed_ns) is int and observed_ns >= started_ns
+        else clock_ns()
+    )
     return TrialObservation(
         initiated=1,
         accepted=accepted,
@@ -651,6 +774,10 @@ async def run_cell(
         inapplicable_crash_points=(),
         timed_out=False,
         final_transport=final_transport,
+        started_monotonic_ns=started_ns,
+        ended_monotonic_ns=ended_ns,
+        initial_transport=initial_transport,
+        workload_evidence=workload_evidence,
     )
 
 
@@ -658,6 +785,7 @@ __all__ = [
     "CrashPoint",
     "MatrixCell",
     "TrialObservation",
+    "classify_outcome",
     "required_matrix_cells",
     "run_cell",
 ]

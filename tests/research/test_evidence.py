@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 
+from scripts.research.check_artifact import check_bundle
 from scripts.research.evidence import (
     capture_source_provenance,
     finalize_bundle,
@@ -94,6 +95,30 @@ def test_finalization_refuses_to_overwrite_a_final_bundle_or_raw_evidence(
     assert finalize_bundle(bundle, _manifest(source), _SCHEMA_PATH) == "INVALID"
     assert (bundle / "events.jsonl").read_bytes() == original_raw
     assert (bundle / "manifest.json").read_bytes() == original_manifest
+
+
+def test_explicit_invalid_finalization_is_sealed_and_manifest_hash_is_checked(
+    tmp_path: Path,
+) -> None:
+    source_root = _git_source(tmp_path / "source")
+    source = capture_source_provenance(source_root)
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    write_json(bundle / "preflight.json", {"valid": False})
+    manifest = _manifest(source)
+    manifest["status"] = "INVALID"
+
+    assert finalize_bundle(bundle, manifest, _SCHEMA_PATH) == "INVALID"
+    sealed = json.loads((bundle / "manifest.json").read_text())
+    assert sealed["status"] == "INVALID"
+    report = check_bundle(bundle, expected_kind="benchmark")
+    assert report.valid is False
+    assert [issue.code for issue in report.issues] == ["EVIDENCE_STATUS_INVALID"]
+
+    sealed["run_id"] = "run-2"
+    (bundle / "manifest.json").write_text(json.dumps(sealed) + "\n")
+    report = check_bundle(bundle, expected_kind="benchmark")
+    assert "MANIFEST_HASH_MISMATCH" in {issue.code for issue in report.issues}
 
 
 @pytest.mark.parametrize(

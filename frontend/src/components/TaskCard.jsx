@@ -23,6 +23,8 @@ export default function TaskCard({ task, onClick }) {
   return (
     <div
       onClick={onClick}
+      data-task-id={task.task_id || ''}
+      data-task-state={task.task_state || 'submitted'}
       className={clsx(
         'bg-surface-50 border border-surface-200 rounded-lg p-3 cursor-pointer',
         'hover:border-surface-300 transition-colors border-l-2',

@@ -1,0 +1,56 @@
+services:
+  nats:
+    image: ${LAB_NATS_IMAGE:?required}
+    command: ["-c", "/etc/nats/nats.conf"]
+    env_file: ["${LAB_SERVICE_ENV_FILE:?required}"]
+    ports:
+      - "${LAB_BIND_HOST:?required}:${LAB_NATS_PORT-}:4222"
+      - "127.0.0.1:${LAB_MONITOR_PORT-}:8222"
+    volumes:
+      - "${LAB_NATS_CONFIG:?required}:/etc/nats/nats.conf:ro"
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    labels: &lab-labels
+      ai.edgecitadel.owner: artifact
+      ai.edgecitadel.run-id: ${LAB_RUN_ID:?required}
+  aggregator:
+    image: ${LAB_AGGREGATOR_IMAGE:?required}
+    build:
+      context: ../..
+      dockerfile: aggregator/Dockerfile
+      labels: *lab-labels
+    env_file: ["${LAB_SERVICE_ENV_FILE:?required}"]
+    environment:
+      DB_PATH: /data/openclaw.db
+      NATS_URL: nats://nats:4222
+      FORWARDED_ALLOW_IPS: "*"
+      LAB_RUN_ID: ${LAB_RUN_ID:?required}
+      LAB_TOKEN_SHA256: ${LAB_TOKEN_SHA256:?required}
+      LAB_INVENTORY_PATH: /data/lab-inventory.db
+    volumes:
+      - "${LAB_DATA_DIR:?required}:/data"
+    labels: *lab-labels
+    depends_on:
+      nats:
+        condition: service_healthy
+  dashboard:
+    image: ${LAB_DASHBOARD_IMAGE:?required}
+    build:
+      context: ../../frontend
+      labels: *lab-labels
+    labels: *lab-labels
+  nginx:
+    image: ${LAB_NGINX_IMAGE:?required}
+    ports:
+      - "${LAB_BIND_HOST:?required}:${LAB_HTTP_PORT-}:80"
+    volumes:
+      - "../../nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"
+    labels: *lab-labels
+    depends_on: [aggregator, dashboard]
+volumes:
+  nats-data:
+    labels: *lab-labels

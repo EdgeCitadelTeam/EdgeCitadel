@@ -4,11 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from time import perf_counter_ns, process_time, sleep
+from typing import Protocol, cast
 
 _INTERVAL_NS = 100_000_000
 _IDLE_DURATION_NS = 2_000_000_000
 _MAX_SAMPLER_CPU_PER_WALL_SECOND = 0.02
+_RESOURCE_METRICS = (
+    "cpu_seconds",
+    "peak_rss_bytes",
+    "rss_seconds",
+    "rx_bytes",
+    "tx_bytes",
+    "application_bytes",
+    "nats_connection_bytes",
+    "http_bytes",
+    "storage_bytes",
+    "message_count_delta",
+    "sampler_cpu_seconds",
+)
 
 
 @dataclass(frozen=True)
@@ -27,9 +41,11 @@ class ComponentCounters:
 @dataclass(frozen=True)
 class ResourceWindow:
     components: tuple[str, ...]
+    metric_coverage: tuple[str, ...]
     start_monotonic_ns: int
     end_monotonic_ns: int
     sample_monotonic_ns: tuple[int, ...]
+    component_samples: tuple[Mapping[str, ComponentCounters], ...]
     outcome: str
     cpu_seconds: float
     peak_rss_bytes: int
@@ -71,6 +87,75 @@ class _CounterReader(Protocol):
     def read(self, components: tuple[str, ...]) -> Mapping[str, ComponentCounters]: ...
 
 
+class SystemClock:
+    """Host monotonic clock used only by the resource sampler."""
+
+    def monotonic_ns(self) -> int:
+        return perf_counter_ns()
+
+    def process_cpu_seconds(self) -> float:
+        return process_time()
+
+    def sleep_ns(self, duration_ns: int) -> None:
+        sleep(duration_ns / 1_000_000_000)
+
+
+class _ActiveResourceWindow:
+    def __init__(
+        self,
+        sampler: ResourceSampler,
+        components: tuple[str, ...],
+        start_ns: int,
+        sampler_cpu_start: float,
+        initial_snapshot: dict[str, ComponentCounters],
+    ) -> None:
+        self._sampler = sampler
+        self._components = components
+        self._start_ns = start_ns
+        self._sampler_cpu_start = sampler_cpu_start
+        self._snapshots = [initial_snapshot]
+        self._sample_times = [start_ns]
+        self._finished = False
+
+    def sample_due(self) -> bool:
+        """Record one snapshot once the declared 100ms interval has elapsed."""
+        if self._finished:
+            raise ValueError("resource window is already finished")
+        now = self._sampler._clock.monotonic_ns()
+        if now - self._sample_times[-1] < _INTERVAL_NS:
+            return False
+        self._append_snapshot(now)
+        return True
+
+    def finish(self, *, outcome: str) -> ResourceWindow:
+        """Close a variable-duration window with a final terminal snapshot."""
+        if self._finished:
+            raise ValueError("resource window is already finished")
+        self._finished = True
+        end_ns = self._sampler._clock.monotonic_ns()
+        if end_ns < self._start_ns:
+            raise ValueError("monotonic clock moved backwards")
+        if end_ns > self._sample_times[-1]:
+            self._append_snapshot(end_ns)
+        return self._sampler._resource_window(
+            self._components,
+            self._start_ns,
+            end_ns,
+            self._sample_times,
+            self._snapshots,
+            outcome,
+            self._sampler._clock.process_cpu_seconds() - self._sampler_cpu_start,
+        )
+
+    def _append_snapshot(self, sample_time: int) -> None:
+        snapshot = _validate_snapshot(
+            self._components, self._sampler._reader.read(self._components)
+        )
+        _validate_counter_progress(self._snapshots[-1], snapshot)
+        self._sample_times.append(sample_time)
+        self._snapshots.append(snapshot)
+
+
 def _validate_snapshot(
     components: tuple[str, ...],
     snapshot: Mapping[str, ComponentCounters],
@@ -96,16 +181,66 @@ def _validate_snapshot(
     return values
 
 
+def _validate_counter_progress(
+    before: Mapping[str, ComponentCounters],
+    after: Mapping[str, ComponentCounters],
+) -> None:
+    cumulative_fields = (
+        "cpu_seconds",
+        "rx_bytes",
+        "tx_bytes",
+        "application_bytes",
+        "nats_connection_bytes",
+        "http_bytes",
+        "storage_bytes",
+        "message_count",
+    )
+    if any(
+        getattr(after[component], field) < getattr(before[component], field)
+        for component in before
+        for field in cumulative_fields
+    ):
+        raise ValueError("counters regressed during sampling")
+
+
 class ResourceSampler:
     """Collect component-stable counter snapshots at the declared interval."""
 
-    def __init__(self, reader: _CounterReader, clock: _Clock) -> None:
+    def __init__(
+        self,
+        reader: _CounterReader,
+        clock: _Clock,
+        *,
+        metric_coverage: tuple[str, ...] = _RESOURCE_METRICS,
+    ) -> None:
+        if (
+            len(set(metric_coverage)) != len(metric_coverage)
+            or any(metric not in _RESOURCE_METRICS for metric in metric_coverage)
+        ):
+            raise ValueError("invalid resource metric coverage")
         self._reader = reader
         self._clock = clock
+        self._metric_coverage = metric_coverage
 
     def idle_baseline(self, components: tuple[str, ...]) -> ResourceWindow:
         return self.sample_window(
             components, duration_ns=_IDLE_DURATION_NS, outcome="idle"
+        )
+
+    def start_active_window(
+        self, components: tuple[str, ...]
+    ) -> _ActiveResourceWindow:
+        if not components or len(set(components)) != len(components):
+            raise ValueError("components must be nonempty and unique")
+        start_ns = self._clock.monotonic_ns()
+        sampler_cpu_start = self._clock.process_cpu_seconds()
+        initial_snapshot = _validate_snapshot(components, self._reader.read(components))
+        return _ActiveResourceWindow(
+            self,
+            components,
+            start_ns,
+            sampler_cpu_start,
+            initial_snapshot,
         )
 
     def sample_window(
@@ -115,33 +250,38 @@ class ResourceSampler:
         duration_ns: int,
         outcome: str = "completed",
     ) -> ResourceWindow:
-        if not components or len(set(components)) != len(components):
-            raise ValueError("components must be nonempty and unique")
         if duration_ns <= 0 or duration_ns % _INTERVAL_NS:
             raise ValueError("duration must be a positive multiple of 100ms")
-        start_ns = self._clock.monotonic_ns()
-        sampler_cpu_start = self._clock.process_cpu_seconds()
-        snapshots = [_validate_snapshot(components, self._reader.read(components))]
-        sample_times = [start_ns]
-        while self._clock.monotonic_ns() < start_ns + duration_ns:
+        session = self.start_active_window(components)
+        while self._clock.monotonic_ns() < session._start_ns + duration_ns:
             self._clock.sleep_ns(_INTERVAL_NS)
-            sample_times.append(self._clock.monotonic_ns())
-            snapshots.append(
-                _validate_snapshot(components, self._reader.read(components))
-            )
-        end_ns = self._clock.monotonic_ns()
-        sampler_cpu_seconds = self._clock.process_cpu_seconds() - sampler_cpu_start
+            session.sample_due()
+        return session.finish(outcome=outcome)
+
+    def _resource_window(
+        self,
+        components: tuple[str, ...],
+        start_ns: int,
+        end_ns: int,
+        sample_times: list[int],
+        snapshots: list[dict[str, ComponentCounters]],
+        outcome: str,
+        sampler_cpu_seconds: float,
+    ) -> ResourceWindow:
         totals = self._totals(snapshots, sample_times)
         wall_seconds = (end_ns - start_ns) / 1_000_000_000
         return ResourceWindow(
             components=components,
+            metric_coverage=self._metric_coverage,
             start_monotonic_ns=start_ns,
             end_monotonic_ns=end_ns,
             sample_monotonic_ns=tuple(sample_times),
+            component_samples=tuple(dict(snapshot) for snapshot in snapshots),
             outcome=outcome,
             sampler_cpu_seconds=sampler_cpu_seconds,
             cost_claims_valid=(
                 wall_seconds > 0
+                and set(self._metric_coverage) == set(_RESOURCE_METRICS)
                 and sampler_cpu_seconds / wall_seconds
                 <= _MAX_SAMPLER_CPU_PER_WALL_SECOND
             ),
@@ -184,7 +324,8 @@ class ResourceSampler:
 
         def delta(name: str) -> float | int:
             return sum(
-                getattr(last[component], name) - getattr(first[component], name)
+                cast(float | int, getattr(last[component], name))
+                - cast(float | int, getattr(first[component], name))
                 for component in first
             )
 
@@ -202,4 +343,4 @@ class ResourceSampler:
         )
 
 
-__all__ = ["ComponentCounters", "ResourceSampler", "ResourceWindow"]
+__all__ = ["ComponentCounters", "ResourceSampler", "ResourceWindow", "SystemClock"]

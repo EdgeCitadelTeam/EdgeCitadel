@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from scripts.research import run_artifact
 from scripts.research.preflight import PreflightReport
 from scripts.research.run_artifact import main
+from scripts.research.workload_matrix import MatrixCell, classify_outcome
 
 
 def test_preliminary_campaign_fixes_the_paper_profile_contract() -> None:
@@ -38,6 +40,25 @@ def test_preliminary_campaign_fixes_the_paper_profile_contract() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("system", "machine", "expected"),
+    (
+        ("Darwin", "arm64", "paper profile requires Linux"),
+        ("Linux", "aarch64", "paper profile requires x86_64"),
+    ),
+)
+def test_paper_host_gate_rejects_unsupported_platforms(
+    monkeypatch: pytest.MonkeyPatch,
+    system: str,
+    machine: str,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(platform, "system", lambda: system)
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+
+    assert run_artifact._paper_host_error() == expected
+
+
 def test_campaign_schema_rejects_a_missing_workload_timeout() -> None:
     campaign = yaml.safe_load(
         Path("scripts/research/configs/campaigns/preliminary-x86-lan.yaml").read_text()
@@ -51,6 +72,65 @@ def test_campaign_schema_rejects_a_missing_workload_timeout() -> None:
 
     with pytest.raises(ValidationError):
         schema.validate(campaign)
+
+
+def test_resource_application_bytes_sum_only_canonical_publication_receipts() -> None:
+    assert run_artifact._application_bytes(
+        [
+            {"event": "fixture.ready"},
+            {
+                "event": "transport.publication_accepted",
+                "data": {"receipt": {"application_bytes": 12}},
+            },
+            {
+                "event": "transport.publication_accepted",
+                "data": {"receipt": {"application_bytes": 8}},
+            },
+        ]
+    ) == 20
+
+
+def test_transport_resource_deltas_use_paired_monotonic_snapshots() -> None:
+    assert run_artifact._transport_resource_deltas(
+        {
+            "initial_transport": {
+                "mode": "edgecitadel",
+                "connection_bytes": {"in_bytes": 10, "out_bytes": 20},
+                "storage_bytes": 100,
+                "message_count": 2,
+            },
+            "final_transport": {
+                "mode": "edgecitadel",
+                "connection_bytes": {"in_bytes": 30, "out_bytes": 50},
+                "storage_bytes": 125,
+                "message_count": 4,
+            },
+        }
+    ) == {
+        "nats_connection_bytes": 50,
+        "http_bytes": 0,
+        "storage_bytes": 25,
+        "message_count_delta": 2,
+    }
+
+
+def test_paper_campaign_uses_the_predeclared_id_for_directory_and_bundles() -> None:
+    config_path = Path(
+        "scripts/research/configs/campaigns/preliminary-x86-lan.yaml"
+    ).resolve()
+    schedule = run_artifact.build_schedule(
+        profile="paper",
+        campaign_config=config_path,
+    )
+    config = run_artifact._resolved_campaign_config(
+        "paper",
+        schedule,
+        config_path,
+    )
+
+    assert run_artifact._campaign_directory_name("paper", schedule, config) == (
+        "preliminary-x86-lan"
+    )
 
 
 def test_quick_lifecycle_captures_source_once_and_cleans_every_fresh_environment(
@@ -73,6 +153,7 @@ def test_quick_lifecycle_captures_source_once_and_cleans_every_fresh_environment
     created: list[object] = []
     executed: list[str] = []
     observed_scratch_roots: list[str | None] = []
+    campaign_inputs_ready: list[bool] = []
 
     class Cleanup:
         completed = True
@@ -95,6 +176,17 @@ def test_quick_lifecycle_captures_source_once_and_cleans_every_fresh_environment
 
     def runner(repetition: object, _: object, __: object) -> None:
         executed.append(repetition.run_id)
+        campaign_root = output_root / "quick-20260725"
+        campaign_inputs_ready.append(
+            all(
+                (campaign_root / name).is_file()
+                for name in (
+                    "campaign.json",
+                    "campaign-config.json",
+                    "schedule.jsonl",
+                )
+            )
+        )
 
     output_root = tmp_path / "results"
     result_file = tmp_path / "result.json"
@@ -125,7 +217,26 @@ def test_quick_lifecycle_captures_source_once_and_cleans_every_fresh_environment
     assert result["source"]["git_dirty"] is False
     assert len(result["bundle_paths"]) == 22
     assert observed_scratch_roots == [str(scratch_root)] * 22
+    assert campaign_inputs_ready == [True] * 22
     assert os.environ.get("EC_ARTIFACT_SCRATCH_ROOT") != str(scratch_root)
+    campaign_root = Path(result["campaign_path"])
+    schedule = [
+        json.loads(line)
+        for line in (campaign_root / "schedule.jsonl").read_text().splitlines()
+    ]
+    assert len(schedule) == 22
+    assert schedule[0] == {
+        "block": 0,
+        "cell": {
+            "ablation": "full-contract",
+            "mode": "central-relay",
+            "timeout_seconds": 30,
+            "variant": "primary",
+            "workload": "W1",
+        },
+        "measured": False,
+        "run_id": "ec-20260725-00000",
+    }
     manifests = [
         json.loads((environment.output_dir / "manifest.json").read_text())
         for environment in created
@@ -135,6 +246,12 @@ def test_quick_lifecycle_captures_source_once_and_cleans_every_fresh_environment
     assert all(manifest["cleanup"] == {"completed": True} for manifest in manifests)
     assert all(
         manifest["metric_contract"] == {"status": "not_collected"}
+        for manifest in manifests
+    )
+    assert all(
+        manifest["campaign_contract"]["campaign_sha256"]
+        and manifest["campaign_contract"]["schedule_sha256"]
+        and manifest["campaign_contract"]["config_sha256"]
         for manifest in manifests
     )
     assert all(manifest["manifest_sha256"] for manifest in manifests)
@@ -165,10 +282,29 @@ def test_real_repetition_runner_starts_topology_and_persists_runner_output(
     environment = Environment()
     cell = run_artifact.build_schedule(profile="quick").repetitions[1].cell
     repetition = run_artifact.Repetition("ec-20260725-00000", 0, True, cell)
+    runner_observation = {
+        "initiated": 1,
+        "accepted": 1,
+        "delivered": 1,
+        "executions": 1,
+        "logical_terminals": 1,
+        "distinct_terminal_ids": 1,
+        "publication_attempts": 1,
+        "wire_deliveries": 1,
+        "timed_out": False,
+        "started_monotonic_ns": 10_000,
+        "ended_monotonic_ns": 110_000,
+    }
     completed = subprocess.CompletedProcess(
         ["docker"],
         0,
-        '{"events":[{"event":"fixture.ready"}],"observation":{"accepted":1},"workload":"W1"}',
+        json.dumps(
+            {
+                "events": [{"event": "fixture.ready"}],
+                "observation": runner_observation,
+                "workload": "W1",
+            }
+        ),
         "",
     )
     calls: list[list[str]] = []
@@ -214,11 +350,134 @@ def test_real_repetition_runner_starts_topology_and_persists_runner_output(
         "event": "fixture.ready"
     }
     assert json.loads((environment.output_dir / "trials.jsonl").read_text()) == {
+        "schema_version": "research-trial.v1",
         "block": 0,
+        "cell": {
+            "ablation": cell.ablation,
+            "mode": cell.mode,
+            "timeout_seconds": cell.timeout_seconds,
+            "variant": cell.variant,
+            "workload": cell.workload,
+        },
         "measured": True,
-        "observation": {"accepted": 1},
+        "trial_id": repetition.run_id,
+        "observation": {
+            **runner_observation,
+            "latency_ns": 100_000,
+            "outcome": "completed",
+        },
+        "timing": {
+            "started_monotonic_ns": 10_000,
+            "ended_monotonic_ns": 110_000,
+        },
+        "events_artifact": "events.jsonl",
+        "resource_artifact": "resources.json",
+        "invariant_results": {"outcome_consistent": True},
         "run_id": repetition.run_id,
     }
+    assert json.loads((environment.output_dir / "resources.json").read_text()) == {
+        "status": "not_collected"
+    }
+
+
+@pytest.mark.parametrize(
+    ("workload", "observation", "expected"),
+    (
+        (
+            "W1",
+            {
+                "initiated": 1,
+                "accepted": 1,
+                "delivered": 1,
+                "executions": 2,
+                "logical_terminals": 1,
+                "distinct_terminal_ids": 1,
+                "publication_attempts": 1,
+                "wire_deliveries": 1,
+                "timed_out": False,
+            },
+            "failed",
+        ),
+        (
+            "W6c",
+            {
+                "initiated": 1,
+                "accepted": 3,
+                "delivered": 0,
+                "executions": 0,
+                "logical_terminals": 0,
+                "distinct_terminal_ids": 0,
+                "publication_attempts": 3,
+                "wire_deliveries": 0,
+                "poison": 2,
+                "timed_out": True,
+            },
+            "completed",
+        ),
+        (
+            "W1",
+            {
+                "initiated": 1,
+                "accepted": 1,
+                "delivered": 0,
+                "executions": 0,
+                "logical_terminals": 0,
+                "distinct_terminal_ids": 0,
+                "publication_attempts": 1,
+                "wire_deliveries": 0,
+                "timed_out": True,
+            },
+            "timeout",
+        ),
+        (
+            "W2",
+            {
+                "initiated": 1,
+                "accepted": 1,
+                "delivered": 1,
+                "executions": 2,
+                "logical_terminals": 1,
+                "distinct_terminal_ids": 1,
+                "publication_attempts": 1,
+                "wire_deliveries": 1,
+                "timed_out": False,
+            },
+            "completed",
+        ),
+        (
+            "W8",
+            {
+                "initiated": 1,
+                "accepted": 1,
+                "delivered": 1,
+                "executions": 2,
+                "side_effects": 2,
+                "prepared_outcomes": 1,
+                "logical_terminals": 1,
+                "distinct_terminal_ids": 1,
+                "publication_attempts": 2,
+                "wire_deliveries": 1,
+                "timed_out": False,
+            },
+            "completed",
+        ),
+    ),
+)
+def test_runner_classifies_semantic_outcomes(
+    workload: str,
+    observation: dict[str, object],
+    expected: str,
+) -> None:
+    base_cell = run_artifact.build_schedule(profile="matrix-smoke").repetitions[0].cell
+    cell = MatrixCell(
+        workload,
+        base_cell.mode,
+        base_cell.variant,
+        base_cell.ablation,
+        30,
+    )
+
+    assert classify_outcome(cell, observation) == expected
 
 
 def test_real_repetition_runner_records_valid_prestart_preflight(
@@ -234,12 +493,17 @@ def test_real_repetition_runner_records_valid_prestart_preflight(
     completed = subprocess.CompletedProcess(
         ["docker"],
         0,
-        '{"events":[],"observation":{"accepted":1},"workload":"W1"}',
+        '{"events":[],"observation":{"accepted":1,"initial_transport":{"mode":"core-only","connection_bytes":{"in_bytes":0,"out_bytes":0},"storage_bytes":0,"message_count":0},"final_transport":{"mode":"core-only","connection_bytes":{"in_bytes":0,"out_bytes":0},"storage_bytes":0,"message_count":0},"started_monotonic_ns":1,"ended_monotonic_ns":2},"workload":"W1"}',
         "",
     )
     monkeypatch.setattr(run_artifact.ArtifactEnvironment, "start", lambda _: None)
     monkeypatch.setattr(
         run_artifact.subprocess, "run", lambda *_args, **_kwargs: completed
+    )
+    monkeypatch.setattr(
+        run_artifact,
+        "_run_with_host_resource_sampling",
+        lambda *_args: (completed.stdout, {"status": "partial", "active_window": {}}),
     )
 
     run_artifact.run_repetition(repetition, environment, object())
@@ -252,6 +516,39 @@ def test_real_repetition_runner_records_valid_prestart_preflight(
         "agents",
         "freshness_attestation",
         "resolved_config_mode",
+    }
+
+
+def test_real_bundle_manifest_declares_partial_host_metric_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    environment = run_artifact.ArtifactEnvironment.create(
+        "ec-20260727-metrics", "core-only", tmp_path / "raw"
+    )
+    repetition = run_artifact.Repetition(
+        environment.run_id,
+        0,
+        True,
+        run_artifact.build_schedule(profile="quick").repetitions[1].cell,
+    )
+
+    manifest = run_artifact._bundle_manifest(
+        repetition,
+        environment,
+        run_artifact.capture_source_provenance(Path.cwd()),
+        "quick",
+        type("Cleanup", (), {"completed": True})(),
+        "quick-20260725",
+        {},
+    )
+
+    assert manifest["metric_contract"] == {
+        "status": "partial",
+        "components": ["controller", "broker", "worker", "observer"],
+        "sampler_interval_ms": 100,
+        "idle_baseline_seconds": 2,
     }
 
 

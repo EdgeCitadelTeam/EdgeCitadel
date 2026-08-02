@@ -1,6 +1,6 @@
 # EdgeCitadel Task-Aware Reliability Artifact Design
 
-**Status:** Design direction approved; written specification v0.1 pending user review
+**Status:** Design direction approved; implementation and evidence gates in progress
 
 **Date:** 2026-07-25
 
@@ -623,20 +623,46 @@ applies 25 ms fixed egress delay at each endpoint with no injected loss.
 injected delay. Preflight verifies the active `tc netem` state and records a
 five-second probe before the campaign; a mismatch invalidates the profile.
 
-The command-line contract is:
+The maintained execution contract is:
 
 ```bash
-python3 scripts/research/run_artifact.py run --profile quick
-python3 scripts/research/run_artifact.py run --profile matrix-smoke
-python3 scripts/research/run_artifact.py run \
+scripts/research/run-python scripts/research/run_artifact.py run --profile quick \
+  --source-root /absolute/path/to/clean-checkout \
+  --output-root /absolute/path/to/results/raw \
+  --scratch-root /absolute/path/to/artifact-scratch
+scripts/research/run-python scripts/research/run_artifact.py run --profile matrix-smoke \
+  --source-root /absolute/path/to/clean-checkout \
+  --output-root /absolute/path/to/results/raw \
+  --scratch-root /absolute/path/to/artifact-scratch
+scripts/research/run-python scripts/research/run_artifact.py run \
   --profile paper \
-  --campaign-config scripts/research/configs/campaigns/preliminary-x86-lan.yaml
-python3 scripts/research/analyze_artifact.py \
+  --campaign-config scripts/research/configs/campaigns/preliminary-x86-lan.yaml \
+  --source-root /absolute/path/to/clean-checkout \
+  --output-root /absolute/path/to/results/raw \
+  --scratch-root /absolute/path/to/artifact-scratch
+scripts/research/run-python scripts/research/check_artifact.py \
+  --bundle /absolute/path/to/bundle \
+  --require-kind benchmark \
+  --source-root /absolute/path/to/clean-checkout
+scripts/research/run-python scripts/research/check_artifact.py \
+  --campaign /absolute/path/to/results/raw/preliminary-x86-lan \
+  --publication
+scripts/research/run-python scripts/research/analyze_artifact.py \
   --campaign preliminary-x86-lan \
-  --confidence 0.95 \
-  --bootstrap-samples 10000
-python3 scripts/research/check_artifact.py --campaign preliminary-x86-lan
+  --input-root /absolute/path/to/results/raw \
+  --output-root /absolute/path/to/results/derived
 ```
+
+The maintained analyzer validates the full campaign first, uses the predeclared
+bootstrap seed, writes canonical input-bound outputs atomically, and omits p99
+below 1,000 completed measurements. The maintained runner records explicitly
+partial Docker Engine CPU/RSS/network snapshots and a two-second idle baseline.
+A runner-to-host acknowledgement captures the host start snapshot immediately
+before T0 and the terminal snapshot before transport teardown. It is still
+rejected by the publication gate because application, protocol-wire,
+broker-storage, and message-count counters are absent. No cost or comparative
+performance claim is publication-ready until the runner emits complete
+schema-checked trial and resource evidence.
 
 The campaign file contains the fixed seed, required matrix cells, trial/warmup
 counts, hardware declaration, network declaration, timeouts, and output root.
@@ -644,7 +670,9 @@ Hardware and network schemas live under `scripts/research/configs/schema/`.
 Automatic cleanup runs after every repetition; the idempotent recovery command is:
 
 ```bash
-python3 scripts/research/run_artifact.py cleanup --run-id ec-20260725-example
+scripts/research/run-python scripts/research/run_artifact.py cleanup \
+  --run-id ec-20260725-example \
+  --scratch-root /absolute/path/to/artifact-scratch
 ```
 
 ### 4.6 Artifact Layout
@@ -812,8 +840,12 @@ Compose lifecycle and writes:
 - Compose configuration hash, image digests, tool versions, OS, architecture,
   command line, timestamps, and artifact hashes.
 
-The screenshot and video must originate from the same passing run. Existing March
-2026 media is archived as historical and never presented as current evidence.
+The screenshot and video must originate from the same passing run. The capture
+wrapper rejects a dirty source checkout, writes portable project-relative media
+paths, and seals the bundle only after its independent checker validates source
+provenance, API snapshots, queue drain, and owned-resource teardown. Existing
+March 2026 media is archived as historical and never presented as current
+evidence.
 
 ### 5.5 Slice 2 Acceptance
 
@@ -889,16 +921,20 @@ Two deterministic agents must run concurrently on one or multiple nodes without
 editing tracked source, sharing durable identities, or stopping each other. The
 same launcher is used by the benchmark and Playwright environments.
 
-The controller and node entrypoints are:
+The controller and node entrypoints are documented in the maintained runbooks;
+the following forms are the current launcher interfaces:
 
 ```bash
-python3 scripts/research/lab_controller.py start --run-id ec-lab-01
-python3 scripts/research/lab_controller.py status --run-id ec-lab-01
-python3 scripts/research/lab_node.py start \
-  --controller-config tmp/research/ec-lab-01/controller.json \
-  --credential-file tmp/research/ec-lab-01/nats.creds \
-  --agent-id fixture-1
-python3 scripts/research/lab_controller.py stop --run-id ec-lab-01
+scripts/research/run-python scripts/research/lab_controller.py start \
+  --run-id ec-lab-01 --host-id controller-lab-01 --lab-variant lifecycle
+scripts/research/run-python scripts/research/lab_controller.py status \
+  --state-file tmp/research/lab/ec-lab-01/controller-state.json
+scripts/research/run-python scripts/research/lab_node.py start \
+  --controller-config /path/to/controller.json \
+  --credential-file /path/to/transport-token \
+  --host-id gateway-lab-02 --agent-id fixture-1
+scripts/research/run-python scripts/research/lab_controller.py stop \
+  --state-file tmp/research/lab/ec-lab-01/controller-state.json
 ```
 
 The controller inventory rejects a duplicate agent ID within a run before process

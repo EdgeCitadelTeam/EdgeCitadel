@@ -2468,7 +2468,7 @@
 - Create: `tests/research/test_checker.py`
 - Create: `tests/research/test_analysis.py`
 
-- [ ] **Step 1: Write failing statistical unit tests**
+- [x] **Step 1: Write failing statistical unit tests**
 
   Use fixed published/reference vectors and require:
 
@@ -2481,7 +2481,7 @@
   - completed-only latency next to initiated/failure/timeout counts;
   - no imputation or silent row deletion.
 
-- [ ] **Step 2: Write failing base checker and deterministic-analysis tests**
+- [x] **Step 2: Write failing base checker and deterministic-analysis tests**
 
   First require `check_bundle()`/`check_campaign()` to validate schema and hashes,
   scheduled-cell/block completeness, source readiness, cleanup, and raw
@@ -2514,7 +2514,7 @@
   `require_valid()` raises one deterministic `ArtifactInvalid` without mutating
   the manifest.
 
-- [ ] **Step 3: Run tests and verify missing modules**
+- [x] **Step 3: Run tests and verify missing modules**
 
   Run:
 
@@ -2527,7 +2527,7 @@
 
   Expected: collection fails for missing statistics/checker/analyzer modules.
 
-- [ ] **Step 4: Implement base validation, fixed estimators, and analyzer**
+- [x] **Step 4: Implement base validation, fixed estimators, and analyzer**
 
   Implement the precondition `ArtifactIssue`, `CheckReport`, and exact
   `check_bundle` signature before the analyzer, plus:
@@ -2560,7 +2560,7 @@
   The analyzer refuses quick, matrix-smoke, development, incomplete, dirty,
   hash-invalid, or harness-invalid inputs for publication output.
 
-- [ ] **Step 5: Run tests and CLI help**
+- [x] **Step 5: Run tests and CLI help**
 
   Run:
 
@@ -2575,6 +2575,14 @@
 
   Expected: tests pass and help exposes campaign, confidence, bootstrap-samples,
   input-root, and output-root arguments.
+
+  Local evidence (2026-08-01): the focused contract suite passed with 60 tests;
+  the full research suite passed with 665 tests and 34 environment skips; Ruff
+  and strict Mypy passed for the maintained modules. The analyzer is ready
+  for valid input, but the paper runner remains publication-ineligible until
+  Tasks 10-11 integrate real component samples and complete trial records.
+  Independent re-review found no remaining blocker, critical, or important issue
+  in the corrected analysis and publication-validation boundary.
 
 - [ ] **Step 6: Commit Task 12**
 

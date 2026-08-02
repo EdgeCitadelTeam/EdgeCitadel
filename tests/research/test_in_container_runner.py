@@ -15,7 +15,7 @@ from scripts.research.in_container_runner import (
     prepare_direct_execution,
 )
 from scripts.research.modes.base import Mode
-from scripts.research.workload_matrix import MatrixCell
+from scripts.research.workload_matrix import MatrixCell, TrialObservation
 
 
 def _config(tmp_path: Path) -> NativeControlConfig:
@@ -141,3 +141,77 @@ def test_direct_runner_assigns_the_durable_observer_identity(
 
     assert isinstance(transport, Transport)
     assert seen["observer_agent_id"] == "requester-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("workload", "handler_events", "reported_executions", "expected"),
+    (
+        ("W1", 1, None, 1),
+        ("W2", 2, None, 2),
+        ("W6c", 1, 0, 0),
+    ),
+)
+async def test_direct_runner_projects_observed_handler_execution_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    workload: str,
+    handler_events: int,
+    reported_executions: int | None,
+    expected: int,
+) -> None:
+    async def execute_cell(
+        _cell: object,
+        _config: object,
+        _endpoints: object,
+        _token: object,
+        _observers: object,
+        event_sink: CollectingEventSink,
+        **_: object,
+    ) -> TrialObservation:
+        for index in range(handler_events):
+            event_sink.emit(
+                {
+                    "event": "fixture.handler_started",
+                    "data": {"request_envelope_id": f"request-{index}"},
+                }
+            )
+        return TrialObservation(
+            initiated=1,
+            accepted=1,
+            delivered=1,
+            handler_attempts=None,
+            executions=reported_executions,
+            side_effects=None,
+            prepared_outcomes=None,
+            logical_terminals=1,
+            distinct_terminal_ids=1,
+            publication_attempts=1,
+            wire_deliveries=1,
+            progress_generated=None,
+            progress_live_delivered=None,
+            progress_replay_delivered=None,
+            progress_missing=None,
+            poison=None,
+            inapplicable_crash_points=(),
+            timed_out=False,
+            final_transport={},
+        )
+
+    monkeypatch.setattr(in_container_runner, "execute_cell", execute_cell)
+    cell = MatrixCell(
+        workload,
+        Mode.CORE_ONLY.value,
+        "primary",
+        "full-contract",
+        30,
+    )
+
+    observation, _ = await in_container_runner.run_direct_cell(
+        cell,
+        _config(tmp_path),
+        {"NATS_URL": "nats://nats:4222"},
+        "a" * 64,
+    )
+
+    assert observation.executions == expected

@@ -180,6 +180,17 @@ class _SleepRecorder:
             self.timeline.append(("sleep", delay))
 
 
+class _ReleaseAfterFirstPoll:
+    def __init__(self, release_path: Path) -> None:
+        self.release_path = release_path
+        self.delays: list[float] = []
+
+    async def __call__(self, delay: float) -> None:
+        self.delays.append(delay)
+        if len(self.delays) == 1:
+            self.release_path.write_text("released\n")
+
+
 class _RecordingTransport:
     def __init__(self, timeline: list[tuple[str, object]] | None = None) -> None:
         self.progress: list[Mapping[str, object]] = []
@@ -2134,3 +2145,57 @@ async def test_main_hides_runtime_factory_failures(
         )
     assert raised.value.code == "native control failed"
     assert "d" * 64 not in str(raised.value)
+
+
+@async_test
+async def test_terminal_release_gate_is_inert_without_an_armed_hold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nonce = "60000000-0000-4000-8000-000000000001"
+    sleeper = _SleepRecorder()
+    monkeypatch.delenv("EC_TERMINAL_RELEASE_DIR", raising=False)
+
+    await native_control._wait_for_terminal_release(TASK_ID, nonce, sleep=sleeper)
+
+    release_directory = tmp_path / "releases"
+    release_directory.mkdir()
+    monkeypatch.setenv("EC_TERMINAL_RELEASE_DIR", str(release_directory))
+    await native_control._wait_for_terminal_release(TASK_ID, nonce, sleep=sleeper)
+
+    assert sleeper.delays == []
+
+
+@async_test
+async def test_terminal_release_gate_waits_for_an_owned_regular_release_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nonce = "60000000-0000-4000-8000-000000000001"
+    release_directory = tmp_path / "releases"
+    release_directory.mkdir()
+    (release_directory / f"{nonce}.hold").write_text("hold\n")
+    release_path = release_directory / f"{TASK_ID}.release"
+    sleeper = _ReleaseAfterFirstPoll(release_path)
+    monkeypatch.setenv("EC_TERMINAL_RELEASE_DIR", str(release_directory))
+
+    await native_control._wait_for_terminal_release(TASK_ID, nonce, sleep=sleeper)
+
+    assert sleeper.delays == [0.025]
+    assert release_path.read_text() == "released\n"
+
+
+@async_test
+async def test_terminal_release_gate_rejects_non_regular_control_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nonce = "60000000-0000-4000-8000-000000000001"
+    release_directory = tmp_path / "releases"
+    release_directory.mkdir()
+    hold_path = release_directory / f"{nonce}.hold"
+    hold_path.symlink_to(tmp_path / "not-a-hold")
+    monkeypatch.setenv("EC_TERMINAL_RELEASE_DIR", str(release_directory))
+
+    with pytest.raises(RuntimeError, match="invalid terminal release hold"):
+        await native_control._wait_for_terminal_release(TASK_ID, nonce)

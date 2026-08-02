@@ -139,3 +139,32 @@ async def test_poststart_preflight_uses_runtime_attestation_not_empty_state(
     )
     assert invalid_report.valid is False
     assert "authentication failed" in invalid_report.errors
+
+
+@pytest.mark.asyncio
+async def test_poststart_preflight_accepts_structural_lab_controller_snapshot(
+    tmp_path: Path,
+) -> None:
+    credential = tmp_path / "credential"
+    credential.write_text("a" * 64 + "\n")
+    credential.chmod(0o600)
+    request = PreflightRequest(
+        run_id="ec-lab-01",
+        mode="edgecitadel",
+        expected_agents=(),
+        resolved_config={
+            "run_id": "ec-lab-01",
+            "lab_variant": "lifecycle",
+            "app_url": "http://127.0.0.1:18080",
+            "agg_url": "http://127.0.0.1:18080",
+            "nats_url": "nats://127.0.0.1:14222",
+            "monitor_url": "http://127.0.0.1:18222",
+            "inventory_url": "http://127.0.0.1:18080/api/lab/status",
+        },
+        credential_file=credential,
+    )
+
+    report = await run_preflight(request)
+
+    assert report.valid is True
+    assert next(check for check in report.checks if check["name"] == "agents")["passed"] is True

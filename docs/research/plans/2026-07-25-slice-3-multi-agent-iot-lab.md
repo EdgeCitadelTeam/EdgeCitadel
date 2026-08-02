@@ -1046,7 +1046,7 @@ wrapper owns a different Compose stack.
   explicit. `append_observation` rejects secret-shaped keys/values before an
   `O_APPEND` write and fsync.
 - The lab manifest uses the Slice 1 schema without dummy benchmark fields. Every
-  accepted lab manifest contains exactly these required top-level fields:
+  accepted `PASS` lab manifest contains exactly these required top-level fields:
 
   ```text
   schema_version, evidence_kind, lab_variant, status, run_id,
@@ -1066,7 +1066,12 @@ wrapper owns a different Compose stack.
   node-report, controller-command, Playwright, and cleanup evidence used by the
   checker.
 
-- [ ] **Step 1: Use `deliberate-changes`, then write sixteen failing controller tests**
+  A sealed `INVALID` start-failure manifest retains the same top-level shape but
+  may truthfully record zero nodes and `unavailable` image identities. Those
+  exceptions are rejected for `PASS`; missing required structures and secret or
+  nonportable evidence remain invalid for both statuses.
+
+- [x] **Step 1: Use `deliberate-changes`, then write sixteen failing controller tests**
 
   Write exactly these sixteen tests before controller implementation:
 
@@ -1120,7 +1125,7 @@ wrapper owns a different Compose stack.
   assert fake_docker.compose_project == "edgecitadel-artifact-ec-lab-01"
   ```
 
-- [ ] **Step 2: Write ten failing lab schema and checker tests**
+- [x] **Step 2: Write ten failing lab schema and checker tests**
 
   In `tests/research/test_lab_evidence.py`, write one valid-variants function
   that loops over all three fixtures and nine isolated corruption functions:
@@ -1151,7 +1156,7 @@ wrapper owns a different Compose stack.
   10. A controller finalization spy is called once; a gate/checker invocation
       calls `check_bundle` only and never calls `finalize_bundle`.
 
-- [ ] **Step 3: Run RED**
+- [x] **Step 3: Run RED**
 
   ```bash
   cd "$TASK_ROOT"
@@ -1164,7 +1169,7 @@ wrapper owns a different Compose stack.
   `scripts.research.lab_contract`, `scripts.research.lab_observations`, and
   `scripts.research.lab_preflight` are absent.
 
-- [ ] **Step 4: Create the complete controller topology**
+- [x] **Step 4: Create the complete controller topology**
 
   `nats-lab.conf.tpl` is:
 
@@ -1295,7 +1300,7 @@ wrapper owns a different Compose stack.
   The runner captures output in memory, rejects output containing the raw token,
   and persists only exit status plus config SHA-256.
 
-- [ ] **Step 5: Implement the lab schema, observations, and shared checker predicates**
+- [x] **Step 5: Implement the lab schema, observations, and shared checker predicates**
 
   Extend only the `evidence_kind == "lab"` branch in
   `schemas/research-manifest.v1.json`; do not modify the settled benchmark or
@@ -1335,7 +1340,7 @@ wrapper owns a different Compose stack.
   before append; the function rejects a surviving absolute transient path. It
   never calls `finalize_bundle`.
 
-- [ ] **Step 6: Implement preflight with the shared types**
+- [x] **Step 6: Implement preflight with the shared types**
 
   Construct:
 
@@ -1365,7 +1370,7 @@ wrapper owns a different Compose stack.
   `preflight.json` must pass the shared path normalizer and uses
   `<credential-file>`, `<run-state>`, and `$SOURCE_ROOT`.
 
-- [ ] **Step 7: Implement controller start with transactional rollback**
+- [x] **Step 7: Implement controller start with transactional rollback**
 
   The CLI is:
 
@@ -1446,7 +1451,7 @@ wrapper owns a different Compose stack.
   Finalizer failure never bypasses secret cleanup, and rollback failure is
   reported without replacing the original error.
 
-- [ ] **Step 8: Implement fresh-process stop and manifest finalization**
+- [x] **Step 8: Implement fresh-process stop and manifest finalization**
 
   `stop_controller` loads `controller-state.json`; it does not rely on an
   in-memory `ArtifactEnvironment`. It accepts `starting`, `active`, `stopping`,
@@ -1519,7 +1524,7 @@ wrapper owns a different Compose stack.
   machine-readable result containing output path/image ID/SHA-256, journals the
   export for teardown, and refuses an active export path or mutable image tag.
 
-- [ ] **Step 9: Run GREEN, shared regressions, and Compose validation**
+- [x] **Step 9: Run GREEN, shared regressions, and Compose validation**
 
   ```bash
   cd "$TASK_ROOT"
@@ -1543,7 +1548,7 @@ wrapper owns a different Compose stack.
   NATS_IMAGE="$(scripts/research/run-python -c \
     'import json; print(json.load(open("scripts/research/toolchain.json"))["nats_image"])')"
   NGINX_IMAGE="$(scripts/research/run-python -c \
-    'from scripts.research.lab_runtime import LAB_NGINX_IMAGE; print(LAB_NGINX_IMAGE)')"
+    'from scripts.research.lab_config import LAB_NGINX_IMAGE; print(LAB_NGINX_IMAGE)')"
   test "${NATS_IMAGE#*@sha256:}" != "$NATS_IMAGE"
   test "${NGINX_IMAGE#*@sha256:}" != "$NGINX_IMAGE"
   PLACEHOLDER_DIGEST="sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -2206,7 +2211,7 @@ wrapper owns a different Compose stack.
   controllers before either completes. The sequential test completes and cleans
   the first before starting the second.
 
-- [ ] **Step 1: Add three failing integration tests**
+- [x] **Step 1: Add three failing integration tests**
 
   Add exactly:
 
@@ -2251,7 +2256,7 @@ wrapper owns a different Compose stack.
   Expected: exactly 3 tests fail because the pair helpers and complete
   assertions are absent.
 
-- [ ] **Step 3: Implement full paired runs**
+- [x] **Step 3: Implement full paired runs**
 
   `run_concurrent_pair` uses two worker threads only to execute two complete
   `run_two_node_lifecycle` calls. It joins both, propagates both exceptions, and
@@ -2267,7 +2272,7 @@ wrapper owns a different Compose stack.
   distinct full scopes. Consumer names themselves must still include the run ID
   and be disjoint.
 
-- [ ] **Step 4: Check each controller-finalized bundle without refinalizing**
+- [x] **Step 4: Check each controller-finalized bundle without refinalizing**
 
   Before controller stop finalizes, require raw files for:
 
@@ -2411,6 +2416,13 @@ wrapper owns a different Compose stack.
   retains its source bundle and finalized evidence, and validates against a
   checkout reconstructed from that source bundle.
 
+Local acceptance note (2026-08-02): the paired helpers, live overlap and
+cross-controller contamination probes, exact review surface, idempotent
+failure cleanup, and clean-checkout receipt command are implemented. The
+lifecycle file collects exactly five integration cases; on macOS they report
+`5 skipped`, while six non-integration lifecycle tests pass. Steps 2, 5, and 6
+remain open until the exact clean Ubuntu 24.04 x86_64 commands run.
+
 - [ ] **Step 7: Commit Task 6**
 
   Invoke `commit-check`, require `git diff --cached --check` to exit zero, then:
@@ -2456,7 +2468,7 @@ wrapper owns a different Compose stack.
   and then `report.require_valid()`. It reads only the finalized bundle and
   never mutates finalized evidence.
 
-- [ ] **Step 1: Write eight failing classifier and runbook tests**
+- [x] **Step 1: Write eight failing classifier and runbook tests**
 
   Write exactly:
 
@@ -2520,7 +2532,7 @@ wrapper owns a different Compose stack.
   Expected: collection fails because
   `scripts.research.lab_qualification` is absent.
 
-- [ ] **Step 3: Implement the fail-closed classifier**
+- [x] **Step 3: Implement the fail-closed classifier**
 
   `remote_qualified` is true only when all conditions hold:
 
@@ -2550,7 +2562,7 @@ wrapper owns a different Compose stack.
   Never infer remote status from declared names, checkout paths, IP strings, or
   node count alone. Return every failed condition as a stable reason.
 
-- [ ] **Step 4: Reuse command evidence and add immutable qualification**
+- [x] **Step 4: Reuse command evidence and add immutable qualification**
 
   Reuse the machine-readable Task 5 command/await forms:
 
@@ -2590,7 +2602,7 @@ wrapper owns a different Compose stack.
   lab qualification: REMOTE QUALIFIED
   ```
 
-- [ ] **Step 5: Write the exact runbook**
+- [x] **Step 5: Write the exact runbook**
 
   `docs/setup-lab-node.md` has these sections:
 
@@ -2854,7 +2866,7 @@ wrapper owns a different Compose stack.
   State that any result short of a valid bundle plus the exact
   `REMOTE QUALIFIED` line is `remote-capable` or `preliminary`.
 
-- [ ] **Step 6: Run GREEN**
+- [x] **Step 6: Run GREEN**
 
   ```bash
   cd "$TASK_ROOT"
@@ -2863,6 +2875,14 @@ wrapper owns a different Compose stack.
   ```
 
   Expected: exactly 8 tests pass.
+
+Local acceptance note (2026-08-02): exactly eight qualification tests pass.
+Qualification loads only checker-valid finalized observation files, requires
+direct HTTP 202 commands with one exact nonconflicting terminal on each host,
+verifies the queued reconnect order, and emits one immutable classification
+line. The remote runbook removes remote node/image/private credential state
+before checker and qualification execution. Independent re-review reported
+`NO BLOCKER`; the two-host Ubuntu execution remains pending.
 
 - [ ] **Step 7: Commit Task 7**
 

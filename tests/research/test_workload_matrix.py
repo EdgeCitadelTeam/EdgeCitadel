@@ -477,6 +477,10 @@ async def test_w6a_reuses_the_same_serialized_envelope_and_wire_identity() -> No
     assert observation.accepted == 2
     assert observation.publication_attempts == 2
     assert observation.logical_terminals == 1
+    assert observation.workload_evidence["wire_retry"]["envelope_ids"] == [
+        transport.submissions[0]["id"],
+        transport.submissions[1]["id"],
+    ]
 
 
 @pytest.mark.asyncio
@@ -502,6 +506,9 @@ async def test_w6b_uses_a_new_wire_id_with_the_same_logical_request() -> None:
     assert observation.initiated == 1
     assert observation.accepted == 2
     assert observation.publication_attempts == 2
+    assert observation.workload_evidence["semantic_retry"]["task_id"] == (
+        transport.submissions[0]["task_id"]
+    )
 
 
 @pytest.mark.asyncio
@@ -555,6 +562,11 @@ async def test_w6c_submits_sender_and_payload_collisions_without_cached_output_e
     assert observation.executions == 0
     assert observation.logical_terminals == 0
     assert observation.timed_out is True
+    assert observation.workload_evidence["collision"] == {
+        "rejections": 2,
+        "executions": 0,
+        "cached_output_exposure": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -579,6 +591,7 @@ async def test_w5_runs_every_crash_boundary_and_preserves_core_only_inapplicabil
     assert observation.side_effects == len(CrashPoint)
     assert observation.logical_terminals == len(CrashPoint)
     assert observation.inapplicable_crash_points == (CrashPoint.AFTER_MARK.value,)
+    assert len(observation.workload_evidence["crash_subtrials"]) == len(CrashPoint)
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 _GENERATED_PREFIXES = (
     "docs/research/results/raw/",
@@ -151,6 +151,13 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def manifest_sha256(manifest: Mapping[str, object]) -> str:
+    """Hash canonical manifest contents without the self-referential digest."""
+    candidate = dict(manifest)
+    candidate.pop("manifest_sha256", None)
+    return hashlib.sha256(_canonical_json(candidate)).hexdigest()
+
+
 def _value_contains_secret(value: object, *, key: str = "") -> bool:
     if isinstance(value, Mapping):
         return any(
@@ -197,7 +204,7 @@ def _valid_manifest(manifest: Mapping[str, object], schema_path: Path) -> bool:
     try:
         schema = json.loads(schema_path.read_text())
         Draft202012Validator(schema).validate(manifest)
-    except (OSError, json.JSONDecodeError, ValueError):
+    except (OSError, json.JSONDecodeError, ValidationError, ValueError):
         return False
     return True
 
@@ -233,17 +240,16 @@ def finalize_bundle(
         or cleanup.get("completed") is not True
     ):
         return "INVALID"
-    candidate["status"] = "PASS"
+    final_status = "INVALID" if candidate.get("status") == "INVALID" else "PASS"
+    candidate["status"] = final_status
     candidate["artifacts"] = {
         path.relative_to(bundle).as_posix(): file_sha256(path) for path in raw_files
     }
-    candidate["manifest_sha256"] = hashlib.sha256(
-        _canonical_json(candidate)
-    ).hexdigest()
+    candidate["manifest_sha256"] = manifest_sha256(candidate)
     if not _valid_manifest(candidate, schema_path):
         return "INVALID"
     _atomic_manifest(manifest_path, candidate)
-    return "PASS"
+    return final_status
 
 
 __all__ = [
@@ -251,6 +257,7 @@ __all__ = [
     "capture_source_provenance",
     "file_sha256",
     "finalize_bundle",
+    "manifest_sha256",
     "verify_source_provenance",
     "write_json",
     "write_jsonl",

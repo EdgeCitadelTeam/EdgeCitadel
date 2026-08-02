@@ -23,6 +23,7 @@ const COLUMNS = [
 
 export default function TaskBoard() {
   const selectedAgent = useAppStore((s) => s.selectedAgent)
+  const realtimeMessages = useAppStore((s) => s.realtimeMessages)
   const addNotification = useAppStore((s) => s.addNotification)
   const [tasks, setTasks] = useState([])
   const [selectedTask, setSelectedTask] = useState(null)
@@ -56,6 +57,13 @@ export default function TaskBoard() {
       requestGeneration.current += 1
     }
   }, [fetchTasks])
+
+  useEffect(() => {
+    const newest = realtimeMessages[0]
+    if (newest && ['command', 'task.progress', 'result'].includes(newest.type)) {
+      fetchTasks()
+    }
+  }, [fetchTasks, realtimeMessages])
 
   const handleSelectTask = async (task) => {
     setSelectedTask(task)
@@ -94,7 +102,12 @@ export default function TaskBoard() {
           {COLUMNS.map((col) => (
             <div
               key={col.key}
-              className="w-44 md:w-56 shrink-0 bg-surface/50 rounded-lg"
+              className={clsx(
+                'w-[calc(100vw-1.5rem)] md:w-56 shrink-0 bg-surface/50 rounded-lg',
+                grouped[col.key].length > 0
+                  ? 'order-first md:order-none'
+                  : 'order-last md:order-none'
+              )}
             >
               <div className="flex items-center gap-2 p-2 border-b border-surface-200">
                 <span className={clsx('text-xs font-medium', col.color)}>

@@ -1,6 +1,10 @@
 const WebSocket = require('ws');
 
-const WS_BASE_URL = process.env.WS_BASE_URL || 'ws://localhost:18000/ws';
+if (!process.env.WS_BASE_URL) {
+  throw new Error('WS_BASE_URL is required');
+}
+
+const WS_BASE_URL = process.env.WS_BASE_URL;
 
 class TestWSClient {
   constructor() {

@@ -26,6 +26,7 @@ const useAppStore = create((set, get) => ({
 
   // Real-time messages — canonical envelopes
   realtimeMessages: [],
+  trackedTaskId: null,
   wsConnected: false,
 
   // Filters
@@ -118,6 +119,8 @@ const useAppStore = create((set, get) => ({
         pendingCommands: pending,
       }
     }),
+
+  setTrackedTaskId: (taskId) => set({ trackedTaskId: taskId }),
 
   // Phase 2.5 — Streaming bubble reducers.
   // Synthetic streaming bubbles live in the existing realtimeMessages array

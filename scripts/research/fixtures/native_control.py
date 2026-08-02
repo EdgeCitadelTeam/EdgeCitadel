@@ -266,6 +266,53 @@ def _emit_native_event(
     )
 
 
+async def _wait_for_terminal_release(
+    task_id: str,
+    command_body: str,
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Hold one explicitly armed UUIDv4 command until the evidence runner releases it."""
+    configured_directory = os.environ.get("EC_TERMINAL_RELEASE_DIR")
+    if configured_directory is None:
+        return
+    try:
+        release_directory = Path(configured_directory).resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError("invalid terminal release directory") from error
+    if not release_directory.is_dir():
+        raise RuntimeError("invalid terminal release directory")
+    try:
+        nonce = uuid.UUID(command_body)
+    except ValueError:
+        return
+    if nonce.version != 4 or str(nonce) != command_body:
+        return
+    try:
+        parsed_task_id = uuid.UUID(task_id)
+    except ValueError as error:
+        raise RuntimeError("invalid terminal release task id") from error
+    if parsed_task_id.version != 4 or str(parsed_task_id) != task_id:
+        raise RuntimeError("invalid terminal release task id")
+    hold_path = release_directory / f"{command_body}.hold"
+    release_path = release_directory / f"{task_id}.release"
+    try:
+        hold_status = hold_path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(hold_status.st_mode):
+        raise RuntimeError("invalid terminal release hold")
+    while True:
+        try:
+            release_status = release_path.lstat()
+        except FileNotFoundError:
+            await sleep(0.025)
+            continue
+        if not stat.S_ISREG(release_status.st_mode):
+            raise RuntimeError("invalid terminal release signal")
+        return
+
+
 class _NativeHandler:
     def __init__(
         self,
@@ -312,6 +359,7 @@ class _NativeHandler:
         if self._config.behavior == "echo":
             publication = await context.publish_progress(task_id, body="working")
             _require_accepted(publication, publication.envelope_id, "progress")
+            await _wait_for_terminal_release(task_id, body, sleep=self._sleep)
             await self._sleep(self._config.delay_ms / 1000)
         elif self._config.behavior == "delegate":
             publication = await context.publish_progress(task_id, body="working")

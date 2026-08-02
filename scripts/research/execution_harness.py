@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
 from adapters._common.task_publisher import EventSink
@@ -26,8 +26,10 @@ class _FixtureRunner(Protocol):
     ) -> None: ...
 
 
-class _EventBuffer(EventSink, Protocol):
+class _EventBuffer(Protocol):
     events: list[Mapping[str, object]]
+
+    def emit(self, event: Mapping[str, object]) -> None: ...
 
 
 class CollectingEventSink:
@@ -172,6 +174,8 @@ async def execute_cell(
     *,
     transport_factory: TransportFactory = build_transport,
     fixture_runner: _FixtureRunner = run_fixture,
+    before_trial: Callable[[], Awaitable[None]] | None = None,
+    after_trial: Callable[[], Awaitable[None]] | None = None,
 ) -> TrialObservation:
     """Run one declared cell with a ready native fixture, then close everything."""
     if cell.mode != config.mode:
@@ -180,13 +184,17 @@ async def execute_cell(
     fixture_task = asyncio.create_task(fixture_runner(config, transport, event_sink))
     try:
         await _wait_fixture_ready(event_sink, config.agent_id)
-        return await run_cell(
+        observation = await run_cell(
             cell,
             transport,
             {"sender_id": "requester-1", "worker_id": config.agent_id},
             observers,
             event_sink,
+            before_trial=before_trial,
         )
+        if after_trial is not None:
+            await after_trial()
+        return observation
     finally:
         fixture_task.cancel()
         try:

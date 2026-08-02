@@ -2,9 +2,12 @@
   "name": "edgecitadel-e2e",
   "version": "1.0.0",
   "private": true,
-  "description": "E2E tests for OpenClaw Swarm Control Dashboard",
+  "description": "Deterministic end-to-end tests for the EdgeCitadel dashboard",
   "scripts": {
-    "test": "npx playwright test",
+    "test": "node run-isolated.js --config playwright.config.js",
+    "test:stack-unit": "node --test helpers/stack-config.spec.js helpers/owned-stack.spec.js",
+    "test:stack-integration": "node --test --test-concurrency=1 helpers/lifecycle.integration.spec.js",
+    "test:clean-checkout": "node helpers/clean-checkout.js",
     "test:headed": "npx playwright test --headed",
     "test:debug": "npx playwright test --debug",
     "report": "npx playwright show-report"

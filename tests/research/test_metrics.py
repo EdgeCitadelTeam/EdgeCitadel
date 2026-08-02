@@ -92,6 +92,38 @@ def test_idle_calibration_is_exactly_two_seconds_with_the_same_sampling_path() -
     assert len(window.sample_monotonic_ns) == 21
 
 
+def test_active_session_finishes_at_an_arbitrary_terminal_observation() -> None:
+    components = ("controller",)
+    sampler = ResourceSampler(
+        _Reader(
+            [
+                {"controller": _counter(cpu=1.0, rss=100, rx=10)},
+                {"controller": _counter(cpu=1.1, rss=200, rx=20)},
+                {"controller": _counter(cpu=1.2, rss=300, rx=40)},
+            ]
+        ),
+        clock := _Clock(),
+    )
+
+    session = sampler.start_active_window(components)
+    clock.sleep_ns(100_000_000)
+    session.sample_due()
+    clock.sleep_ns(30_000_000)
+    window = session.finish(outcome="completed")
+
+    assert window.start_monotonic_ns == 0
+    assert window.end_monotonic_ns == 130_000_000
+    assert window.sample_monotonic_ns == (0, 100_000_000, 130_000_000)
+    assert [sample["controller"].rss_bytes for sample in window.component_samples] == [
+        100,
+        200,
+        300,
+    ]
+    assert window.cpu_seconds == pytest.approx(0.2)
+    assert window.peak_rss_bytes == 300
+    assert window.rx_bytes == 30
+
+
 def test_component_membership_mismatch_invalidates_comparison() -> None:
     clock = _Clock()
     sampler = ResourceSampler(
@@ -101,6 +133,39 @@ def test_component_membership_mismatch_invalidates_comparison() -> None:
 
     with pytest.raises(ValueError, match="component membership"):
         sampler.sample_window(("controller", "worker"), duration_ns=100_000_000)
+
+
+def test_counter_regression_invalidates_a_resource_window() -> None:
+    sampler = ResourceSampler(
+        _Reader(
+            [
+                {"controller": _counter(cpu=1.0, rx=10)},
+                {"controller": _counter(cpu=0.9, rx=9)},
+            ]
+        ),
+        _Clock(),
+    )
+
+    with pytest.raises(ValueError, match="counters regressed"):
+        sampler.sample_window(("controller",), duration_ns=100_000_000)
+
+
+def test_partial_measurement_coverage_never_validates_cost_claims() -> None:
+    sampler = ResourceSampler(
+        _Reader(
+            [
+                {"controller": _counter(cpu=1.0)},
+                {"controller": _counter(cpu=1.1)},
+            ]
+        ),
+        _Clock(),
+        metric_coverage=("cpu_seconds", "peak_rss_bytes"),
+    )
+
+    window = sampler.sample_window(("controller",), duration_ns=100_000_000)
+
+    assert window.metric_coverage == ("cpu_seconds", "peak_rss_bytes")
+    assert window.cost_claims_valid is False
 
 
 def test_failed_window_retains_costs_and_sampler_overhead_invalidates_claims() -> None:

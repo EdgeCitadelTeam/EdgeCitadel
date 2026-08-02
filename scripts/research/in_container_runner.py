@@ -35,6 +35,7 @@ from scripts.research.fixtures.native_control import (
     runtime_endpoints,
 )
 from scripts.research.modes.base import Mode, TaskTransport
+from scripts.research.trial_timing import TrialWindowSignal
 from scripts.research.workload_matrix import (
     MatrixCell,
     TrialObservation,
@@ -146,6 +147,7 @@ async def run_direct_cell(
     config: NativeControlConfig,
     endpoints: Mapping[str, str],
     token: str,
+    trial_window: TrialWindowSignal | None = None,
 ) -> tuple[TrialObservation, tuple[Mapping[str, object], ...]]:
     event_sink = CollectingEventSink()
     configured, observers = prepare_direct_execution(cell, config, event_sink)
@@ -170,8 +172,24 @@ async def run_direct_cell(
                 coordinator_restart,
             )
         ),
+        before_trial=(
+            trial_window.await_start_acknowledgement if trial_window is not None else None
+        ),
+        after_trial=(
+            trial_window.await_end_acknowledgement if trial_window is not None else None
+        ),
     )
-    return observation, tuple(event_sink.events)
+    events = tuple(event_sink.events)
+    if cell.workload != "W6c":
+        handler_attempts = sum(
+            event.get("event") == "fixture.handler_started" for event in events
+        )
+        observation = replace(
+            observation,
+            executions=handler_attempts,
+            handler_attempts=handler_attempts,
+        )
+    return observation, events
 
 
 async def run_external_cell(
@@ -179,6 +197,7 @@ async def run_external_cell(
     config: NativeControlConfig,
     endpoints: Mapping[str, str],
     token: str,
+    trial_window: TrialWindowSignal | None = None,
 ) -> tuple[TrialObservation, tuple[Mapping[str, object], ...]]:
     """Run a workload whose fixture process is owned by the compose supervisor."""
     if cell.mode != config.mode:
@@ -207,7 +226,14 @@ async def run_external_cell(
             {"sender_id": "requester-1", "worker_id": config.agent_id},
             observers,
             event_sink,
+            before_trial=(
+                trial_window.await_start_acknowledgement
+                if trial_window is not None
+                else None
+            ),
         )
+        if trial_window is not None:
+            await trial_window.await_end_acknowledgement()
     finally:
         await transport.close()
     return observation, tuple(event_sink.events)
@@ -246,11 +272,14 @@ async def _main(argv: Sequence[str], environ: Mapping[str, str]) -> int:
             ablation=arguments.ablation,
             timeout_seconds=timeout_seconds,
         )
+        trial_window = TrialWindowSignal(Path("/control"))
         if cell.workload in _DIRECT_WORKLOADS:
-            observation, events = await run_direct_cell(cell, config, endpoints, token)
+            observation, events = await run_direct_cell(
+                cell, config, endpoints, token, trial_window
+            )
         else:
             observation, events = await run_external_cell(
-                cell, config, endpoints, token
+                cell, config, endpoints, token, trial_window
             )
     except (OSError, ValueError, RuntimeError) as error:
         print(f"runner failed: {error}", file=sys.stderr)

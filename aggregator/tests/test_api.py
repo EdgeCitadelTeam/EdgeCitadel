@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
@@ -13,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from aggregator import validator as validator_module
 from aggregator.main import make_app
+from aggregator.models import CommandRequest
 from aggregator.validator import EnvelopeValidator
 
 
@@ -112,11 +115,13 @@ def test_post_command_correlation_preserves_actual_producer_shape(
         "sender_id",
         "recipient_id",
         "task_id",
+        "context_id",
+        "hop_count",
         "timestamp",
         "payload",
     }
-    assert "context_id" not in env
-    assert "hop_count" not in env
+    assert env["context_id"] == env["task_id"]
+    assert env["hop_count"] == 0
 
     validator = EnvelopeValidator(envelope_schema_path, card_schema_path)
     validator.validate_envelope(env)
@@ -155,6 +160,26 @@ def test_get_queue_requires_jetstream(client):
     r = client.get("/api/agents/shell-1/queue")
     # In test mode, returns 503 when JetStream not wired
     assert r.status_code in (200, 503)
+
+
+@pytest.mark.asyncio
+async def test_queue_uses_the_agent_inbox_subject_not_a_legacy_durable_name():
+    from aggregator.main import _agent_inbox_consumer
+
+    matching = SimpleNamespace(
+        config=SimpleNamespace(filter_subject="agents.shell-1.inbox"),
+        num_pending=0,
+        num_ack_pending=0,
+    )
+    ignored = SimpleNamespace(
+        config=SimpleNamespace(filter_subject="agents.other.inbox"),
+    )
+    js = SimpleNamespace(consumers_info=AsyncMock(return_value=[ignored, matching]))
+
+    consumer = await _agent_inbox_consumer(js, "shell-1")
+
+    assert consumer is matching
+    js.consumers_info.assert_awaited_once_with("AGENT_INBOX")
 
 
 def test_openclaw_login_returns_token(client):
@@ -196,3 +221,71 @@ def test_messages_exposes_replay_and_observation_metadata(client):
     assert rows[0]["duplicate_count"] == 1
     assert isinstance(rows[0]["observation_index"], int)
     assert rows[0]["observation_index"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_context", "expected_context"),
+    [
+        (None, None),
+        (
+            "6e088543-c9de-4459-a0fe-2191d20dfba1",
+            "6e088543-c9de-4459-a0fe-2191d20dfba1",
+        ),
+    ],
+)
+async def test_direct_command_publish_has_complete_correlation(
+    requested_context,
+    expected_context,
+):
+    from aggregator.main import (
+        _build_direct_command_envelope,
+        _publish_direct_command,
+    )
+
+    router = SimpleNamespace(
+        js=SimpleNamespace(publish=AsyncMock()),
+        nc=SimpleNamespace(publish=AsyncMock()),
+    )
+    request = CommandRequest(body="operator-nonce", context_id=requested_context)
+    envelope = _build_direct_command_envelope(
+        agent_id="shell-1",
+        sender_id="aggregator",
+        request=request,
+    )
+    await _publish_direct_command(router, envelope)
+
+    assert UUID(envelope["id"]).version == 4
+    assert UUID(envelope["task_id"]).version == 4
+    assert UUID(envelope["context_id"]).version == 4
+    if expected_context is None:
+        assert envelope["context_id"] == envelope["task_id"]
+    else:
+        assert envelope["context_id"] == expected_context
+    assert envelope["hop_count"] == 0
+    assert envelope["payload"] == {"body": "operator-nonce"}
+
+    inbox = router.js.publish.await_args
+    assert inbox.args[0] == "agents.shell-1.inbox"
+    assert inbox.kwargs["headers"] == {"Nats-Msg-Id": envelope["id"]}
+    outbox = router.nc.publish.await_args
+    assert outbox.args[0] == "agents.aggregator.outbox"
+    assert json.loads(inbox.args[1]) == envelope
+    assert json.loads(outbox.args[1]) == envelope
+
+
+@pytest.mark.parametrize(
+    "bad_context",
+    [
+        "not-a-uuid",
+        "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+        "6E088543-C9DE-4459-A0FE-2191D20DFBA1",
+    ],
+)
+def test_direct_command_rejects_non_uuid4_context(client, bad_context):
+    response = client.post(
+        "/api/command/shell-1",
+        json={"body": "operator-nonce", "context_id": bad_context},
+    )
+
+    assert response.status_code == 422
