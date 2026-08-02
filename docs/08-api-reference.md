@@ -162,8 +162,9 @@ Returns just the A2A Agent Card payload (no aggregator metadata).
 
 ## GET /api/agents/{id}/queue
 
-JetStream consumer info for `AGENT_INBOX` / `{id}_inbox`. Used by the
-dashboard to surface inbox depth and ack pressure.
+JetStream consumer info for the unique `AGENT_INBOX` consumer whose filter is
+`agents.{id}.inbox`. Used by the dashboard to surface inbox depth and ack
+pressure without depending on a producer-specific durable name.
 
 **Response 200**
 ```json

@@ -1,10 +1,11 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import useAppStore from '../stores/appStore'
+import { applyRealtimeEvent } from './realtimeEvents'
 
 const MAX_RECONNECT_DELAY = 30000
 const PING_INTERVAL = 15000
 
-export default function useWebSocket(agentName = null) {
+export default function useWebSocket() {
   const wsRef = useRef(null)
   const reconnectDelay = useRef(1000)
   const pingTimer = useRef(null)
@@ -12,143 +13,98 @@ export default function useWebSocket(agentName = null) {
 
   const setWsConnected = useAppStore((s) => s.setWsConnected)
   const addRealtimeMessage = useAppStore((s) => s.addRealtimeMessage)
+  const appendStreamDelta = useAppStore((s) => s.appendStreamDelta)
+  const finalizeStream = useAppStore((s) => s.finalizeStream)
   const updateAgentStatus = useAppStore((s) => s.updateAgentStatus)
+  const upsertAgent = useAppStore((s) => s.upsertAgent)
+  const upsertRegistryRow = useAppStore((s) => s.upsertRegistryRow)
+  const removeAgent = useAppStore((s) => s.removeAgent)
   const addNotification = useAppStore((s) => s.addNotification)
+  const actions = useMemo(() => ({
+    addRealtimeMessage,
+    appendStreamDelta,
+    finalizeStream,
+    updateAgentStatus,
+    upsertAgent,
+    upsertRegistryRow,
+    removeAgent,
+    addNotification,
+  }), [
+    addRealtimeMessage,
+    appendStreamDelta,
+    finalizeStream,
+    updateAgentStatus,
+    upsertAgent,
+    upsertRegistryRow,
+    removeAgent,
+    addNotification,
+  ])
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host
-    const path = agentName ? `/ws/agent/${agentName}` : '/ws/stream'
-    const url = `${protocol}//${host}${path}`
-
+    const url = `${protocol}//${window.location.host}/ws/stream`
     const ws = new WebSocket(url)
     wsRef.current = ws
 
     ws.onopen = () => {
       setWsConnected(true)
       reconnectDelay.current = 1000
-
-      // Start heartbeat ping
       pingTimer.current = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send('ping')
-        }
+        if (ws.readyState === WebSocket.OPEN) ws.send('ping')
       }, PING_INTERVAL)
     }
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data)
-
-        if (data.event === 'message') {
-          const env = data.data
-          if (env?.type === 'task.progress') {
-            // Canonical streaming chunk lives at payload.message (per
-            // adapters/_common/pull_consumer.py:Context.publish_progress).
-            // Gemma redundantly mirrors it to payload.delta; non-Gemma
-            // adapters (e.g. the Hermes bridge) only set payload.message.
-            const delta = env.payload?.message ?? env.payload?.delta ?? ''
-            const skill = env.payload?.skill_id
-            useAppStore.getState().appendStreamDelta(
-              env.task_id, env.sender_id, delta, skill)
-            return
-          }
-          if (env?.type === 'result' && env?.task_id) {
-            useAppStore.getState().finalizeStream(env.task_id, env)
-            // fall through to existing addRealtimeMessage path so
-            // the canonical result is added to the regular feed too
-          }
-          // Skip heartbeat/register messages from chat display
-          const msgType = env?.type
-          if (msgType !== 'heartbeat' && msgType !== 'register') {
-            addRealtimeMessage(env)
-          }
-        } else if (data.event === 'agent_status_change') {
-          updateAgentStatus(data.data.agent_id, data.data.agent_state || data.data.status)
-          if (data.data.status === 'offline') {
-            addNotification({
-              type: 'warning',
-              title: 'Agent Offline',
-              message: `${data.data.agent_id} went offline`,
-            })
-          }
-        } else if (data.event === 'agent_registered') {
-          addNotification({
-            type: 'info',
-            title: 'Agent Registered',
-            message: `${data.data.agent_id} connected`,
+        const frame = JSON.parse(event.data)
+        applyRealtimeEvent(frame, actions)
+        if (frame.event === 'log' && frame.data?.level === 'ERROR') {
+          actions.addNotification({
+            type: 'error',
+            title: 'Error',
+            message: frame.data.message,
           })
-        } else if (data.event === 'agent_deleted') {
-          // Registry tab listens to this via the store
-          const removeRow = useAppStore.getState().removeRegistryRow
-          removeRow(data.data.agent_id)
-        } else if (data.event === 'log') {
-          if (data.data?.level === 'ERROR') {
-            addNotification({
-              type: 'error',
-              title: 'Error',
-              message: data.data.message,
-            })
-          }
         }
       } catch {
-        // Ignore non-JSON messages
+        // Ignore non-JSON messages.
       }
     }
 
     ws.onclose = () => {
       setWsConnected(false)
       clearInterval(pingTimer.current)
-
-      // Exponential backoff reconnect
       reconnectTimer.current = setTimeout(() => {
-        reconnectDelay.current = Math.min(
-          reconnectDelay.current * 2,
-          MAX_RECONNECT_DELAY
-        )
+        reconnectDelay.current = Math.min(reconnectDelay.current * 2, MAX_RECONNECT_DELAY)
         connect()
       }, reconnectDelay.current)
     }
 
-    ws.onerror = () => {
-      ws.close()
-    }
-  }, [agentName, setWsConnected, addRealtimeMessage, updateAgentStatus, addNotification])
+    ws.onerror = () => ws.close()
+  }, [actions, setWsConnected])
 
   useEffect(() => {
     connect()
-
-    // Reconnect on tab visibility change and network recovery
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && wsRef.current?.readyState !== WebSocket.OPEN) {
-        connect()
-      }
+      if (document.visibilityState === 'visible' && wsRef.current?.readyState !== WebSocket.OPEN) connect()
     }
     const handleOnline = () => {
-      if (wsRef.current?.readyState !== WebSocket.OPEN) {
-        connect()
-      }
+      if (wsRef.current?.readyState !== WebSocket.OPEN) connect()
     }
     document.addEventListener('visibilitychange', handleVisibility)
     window.addEventListener('online', handleOnline)
-
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility)
       window.removeEventListener('online', handleOnline)
       clearInterval(pingTimer.current)
       clearTimeout(reconnectTimer.current)
-      if (wsRef.current) {
-        wsRef.current.close()
-      }
+      if (wsRef.current) wsRef.current.close()
     }
   }, [connect])
 
   const sendMessage = useCallback((data) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data))
-    }
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(data))
   }, [])
 
   return { sendMessage }

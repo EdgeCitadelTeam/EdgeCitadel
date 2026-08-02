@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRegisterEnvelope, buildHeartbeatEnvelope, validateEnvelope } from '../src/nats-session.js';
+import {
+  buildCommandEnvelope,
+  buildHeartbeatEnvelope,
+  buildRegisterEnvelope,
+  validateEnvelope
+} from '../src/nats-session.js';
 
 test('register envelope has canonical shape', () => {
   const env = buildRegisterEnvelope({
@@ -39,5 +44,30 @@ test('accepts valid command envelope', () => {
     timestamp: '2026-04-23T10:00:00.000Z',
     payload: { body: 'echo hi' }
   });
+  assert.equal(result.ok, true, result.error);
+});
+
+test('command correlation preserves actual producer shape', () => {
+  const env = JSON.parse(JSON.stringify(
+    buildCommandEnvelope({
+      senderId: 'openclaw-abc',
+      recipientId: 'shell-1',
+      body: 'printf spine:nonce'
+    })
+  ));
+
+  assert.deepEqual(Object.keys(env).sort(), [
+    'id',
+    'payload',
+    'recipient_id',
+    'sender_id',
+    'task_id',
+    'timestamp',
+    'type',
+    'v'
+  ]);
+  assert.equal('context_id' in env, false);
+  assert.equal('hop_count' in env, false);
+  const result = validateEnvelope(env);
   assert.equal(result.ok, true, result.error);
 });

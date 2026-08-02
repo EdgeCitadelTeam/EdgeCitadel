@@ -1,6 +1,10 @@
 const axios = require('axios');
 
-const BASE_URL = process.env.API_BASE_URL || 'http://localhost:18000';
+if (!process.env.AGG_URL) {
+  throw new Error('AGG_URL is required');
+}
+
+const BASE_URL = `${process.env.AGG_URL}/api`;
 
 class TestAPIClient {
   constructor() {

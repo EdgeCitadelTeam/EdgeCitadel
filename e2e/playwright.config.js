@@ -1,28 +1,23 @@
 // @ts-check
 const { defineConfig } = require('@playwright/test');
 
+if (!process.env.APP_URL || !process.env.AGG_URL) {
+  throw new Error('APP_URL and AGG_URL are required');
+}
+
 module.exports = defineConfig({
   testDir: './tests',
-  fullyParallel: true,
-  workers: 3,
-  retries: 1,
+  fullyParallel: false,
+  workers: 1,
+  retries: 0,
   timeout: 60_000,
-  expect: {
-    timeout: 15_000,
-  },
-  reporter: [
-    ['html', { open: 'never' }],
-    ['list'],
-  ],
-  globalSetup: './global-setup.js',
-  globalTeardown: './global-teardown.js',
   use: {
-    baseURL: 'http://localhost:13000',
-    trace: 'on-first-retry',
-    screenshot: 'only-on-failure',
+    baseURL: process.env.APP_URL,
+    trace: 'off',
+    video: 'off',
+    screenshot: 'off',
     actionTimeout: 10_000,
     navigationTimeout: 30_000,
-    storageState: './test-storage-state.json',
   },
   projects: [
     {

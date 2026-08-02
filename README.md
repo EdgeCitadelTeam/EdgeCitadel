@@ -185,6 +185,7 @@ This repo is set up for Claude Code.
 | Task Management | [docs/07-task-management.md](docs/07-task-management.md) |
 | API Reference | [docs/08-api-reference.md](docs/08-api-reference.md) |
 | Monitoring | [docs/09-monitoring.md](docs/09-monitoring.md) |
+| Research Artifact | [docs/research/artifact.md](docs/research/artifact.md) |
 
 ## Development
 

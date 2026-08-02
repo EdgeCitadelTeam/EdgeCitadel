@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Radio, Activity, AlertTriangle, CheckCircle, Moon, Sun, Menu, FlaskConical } from 'lucide-react'
+import { Radio, Activity, AlertTriangle, CheckCircle, Menu, FlaskConical } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from '../stores/appStore'
 import { api } from '../api/client'
@@ -9,8 +9,6 @@ export default function HeaderBar() {
   const wsConnected = useAppStore((s) => s.wsConnected)
   const systemStatus = useAppStore((s) => s.systemStatus)
   const setSystemStatus = useAppStore((s) => s.setSystemStatus)
-  const darkMode = useAppStore((s) => s.darkMode)
-  const setDarkMode = useAppStore((s) => s.setDarkMode)
   const showTestAgents = useAppStore((s) => s.showTestAgents)
   const setShowTestAgents = useAppStore((s) => s.setShowTestAgents)
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
@@ -32,18 +30,13 @@ export default function HeaderBar() {
     return () => clearInterval(interval)
   }, [setSystemStatus])
 
-  const toggleDarkMode = () => {
-    const next = !darkMode
-    setDarkMode(next)
-    document.documentElement.classList.toggle('dark', next)
-  }
-
   return (
     <header className="h-12 bg-surface-50 border-b border-surface-200 px-3 md:px-4 flex items-center justify-between shrink-0">
       <div className="flex items-center gap-2 md:gap-3 min-w-0">
         {/* Hamburger menu - mobile only */}
         <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
+          aria-label="Open agent list"
           className="p-1 hover:bg-surface-200 rounded transition-colors md:hidden"
         >
           <Menu size={18} className="text-gray-400" />
@@ -51,8 +44,7 @@ export default function HeaderBar() {
 
         <Radio size={18} className="text-accent shrink-0" />
         <h1 className="text-sm font-semibold text-gray-100 truncate">
-          <span className="hidden sm:inline">OpenClaw Swarm Control</span>
-          <span className="sm:hidden">OpenClaw</span>
+          EdgeCitadel
         </h1>
         <StatusBadge
           status={wsConnected ? 'online' : 'error'}
@@ -87,6 +79,7 @@ export default function HeaderBar() {
         {/* Test data toggle */}
         <button
           onClick={() => setShowTestAgents(!showTestAgents)}
+          aria-label={showTestAgents ? 'Hide test data' : 'Show test data'}
           className={clsx(
             'flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors',
             showTestAgents
@@ -97,13 +90,6 @@ export default function HeaderBar() {
         >
           <FlaskConical size={12} />
           <span className="hidden sm:inline">{showTestAgents ? 'Test' : 'No Test'}</span>
-        </button>
-
-        <button
-          onClick={toggleDarkMode}
-          className="p-1 hover:bg-surface-200 rounded transition-colors"
-        >
-          {darkMode ? <Sun size={14} /> : <Moon size={14} />}
         </button>
       </div>
     </header>

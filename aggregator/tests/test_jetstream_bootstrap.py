@@ -1,31 +1,43 @@
-"""Requires a live NATS with JetStream on $NATS_URL. Skipped if unreachable."""
-import os, pytest, asyncio
+"""Explicitly opt-in JetStream integration tests with an owned NATS server."""
+
+import os
+import secrets
+
+import pytest
 from nats.aio.client import Client as NATS
-from aggregator.jetstream_bootstrap import ensure_stream, ensure_consumer
+
+from aggregator.jetstream_bootstrap import ensure_consumer, ensure_stream
+from tests.research.nats_server import NatsServer
 
 
-NATS_URL = os.environ.get("NATS_URL_TEST", "nats://localhost:4222")
-NATS_TOKEN = os.environ.get("NATS_TOKEN_TEST", os.environ.get("NATS_TOKEN", ""))
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_JETSTREAM_INTEGRATION") != "1",
+    reason="set RUN_JETSTREAM_INTEGRATION=1 to run owned JetStream integration",
+)
+
+
+def test_jetstream_integration_is_explicitly_opted_in():
+    assert os.environ["RUN_JETSTREAM_INTEGRATION"] == "1"
 
 
 @pytest.fixture
 async def js_client():
+    server = NatsServer(token=secrets.token_hex(32), jetstream=True).start()
     nc = NATS()
     try:
-        await nc.connect(servers=[NATS_URL], token=NATS_TOKEN,
-                         connect_timeout=1)
-    except Exception:
-        pytest.skip("NATS not reachable; set NATS_URL_TEST to run")
-    js = nc.jetstream()
-    yield js
-    # cleanup
-    try:
-        await js.delete_consumer("AGENT_INBOX", "shell-test_inbox")
-    except Exception: pass
-    try:
-        await js.delete_stream("AGENT_INBOX")
-    except Exception: pass
-    await nc.drain()
+        await nc.connect(
+            servers=[server.url],
+            token=server.token,
+            connect_timeout=1,
+            allow_reconnect=False,
+            max_reconnect_attempts=0,
+        )
+        yield nc.jetstream()
+    finally:
+        try:
+            await nc.drain()
+        finally:
+            server.close()
 
 
 async def test_ensure_stream_idempotent(js_client):
@@ -39,7 +51,7 @@ async def test_ensure_consumer_serialization(js_client):
     await ensure_stream(js_client)
     ci = await ensure_consumer(js_client, "shell-test", ack_wait_sec=30)
     assert ci.config.max_ack_pending == 1
-    assert ci.config.ack_wait == 30 * 1_000_000_000  # ns in nats-py
+    assert ci.config.ack_wait == 30
     assert ci.config.filter_subject == "agents.shell-test.inbox"
 
 
@@ -48,8 +60,7 @@ async def test_stream_config_matches_spec(js_client):
     cfg = info.config
     assert cfg.name == "AGENT_INBOX"
     assert cfg.subjects == ["agents.*.inbox"]
-    assert cfg.retention.name in ("workqueue", "WorkQueuePolicy",
-                                  "WorkQueue")
-    assert cfg.discard.name in ("new", "DiscardNew")
+    assert str(cfg.retention).lower() in ("workqueue", "workqueuepolicy")
+    assert str(cfg.discard).lower() in ("new", "discardnew")
     assert cfg.max_msg_size == 1024 * 1024
-    assert cfg.duplicate_window == 5 * 60 * 1_000_000_000
+    assert cfg.duplicate_window == 5 * 60

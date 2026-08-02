@@ -76,6 +76,8 @@ export default function AgentRegistry() {
   }, [])
 
   const visibleRows = useMemo(() => {
+    // Recompute relative heartbeat ages whenever the local clock advances.
+    void tick
     let rows = registry
     if (!showTestAgents) {
       rows = rows.filter((r) => (r.deployment || 'default') !== 'test')

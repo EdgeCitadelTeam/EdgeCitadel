@@ -52,6 +52,8 @@ Thumbs.db
 test-artifacts/
 e2e/test-results/
 e2e/playwright-report/
+tmp/e2e/
+tmp/operator-evidence*/
 
 # Raw video (keep only final mp4/gif)
 docs/demo-raw.webm

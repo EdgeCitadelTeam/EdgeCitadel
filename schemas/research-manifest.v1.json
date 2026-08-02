@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/research-manifest.v1.json",
+  "title": "EdgeCitadel Research Evidence Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "evidence_kind", "status", "run_id", "source", "command", "timing", "host", "dependencies", "images", "compose_config_sha256", "schemas", "cleanup", "artifacts", "manifest_sha256"],
+  "properties": {
+    "schema_version": {"const": "research-manifest.v1"},
+    "evidence_kind": {"enum": ["benchmark", "operator", "lab"]},
+    "status": {"enum": ["PASS", "INVALID"]},
+    "run_id": {"type": "string", "minLength": 1},
+    "source": {"type": "object", "additionalProperties": false, "required": ["commit", "git_dirty", "source_sha256", "paths"], "properties": {"commit": {"type": "string", "minLength": 1}, "git_dirty": {"type": "boolean"}, "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "paths": {"type": "array", "items": {"type": "string"}}}},
+    "command": {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "array", "items": {"type": "array", "minItems": 1, "items": {"type": "string"}}}]},
+    "timing": {"type": "object"},
+    "host": {"type": "object"},
+    "dependencies": {"type": "object"},
+    "images": {"type": "object"},
+    "compose_config_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "schemas": {"type": "object"},
+    "cleanup": {"type": "object", "required": ["completed"], "properties": {"completed": {"const": true}}},
+    "artifacts": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "campaign_id": {"type": "string", "minLength": 1},
+    "profile": {"type": "string", "minLength": 1},
+    "transport_config": {"type": "object"},
+    "workload_config": {"type": "object"},
+    "metric_contract": {"type": "object"},
+    "campaign_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["block", "measured", "config_sha256", "schedule_sha256", "campaign_sha256"],
+      "properties": {
+        "block": {"type": "integer", "minimum": 0},
+        "measured": {"type": "boolean"},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "schedule_sha256": {"$ref": "#/$defs/sha256"},
+        "campaign_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "task": {"type": "object"},
+    "media": {"type": "object"},
+    "lab_variant": {"enum": ["lifecycle", "operator-smoke", "operator-evidence"]},
+    "controller": {"type": "object"},
+    "nodes": {"type": "array"},
+    "observations": {"type": "object"},
+    "operator_evidence": {"type": "object"},
+    "projects": {"type": "object"}
+  },
+  "$defs": {
+    "uuidV4": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "utcTimestamp": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"},
+    "artifactRef": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|/)\\.\\.(?:/|$)).+$"}, "sha256": {"$ref": "#/$defs/sha256"}}},
+    "ownedResource": {"type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": {"kind": {"enum": ["container", "network", "volume", "image"]}, "name": {"type": "string", "minLength": 1}}},
+    "labCleanup": {"type": "object", "additionalProperties": false, "required": ["completed", "attempted", "remaining", "owned_resources_removed", "foreign_resources_touched", "credential_removed", "artifact_state_removed", "artifact_scratch_removed", "artifact_recovery_record_removed", "completed_at"], "properties": {"completed": {"const": true}, "attempted": {"type": "array", "items": {"$ref": "#/$defs/ownedResource"}}, "remaining": {"type": "array", "items": {"$ref": "#/$defs/ownedResource"}}, "owned_resources_removed": {"type": "boolean"}, "foreign_resources_touched": {"type": "boolean"}, "credential_removed": {"type": "boolean"}, "artifact_state_removed": {"type": "boolean"}, "artifact_scratch_removed": {"type": "boolean"}, "artifact_recovery_record_removed": {"type": "boolean"}, "completed_at": {"$ref": "#/$defs/utcTimestamp"}}},
+    "labController": {"type": "object", "additionalProperties": false, "required": ["project", "bind_host", "advertised_host", "advertised_ip", "app_url", "nats_url", "monitor_url", "inventory_url", "declared_host_id", "machine_id_sha256", "hostname", "os_release", "architecture"], "properties": {"project": {"type": "string", "minLength": 1}, "bind_host": {"type": "string", "format": "ipv4"}, "advertised_host": {"type": "string", "minLength": 1}, "advertised_ip": {"type": "string", "format": "ipv4"}, "app_url": {"type": "string", "minLength": 1}, "nats_url": {"type": "string", "minLength": 1}, "monitor_url": {"type": "string", "minLength": 1}, "inventory_url": {"type": "string", "minLength": 1}, "declared_host_id": {"type": "string", "minLength": 1}, "machine_id_sha256": {"$ref": "#/$defs/sha256"}, "hostname": {"type": "string", "minLength": 1}, "os_release": {"type": "string", "minLength": 1}, "architecture": {"type": "string", "minLength": 1}}},
+    "networkPath": {"type": "object", "additionalProperties": false, "required": ["source_ip", "destination_ip", "interface", "route_output_sha256", "controller_dns_name"], "properties": {"source_ip": {"type": "string", "format": "ipv4"}, "destination_ip": {"type": "string", "format": "ipv4"}, "interface": {"type": "string", "minLength": 1}, "route_output_sha256": {"$ref": "#/$defs/sha256"}, "controller_dns_name": {"type": "string", "minLength": 1}}},
+    "labNode": {"type": "object", "additionalProperties": false, "required": ["agent_id", "qualified_agent_id", "reservation_id", "declared_host_id", "machine_id_sha256", "hostname", "os_release", "architecture", "fixture_image_id", "launcher_source_commit", "source_snapshot_sha256", "preflight_valid", "lifecycle_state", "server_observed_peer_ip", "network_path"], "properties": {"agent_id": {"type": "string", "minLength": 1}, "qualified_agent_id": {"type": "string", "minLength": 1}, "reservation_id": {"type": "string", "minLength": 1}, "declared_host_id": {"type": "string", "minLength": 1}, "machine_id_sha256": {"$ref": "#/$defs/sha256"}, "hostname": {"type": "string", "minLength": 1}, "os_release": {"type": "string", "minLength": 1}, "architecture": {"type": "string", "minLength": 1}, "fixture_image_id": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}, "launcher_source_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"}, "source_snapshot_sha256": {"$ref": "#/$defs/sha256"}, "preflight_valid": {"type": "boolean"}, "lifecycle_state": {"enum": ["starting", "active", "retained", "released", "stopped"]}, "server_observed_peer_ip": {"type": "string", "format": "ipv4"}, "network_path": {"$ref": "#/$defs/networkPath"}}},
+    "labObservations": {"type": "object", "additionalProperties": false, "required": ["reservation_events", "node_reports", "controller_commands", "playwright", "cleanup"], "properties": {"reservation_events": {"$ref": "#/$defs/artifactRef"}, "node_reports": {"$ref": "#/$defs/artifactRef"}, "controller_commands": {"$ref": "#/$defs/artifactRef"}, "playwright": {"type": "array", "items": {"$ref": "#/$defs/artifactRef"}}, "cleanup": {"$ref": "#/$defs/artifactRef"}}},
+    "operatorProject": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["task_id", "nonce", "command_body", "expected_output", "context_id", "hop_count", "command_envelope_id", "terminal_envelope_id", "progress_envelope_ids", "command_sender_id", "command_recipient_id", "terminal_sender_id", "terminal_recipient_id", "browser_name", "browser_version", "command_observation_index", "progress_observation_indices", "terminal_observation_index"],
+      "properties": {
+        "task_id": {"$ref": "#/$defs/uuidV4"},
+        "nonce": {"$ref": "#/$defs/uuidV4"},
+        "command_body": {"type": "string", "minLength": 1},
+        "expected_output": {"type": "string", "minLength": 1},
+        "context_id": {"$ref": "#/$defs/uuidV4"},
+        "hop_count": {"const": 0},
+        "command_envelope_id": {"type": "string", "minLength": 1},
+        "terminal_envelope_id": {"type": "string", "minLength": 1},
+        "progress_envelope_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "command_sender_id": {"const": "aggregator"},
+        "command_recipient_id": {"const": "shell-1"},
+        "terminal_sender_id": {"const": "shell-1"},
+        "terminal_recipient_id": {"const": "aggregator"},
+        "browser_name": {"const": "chromium"},
+        "browser_version": {"type": "string", "minLength": 1},
+        "command_observation_index": {"type": "integer", "minimum": 1},
+        "progress_observation_indices": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1}},
+        "terminal_observation_index": {"type": "integer", "minimum": 1}
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"evidence_kind": {"const": "benchmark"}}}, "then": {"required": ["campaign_id", "profile", "transport_config", "workload_config", "metric_contract"], "properties": {"command": {"type": "array", "items": {"type": "string"}}}, "not": {"anyOf": [{"required": ["lab_variant"]}, {"required": ["controller"]}, {"required": ["nodes"]}, {"required": ["observations"]}, {"required": ["operator_evidence"]}]}}},
+    {"if": {"properties": {"evidence_kind": {"const": "operator"}}, "required": ["evidence_kind"]}, "then": {"required": ["task", "media", "projects"], "properties": {"command": {"type": "array", "items": {"type": "string"}}, "projects": {"type": "object", "additionalProperties": false, "required": ["desktop", "mobile"], "properties": {"desktop": {"$ref": "#/$defs/operatorProject"}, "mobile": {"$ref": "#/$defs/operatorProject"}}}}, "not": {"anyOf": [{"required": ["lab_variant"]}, {"required": ["controller"]}, {"required": ["nodes"]}, {"required": ["observations"]}, {"required": ["operator_evidence"]}]}}},
+    {"if": {"properties": {"evidence_kind": {"const": "lab"}}, "required": ["evidence_kind"]}, "then": {
+      "required": ["lab_variant", "controller", "nodes", "observations"],
+      "not": {"anyOf": [
+        {"required": ["campaign_id"]}, {"required": ["profile"]},
+        {"required": ["transport_config"]}, {"required": ["workload_config"]},
+        {"required": ["metric_contract"]}, {"required": ["projects"]},
+        {"required": ["task"]}, {"required": ["media"]}
+      ]},
+      "properties": {
+        "command": {"type": "array", "minItems": 1, "items": {"type": "array", "minItems": 1, "items": {"type": "string"}}},
+        "timing": {"type": "object", "additionalProperties": false, "required": ["started_at", "completed_at"], "properties": {"started_at": {"$ref": "#/$defs/utcTimestamp"}, "completed_at": {"$ref": "#/$defs/utcTimestamp"}}},
+        "host": {"type": "object", "additionalProperties": false, "required": ["os", "architecture"], "properties": {"os": {"type": "string", "minLength": 1}, "architecture": {"type": "string", "minLength": 1}}},
+        "dependencies": {"type": "object", "additionalProperties": false, "required": ["python", "docker", "docker_compose", "git", "node", "npm", "playwright"], "properties": {"python": {"type": "string", "minLength": 1}, "docker": {"type": "string", "minLength": 1}, "docker_compose": {"type": "string", "minLength": 1}, "git": {"type": "string", "minLength": 1}, "node": {"type": "string", "minLength": 1}, "npm": {"type": "string", "minLength": 1}, "playwright": {"type": "string", "minLength": 1}}},
+        "images": {"type": "object", "additionalProperties": false, "required": ["nats", "aggregator", "dashboard", "nginx", "fixture"], "properties": {"nats": {"type": "string", "minLength": 1}, "aggregator": {"type": "string", "minLength": 1}, "dashboard": {"type": "string", "minLength": 1}, "nginx": {"type": "string", "minLength": 1}, "fixture": {"type": "string", "minLength": 1}}},
+        "schemas": {"type": "object", "additionalProperties": false, "required": ["manifest"], "properties": {"manifest": {"const": "schemas/research-manifest.v1.json"}}},
+        "cleanup": {"$ref": "#/$defs/labCleanup"},
+        "controller": {"$ref": "#/$defs/labController"},
+        "nodes": {"type": "array", "items": {"$ref": "#/$defs/labNode"}},
+        "observations": {"$ref": "#/$defs/labObservations"},
+        "operator_evidence": {"type": "object", "additionalProperties": false, "required": ["report"], "properties": {"report": {"$ref": "#/$defs/artifactRef"}}}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"const": "PASS"}}, "required": ["status"]}, "then": {"properties": {"images": {"properties": {"nats": {"pattern": "^[a-z0-9._/-]+@sha256:[a-f0-9]{64}$"}, "aggregator": {"pattern": "^sha256:[a-f0-9]{64}$"}, "dashboard": {"pattern": "^sha256:[a-f0-9]{64}$"}, "nginx": {"pattern": "^[a-z0-9._/-]+@sha256:[a-f0-9]{64}$"}, "fixture": {"pattern": "^sha256:[a-f0-9]{64}$"}}}}}},
+        {"if": {"properties": {"lab_variant": {"const": "lifecycle"}, "status": {"const": "PASS"}}, "required": ["lab_variant", "status"]}, "then": {"properties": {"nodes": {"minItems": 2}, "observations": {"properties": {"playwright": {"maxItems": 0}}}}, "not": {"required": ["operator_evidence"]}}},
+        {"if": {"properties": {"lab_variant": {"const": "operator-smoke"}, "status": {"const": "PASS"}}, "required": ["lab_variant", "status"]}, "then": {"properties": {"nodes": {"minItems": 1, "maxItems": 1}, "observations": {"properties": {"playwright": {"minItems": 1, "maxItems": 1}}}}, "not": {"required": ["operator_evidence"]}}},
+        {"if": {"properties": {"lab_variant": {"const": "operator-evidence"}, "status": {"const": "PASS"}}, "required": ["lab_variant", "status"]}, "then": {"required": ["operator_evidence"], "properties": {"nodes": {"minItems": 1, "maxItems": 1}, "observations": {"properties": {"playwright": {"minItems": 1, "maxItems": 1}}}}}}
+      ]
+    }}
+  ]
+}

@@ -38,7 +38,7 @@ export default function RegistryRow({ row, onClick, showTestAgents }) {
       <td className="px-3 py-2 text-gray-400">{roles.join(', ')}</td>
       <td className="px-3 py-2 text-gray-400">{kind}</td>
       <td className="px-3 py-2">
-        <StatusBadge state={row.agent_state} />
+        <StatusBadge status={row.agent_state} />
       </td>
       <td className="px-3 py-2 text-gray-400">{ageLabel}</td>
       <td className="px-3 py-2 text-gray-400">

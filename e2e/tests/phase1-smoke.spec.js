@@ -1,6 +1,7 @@
 const { test, expect } = require('@playwright/test');
+const crypto = require('node:crypto');
 
-const API = process.env.AGG_URL || 'http://localhost';
+const API = process.env.AGG_URL;
 
 test.describe('Phase 1 smoke — canonical envelope round trip', () => {
   test('system status has no mqtt_connected', async ({ request }) => {
@@ -27,14 +28,14 @@ test.describe('Phase 1 smoke — canonical envelope round trip', () => {
   });
 
   test('POST /command returns task_id and result arrives', async ({ request }) => {
+    const nonce = crypto.randomUUID();
     const post = await request.post(`${API}/api/command/shell-1`, {
-      data: { body: 'echo phase1-smoke' },
+      data: { body: nonce },
     });
     expect(post.status()).toBe(202);
     const { task_id } = await post.json();
     expect(task_id).toMatch(/^[0-9a-f-]{36}$/);
 
-    // poll for result (up to ~15s)
     let result;
     for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 500));
@@ -49,8 +50,7 @@ test.describe('Phase 1 smoke — canonical envelope round trip', () => {
     }
     expect(result).toBeDefined();
     expect(result.task_state).toBe('completed');
-    expect(result.payload.body).toContain('phase1-smoke');
-    // legacy fields must not appear in the DB row
+    expect(result.payload.body).toBe(`edgecitadel:${nonce}`);
     expect(result).not.toHaveProperty('receiver_id');
     expect(result).not.toHaveProperty('message_type');
   });
@@ -64,11 +64,6 @@ test.describe('Phase 1 smoke — canonical envelope round trip', () => {
   });
 
   test('subject inventory coverage — DB contains each persisted type', async ({ request }) => {
-    // The aggregator persists `command`/`result` (via outbox mirror, ADR-0006)
-    // plus `status`/`log`/`broadcast` directly. `register` and `heartbeat`
-    // intentionally update the `agents` table only and are NOT inserted into
-    // `messages` — that's a per-row-cost / observability tradeoff. See
-    // docs/roadmap.md Phase 1 follow-ups if we ever want to reverse it.
     const r = await request.get(`${API}/api/messages?limit=500`);
     const rows = await r.json();
     const types = new Set(rows.map((x) => x.type));
