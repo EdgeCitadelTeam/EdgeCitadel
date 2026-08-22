@@ -39,7 +39,7 @@ class TestParseManifest(unittest.TestCase):
     def test_get_ollama_models_as_json(self):
         r = self._run(["get", "ollama.models", "--format", "json"])
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.loads(r.stdout), ["gemma3:4b"])
+        self.assertEqual(json.loads(r.stdout), ["gemma4:e2b"])
 
     def test_get_apt_packages_as_lines(self):
         r = self._run(["get", "apt_packages.common", "--format", "lines"])
@@ -54,7 +54,7 @@ class TestParseManifest(unittest.TestCase):
         r = self._run(["get", "adapters.enabled", "--format", "lines"])
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = [ln for ln in r.stdout.splitlines() if ln]
-        self.assertEqual(set(lines), {"gemma", "watchdog"})
+        self.assertEqual(set(lines), {"gemma", "watchdog", "homeassistant"})
 
     def test_missing_key_exits_nonzero(self):
         r = self._run(["get", "nonexistent.key"])

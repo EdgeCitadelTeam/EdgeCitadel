@@ -1,0 +1,29 @@
+agent_id: homeassistant-1
+name: homeassistant-1
+description: Executes bounded, allowlisted Home Assistant operations and smart-home experiment sequences.
+version: 0.1.0
+runtime:
+  kind: native
+  roles: [worker]
+  conformance: L1
+  tags: [homeassistant, smart-home, physical-environment, experiment]
+  heartbeat_interval_sec: 30
+skills:
+  - id: homeassistant.state
+    name: read-state
+    description: Read the reported state of an allowlisted Home Assistant entity.
+    tags: [observation, state]
+  - id: homeassistant.light
+    name: control-light
+    description: Turn an allowlisted light on or off with bounded brightness.
+    tags: [actuation, light]
+  - id: homeassistant.camera
+    name: read-camera-luma
+    description: Read reduced luminance evidence from an allowlisted camera ROI; raw images are discarded.
+    tags: [observation, camera]
+  - id: homeassistant.experiment
+    name: run-sequence
+    description: Run a bounded sequence of allowlisted operations and restore touched lights by default.
+    tags: [experiment, sequence, cleanup]
+capabilities:
+  streaming: false

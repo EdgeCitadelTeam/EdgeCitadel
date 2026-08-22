@@ -101,4 +101,8 @@ async def main(config_path: str | Path) -> None:
     await nc.publish(f"agents.{agent_id}.status", json.dumps(off).encode())
     await pc.stop()
     hb_task.cancel(); consumer_task.cancel()
-    await nc.drain()
+    await asyncio.gather(hb_task, consumer_task, return_exceptions=True)
+    try:
+        await asyncio.wait_for(nc.drain(), timeout=5)
+    except Exception:  # noqa: BLE001
+        await nc.close()

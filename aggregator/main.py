@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import database as db
 from .aggregator import AggregatorApp, now_iso
+from .liveness import effective_agent_state, with_effective_agent_state
 from .models import CommandRequest, CommandResponse, RegistryEntry
 from .websocket_hub import WebSocketHub
 
@@ -79,7 +80,7 @@ def make_app(for_testing: bool = False) -> FastAPI:
 
     @app.get("/api/agents")
     async def list_agents():
-        agents = db.list_agents()
+        agents = [with_effective_agent_state(a) for a in db.list_agents()]
         # exclude self-cached aggregator entry from peer list
         return [a for a in agents if a["agent_id"] != "aggregator"]
 
@@ -87,7 +88,7 @@ def make_app(for_testing: bool = False) -> FastAPI:
     async def get_agent(agent_id: str):
         a = db.get_agent(agent_id)
         if not a: raise HTTPException(404, "agent not found")
-        return a
+        return with_effective_agent_state(a)
 
     @app.get("/api/agents/{agent_id}/card")
     async def get_agent_card(agent_id: str):
@@ -140,6 +141,9 @@ def make_app(for_testing: bool = False) -> FastAPI:
         (e.g. Playwright Phase 2 smoke); production callers omit it."""
         agg = state["app"]
         actual_sender = sender_id or "aggregator"
+        recipient = db.get_agent(agent_id)
+        if recipient is not None and effective_agent_state(recipient) == "offline":
+            raise HTTPException(409, f"agent {agent_id} is offline")
         # Auto-register a synthetic test-deployment card for non-default
         # senders so deployment tagging propagates without requiring a real
         # NATS register envelope from the caller.
@@ -219,6 +223,7 @@ def make_app(for_testing: bool = False) -> FastAPI:
         out: list[dict] = []
         agg = state["app"]
         for r in rows:
+            r = with_effective_agent_state(r)
             queue = {"pending": 0, "ack_pending": 0}
             if agg is not None:
                 try:

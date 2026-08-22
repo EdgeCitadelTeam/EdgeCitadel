@@ -24,12 +24,12 @@ class _MockHandler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path.startswith("/api/command/"):
             length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
-            _MockHandler.posted_task_id = body.get("task_id")
+            json.loads(self.rfile.read(length))
+            _MockHandler.posted_task_id = "mock-task-id"
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b"{}")
+            self.wfile.write(json.dumps({"task_id": _MockHandler.posted_task_id}).encode())
         else:
             self.send_response(404)
             self.end_headers()

@@ -42,6 +42,25 @@ def test_post_command_returns_task_id(client, monkeypatch):
     assert body["recipient_id"] == "shell-1"
 
 
+def test_post_command_rejects_stale_registered_agent(client):
+    from aggregator import database as db
+
+    db.upsert_agent_card({
+        "name": "eu-amd-hermes", "description": "x", "version": "0",
+        "url": "u", "provider": {"organization": "x"},
+        "capabilities": {}, "securitySchemes": {},
+        "metadata": {"runtime.kind": "native", "runtime.roles": ["worker"],
+                     "runtime.heartbeat_interval_sec": 30}},
+        timestamp="2026-04-23T10:00:00.000Z")
+    db.update_heartbeat("eu-amd-hermes", "2000-01-01T00:00:00.000Z")
+
+    r = client.post("/api/command/eu-amd-hermes",
+                    json={"body": "weather in London"})
+
+    assert r.status_code == 409
+    assert "offline" in r.text
+
+
 def test_post_command_rejects_invalid_body(client):
     r = client.post("/api/command/shell-1", json={"unknown": 1})
     assert r.status_code == 422

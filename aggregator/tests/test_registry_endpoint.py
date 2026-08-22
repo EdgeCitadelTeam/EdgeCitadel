@@ -54,6 +54,18 @@ def test_registry_returns_fields(client):
     assert e["poison_count"] == 0
 
 
+def test_registry_reports_stale_heartbeat_offline(client):
+    _seed_card("eu-amd-hermes", ["worker"])
+    from aggregator import database as db
+    db.update_heartbeat("eu-amd-hermes", "2000-01-01T00:00:00.000Z")
+
+    body = client.get("/api/registry").json()
+    entry = next(e for e in body if e["agent_id"] == "eu-amd-hermes")
+
+    assert entry["agent_state"] == "offline"
+    assert entry["last_heartbeat"] == "2000-01-01T00:00:00.000Z"
+
+
 def test_registry_includes_poison_count(client):
     _seed_card("shell-1", ["worker"])
     from aggregator import database as db

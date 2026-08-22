@@ -40,6 +40,7 @@ def test_register_card_must_match_sender_id(validator):
                         "capabilities": {}, "securitySchemes": {},
                         "metadata": {"runtime.kind": "native",
                                      "runtime.roles": ["worker"],
+                                     "runtime.conformance": "L1",
                                      "runtime.heartbeat_interval_sec": 30}})
     validator.validate_envelope(env)
     validator.validate_register(env)  # name == sender_id

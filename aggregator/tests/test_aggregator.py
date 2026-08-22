@@ -24,6 +24,7 @@ async def test_register_caches_card(router):
         "url": "nats://x", "provider": {"organization": "EC"},
         "capabilities": {}, "securitySchemes": {},
         "metadata": {"runtime.kind": "native", "runtime.roles": ["worker"],
+                     "runtime.conformance": "L1",
                      "runtime.heartbeat_interval_sec": 30}}
     env = {"v": 1, "id": "11111111-2222-4333-8444-555555555555",
            "type": "register", "sender_id": "shell-1",
@@ -39,6 +40,7 @@ async def test_register_rejects_sender_id_mismatch(router):
         "url": "nats://x", "provider": {"organization": "EC"},
         "capabilities": {}, "securitySchemes": {},
         "metadata": {"runtime.kind": "native", "runtime.roles": ["worker"],
+                     "runtime.conformance": "L1",
                      "runtime.heartbeat_interval_sec": 30}}
     env = {"v": 1, "id": "11111111-2222-4333-8444-555555555555",
            "type": "register", "sender_id": "shell-1",
@@ -78,6 +80,7 @@ async def _register_shell(router):
         "url": "nats://x", "provider": {"organization": "EC"},
         "capabilities": {}, "securitySchemes": {},
         "metadata": {"runtime.kind": "native", "runtime.roles": ["worker"],
+                     "runtime.conformance": "L1",
                      "runtime.heartbeat_interval_sec": 30}}
     env = {"v": 1, "id": "11111111-2222-4333-8444-555555555555",
            "type": "register", "sender_id": "shell-1",
