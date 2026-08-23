@@ -24,10 +24,9 @@ All must pass with zero errors.
 
 ## 3. Frontend Quality (if .js/.jsx files changed)
 ```bash
-cd frontend && npm run lint
 cd frontend && npm run build
 ```
-Build must succeed. No lint errors.
+Build must succeed. The frontend currently has no configured lint script.
 
 ## 4. Commit Message Validation
 Verify the commit message follows Conventional Commits:

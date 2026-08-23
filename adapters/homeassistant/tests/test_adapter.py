@@ -50,6 +50,39 @@ def test_sequence_requires_steps():
         w.sequence([], restore=True)
 
 
+def test_set_light_confirms_requested_brightness():
+    w = worker()
+    w.client.states["light.test"] = {"state": "on", "attributes": {"brightness": 100}}
+    w.client.set_light = MagicMock()
+    with pytest.raises(TimeoutError):
+        w.operation("set_light", {
+            "entity_id": "light.test",
+            "state": "on",
+            "brightness": 200,
+            "confirm_timeout_sec": 0.01,
+            "poll_sec": 0.01,
+        })
+
+
+def test_handle_marks_restore_failure_failed():
+    w = worker()
+    w.sequence = MagicMock(return_value={"steps": [], "restored_entities": ["light.test"],
+                                         "restore_errors": ["light.test"]})
+
+    import adapters.homeassistant.adapter as module
+    original = module._load_worker
+    module._load_worker = lambda: w
+    try:
+        payload, state = __import__("asyncio").run(handle(
+            {"type": "command", "payload": {"args": {"operation": "run_sequence"}}},
+            MagicMock(spec=Context),
+        ))
+    finally:
+        module._load_worker = original
+    assert state == "failed"
+    assert payload["result"]["restore_errors"] == ["light.test"]
+
+
 @pytest.mark.asyncio
 async def test_handle_rejects_non_command():
     env = {"type": "delegation", "sender_id": "planner-1", "payload": {}}

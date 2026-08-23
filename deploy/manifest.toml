@@ -40,8 +40,8 @@ common = ["jq", "sqlite", "gnu-tar", "coreutils", "gnupg"]
 # Each entry produces:
 #   - venv at /var/lib/edgecitadel/venvs/<name>/
 #   - systemd unit edgecitadel-<name>.service (rendered from systemd/<name>.service.in)
-enabled           = ["gemma", "watchdog", "homeassistant"]
-optional_disabled = ["shell"]   # installed but not enabled (executes arbitrary host commands)
+enabled           = ["gemma", "watchdog"]
+optional_disabled = ["shell", "homeassistant"]   # Home Assistant requires operator-provided credentials and allowlists
 
 [verification]
 # Time budget for the round-trip smoke test (Phase 6 of deploy-host.sh).

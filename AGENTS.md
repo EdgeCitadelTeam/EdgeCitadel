@@ -57,5 +57,5 @@
 - Architecture: `docs/01-architecture.md`
 - Messaging contracts: `docs/05-messaging.md`
 - Setup: `docs/agent-setup.md`
-- Operational workflows: `.Codex/skills/` (verify-*, release, smoke-check, etc.)
+- Operational workflows: `.agents/skills/` (verify-*, release, smoke-check, etc.)
 - Hook/permission config: `.Codex/settings.json`

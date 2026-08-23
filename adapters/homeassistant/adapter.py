@@ -74,11 +74,13 @@ class HomeAssistantWorker:
         confirmed = self._wait_state({
             "entity_id": entity_id,
             "state": state,
+            "brightness": brightness if state == "on" else None,
             "timeout_sec": args.get("confirm_timeout_sec", DEFAULT_MAX_WAIT_SEC),
             "poll_sec": args.get("poll_sec", 0.1),
         })
         return {"entity_id": entity_id, "requested_state": state,
                 "reported_state": confirmed["state"],
+                "reported_brightness": confirmed.get("brightness"),
                 "last_changed": confirmed.get("last_changed")}
 
     def _wait_state(self, args: dict) -> dict:
@@ -94,8 +96,11 @@ class HomeAssistantWorker:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             record = self._state(entity_id)
-            if record.get("state") == target:
+            brightness = args.get("brightness")
+            reported_brightness = (record.get("attributes") or {}).get("brightness")
+            if record.get("state") == target and (brightness is None or reported_brightness == brightness):
                 return {"entity_id": entity_id, "state": target,
+                        "brightness": reported_brightness,
                         "last_changed": record.get("last_changed")}
             time.sleep(poll)
         raise TimeoutError(f"state did not reach {target}: {entity_id}")
@@ -200,7 +205,8 @@ async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
                 worker.sequence, args.get("steps"), restore=args.get("restore", True))
         else:
             result = await asyncio.to_thread(worker.operation, operation, args)
-        return ({"operation": operation, "result": result}, "completed")
+        state = "failed" if result.get("restore_errors") else "completed"
+        return ({"operation": operation, "result": result}, state)
     except (PermissionError, ValueError, TimeoutError) as exc:
         state = "failed" if isinstance(exc, TimeoutError) else "rejected"
         return ({"operation": operation, "error": type(exc).__name__,

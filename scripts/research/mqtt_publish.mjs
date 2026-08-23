@@ -23,7 +23,10 @@ if (!args.url || !args.topic || args.payload === undefined) {
   process.exit(2);
 }
 
-const client = mqtt.connect(args.url, { protocolVersion: 4, clean: true });
+const options = { protocolVersion: 4, clean: true };
+if (args.username) options.username = args.username;
+if (args.password) options.password = args.password;
+const client = mqtt.connect(args.url, options);
 
 client.on("connect", () => {
   client.publish(args.topic, args.payload, { retain: false, qos: 0 }, (error) => {

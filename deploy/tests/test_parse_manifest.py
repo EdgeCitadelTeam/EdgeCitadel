@@ -54,7 +54,7 @@ class TestParseManifest(unittest.TestCase):
         r = self._run(["get", "adapters.enabled", "--format", "lines"])
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = [ln for ln in r.stdout.splitlines() if ln]
-        self.assertEqual(set(lines), {"gemma", "watchdog", "homeassistant"})
+        self.assertEqual(set(lines), {"gemma", "watchdog"})
 
     def test_missing_key_exits_nonzero(self):
         r = self._run(["get", "nonexistent.key"])

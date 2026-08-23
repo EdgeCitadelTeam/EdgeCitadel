@@ -191,11 +191,13 @@ def make_app(for_testing: bool = False) -> FastAPI:
                              task_id: str | None = None,
                              context_id: str | None = None,
                              type: str | None = None,
+                             since_ts: str | None = None,
                              deployment: str | None = None,
                              exclude_deployment: str | None = None,
                              limit: int = 500):
         return db.query_messages(agent_id=agent_id, task_id=task_id,
                                  context_id=context_id, type=type,
+                                 since_ts=since_ts,
                                  deployment=deployment,
                                  exclude_deployment=exclude_deployment,
                                  limit=limit)

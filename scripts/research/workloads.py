@@ -74,6 +74,7 @@ async def _connect_nats(
     token: str | None = None,
     user: str | None = None,
     password: str | None = None,
+    error_cb: Any | None = None,
 ) -> NATS:
     nc = NATS()
     kwargs: dict[str, Any] = {"servers": [nats_url], "connect_timeout": 3}
@@ -83,6 +84,8 @@ async def _connect_nats(
         kwargs["user"] = user
     if password:
         kwargs["password"] = password
+    if error_cb:
+        kwargs["error_cb"] = error_cb
     await nc.connect(**kwargs)
     return nc
 
@@ -254,7 +257,7 @@ async def run_e4(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 result_state=results[0].get("task_state") if results else None,
                 result_count=len(results),
                 progress_frames=len(progresses),
-                semantic_failures=0 if results else 1,
+                semantic_failures=0 if results and results[0].get("task_state") == "completed" and progresses else 1,
                 notes=notes,
             )
         )
@@ -363,7 +366,7 @@ async def run_e7(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                     result_state=results[0].get("task_state") if results else None,
                     result_count=len(results),
                     duplicates_seen=1 if duplicate else 0,
-                    semantic_failures=0 if len(results) == 1 else 1,
+                    semantic_failures=0 if duplicate and len(results) == 1 else 1,
                     notes=[f"first_seq={first_seq}", f"second_seq={second_seq}", f"second_duplicate={duplicate}"],
                 )
             )
@@ -384,12 +387,11 @@ async def run_e6(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
     await assert_stack_ready(args.api_base)
     trials: list[TrialResult] = []
     fixture = _repo_root() / "scripts" / "research" / "fixtures" / "crash_consumer.py"
-    counter = _repo_root() / "tmp" / f"bench-crash-{uuid.uuid4().hex[:8]}.count"
-    counter.parent.mkdir(parents=True, exist_ok=True)
     nc = await _connect_nats(args.nats_url, token=args.nats_token)
     try:
         js = nc.jetstream()
         for trial in range(1, args.trials + 1):
+            counter = _repo_root() / "tmp" / f"bench-crash-{uuid.uuid4().hex[:8]}.count"
             env = command_envelope(
                 sender_id=RUNNER_ID,
                 recipient_id="bench-crash",
@@ -631,7 +633,7 @@ async def run_e8(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                     )
                     progress_seen = len(_progress_rows(rows))
                     await asyncio.sleep(0.1)
-                cancel_at = time.perf_counter()
+                cancel_at = now_iso()
                 cancel = cancel_envelope(
                     sender_id=RUNNER_ID,
                     recipient_id="bench-cancel",
@@ -645,7 +647,7 @@ async def run_e8(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 progress_after_cancel = sum(
                     1
                     for row in progresses
-                    if row.get("timestamp") and row["timestamp"] > datetime.fromtimestamp(cancel_at, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                    if row.get("timestamp") and row["timestamp"] > cancel_at
                 )
                 final_state = results[0].get("task_state") if results else None
                 trials.append(
@@ -674,7 +676,7 @@ async def run_e8(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
 
 async def _run_mqtt_publish(args: Any, *, topic: str, payload: str) -> None:
     script = _repo_root() / "scripts" / "research" / "mqtt_publish.mjs"
-    proc = await asyncio.create_subprocess_exec(
+    command = [
         "node",
         str(script),
         "--url",
@@ -683,6 +685,11 @@ async def _run_mqtt_publish(args: Any, *, topic: str, payload: str) -> None:
         topic,
         "--payload",
         payload,
+    ]
+    if args.nats_token:
+        command.extend(["--password", args.nats_token])
+    proc = await asyncio.create_subprocess_exec(
+        *command,
         cwd=str(_repo_root()),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -692,13 +699,13 @@ async def _run_mqtt_publish(args: Any, *, topic: str, payload: str) -> None:
         raise RuntimeError(f"mqtt publish failed: {stderr.decode().strip() or stdout.decode().strip()}")
 
 
-async def _wait_for_gateway_log(api_base: str, topic: str, timeout_sec: float = 20) -> list[dict[str, Any]]:
+async def _wait_for_gateway_log(api_base: str, topic: str, since_ts: str, timeout_sec: float = 20) -> list[dict[str, Any]]:
     deadline = time.monotonic() + timeout_sec
     async with httpx.AsyncClient(timeout=10) as client:
         while time.monotonic() < deadline:
             response = await client.get(
                 f"{api_base}/messages",
-                params={"agent_id": "bench-mqtt-gateway", "type": "log", "limit": 100},
+                params={"agent_id": "bench-mqtt-gateway", "type": "log", "since_ts": since_ts, "limit": 100},
             )
             response.raise_for_status()
             rows = response.json()
@@ -715,11 +722,13 @@ async def run_e9(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
     trials: list[TrialResult] = []
     async with _subprocess(sys.executable, str(fixture), env=_python_env(args)):
         await asyncio.sleep(1.0)
+        run_tag = uuid.uuid4().hex[:8]
         for trial in range(1, args.trials + 1):
-            topic = f"devices/pi-{trial}/telemetry"
+            topic = f"devices/pi-{run_tag}-{trial}/telemetry"
             start = time.perf_counter()
+            published_at = now_iso()
             await _run_mqtt_publish(args, topic=topic, payload='{"temperature_c":22.5}')
-            rows = await _wait_for_gateway_log(args.api_base, topic)
+            rows = await _wait_for_gateway_log(args.api_base, topic, published_at)
             matched = [row for row in rows if (row.get("payload") or {}).get("mqtt_topic") == topic]
             trials.append(
                 TrialResult(
@@ -748,12 +757,14 @@ async def run_e10(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
     trials: list[TrialResult] = []
     async with _subprocess(sys.executable, str(fixture), env=_python_env(args)):
         await asyncio.sleep(1.0)
+        run_tag = uuid.uuid4().hex[:8]
         for trial in range(1, args.trials + 1):
-            topic = f"devices/pi-{trial}/command/{args.target_agent}"
+            topic = f"devices/pi-{run_tag}-{trial}/command/{args.target_agent}"
             body = f"printf mqtt-{trial}"
             start = time.perf_counter()
+            published_at = now_iso()
             await _run_mqtt_publish(args, topic=topic, payload=json.dumps({"body": body}))
-            rows = await _wait_for_gateway_log(args.api_base, topic)
+            rows = await _wait_for_gateway_log(args.api_base, topic, published_at)
             task_ids = [
                 (row.get("payload") or {}).get("task_id")
                 for row in rows
@@ -877,7 +888,15 @@ async def run_e12(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
 
         sender = await _connect_nats(url, user="bench_sender", password="bench")
         worker = await _connect_nats(url, user="bench_worker", password="bench")
-        denied = await _connect_nats(url, user="bench_denied", password="bench")
+        denied_errors: list[BaseException] = []
+        denied_error_seen = asyncio.Event()
+
+        async def denied_error_cb(error: BaseException) -> None:
+            denied_errors.append(error)
+            denied_error_seen.set()
+
+        denied = await _connect_nats(
+            url, user="bench_denied", password="bench", error_cb=denied_error_cb)
         try:
             allowed_seen = asyncio.Event()
 
@@ -893,19 +912,22 @@ async def run_e12(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 false_denies += 1
             await sub.unsubscribe()
 
+            await denied.publish("agents.shell-1.inbox", b"denied")
+            await denied.flush()
             try:
-                await denied.publish("agents.shell-1.inbox", b"denied")
-                await denied.flush()
+                await asyncio.wait_for(denied_error_seen.wait(), timeout=2)
+            except asyncio.TimeoutError:
                 false_allows += 1
-            except Exception:
-                pass
+            denied_error_seen.clear()
+            denied_errors.clear()
 
+            denied_sub = await denied.subscribe("agents.shell-1.outbox")
+            await denied.flush()
             try:
-                denied_sub = await denied.subscribe("agents.shell-1.outbox")
-                await denied_sub.unsubscribe()
+                await asyncio.wait_for(denied_error_seen.wait(), timeout=2)
+            except asyncio.TimeoutError:
                 false_allows += 1
-            except Exception:
-                pass
+            await denied_sub.unsubscribe()
         finally:
             await sender.close()
             await worker.close()

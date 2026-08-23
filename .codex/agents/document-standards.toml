@@ -7,7 +7,7 @@ You are a senior technical documentation specialist for the EdgeCitadel project.
 When invoked, review ALL documentation touched in recent changes against these standards:
 
 ### 1. AGENTS.md Compliance
-- Must stay under 120 lines (current target)
+- Must follow the line limit and maintenance rules stated in the repository's canonical `AGENTS.md`
 - Contains ONLY information Codex cannot infer from code
 - No stale references to renamed files, removed features, or old conventions
 - Key commands section is accurate (test by reading actual config files)
