@@ -17,6 +17,59 @@ from .websocket_hub import WebSocketHub
 _OPENCLAW_TOKENS: dict[str, str] = {}
 
 
+async def _agent_inbox_consumer(js, agent_id: str):
+    subject = f"agents.{agent_id}.inbox"
+    consumers = await js.consumers_info("AGENT_INBOX")
+    matches = [
+        consumer
+        for consumer in consumers
+        if getattr(getattr(consumer, "config", None), "filter_subject", None)
+        == subject
+    ]
+    if len(matches) != 1:
+        raise LookupError("consumer not found")
+    return matches[0]
+
+
+def _build_direct_command_envelope(
+    *,
+    agent_id: str,
+    sender_id: str,
+    request: CommandRequest,
+) -> dict:
+    task_id = str(uuid.uuid4())
+    context_id = request.context_id or task_id
+    return {
+        "v": 1,
+        "id": str(uuid.uuid4()),
+        "type": "command",
+        "sender_id": sender_id,
+        "recipient_id": agent_id,
+        "task_id": task_id,
+        "context_id": context_id,
+        "hop_count": 0,
+        "timestamp": now_iso(),
+        "payload": {
+            "body": request.body,
+            **({"args": request.args} if request.args else {}),
+            **({"skill_id": request.skill_id} if request.skill_id else {}),
+        },
+    }
+
+
+async def _publish_direct_command(router, envelope: dict) -> None:
+    encoded = json.dumps(envelope).encode()
+    await router.js.publish(
+        f"agents.{envelope['recipient_id']}.inbox",
+        encoded,
+        headers={"Nats-Msg-Id": envelope["id"]},
+    )
+    await router.nc.publish(
+        f"agents.{envelope['sender_id']}.outbox",
+        encoded,
+    )
+
+
 def make_app(for_testing: bool = False) -> FastAPI:
     app = FastAPI(title="EdgeCitadel Aggregator", version="0.1.0")
     state: dict = {"app": None}
@@ -30,6 +83,25 @@ def make_app(for_testing: bool = False) -> FastAPI:
         str(Path(__file__).resolve().parents[1] / "schemas" / "agent-card.v1.json")))
 
     db.init_db(db_path)
+    lab_run_id = os.environ.get("LAB_RUN_ID")
+    if lab_run_id:
+        from .lab_inventory import build_lab_router
+        from scripts.research.lab_config import LabConfigError, validate_run_id
+
+        token_sha256 = os.environ.get("LAB_TOKEN_SHA256", "")
+        inventory_value = os.environ.get("LAB_INVENTORY_PATH", "")
+        try:
+            validate_run_id(lab_run_id)
+            if len(token_sha256) != 64 or any(char not in "0123456789abcdef" for char in token_sha256):
+                raise LabConfigError("lab token hash is invalid")
+            inventory_path = Path(inventory_value)
+            if not inventory_path.is_absolute():
+                raise LabConfigError("lab inventory path must be absolute")
+        except LabConfigError as error:
+            raise RuntimeError("invalid lab runtime configuration") from error
+        app.include_router(build_lab_router(
+            run_id=lab_run_id, token_sha256=token_sha256, inventory_path=inventory_path,
+        ))
 
     @app.on_event("startup")
     async def _startup():
@@ -118,10 +190,9 @@ def make_app(for_testing: bool = False) -> FastAPI:
         if agg is None:
             raise HTTPException(503, "jetstream not initialized")
         try:
-            ci = await agg.router.js.consumer_info("AGENT_INBOX",
-                                                   f"{agent_id}_inbox")
-        except Exception as e:
-            raise HTTPException(404, f"consumer not found: {e}")
+            ci = await _agent_inbox_consumer(agg.router.js, agent_id)
+        except Exception as error:
+            raise HTTPException(404, f"consumer not found: {error}")
         return {"pending": ci.num_pending,
                 "ack_pending": ci.num_ack_pending,
                 "num_waiting": getattr(ci, "num_waiting", 0)}
@@ -160,31 +231,18 @@ def make_app(for_testing: bool = False) -> FastAPI:
                 },
             }
 
-        task_id = str(uuid.uuid4())
-        env: dict = {
-            "v": 1, "id": str(uuid.uuid4()), "type": "command",
-            "sender_id": actual_sender, "recipient_id": agent_id,
-            "task_id": task_id, "timestamp": now_iso(),
-            "payload": {
-                "body": req.body,
-                **({"args": req.args} if req.args else {}),
-                **({"skill_id": req.skill_id} if req.skill_id else {}),
-            },
-        }
-        if req.context_id:
-            env["context_id"] = req.context_id
+        env = _build_direct_command_envelope(
+            agent_id=agent_id,
+            sender_id=actual_sender,
+            request=req,
+        )
         if agg is not None:
-            # Publish JetStream with Nats-Msg-Id for idempotency
-            await agg.router.js.publish(f"agents.{agent_id}.inbox",
-                                        json.dumps(env).encode(),
-                                        headers={"Nats-Msg-Id": env["id"]})
-            # Mirror on the SENDER's outbox (was always aggregator before;
-            # now matches the actual sender so test-runner traffic tags
-            # consistently).
-            await agg.router.nc.publish(f"agents.{actual_sender}.outbox",
-                                        json.dumps(env).encode())
-        return CommandResponse(task_id=task_id, recipient_id=agent_id,
-                               accepted_at=env["timestamp"])
+            await _publish_direct_command(agg.router, env)
+        return CommandResponse(
+            task_id=env["task_id"],
+            recipient_id=agent_id,
+            accepted_at=env["timestamp"],
+        )
 
     @app.get("/api/messages")
     async def query_messages(agent_id: str | None = None,

@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import pytest
 from aggregator import database as db
@@ -80,3 +81,83 @@ def test_query_messages_deployment_filters(fresh_db):
     rows = db.query_messages(exclude_deployment="test")
     assert len(rows) == 2
     assert all(r["deployment"] != "test" for r in rows)
+
+
+def result_envelope(envelope_id: str = "wire-1") -> dict:
+    return {
+        "v": 1,
+        "id": envelope_id,
+        "type": "result",
+        "sender_id": "shell-1",
+        "recipient_id": "aggregator",
+        "task_id": "task-1",
+        "context_id": "context-1",
+        "task_state": "completed",
+        "hop_count": 0,
+        "timestamp": "2026-07-25T12:00:01.000Z",
+        "payload": {"body": "edgecitadel:nonce-1"},
+    }
+
+
+def test_insert_message_counts_replayed_envelope_once(fresh_db):
+    env = result_envelope()
+    db.insert_message(env)
+    db.insert_message(env)
+    db.insert_message(env)
+
+    rows = db.query_messages(task_id="task-1")
+
+    assert len(rows) == 1
+    assert rows[0]["duplicate_count"] == 2
+
+
+def test_init_db_migrates_duplicate_count_without_wipe(tmp_path):
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """CREATE TABLE messages (
+               id TEXT PRIMARY KEY, v INTEGER NOT NULL DEFAULT 1,
+               type TEXT NOT NULL, sender_id TEXT NOT NULL,
+               recipient_id TEXT, task_id TEXT, context_id TEXT,
+               task_state TEXT, agent_state TEXT, hop_count INTEGER,
+               timestamp TEXT NOT NULL, payload TEXT NOT NULL,
+               deployment TEXT NOT NULL DEFAULT 'default'
+            )"""
+        )
+        row = result_envelope("legacy-wire")
+        conn.execute(
+            """INSERT INTO messages
+               (id, v, type, sender_id, recipient_id, task_id, context_id,
+                task_state, agent_state, hop_count, timestamp, payload,
+                deployment)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                row["id"], row["v"], row["type"], row["sender_id"],
+                row["recipient_id"], row["task_id"], row["context_id"],
+                row["task_state"], None, row["hop_count"], row["timestamp"],
+                '{"body":"edgecitadel:nonce-1"}', "default",
+            ),
+        )
+
+    db.init_db(str(path), wipe=False)
+
+    assert "duplicate_count" in db.table_columns("messages")
+    rows = db.query_messages(task_id="task-1")
+    assert len(rows) == 1
+    assert rows[0]["duplicate_count"] == 0
+
+
+def test_query_messages_uses_sqlite_observation_order(fresh_db):
+    late_insert = result_envelope("wire-late")
+    late_insert["task_id"] = "task-late"
+    late_insert["timestamp"] = "2000-01-01T00:00:00.000Z"
+    early_insert = result_envelope("wire-early")
+    early_insert["task_id"] = "task-early"
+    early_insert["timestamp"] = "2099-01-01T00:00:00.000Z"
+    db.insert_message(early_insert)
+    db.insert_message(late_insert)
+
+    rows = db.query_messages(limit=2)
+
+    assert [row["id"] for row in rows] == ["wire-late", "wire-early"]
+    assert rows[0]["observation_index"] > rows[1]["observation_index"]

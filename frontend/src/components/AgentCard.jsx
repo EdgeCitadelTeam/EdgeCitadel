@@ -21,6 +21,9 @@ export default function AgentCard({ agent, selected, onClick }) {
   return (
     <button
       onClick={onClick}
+      data-agent-id={id}
+      aria-pressed={selected}
+      aria-label={`Select agent ${id}`}
       className={clsx(
         'w-full text-left px-3 py-2.5 rounded-lg transition-colors',
         'hover:bg-surface-100',

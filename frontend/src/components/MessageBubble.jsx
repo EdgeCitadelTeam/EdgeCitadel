@@ -160,6 +160,8 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
       <div
         onClick={onClick}
         data-task-id={message.task_id || ''}
+        data-message-type={type}
+        data-task-state={taskState || ''}
         className={clsx(
           'rounded-lg border px-3 py-2 transition-all cursor-pointer border-l-[3px] relative',
           highlighted && 'ring-1 ring-accent/40 shadow-sm shadow-accent/10',

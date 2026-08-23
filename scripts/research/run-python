@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+TOOLCHAIN="$ROOT/scripts/research/toolchain.json"
+LOCK="$ROOT/scripts/research/requirements.lock.txt"
+
+expected_uv="$(
+  awk -F'"' '$2 == "uv_version" { print $4 }' "$TOOLCHAIN"
+)"
+expected_python="$(
+  awk -F'"' '$2 == "python_version" { print $4 }' "$TOOLCHAIN"
+)"
+if [[ -z "$expected_uv" || -z "$expected_python" ]]; then
+  printf 'invalid research toolchain metadata: %s\n' "$TOOLCHAIN" >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  lock_sha="$(sha256sum "$LOCK" | awk '{ print $1 }')"
+else
+  lock_sha="$(shasum -a 256 "$LOCK" | awk '{ print $1 }')"
+fi
+lock_prefix="${lock_sha:0:16}"
+
+canonicalize_path() {
+  local raw_path="$1"
+  local component
+  local remaining
+  local resolved="/"
+  local candidate
+
+  [[ "$raw_path" == /* ]] || return 1
+  remaining="${raw_path#/}"
+  while [[ -n "$remaining" ]]; do
+    component="${remaining%%/*}"
+    if [[ "$remaining" == */* ]]; then
+      remaining="${remaining#*/}"
+    else
+      remaining=""
+    fi
+
+    case "$component" in
+      "" | ".")
+        ;;
+      "..")
+        if [[ "$resolved" != "/" ]]; then
+          resolved="${resolved%/*}"
+          [[ -n "$resolved" ]] || resolved="/"
+        fi
+        ;;
+      *)
+        candidate="${resolved%/}/$component"
+        if [[ -e "$candidate" || -L "$candidate" ]]; then
+          resolved="$(realpath "$candidate")" || return 1
+          [[ "$resolved" == /* ]] || return 1
+        else
+          resolved="$candidate"
+        fi
+        ;;
+    esac
+  done
+  printf '%s\n' "$resolved"
+}
+
+canonicalize_external_path() {
+  local raw_path="$1"
+  local purpose="$2"
+  local canonical_path
+
+  if ! canonical_path="$(canonicalize_path "$raw_path")"; then
+    printf '%s must be an absolute canonicalizable path: %s\n' \
+      "$purpose" "$raw_path" >&2
+    return 1
+  fi
+  case "$canonical_path" in
+    "$ROOT" | "$ROOT"/*)
+    printf '%s must be an absolute path outside the checkout: %s\n' \
+      "$purpose" "$raw_path" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$canonical_path"
+}
+
+reject_non_directory() {
+  local path="$1"
+  local purpose="$2"
+  if [[ (-e "$path" || -L "$path") && ! -d "$path" ]]; then
+    printf '%s must be a directory or an unused path: %s\n' \
+      "$purpose" "$path" >&2
+    return 1
+  fi
+}
+
+runtime_root="$(
+  canonicalize_external_path "${TMPDIR:-/tmp}" "research runtime root"
+)"
+venv_candidate="${EC_RESEARCH_VENV:-$runtime_root/edgecitadel-research-py312-$lock_prefix}"
+VENV="$(canonicalize_external_path \
+  "$venv_candidate" "research virtual environment")"
+UV_CACHE_DIR="$(canonicalize_external_path \
+  "$runtime_root/edgecitadel-research-uv-cache" "uv cache")"
+PYTHONPYCACHEPREFIX="$(canonicalize_external_path \
+  "$runtime_root/edgecitadel-research-pycache" "Python bytecode cache")"
+UV_PYTHON_INSTALL_DIR="$(canonicalize_external_path \
+  "$runtime_root/edgecitadel-research-uv-python" "uv Python install directory")"
+
+reject_non_directory "$runtime_root" "research runtime root"
+reject_non_directory "$VENV" "research virtual environment"
+reject_non_directory "$UV_CACHE_DIR" "uv cache"
+reject_non_directory "$PYTHONPYCACHEPREFIX" "Python bytecode cache"
+reject_non_directory "$UV_PYTHON_INSTALL_DIR" "uv Python install directory"
+
+export TMPDIR="$runtime_root"
+export UV_CACHE_DIR
+export UV_NO_CONFIG=1
+export PYTHONPYCACHEPREFIX
+export UV_PYTHON_INSTALL_DIR
+
+if ! command -v uv >/dev/null 2>&1; then
+  printf 'required uv %s is not installed\n' "$expected_uv" >&2
+  exit 1
+fi
+uv_full_version="$(uv --version)"
+read -r uv_name uv_semver _ <<<"$uv_full_version"
+if [[ "$uv_name" != "uv" || "$uv_semver" != "$expected_uv" ]]; then
+  printf 'required uv %s, found %s\n' "$expected_uv" "$uv_full_version" >&2
+  exit 1
+fi
+
+if [[ ! -e "$VENV" && ! -L "$VENV" ]]; then
+  uv venv --managed-python --python "$expected_python" "$VENV"
+fi
+
+if [[ ! -d "$VENV" || ! -x "$VENV/bin/python" || ! -f "$VENV/pyvenv.cfg" ]]; then
+  printf 'existing research environment is not uv-managed: %s\n' "$VENV" >&2
+  exit 1
+fi
+if ! grep -Fxq "uv = $expected_uv" "$VENV/pyvenv.cfg"; then
+  printf 'existing research environment is not uv-managed: %s\n' "$VENV" >&2
+  exit 1
+fi
+
+actual_python="$(
+  "$VENV/bin/python" -c \
+    'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+)"
+if [[ "$actual_python" != "$expected_python" ]]; then
+  printf 'required Python %s, found %s\n' \
+    "$expected_python" "$actual_python" >&2
+  exit 1
+fi
+
+uv pip sync --python "$VENV/bin/python" --require-hashes "$LOCK"
+
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="$ROOT"
+exec "$VENV/bin/python" "$@"

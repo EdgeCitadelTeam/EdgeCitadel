@@ -1,1 +1,1 @@
-"""Research-only benchmark helpers for EdgeCitadel experiments."""
+"""Research and lab runtime modules for EdgeCitadel experiments."""

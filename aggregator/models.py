@@ -1,5 +1,7 @@
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
+from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class Envelope(BaseModel):
@@ -25,6 +27,16 @@ class CommandRequest(BaseModel):
     args: Optional[dict] = None
     skill_id: Optional[str] = None
     context_id: Optional[str] = None
+
+    @field_validator("context_id")
+    @classmethod
+    def context_id_must_be_uuid4(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = UUID(value)
+        if parsed.version != 4 or str(parsed) != value:
+            raise ValueError("context_id must be canonical UUIDv4")
+        return str(parsed)
 
 
 class CommandResponse(BaseModel):

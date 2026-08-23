@@ -1,0 +1,5 @@
+{
+  "nats_image": "nats@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927",
+  "python_version": "3.12",
+  "uv_version": "0.8.13"
+}

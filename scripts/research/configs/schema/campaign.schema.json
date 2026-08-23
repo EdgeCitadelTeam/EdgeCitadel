@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "campaign_id", "seed", "warmup_blocks", "measured_blocks", "bootstrap_seed", "bootstrap_samples", "hardware_profile", "network_profile", "sampler_interval_ms", "idle_baseline_seconds", "workload_timeouts", "resource_components"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "campaign_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
+    "seed": {"type": "integer", "minimum": 0},
+    "warmup_blocks": {"type": "integer", "minimum": 1},
+    "measured_blocks": {"type": "integer", "minimum": 1},
+    "bootstrap_seed": {"type": "integer", "minimum": 0},
+    "bootstrap_samples": {"type": "integer", "minimum": 10000},
+    "hardware_profile": {"type": "string", "minLength": 1},
+    "network_profile": {"enum": ["lan", "50ms-rtt", "1pct-loss"]},
+    "sampler_interval_ms": {"const": 100},
+    "idle_baseline_seconds": {"const": 2},
+    "workload_timeouts": {"type": "object", "additionalProperties": false, "required": ["W1", "W2", "W3", "W4", "W5", "W6a", "W6b", "W6c", "W7", "W8"], "properties": {"W1": {"type": "integer", "minimum": 1}, "W2": {"type": "integer", "minimum": 1}, "W3": {"type": "integer", "minimum": 1}, "W4": {"type": "integer", "minimum": 1}, "W5": {"type": "integer", "minimum": 1}, "W6a": {"type": "integer", "minimum": 1}, "W6b": {"type": "integer", "minimum": 1}, "W6c": {"type": "integer", "minimum": 1}, "W7": {"type": "integer", "minimum": 1}, "W8": {"type": "integer", "minimum": 1}}},
+    "resource_components": {"type": "array", "minItems": 4, "uniqueItems": true, "items": {"enum": ["controller", "broker", "worker", "observer"]}}
+  }
+}

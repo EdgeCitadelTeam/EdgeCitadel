@@ -1,7 +1,15 @@
 """Thin re-export of aggregator.validator so adapters don't import aggregator."""
-from pathlib import Path
-from aggregator.validator import EnvelopeValidator, ValidationError
 
+from pathlib import Path
+
+from aggregator.validator import (
+    CORRELATED_TYPES,
+    EnvelopeValidator,
+    ValidationError,
+    canonical_json,
+    normalize_task_correlation,
+    request_fingerprint,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 SCHEMAS = REPO / "schemas"
@@ -14,4 +22,12 @@ def default_validator() -> EnvelopeValidator:
     )
 
 
-__all__ = ["EnvelopeValidator", "ValidationError", "default_validator"]
+__all__ = [
+    "CORRELATED_TYPES",
+    "EnvelopeValidator",
+    "ValidationError",
+    "canonical_json",
+    "default_validator",
+    "normalize_task_correlation",
+    "request_fingerprint",
+]

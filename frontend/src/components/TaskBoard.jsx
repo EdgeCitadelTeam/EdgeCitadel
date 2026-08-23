@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { X, RefreshCw } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from '../stores/appStore'
 import { api } from '../api/client'
 import TaskCard from './TaskCard'
 import { relativeTime, fullTimestamp } from '../utils/formatTime'
+import { deriveTasks } from '../utils/taskReducer'
 
 // A2A task-state enum from the v0.1 envelope schema. Items without task_state
 // (e.g. a freshly accepted command not yet observed working) bucket into
@@ -20,70 +21,49 @@ const COLUMNS = [
   { key: 'auth-required', label: 'Auth Required', color: 'text-orange-400' },
 ]
 
-// Roll a list of envelopes (messages) into tasks keyed by task_id. The
-// most-recent task_state (preferring result > task.progress > command)
-// becomes the displayed state.
-function deriveTasks(messages) {
-  const byTask = new Map()
-  for (const m of messages) {
-    if (!m.task_id) continue
-    if (!byTask.has(m.task_id)) {
-      byTask.set(m.task_id, {
-        task_id: m.task_id,
-        context_id: m.context_id || null,
-        sender_id: m.sender_id,
-        recipient_id: m.recipient_id || null,
-        first_ts: m.timestamp,
-        last_ts: m.timestamp,
-        task_state: 'submitted',
-        body: null,
-        result: null,
-        last_payload: null,
-      })
-    }
-    const t = byTask.get(m.task_id)
-    if (new Date(m.timestamp) < new Date(t.first_ts)) t.first_ts = m.timestamp
-    if (new Date(m.timestamp) > new Date(t.last_ts)) t.last_ts = m.timestamp
-    if (m.type === 'command') {
-      t.body = m.payload?.body || t.body
-      t.recipient_id = m.recipient_id || t.recipient_id
-      t.sender_id = m.sender_id || t.sender_id
-    }
-    if (m.task_state) t.task_state = m.task_state
-    if (m.type === 'result') {
-      t.result = m.payload
-      // result envelope's task_state is authoritative if present
-      if (m.task_state) t.task_state = m.task_state
-    }
-    t.last_payload = m.payload
-  }
-  return [...byTask.values()].sort(
-    (a, b) => new Date(b.last_ts) - new Date(a.last_ts)
-  )
-}
-
 export default function TaskBoard() {
   const selectedAgent = useAppStore((s) => s.selectedAgent)
+  const realtimeMessages = useAppStore((s) => s.realtimeMessages)
+  const addNotification = useAppStore((s) => s.addNotification)
   const [tasks, setTasks] = useState([])
   const [selectedTask, setSelectedTask] = useState(null)
   const [trace, setTrace] = useState([])
+  const requestGeneration = useRef(0)
 
   const fetchTasks = useCallback(async () => {
+    const generation = ++requestGeneration.current
     try {
       const params = { limit: 500 }
       if (selectedAgent) params.agent_id = selectedAgent
       const items = (await api.queryMessages(params)) || []
-      setTasks(deriveTasks(items))
-    } catch {
-      // ignore
+      const next = deriveTasks(items)
+      if (generation === requestGeneration.current) setTasks(next)
+    } catch (error) {
+      if (generation === requestGeneration.current) {
+        addNotification({
+          type: 'error',
+          title: 'Task observation rejected',
+          message: error.message,
+        })
+      }
     }
-  }, [selectedAgent])
+  }, [addNotification, selectedAgent])
 
   useEffect(() => {
     fetchTasks()
     const interval = setInterval(fetchTasks, 5000)
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      requestGeneration.current += 1
+    }
   }, [fetchTasks])
+
+  useEffect(() => {
+    const newest = realtimeMessages[0]
+    if (newest && ['command', 'task.progress', 'result'].includes(newest.type)) {
+      fetchTasks()
+    }
+  }, [fetchTasks, realtimeMessages])
 
   const handleSelectTask = async (task) => {
     setSelectedTask(task)
@@ -122,7 +102,12 @@ export default function TaskBoard() {
           {COLUMNS.map((col) => (
             <div
               key={col.key}
-              className="w-44 md:w-56 shrink-0 bg-surface/50 rounded-lg"
+              className={clsx(
+                'w-[calc(100vw-1.5rem)] md:w-56 shrink-0 bg-surface/50 rounded-lg',
+                grouped[col.key].length > 0
+                  ? 'order-first md:order-none'
+                  : 'order-last md:order-none'
+              )}
             >
               <div className="flex items-center gap-2 p-2 border-b border-surface-200">
                 <span className={clsx('text-xs font-medium', col.color)}>
