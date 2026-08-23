@@ -246,6 +246,23 @@ How an operator confirms messaging is healthy:
 
 ---
 
+## Physical environment workers
+
+The native `homeassistant-1` worker is the reference physical-environment
+adapter. Agents send typed `command` envelopes to
+`agents.homeassistant-1.inbox`; the worker calls an allowlisted Home Assistant
+REST endpoint and returns a normal `result` envelope. Its supported operations
+are `get_state`, `set_light`, `wait_state`, `read_camera`, and bounded
+`run_sequence`.
+
+This keeps NATS responsible for durable delivery, serialization, cancellation,
+and audit while the adapter owns physical-side-effect policy and observation.
+`run_sequence` snapshots touched lights and restores them by default. Camera
+responses are reduced to luminance statistics; raw image bytes are not returned
+or retained. Host credentials and entity allowlists live outside the repository
+in `/etc/edgecitadel/homeassistant.env` and the token file referenced by
+`HA_TOKEN_FILE`.
+
 ## References
 
 - [`docs/agent-contract.md`](agent-contract.md) — the v0.1 wire contract (envelope, lifecycle, Agent Card).

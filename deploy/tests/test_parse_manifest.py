@@ -39,7 +39,7 @@ class TestParseManifest(unittest.TestCase):
     def test_get_ollama_models_as_json(self):
         r = self._run(["get", "ollama.models", "--format", "json"])
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.loads(r.stdout), ["gemma3:4b"])
+        self.assertEqual(json.loads(r.stdout), ["gemma4:e2b"])
 
     def test_get_apt_packages_as_lines(self):
         r = self._run(["get", "apt_packages.common", "--format", "lines"])

@@ -1,0 +1,4 @@
+nats-py>=2.9.0
+pyyaml>=6.0
+jsonschema>=4.20
+pillow>=10.0

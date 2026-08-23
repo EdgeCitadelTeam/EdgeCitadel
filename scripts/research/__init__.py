@@ -1,1 +1,1 @@
-"""Hermetic research and lab runtime modules."""
+"""Research and lab runtime modules for EdgeCitadel experiments."""

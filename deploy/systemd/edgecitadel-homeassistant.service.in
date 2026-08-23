@@ -1,0 +1,50 @@
+[Unit]
+Description=EdgeCitadel — Home Assistant environment adapter
+Documentation=file:///opt/edgecitadel/adapters/homeassistant/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=edgecitadel
+Group=edgecitadel
+WorkingDirectory=/opt/edgecitadel
+
+EnvironmentFile=/etc/edgecitadel/env
+EnvironmentFile=/etc/edgecitadel/homeassistant.env
+Environment="NATS_URL=nats://localhost:4222"
+Environment="HA_MAX_SEQUENCE_STEPS=32"
+Environment="PYTHONUNBUFFERED=1"
+
+ExecStart=/var/lib/edgecitadel/venvs/homeassistant/bin/python -m adapters.homeassistant.adapter
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/edgecitadel
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount @raw-io @reboot @swap @cpu-emulation @obsolete
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+MemoryMax=256M
+MemoryHigh=128M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

@@ -1,1 +1,1 @@
-"""Deterministic research fixtures."""
+"""Deterministic and disposable research benchmark fixtures."""

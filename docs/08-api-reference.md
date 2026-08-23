@@ -267,6 +267,9 @@ recipient.
 | `task_id` | string | — | exact match |
 | `context_id` | string | — | exact match |
 | `type` | string | — | `register`, `heartbeat`, `status`, `command`, `result`, `delegation`, `cancel`, `log`, `broadcast`, `task.progress` |
+| `since_ts` | ISO-8601 string | — | only rows with `timestamp >= since_ts`; useful for isolating a live benchmark run |
+| `deployment` | string | — | exact deployment match |
+| `exclude_deployment` | string | — | exclude an exact deployment |
 | `limit` | int | 500 | result cap |
 
 **Response 200**
