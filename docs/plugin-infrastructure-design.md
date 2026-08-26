@@ -62,6 +62,7 @@ References:
 
 ```text
 plugin-system/
+  README.md
   pyproject.toml
   schemas/
     agent-plugin.v1alpha1.schema.json
@@ -79,16 +80,19 @@ plugin-system/
       __init__.py
       __main__.py
       cli.py
+      errors.py
       inventory.py
       loader.py
       validator.py
   tests/
+    conftest.py
     test_cli.py
     test_inventory.py
     test_loader.py
     test_validator.py
 
 plugins/
+  README.md
   examples/
     placeholder/
       plugin.yaml
