@@ -27,50 +27,99 @@ authorization, sandboxing, or knowledge persistence.
    maps instead of accepting arbitrary top-level fields.
 6. A manifest requests capabilities; it never grants them.
 
+## Research basis
+
+The package design borrows specific, compatible lessons from established plugin
+systems without adopting any one system as EdgeCitadel's runtime ABI:
+
+- OpenAI plugins and the Agent Skills specification use `SKILL.md` plus optional
+  scripts, references, and assets for portable, progressively disclosed
+  procedures.
+- OpenAI public plugin examples record vendored skill provenance and SHA-256
+  integrity in `plugin.lock.json`.
+- HashiCorp's out-of-process plugin system treats protocol-version negotiation as
+  separate from ordinary package versioning.
+- VS Code extensions declare host-engine compatibility independently of extension
+  version and identity.
+- Grafana signs a manifest of packaged file hashes; EdgeCitadel reserves signing
+  for a later milestone but establishes deterministic hashes now.
+- Backstage keeps host APIs and extension points separate from installable plugin
+  packages and discourages direct cross-plugin code dependencies.
+
+References:
+
+- <https://developers.openai.com/plugins/concepts/plugins>
+- <https://developers.openai.com/plugins/concepts/skills>
+- <https://developers.openai.com/plugins/build/plugins>
+- <https://agentskills.io/specification>
+- <https://github.com/openai/plugins>
+- <https://github.com/hashicorp/go-plugin>
+- <https://github.com/microsoft/vscode-docs/blob/main/api/references/extension-manifest.md>
+- <https://github.com/grafana/plugin-tools/blob/main/docusaurus/docs/publish-a-plugin/sign-a-plugin.md>
+- <https://github.com/backstage/backstage/blob/master/docs/backend-system/architecture/04-plugins.md>
+
 ## Repository shape
 
 ```text
-plugins/
-  README.md
+plugin-system/
   pyproject.toml
   schemas/
     agent-plugin.v1alpha1.schema.json
-    skill.v1alpha1.schema.json
-  edgecitadel_plugin_sdk/
-    __init__.py
-    lifecycle.py
-    runtime.py
-    skills.py
-    knowledge.py
-    transport.py
-  edgecitadel_supervisor/
-    __init__.py
-    __main__.py
-    cli.py
-    loader.py
-    validator.py
+    agent-skill-binding.v1alpha1.schema.json
+    plugin-lock.v1.schema.json
+  src/
+    edgecitadel_plugin_sdk/
+      __init__.py
+      lifecycle.py
+      runtime.py
+      skills.py
+      knowledge.py
+      transport.py
+    edgecitadel_supervisor/
+      __init__.py
+      __main__.py
+      cli.py
+      inventory.py
+      loader.py
+      validator.py
+  tests/
+    test_cli.py
+    test_inventory.py
+    test_loader.py
+    test_validator.py
+
+plugins/
   examples/
     placeholder/
       plugin.yaml
+      plugin.lock.json
+      README.md
       runtime/
         __init__.py
         __main__.py
       skills/
         placeholder/
-          skill.yaml
-          procedure.md
-          input.schema.json
-          output.schema.json
-      assets/
-        .gitkeep
-  tests/
-    test_loader.py
-    test_validator.py
-    test_cli.py
+          SKILL.md
+          binding.yaml
+          schemas/
+            input.json
+            output.json
+          references/
+            README.md
+          scripts/
+            README.md
+          assets/
+            README.md
 ```
 
-The top-level `plugins/` directory is self-contained so the initial scaffold does
-not modify aggregator, adapter, NATS, or deployment behavior.
+`plugin-system/` owns the host-side SDK, schemas, supervisor, and tests.
+`plugins/` contains only installable plugin packages. This prevents runtime
+framework code from becoming part of a plugin's distributable contents and lets
+the two trees evolve independently.
+
+Adding both top-level directories requires updating the repository map in
+`AGENTS.md`. The initial scaffold does not modify aggregator, adapter, NATS, or
+deployment behavior.
 
 ## Package manifest
 
@@ -82,18 +131,29 @@ apiVersion: edgecitadel.io/v1alpha1
 kind: AgentPlugin
 
 metadata:
-  id: placeholder-agent
+  name: placeholder
+  displayName: Placeholder Plugin
+  description: Demonstrates the EdgeCitadel plugin package contract.
   version: 0.1.0
   publisher: local
+
+compatibility:
+  supervisorApi: ">=0.1.0,<0.2.0"
+  protocols:
+    - edgecitadel.plugin.v1
 
 runtime:
   command: ["python", "-m", "runtime"]
   healthTimeoutSeconds: 10
   restartPolicy: on-failure
 
-agent:
-  skillsDirectory: skills
-  listensBroadcast: false
+skills:
+  directory: skills
+
+agents:
+  - id: placeholder-agent
+    skillNames: [placeholder]
+    listensBroadcast: false
 
 permissions:
   knowledge: []
@@ -110,9 +170,16 @@ security:
 extensions: {}
 ```
 
-The schema requires a normalized plugin ID, semantic version, non-empty runtime
-command, relative skills directory, complete permission categories, and a known
-sandbox/restart policy. Paths may not be absolute or escape the plugin root.
+The schema requires a normalized package name, separate publisher, semantic
+version, display metadata, supervisor compatibility range, supported process
+protocols, non-empty runtime command, relative skills directory, at least one
+agent identity, complete permission categories, and known sandbox/restart
+policies. Paths may not be absolute or escape the plugin root.
+
+The stable package identity is `<publisher>.<name>`; it is distinct from every
+entry in `agents[]`. The first package contains one agent, but the schema does not
+require a future breaking change to represent a plugin process that owns multiple
+agent identities.
 
 `extensions` is an object whose keys must be reverse-domain or URI-like
 namespaces. Core loaders preserve extension values without interpreting them.
@@ -120,34 +187,58 @@ Unsupported core fields are rejected.
 
 ## Skills and procedural memory
 
-### Public skill discovery
+### Portable procedure
 
-Every immediate child directory under `agent.skillsDirectory` represents one
-skill and contains `skill.yaml`. The descriptor includes:
+Every immediate child directory under `skills.directory` represents one skill
+and contains a standard `SKILL.md`. Its YAML frontmatter supplies the portable
+skill name, activation description, compatibility statement, and version
+metadata; its Markdown body contains instructions, examples, edge cases, and
+success criteria.
+
+```markdown
+---
+name: placeholder
+description: Demonstrates a validated EdgeCitadel runtime skill.
+compatibility: Requires the EdgeCitadel plugin runtime v1 protocol.
+metadata:
+  version: "0.1.0"
+---
+
+# Placeholder
+
+Follow the packaged procedure and return output matching the declared schema.
+```
+
+The skill directory name must equal `SKILL.md.name`. Names follow the Agent
+Skills constraints: 1-64 lowercase alphanumeric or hyphen characters, no leading,
+trailing, or consecutive hyphens. `SKILL.md` is the single source of truth for
+the portable name, description, and procedure.
+
+Optional `references/`, `scripts/`, and `assets/` directories support progressive
+disclosure. The supervisor validates their package containment but does not load,
+execute, or interpret them.
+
+### EdgeCitadel skill binding
+
+Each skill also contains `binding.yaml`, which keeps EdgeCitadel execution and
+A2A metadata separate from portable procedure content:
 
 ```yaml
 apiVersion: edgecitadel.io/v1alpha1
-kind: AgentSkill
+kind: AgentSkillBinding
 
-metadata:
-  id: example.placeholder
-  version: 0.1.0
-  name: placeholder
-  description: Demonstrates the plugin package contract.
-  tags: [example]
+skillId: example.placeholder
+version: 0.1.0
 
-procedure:
-  path: procedure.md
-  format: markdown
-
-handler:
+execution:
+  kind: runtime-handler
   name: placeholder
 
 schemas:
-  input: input.schema.json
-  output: output.schema.json
+  input: schemas/input.json
+  output: schemas/output.json
 
-capabilities:
+requires:
   knowledge: []
   network: []
   devices: []
@@ -155,24 +246,23 @@ capabilities:
 extensions: {}
 ```
 
-The supervisor converts the public subset (`id`, `name`, `description`, `tags`)
-into the future Agent Card skill catalog. Execution-specific fields remain
-private to the package and are not exposed automatically.
+The supervisor combines `binding.skillId` with the name and description from
+`SKILL.md` to form the future Agent Card skill catalog. Execution-specific fields
+remain private to the package and are not exposed automatically.
 
-`handler.name` is an opaque identifier interpreted only by the plugin runtime.
+`execution.name` is an opaque identifier interpreted only by the plugin runtime.
 It is deliberately not a Python import path, allowing other languages and agent
 frameworks to use the same package contract.
 
 ### Packaged procedures
 
-`procedure.md` is immutable package content containing a prompt, checklist,
-workflow, or operating procedure. It is versioned with both the plugin and skill.
-Input and output schemas make the procedure boundary inspectable without
-requiring a particular agent framework.
+`SKILL.md` is immutable package content containing a prompt, checklist, workflow,
+or operating procedure. It is versioned with both the plugin and binding. Input
+and output schemas make the procedure boundary inspectable without requiring a
+particular agent framework.
 
-The scaffold validates that each referenced procedure and schema exists and is
-inside its skill directory. It does not interpret procedure content or import the
-handler.
+The scaffold validates `SKILL.md` frontmatter, `binding.yaml`, and referenced
+schemas. It does not interpret procedure content or import the handler.
 
 ### Learned procedural memory
 
@@ -185,6 +275,24 @@ The plugin manifest requests the knowledge namespaces it may use. A later policy
 layer resolves those requests into grants. This keeps reviewed package procedures
 separate from mutable learned memory and allows the latter to be audited,
 rejected, rolled back, or shared without changing executable code.
+
+### Package lock and integrity
+
+Every distributable package contains `plugin.lock.json`, validated against
+`plugin-lock.v1.schema.json`. The lock records its format version, package
+identity/version, process protocol, and a deterministic sorted list of packaged
+files with SHA-256 hashes. Skill entries also record the portable name, A2A skill
+ID, version, and relevant content hashes.
+
+The no-op supervisor recomputes hashes and rejects missing, modified, duplicated,
+or unlisted regular files. Symbolic links are rejected in this milestone. The
+lock establishes reproducible procedural content and future signature input;
+cryptographic signing and publisher verification remain later work.
+
+The lockfile does not list or hash itself and contains no generation timestamp or
+other volatile value. The `lock` command structurally validates the package and
+writes canonical JSON with lexicographically sorted paths; the `validate` command
+then verifies that canonical record without modifying the package.
 
 ## SDK extension boundaries
 
@@ -203,12 +311,28 @@ implementation. Methods whose use would cross those boundaries raise a clear
 The interfaces avoid NATS-specific and framework-specific parameter types so a
 future non-Python plugin can implement the same process protocol.
 
+Package semantic version, supervisor API compatibility, and process protocol
+version are independent. A package update may change procedures without changing
+the process protocol; an incompatible protocol is rejected before process launch.
+
+The lifecycle vocabulary is explicit even though process execution is absent:
+
+```text
+discovered -> validated -> installed -> starting -> ready -> draining -> stopped
+       \----------- any active state may transition to failed -----------/
+```
+
+Only `discovered` and `validated` occur in this milestone. The remaining states
+reserve stable names for later supervisor behavior.
+
 ## No-op supervisor
 
 The runnable command is:
 
 ```bash
-python -m edgecitadel_supervisor validate plugins/examples/placeholder
+cd plugin-system
+python -m edgecitadel_supervisor lock ../plugins/examples/placeholder
+python -m edgecitadel_supervisor validate ../plugins/examples/placeholder
 ```
 
 It performs these steps:
@@ -216,12 +340,19 @@ It performs these steps:
 1. Resolve and verify the plugin root.
 2. Load `plugin.yaml` with safe YAML parsing.
 3. Validate it against the plugin schema.
-4. Resolve `skillsDirectory` without following paths outside the package.
-5. Discover skill directories in deterministic name order.
-6. Validate each `skill.yaml` against the skill schema.
-7. Reject duplicate skill IDs and unsafe/missing referenced files.
-8. Emit a deterministic JSON inventory containing plugin identity, runtime
-   metadata, requested permissions, and public skill metadata.
+4. Check declared supervisor and process-protocol compatibility.
+5. Resolve `skills.directory` without following paths outside the package.
+6. Reject every symbolic link in the package.
+7. Discover skill directories in deterministic name order.
+8. Validate each `SKILL.md` frontmatter and directory-name match.
+9. Validate each `binding.yaml` against the binding schema.
+10. Reject duplicate portable names and A2A skill IDs.
+11. Verify every referenced schema stays inside its skill directory.
+12. Verify `agents[].skillNames` refers only to packaged skills.
+13. Recompute and verify `plugin.lock.json` file hashes.
+14. Emit a deterministic JSON inventory containing package identity,
+    compatibility, runtime metadata, agent-to-skill mappings, requested
+    permissions, skill metadata, and content hashes.
 
 The command exits zero only for a fully valid package. It does not run the
 runtime command, import handlers, inspect procedure contents, connect to NATS,
@@ -231,6 +362,9 @@ Future supervisor subcommands (`install`, `start`, `stop`, `status`, `upgrade`)
 are documented as reserved lifecycle operations but are not registered as usable
 commands in this milestone.
 
+`lock` is a packaging operation, not a lifecycle operation. It never imports or
+executes plugin code.
+
 ## Error model
 
 The loader and validator expose stable domain errors rather than raw library
@@ -239,9 +373,11 @@ exceptions:
 - `PluginNotFoundError`
 - `ManifestLoadError`
 - `ManifestValidationError`
+- `CompatibilityError`
 - `UnsafePackagePathError`
 - `SkillDiscoveryError`
 - `DuplicateSkillError`
+- `LockIntegrityError`
 
 CLI failures write one concise diagnostic to stderr and return a non-zero status.
 Diagnostics include the package-relative failing path and schema location but do
@@ -252,7 +388,7 @@ not dump procedure contents or secret values.
 This scaffold enforces only static package safety:
 
 - safe YAML loading;
-- no absolute or parent-traversing package references;
+- no absolute, parent-traversing, or symlinked package references;
 - no handler imports during validation;
 - no subprocess execution;
 - no environment or secret reads;
@@ -269,10 +405,15 @@ Unit tests cover:
 - successful loading of the placeholder package;
 - deterministic skill discovery and inventory output;
 - missing or malformed plugin manifests;
-- malformed skill descriptors;
-- duplicate skill IDs;
-- missing procedure/input/output files;
-- absolute paths and `..` traversal attempts;
+- malformed `SKILL.md` frontmatter and binding descriptors;
+- mismatched skill directory and portable name;
+- duplicate portable names and A2A skill IDs;
+- unknown agent-to-skill references;
+- missing input/output schemas;
+- absolute paths, `..` traversal attempts, and symbolic links;
+- unsupported supervisor API or process protocol;
+- missing, modified, duplicated, and unlisted lockfile content;
+- canonical lockfile generation with no volatile fields or self-hash;
 - unknown top-level core fields;
 - preservation of namespaced extension values;
 - CLI exit codes and stdout/stderr separation;
@@ -289,6 +430,8 @@ the aggregator, or network access.
 - Defining the final supervisor control protocol.
 - Implementing NATS transport, discovery, identity, ACLs, or audit capture.
 - Persisting or retrieving learned procedural memory.
+- Signing packages or verifying publisher identity.
+- Resolving or installing third-party language dependencies.
 - Implementing knowledge-daemon, MCP, A2A gateway, or transport plugins.
 - Adding Docker Compose services or host dependencies.
 
@@ -296,12 +439,18 @@ the aggregator, or network access.
 
 The milestone is complete when:
 
-1. The placeholder plugin contains a manifest, runtime stub, skill descriptor,
-   procedure, and input/output schemas.
+1. The placeholder plugin contains a manifest, lockfile, runtime stub, standard
+   `SKILL.md`, EdgeCitadel binding, references/scripts/assets directories, and
+   input/output schemas.
 2. The no-op supervisor validates it and emits a deterministic inventory.
-3. Invalid package structures fail with stable, actionable errors.
-4. SDK protocols preserve the future runtime, skill, knowledge, transport, and
+3. The no-op supervisor can regenerate its canonical lockfile without executing
+   plugin code.
+4. The supervisor verifies package compatibility, containment, and SHA-256
+   integrity without loading runtime code.
+5. Invalid package structures fail with stable, actionable errors.
+6. SDK protocols preserve the future runtime, skill, knowledge, transport, and
    lifecycle seams without implementing them.
-5. Tests pass without external services.
-6. No existing adapter, message subject, database schema, or deployment behavior
+7. Tests pass without external services.
+8. `AGENTS.md` documents the two new top-level directories.
+9. No existing adapter, message subject, database schema, or deployment behavior
    changes.
