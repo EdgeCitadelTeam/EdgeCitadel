@@ -1,6 +1,6 @@
-"""JetStream pull consumer with isolated legacy and injected paths.
+"""JetStream pull consumer with one delivery/executor path.
 
-Legacy handler contract: handler must produce (result_payload: dict, task_state: str)
+Handler compatibility contract: handler must produce (result_payload: dict, task_state: str)
 for command/delegation/cancel, OR return None for types with no reply
 (heartbeat, status, broadcast, log — but those don't land on inbox anyway).
 
@@ -8,8 +8,9 @@ Ack happens only after successful handler return AND successful result publish
 (for command/delegation/cancel). in_progress() is called periodically to
 extend ack_wait.
 
-Injected mode adapts the raw NATS delivery and delegates task semantics and
-finalization to TaskExecutor.
+Handler-based adapters are retained as a constructor compatibility surface,
+but are adapted to the same ``InboundDelivery`` execution path as injected
+``TaskExecutor`` instances.
 """
 
 from __future__ import annotations
@@ -173,6 +174,21 @@ def _binding_matches(info: ConsumerInfo, binding: ConsumerBinding) -> bool:
     )
 
 
+class _HandlerExecutor:
+    """Adapt the pre-injection handler API to an ``InboundDelivery``.
+
+    This is deliberately private: new integrations inject ``TaskExecutor``;
+    maintained handler-based adapters share the exact same consumer loop and
+    NATS delivery finalization while they migrate their business handlers.
+    """
+
+    def __init__(self, consumer: PullConsumer) -> None:
+        self._consumer = consumer
+
+    async def execute(self, delivery: InboundDelivery) -> None:
+        await self._consumer._execute_handler_delivery(delivery)
+
+
 class PullConsumer:
     def __init__(
         self,
@@ -192,12 +208,12 @@ class PullConsumer:
         max_deliver_supplied = not isinstance(max_deliver, _Unset)
         max_ack_pending_supplied = not isinstance(max_ack_pending, _Unset)
         sender_allowlist_supplied = not isinstance(sender_allowlist, _Unset)
-        legacy_ack_wait_sec = 300 if isinstance(ack_wait_sec, _Unset) else ack_wait_sec
-        legacy_max_deliver = 3 if isinstance(max_deliver, _Unset) else max_deliver
-        legacy_max_ack_pending = (
+        handler_ack_wait_sec = 300 if isinstance(ack_wait_sec, _Unset) else ack_wait_sec
+        handler_max_deliver = 3 if isinstance(max_deliver, _Unset) else max_deliver
+        handler_max_ack_pending = (
             1 if isinstance(max_ack_pending, _Unset) else max_ack_pending
         )
-        legacy_sender_allowlist = (
+        handler_sender_allowlist = (
             None if isinstance(sender_allowlist, _Unset) else sender_allowlist
         )
 
@@ -215,14 +231,14 @@ class PullConsumer:
                 or max_ack_pending_supplied
                 or sender_allowlist_supplied
             ):
-                raise ValueError("legacy options are invalid in injected mode")
+                raise ValueError("handler options are invalid in injected mode")
             if (
                 not _valid_binding(consumer_binding)
                 or consumer_binding.filter_subject != f"agents.{agent_id}.inbox"
             ):
                 raise ValueError("consumer binding does not match agent")
         elif event_sink is not None or consumer_binding is not None:
-            raise ValueError("injected options are invalid in legacy mode")
+            raise ValueError("injected options are invalid in handler mode")
 
         self.agent_id = agent_id
         self.nc = nc
@@ -234,24 +250,26 @@ class PullConsumer:
         self.ack_wait_sec = (
             consumer_binding.ack_wait_seconds
             if consumer_binding is not None
-            else legacy_ack_wait_sec
+            else handler_ack_wait_sec
         )
         self.max_deliver = (
             consumer_binding.max_deliver
             if consumer_binding is not None
-            else legacy_max_deliver
+            else handler_max_deliver
         )
         self.max_ack_pending = (
             consumer_binding.max_ack_pending
             if consumer_binding is not None
-            else legacy_max_ack_pending
+            else handler_max_ack_pending
         )
-        self.sender_allowlist = legacy_sender_allowlist
+        self.sender_allowlist = handler_sender_allowlist
         self.validator = default_validator()
+        if self.executor is None:
+            self.executor = cast(TaskExecutor, _HandlerExecutor(self))
         self._running = False
 
     async def run(self) -> None:
-        if self.executor is None:
+        if self.consumer_binding is None:
             await ensure_stream(self.js)
             await ensure_consumer(
                 self.js,
@@ -295,12 +313,6 @@ class PullConsumer:
         self._running = False
 
     async def _handle_msg(self, msg: Msg) -> None:
-        if self.executor is not None:
-            await self._handle_injected_msg(msg)
-            return
-        await self._handle_legacy_msg(msg)
-
-    async def _handle_injected_msg(self, msg: Msg) -> None:
         executor = cast(TaskExecutor, self.executor)
         delivery: InboundDelivery = _NATSInboundDelivery(self.agent_id, msg)
         keepalive = asyncio.create_task(self._keepalive(msg))
@@ -313,9 +325,10 @@ class PullConsumer:
             except asyncio.CancelledError:
                 pass
 
-    async def _handle_legacy_msg(self, msg: Msg) -> None:
+    async def _execute_handler_delivery(self, delivery: InboundDelivery) -> None:
+        msg = cast(_NATSInboundDelivery, delivery)._msg
         try:
-            env = json.loads(msg.data)
+            env = json.loads(delivery.raw)
         except json.JSONDecodeError:
             await msg.term()
             return
@@ -348,7 +361,6 @@ class PullConsumer:
             await msg.ack()
             return
 
-        keepalive = asyncio.create_task(self._keepalive(msg))
         try:
             ctx = Context(
                 agent_id=self.agent_id,
@@ -394,8 +406,6 @@ class PullConsumer:
             except Exception:  # noqa: BLE001,S110
                 pass
             await msg.nak()
-        finally:
-            keepalive.cancel()
 
     async def _keepalive(self, msg: Msg) -> None:
         cadence = max(1.0, self.ack_wait_sec / 3)

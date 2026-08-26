@@ -75,7 +75,5 @@ A new `conversation_turns` table lives in `/data/openclaw.db`. Three NATS subjec
 
 ## Related
 
-- Spec: `docs/superpowers/specs/2026-04-30-gemma-enhancements-design.md` (local-only, gitignored).
-- Plan: `docs/superpowers/plans/2026-04-30-gemma-enhancements.md` (local-only, gitignored).
 - Builds on ADR-0006 (outbox-mirror as audit path) — memory is a separate, narrower data store with its own retention policy.
 - Forward-compat for v0.3 semantic memory: `sqlite-vec` extension load + `turn_embedding BLOB` column.

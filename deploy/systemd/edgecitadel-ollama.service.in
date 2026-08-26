@@ -24,7 +24,7 @@ Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
 
-# Hardening — see ADR-0009 for rationale.
+# Hardening — see ADR-0012 for rationale.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

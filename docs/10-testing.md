@@ -3,8 +3,8 @@
 End-to-end coverage runs through Playwright against either the dedicated test
 stack (full isolation) or the live dev stack (smoke). The legacy
 `full-e2e.js` / `record-demo.js` scripts and the MQTT-based helpers were
-retired in the v0.1 messaging rebuild — see `docs/roadmap.md` and
-`docs/CHANGELOG.md`.
+retired in the v0.1 messaging rebuild. Git history retains those obsolete
+workflows.
 
 ## Suites
 

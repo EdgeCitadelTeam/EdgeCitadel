@@ -87,7 +87,7 @@ categories:
     checks:
       - name: gemma-hardening-score
         cmd: bash -c 'score=$(systemd-analyze security edgecitadel-gemma 2>/dev/null | tail -1 | grep -oE "[0-9]+\\.[0-9]+"); awk -v s="$score" "BEGIN{exit !(s<2.0)}"'
-        remediation: "expected score < 2.0; see ADR-0009 for hardening directives"
+        remediation: "expected score < 2.0; see ADR-0012 for hardening directives"
       - name: watchdog-hardening-score
         cmd: bash -c 'score=$(systemd-analyze security edgecitadel-watchdog 2>/dev/null | tail -1 | grep -oE "[0-9]+\\.[0-9]+"); awk -v s="$score" "BEGIN{exit !(s<2.0)}"'
         remediation: "expected score < 2.0"

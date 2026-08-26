@@ -1,204 +1,116 @@
 # EdgeCitadel
 
-Monitor, command, and orchestrate AI agents across edge devices from a single dashboard. Built on NATS 2.10 with MQTT adapter for IoT, JetStream for persistence, and P2P delegation for autonomous agent collaboration.
+EdgeCitadel is a small control plane for running and observing AI agents on edge
+hosts. NATS carries fleet traffic, the FastAPI aggregator stores the dashboard
+view in SQLite, and the React dashboard exposes the operator interface.
 
-## Demo
+The maintained transport is native NATS. MQTT ingress is an optional deployment
+adapter for constrained devices and is disabled by default.
 
-![EdgeCitadel Dashboard Demo](docs/demo.gif)
+## What is included
 
-## Features
+- A NATS 2.10 server with JetStream-backed per-agent inboxes.
+- A FastAPI aggregator with SQLite persistence, REST APIs, and dashboard WebSocket updates.
+- A React/Vite dashboard served through nginx.
+- Native adapters for supported agent runtimes under `adapters/`.
+- Playwright end-to-end tests for operator workflows.
 
-- **Real-Time Dashboard** — live WebSocket feed of all agent activity, system health, and connection status
-- **P2P Agent Delegation** — agents delegate tasks to peers autonomously with loop detection and depth limits
-- **Communication Flow Graph** — force-directed topology visualization of agent-to-agent message patterns
-- **Task Board** — Kanban-style tracking (Pending → Assigned → Running → Completed/Failed) with priority levels
-- **Message History** — full-text search, correlation ID grouping, and conversation replay via JetStream
-- **LLM Token Streaming** — stream agent responses token-by-token through NATS subjects to the dashboard
-- **Hybrid NATS + MQTT** — native NATS for the backend, built-in MQTT adapter on port 1883 for IoT agents
-- **Single-Token Auth** — one `NATS_TOKEN` secures both NATS and MQTT connections
+The canonical wire contract is [`schemas/envelope.v1.json`](schemas/envelope.v1.json).
+Subject ownership, durability, and delivery semantics are documented in
+[`docs/05-messaging.md`](docs/05-messaging.md).
 
-## Quick Start
+## Quick start
+
+Prerequisites are Docker Engine with Compose and available ports 80, 4222, and
+8222. Port 1883 is reserved by the development stack but MQTT is off unless it
+is explicitly enabled.
 
 ```bash
-git clone https://github.com/zhonghaozhan/EdgeCitadel.git && cd EdgeCitadel
-cp .env.example .env              # set NATS_TOKEN and OPENCLAW_TOKEN
+git clone https://github.com/zhonghaozhan/EdgeCitadel.git
+cd EdgeCitadel
+cp .env.example .env
+# Replace the placeholder tokens in .env.
 mkdir -p data nats/data
+./scripts/render-nats-conf.sh
 docker compose up --build -d
 ```
 
-Verify: `curl http://localhost:8222/healthz` (NATS) and open `http://localhost` (dashboard).
-
-## Add an Agent
-
-**On the server:**
+Verify the broker and application, then open <http://localhost>:
 
 ```bash
-./add-agent.sh my-agent
+curl --fail http://localhost:8222/healthz
+curl --fail http://localhost/api/system/status
 ```
 
-**On the agent's machine:**
+Runtime data is written below `data/` and `nats/data/`; neither directory should
+be committed. Stop the stack with `docker compose down`.
 
-```bash
-git clone https://github.com/zhonghaozhan/EdgeCitadel.git && cd EdgeCitadel
-./join.sh <server-ip> <nats-token> my-agent
-```
-
-The agent auto-detects its hostname, device type, and local OpenClaw installation. It registers over MQTT and appears on the dashboard within seconds.
-
-## Managing Agents
-
-```bash
-journalctl --user -u edgecitadel-my-agent -f        # logs
-systemctl --user restart edgecitadel-my-agent        # restart
-systemctl --user stop edgecitadel-my-agent           # stop
-```
-
----
+For a production host installation, follow
+[`docs/02-server-setup-linux.md`](docs/02-server-setup-linux.md). Agent authors
+should start with [`docs/agent-contract.md`](docs/agent-contract.md) and
+[`docs/03-agent-registration.md`](docs/03-agent-registration.md), rather than the
+legacy MQTT helper scripts.
 
 ## Architecture
 
 ```mermaid
-graph LR
-    subgraph Agents["Edge Agents"]
-        direction TB
-        A1["Mac Mini"]
-        A2["Raspberry Pi"]
-        A3["EC2 Instance"]
-        A1 -.->|P2P| A2
-        A2 -.->|P2P| A3
-        A1 -.->|P2P| A3
-    end
-
-    subgraph Server["EdgeCitadel Server"]
-        direction TB
-        NATS["NATS 2.10<br/>JetStream + MQTT Adapter"]
-        AGG["Aggregator<br/>FastAPI + nats-py"]
-        DB[(SQLite)]
-        NG["Nginx"]
-        UI["React Dashboard"]
-
-        NATS -->|":4222"| AGG
-        AGG --> DB
-        AGG <-->|WebSocket| NG
-        UI --- NG
-    end
-
-    Agents ==>|"MQTT :1883"| NATS
-    Browser(("Browser")) -->|":80"| NG
+flowchart LR
+    Agent[Native NATS agent or adapter] -->|plain NATS + JetStream inbox| NATS[NATS 2.10]
+    IoT[Constrained device] -.->|optional MQTT ingress| NATS
+    NATS <--> Aggregator[FastAPI aggregator]
+    Aggregator --> DB[(SQLite)]
+    Aggregator <--> Nginx[nginx]
+    Dashboard[React dashboard] --> Nginx
+    Browser[Operator browser] -->|HTTP / WebSocket| Nginx
 ```
 
-> P2P delegation routes through NATS — agents publish to each other's inbox topics.
-> The aggregator observes all traffic (including P2P) via its `agents.>` wildcard subscription.
-
-There is **no separate MQTT broker**. NATS 2.10 has a built-in MQTT adapter that translates MQTT topics (`agents/name/action`) to NATS subjects (`agents.name.action`) automatically.
-
-- **IoT agents** connect via MQTT on port 1883 using `NATS_TOKEN` as password
-- **Aggregator** connects via native NATS on port 4222
-- **Dashboard** receives updates via WebSocket through Nginx
-
-## Communication Flow
-
-```mermaid
-sequenceDiagram
-    participant Agent as Agent
-    participant Hub as NATS Hub
-    participant Server as Server
-    participant UI as Dashboard
-
-    rect rgb(240, 248, 255)
-        Note over Agent,UI: 1. Agent comes online
-        Agent->>Hub: Register + heartbeat
-        Hub->>Server: Forward
-        Server->>UI: Show on dashboard
-    end
-
-    rect rgb(240, 255, 240)
-        Note over Agent,UI: 2. User sends a command
-        UI->>Server: Send command
-        Server->>Hub: Route to agent
-        Hub->>Agent: Deliver
-        Agent->>Hub: Send response
-        Hub->>Server: Forward
-        Server->>UI: Show response
-    end
-
-    rect rgb(255, 248, 240)
-        Note over Agent,Hub: 3. Agent delegates to another agent
-        Agent->>Hub: Ask Agent B for help
-        Hub->>Agent: Agent B replies
-        Agent->>Agent: Combine results
-        Note over Server: Server monitors all traffic
-    end
-```
-
-P2P delegation has built-in guardrails: max 3 rounds, 90s timeout, loop detection, and depth limits. See [docs/06-p2p-delegation.md](docs/06-p2p-delegation.md).
-
-## Subjects & Topics
-
-| MQTT Topic (agent-side) | NATS Subject (server-side) | Purpose |
+| Port | Owner | Purpose |
 |---|---|---|
-| `agents/{id}/register` | `agents.{id}.register` | Agent registration |
-| `agents/{id}/heartbeat` | `agents.{id}.heartbeat` | Health metrics |
-| `agents/{id}/inbox` | `agents.{id}.inbox` | Commands to agent (from dashboard or P2P) |
-| `agents/{id}/outbox` | `agents.{id}.outbox` | Responses from agent (+ P2P delegation requests) |
-| `agents/{id}/status` | `agents.{id}.status` | Online/offline |
-| `agents/{id}/log` | `agents.{id}.log` | Log entries |
-| `tasks/{id}/assign` | `tasks.{id}.assign` | Task assignment |
-| `tasks/{id}/complete` | `tasks.{id}.complete` | Task completion |
-| `system/broadcast` | `system.broadcast` | Broadcast to all |
+| 80 | nginx | Dashboard, `/api/*`, and `/ws/*` |
+| 4222 | NATS | Native agent and service connections |
+| 8222 | NATS | Monitoring and health endpoints |
+| 1883 | NATS | Optional MQTT ingress; disabled by default |
 
-## Services & Ports
+Only `agents.{id}.inbox` is a durable work queue. Registration, heartbeat,
+status, logs, progress, outbox audit mirrors, and broadcasts use plain NATS.
+See [`docs/01-architecture.md`](docs/01-architecture.md) for component ownership
+and [`docs/05-messaging.md`](docs/05-messaging.md) for the complete subject list.
 
-| Port | Protocol | Service |
-|------|----------|---------|
-| 80 | HTTP | Nginx (dashboard + API + WebSocket) |
-| 1883 | MQTT | NATS MQTT adapter (agent connections) |
-| 4222 | NATS | Native NATS (aggregator) |
-| 8222 | HTTP | NATS monitoring (`/healthz`, `/varz`, `/jsz`) |
+## Repository map
 
----
-
-## Coding Agent Compatibility
-
-This repo is set up for Claude Code.
-
-- Coding-agent instructions live in `CLAUDE.md` (root) with subproject-specific rules in nested `CLAUDE.md` files under `aggregator/`, `frontend/`, `openclaw-client/`, and `e2e/`.
-- Shared Claude project settings live in `.claude/settings.json`; local-only Claude overrides belong in `.claude/settings.local.json`.
-- Per-subsystem verification recipes are in `.claude/skills/verify-*` (loaded on demand).
-
-### Verification Expectations
-
-- UI, browser-flow, and operator-workflow changes must include actual Playwright verification from `e2e/`; curl-only smoke checks are not sufficient.
-- Shared workflow, repo-structure, Docker, or agent-config changes should restart the stack and then run smoke checks plus the narrowest relevant Playwright coverage.
-
----
-
-## Documentation
-
-| Topic | Link |
-|-------|------|
-| Architecture | [docs/01-architecture.md](docs/01-architecture.md) |
-| Server Setup | [docs/02-server-setup.md](docs/02-server-setup.md) |
-| Agent Registration | [docs/03-agent-registration.md](docs/03-agent-registration.md) |
-| Messaging Protocol | [docs/05-messaging.md](docs/05-messaging.md) |
-| P2P Delegation | [docs/06-p2p-delegation.md](docs/06-p2p-delegation.md) |
-| Task Management | [docs/07-task-management.md](docs/07-task-management.md) |
-| API Reference | [docs/08-api-reference.md](docs/08-api-reference.md) |
-| Monitoring | [docs/09-monitoring.md](docs/09-monitoring.md) |
-| Research Artifact | [docs/research/artifact.md](docs/research/artifact.md) |
+| Path | Responsibility |
+|---|---|
+| `aggregator/` | FastAPI backend, NATS subscriptions, and SQLite persistence |
+| `frontend/` | The only dashboard source tree |
+| `adapters/` | Agent runtime integrations and shared execution code |
+| `nats/`, `nginx/` | Local stack configuration |
+| `deploy/` | Host installation and service management |
+| `e2e/` | Playwright operator-flow tests |
+| `docs/` | Current architecture, contracts, setup, and operations |
 
 ## Development
 
 ```bash
-# Aggregator
-cd aggregator && ruff check --fix && ruff format && mypy --strict && pytest tests/ -x
+# Backend
+cd aggregator
+ruff check . && ruff format --check . && mypy --strict . && pytest tests/ -x
 
 # Frontend
-cd frontend && npm run lint && npm run build
+cd ../frontend
+npm ci && npm run lint && npm run build
 
-# E2E
-cd e2e && npx playwright test
+# End to end (requires the running stack)
+cd ../e2e
+npm ci && npm test
 ```
+
+Repository workflow and quality gates are defined once in [`AGENTS.md`](AGENTS.md).
+Tool-specific files may add integration details but do not replace those rules.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a change.
+
+## Documentation
+
+The maintained documentation index is [`docs/README.md`](docs/README.md).
 
 ## License
 

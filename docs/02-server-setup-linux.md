@@ -194,8 +194,7 @@ See `/opt/edgecitadel/deploy/backup/README.md` for the full restore procedure. T
 
 ## 11. See also
 
-- ADR-0009: `docs/adr/0009-host-deploy-architecture.md`
-- Spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`
+- ADR-0012: `docs/adr/0012-host-deploy-architecture.md`
 - Manifest: `/opt/edgecitadel/deploy/manifest.toml`
 - Backup runbook: `/opt/edgecitadel/deploy/backup/README.md`
 - macOS variant: `02-server-setup-macos.md`

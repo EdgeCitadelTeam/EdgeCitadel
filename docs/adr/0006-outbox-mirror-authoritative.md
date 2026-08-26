@@ -88,6 +88,5 @@ Concretely:
 
 - [docs/agent-contract.md](../agent-contract.md) — v0.1 contract; outbox subjects are part of the subject inventory.
 - [docs/05-messaging.md](../05-messaging.md) — operator-facing subject inventory (will be updated in Task 8).
-- [docs/superpowers/specs/2026-04-23-agent-messaging-design.md](../superpowers/specs/2026-04-23-agent-messaging-design.md) — full design spec; see "Subject inventory" and "Aggregator durable intake" sections.
 - [ADR-0001: NATS over MQTT broker](0001-nats-over-mqtt-broker.md)
 - [ADR-0003: A2A v1.0 vocabulary adoption](0003-a2a-v1-vocabulary-adoption.md)
