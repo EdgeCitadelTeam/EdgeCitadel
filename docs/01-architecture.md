@@ -1,110 +1,72 @@
-# Architecture: Hybrid NATS + MQTT
+# Architecture
 
-EdgeCitadel runs a single **NATS 2.10+** server that serves two protocols simultaneously:
+EdgeCitadel is a NATS-native control plane for edge agents. The development
+stack has four services:
 
-- **Native NATS** (port 4222) — used by the aggregator for full JetStream features
-- **MQTT 3.1.1 adapter** (port 1883) — used by IoT agents (Raspberry Pi, ESP32, smartphones)
+1. **NATS 2.10** routes ephemeral fleet events and owns the JetStream work queue.
+2. **Aggregator** consumes fleet events, maintains the SQLite dashboard model,
+   serves REST endpoints, and broadcasts WebSocket updates.
+3. **Dashboard** is the compiled React application from `frontend/`.
+4. **nginx** exposes the dashboard, `/api/*`, and `/ws/*` on port 80.
 
-This gives the best of both worlds: enterprise-grade streaming and persistence for the backend, simple pub/sub for constrained devices.
-
-## Why Hybrid
-
-| Concern | NATS (aggregator) | MQTT (agents) |
-|---|---|---|
-| Persistent streams | JetStream `CONVERSATIONS` stream | N/A (NATS persists for them) |
-| K/V state store | `AGENT_STATE` bucket | N/A |
-| Request-reply | Native support | Correlation ID over pub/sub |
-| IoT compatibility | Not practical on ESP32 | First-class, tiny footprint |
-| Auth | Token-based | Same token as MQTT password |
-
-## Topic Translation
-
-NATS uses dot-separated subjects. MQTT uses slash-separated topics. The NATS server translates automatically:
-
-```
-MQTT:  agents/jeeves/heartbeat
-NATS:  agents.jeeves.heartbeat
-       ↕ automatic translation ↕
+```mermaid
+flowchart LR
+    Agents[Agents and adapters] <--> NATS[NATS :4222]
+    Devices[Constrained devices] -. optional MQTT :1883 .-> NATS
+    NATS <--> API[Aggregator :8000]
+    API --> SQLite[(SQLite)]
+    API <--> Proxy[nginx :80]
+    UI[React dashboard] --> Proxy
+    Operator[Operator] --> Proxy
 ```
 
-The aggregator's `publish()` method also converts slashes to dots, so REST API callers can use either format.
+## Transport boundary
 
-## Subject Structure
+Native NATS is the maintained internal transport for the aggregator and agent
+adapters. MQTT is an ingress compatibility option for devices that cannot speak
+NATS; it is disabled by default with `EC_ENABLE_MQTT=0`. Enabling it does not
+change the internal message contract.
 
-```
-agents.{name}.register     # Agent registration with capabilities
-agents.{name}.heartbeat    # Periodic health check (CPU, memory, IP)
-agents.{name}.inbox        # Commands TO the agent
-agents.{name}.outbox       # Results FROM the agent
-agents.{name}.status       # Status changes (online/offline)
-agents.{name}.log          # Agent log entries
+All fleet messages use the canonical JSON envelope in
+[`schemas/envelope.v1.json`](../schemas/envelope.v1.json). The base behavioral
+contract is [`agent-contract.md`](agent-contract.md). Subject and JetStream
+configuration belongs in [`05-messaging.md`](05-messaging.md); it is intentionally
+not duplicated here.
 
-tasks.{id}.assign          # Task assignment
-tasks.{id}.progress        # Task progress update
-tasks.{id}.stream          # Token streaming
-tasks.{id}.complete        # Task completion with result
-tasks.{id}.failed          # Task failure with error
+## Persistence ownership
 
-system.broadcast           # Broadcast to all agents
-```
+- JetStream stream `AGENT_INBOX` owns durable delivery to `agents.{id}.inbox`.
+- Plain NATS carries registration, heartbeat, status, logs, progress, outbox
+  audit mirrors, memory request/reply, and system broadcasts.
+- SQLite owns the aggregator's query model, including dashboard history and
+  current agent state.
+- The browser consumes aggregator APIs only; it does not connect directly to
+  NATS.
 
-## JetStream Persistence
+## Source ownership
 
-The `CONVERSATIONS` stream captures all subjects matching `agents.>`, `tasks.>`, `system.>`:
+| Area | Owner |
+|---|---|
+| Backend and database | `aggregator/` |
+| Dashboard source | `frontend/` |
+| Agent integrations | `adapters/` |
+| Browser-facing routing | `nginx/` |
+| Broker configuration | `nats/` |
+| Host deployment | `deploy/` |
 
-- Retention: max 10,000 messages
-- Storage: file-backed (survives restarts)
-- Replay: ordered consumer for conversation history
+The Docker service remains named `dashboard`; there is no separate
+`dashboard/` source directory.
 
-The `AGENT_STATE` K/V bucket stores live state per agent:
+## Authentication and configuration
 
-```json
-{
-  "agent_id": "jeeves",
-  "action": "heartbeat",
-  "last_seen": 1710000000
-}
-```
+Local configuration starts from `.env.example`. `NATS_TOKEN` authenticates NATS
+clients. `OPENCLAW_TOKEN` is a separately scoped browser/client credential.
+Secrets and runtime data stay in untracked `.env`, `data/`, and `nats/data/`.
 
-## Authentication
+Host-level dependencies are declared only in `deploy/manifest.toml`. See
+[`02-server-setup-linux.md`](02-server-setup-linux.md) for production deployment.
 
-Single `NATS_TOKEN` environment variable:
+## Design decisions
 
-- **NATS clients**: pass as connection token
-- **MQTT clients**: pass as password (username is arbitrary, e.g. `mqtt-agent`)
-- **No auth in test stack**: test-nats.conf omits the authorization block
-
-## Docker Compose Stack
-
-```
-┌─────────────────────────────────────────────┐
-│  nginx (:80)                                │
-│  ├── /api/*  → aggregator:8000              │
-│  ├── /ws/*   → aggregator:8000              │
-│  └── /*      → dashboard:80                 │
-├─────────────────────────────────────────────┤
-│  aggregator (FastAPI, nats-py)              │
-│  └── SQLite /data/openclaw.db               │
-├─────────────────────────────────────────────┤
-│  dashboard (React, Vite, Nginx)             │
-├─────────────────────────────────────────────┤
-│  nats (:4222 NATS, :1883 MQTT, :8222 HTTP)  │
-│  └── JetStream /data/jetstream/             │
-└─────────────────────────────────────────────┘
-```
-
-## Data Flow
-
-```
-IoT Agent (mqtt.js)                    Aggregator (nats-py)
-     │                                      │
-     ├── MQTT publish ──→ NATS server ──→ subscription ──→ parse + store
-     │                         │                              │
-     │                         │                         WebSocket broadcast
-     │                         │                              │
-     │                    JetStream                     React Dashboard
-     │                    persists                           │
-     │                         │                         REST API queries
-     └── MQTT subscribe ←─────┘                              │
-                                                         SQLite DB
-```
+Accepted architectural choices live in [`adr/`](adr/). Operational documents
+describe the current system; ADRs retain the rationale behind it.

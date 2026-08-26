@@ -117,4 +117,3 @@ Concretely:
 - [aggregator/jetstream_bootstrap.py](../../aggregator/jetstream_bootstrap.py) — `ensure_stream` / `ensure_consumer` implementation.
 - [ADR-0001: NATS over MQTT broker](0001-nats-over-mqtt-broker.md)
 - [ADR-0006: Outbox mirror authoritative](0006-outbox-mirror-authoritative.md) — explains why the audit path lives on a separate subject family rather than a second consumer on `AGENT_INBOX`.
-- [docs/superpowers/specs/2026-04-23-agent-messaging-design.md](../superpowers/specs/2026-04-23-agent-messaging-design.md) — design spec, "Delivery semantics" and "JetStream bootstrap" sections.

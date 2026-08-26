@@ -309,7 +309,7 @@ async def run_cell(
         "W7",
         "W8",
     }:
-        raise ValueError("workload execution is not implemented")
+        raise ValueError(f"unsupported workload: {cell.workload}")
     sender_id = _fixture_value(fixture, "sender_id", "requester-1")
     worker_id = _fixture_value(fixture, "worker_id", "worker-1")
     task_id = str(uuid4())

@@ -272,4 +272,3 @@ in `/etc/edgecitadel/homeassistant.env` and the token file referenced by
 - [ADR-0002](adr/0002-nats-jetstream-workqueue.md) — JetStream WorkQueue choice and consumer config rationale.
 - [ADR-0006](adr/0006-outbox-mirror-authoritative.md) — outbox mirror on plain NATS as authoritative for dashboard views.
 - [`aggregator/jetstream_bootstrap.py`](../aggregator/jetstream_bootstrap.py) — `ensure_stream` / `ensure_consumer` source.
-- [`docs/superpowers/specs/2026-04-23-agent-messaging-design.md`](superpowers/specs/2026-04-23-agent-messaging-design.md) — full design spec.

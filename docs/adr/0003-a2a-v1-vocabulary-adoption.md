@@ -88,5 +88,4 @@ Concretely:
 
 - [docs/agent-contract.md](../agent-contract.md) — authoritative v0.1 contract built on this decision.
 - [schemas/envelope.v1.json](../../schemas/envelope.v1.json) — strict JSON Schema enforcing the vocabulary.
-- [docs/superpowers/specs/2026-04-23-agent-messaging-design.md](../superpowers/specs/2026-04-23-agent-messaging-design.md) — full design spec, sections "Semantic layer" and "Subject inventory".
 - [ADR-0001: NATS over MQTT broker](0001-nats-over-mqtt-broker.md)

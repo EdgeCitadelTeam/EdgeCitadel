@@ -1,4 +1,4 @@
-# ADR-0009: Host Deploy Architecture (Phase 5)
+# ADR-0012: Host Deploy Architecture (Phase 5)
 
 ## Status
 
@@ -101,7 +101,6 @@ This is a deliberate amendment to ADR-0004:
 
 ## Links
 
-- Phase 5 spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`
 - ADR-0004 (MQTT opt-in — amended above; deploy now consolidates `nats`/`nats-mqtt` into one always-listening service to fix a port-collision bug)
 - ADR-0005 (browser-scoped token — informs why we don't add an "openclaw browser launcher")
 - systemd hardening reference: `man systemd.exec`

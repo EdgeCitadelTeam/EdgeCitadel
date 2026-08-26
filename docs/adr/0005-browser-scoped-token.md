@@ -95,6 +95,5 @@ Concretely:
 - [docs/agent-contract.md](../agent-contract.md) — envelope and subject contract that openclaw publishes against.
 - [openclaw-client/index.js](../../openclaw-client/index.js) — runtime wiring for the scoped token.
 - [openclaw-client/src/nats-session.js](../../openclaw-client/src/nats-session.js) — envelope builders and validator.
-- [docs/superpowers/specs/2026-04-23-agent-messaging-design.md](../superpowers/specs/2026-04-23-agent-messaging-design.md) — full design spec.
 - [ADR-0001: NATS over MQTT broker](0001-nats-over-mqtt-broker.md)
 - [ADR-0003: A2A v1.0 vocabulary adoption](0003-a2a-v1-vocabulary-adoption.md)

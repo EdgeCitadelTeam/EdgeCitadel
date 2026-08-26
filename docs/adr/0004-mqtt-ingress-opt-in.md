@@ -95,6 +95,5 @@ Concretely:
 - [scripts/render-nats-conf.sh](../../scripts/render-nats-conf.sh) — renderer that drives the toggle.
 - [nats/nats.conf.tpl](../../nats/nats.conf.tpl) — source template, MQTT block commented between markers.
 - [docker-compose.yml](../../docker-compose.yml) — `nats` service (default) vs `nats-mqtt` service behind `profiles: ["mqtt-ingress"]`.
-- [docs/superpowers/specs/2026-04-23-agent-messaging-design.md](../superpowers/specs/2026-04-23-agent-messaging-design.md) — full design spec.
 - [ADR-0001: NATS over MQTT broker](0001-nats-over-mqtt-broker.md)
 - [ADR-0005: Browser scoped token](0005-browser-scoped-token.md)

@@ -2,8 +2,8 @@
 
 ## How this file is maintained
 - Treat this file as code. PRs that change repo workflow, commands, directories, or quality gates must update it.
-- Keep it under 200 lines. Move long workflow detail into `.codex/skills/<name>/SKILL.md`.
-- Keep one source of truth. Do not duplicate facts across this file, `~/.codex/AGENTS.md`, `Codex.local.md`, `.codex/skills/`, or `.codex/settings.json`.
+- Keep it under 200 lines. Move long workflow detail into `.agents/skills/<name>/SKILL.md`.
+- Keep one source of truth. Do not duplicate facts across this file, tool-specific instruction files, or `.agents/skills/`.
 - Add "Do Not" entries only for real mistakes that should be prevented next time.
 
 ## Engineering behavior
@@ -17,7 +17,7 @@
 ## Repo map
 - `aggregator/` - Python FastAPI backend, NATS subscriptions, SQLite persistence
 - `frontend/` - React/Vite dashboard; the only UI source root
-- `openclaw-client/` - Node MQTT listener for agents
+- `openclaw-client/` - Node NATS client for agents
 - `e2e/` - Playwright end-to-end tests
 - `docs/` - architecture and operations
 - Service `dashboard` is current; the old `dashboard/` directory is retired.

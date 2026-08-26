@@ -9,7 +9,7 @@ docker compose up --build     # start full stack
 ```
 
 Dashboard: http://localhost (via nginx)
-API: http://localhost/api/health
+API status: http://localhost/api/system/status
 NATS monitoring: http://localhost:8222
 
 ## Development Workflow
@@ -26,7 +26,7 @@ git checkout -b <type>/<short-description>
 
 ### 2. Make changes
 
-Follow the rules in `.claude/rules/` for the area you're modifying:
+Repository policy and quality gates are in `AGENTS.md`. Claude-specific area guides are in `.claude/rules/`:
 - `python-backend.md` — aggregator Python code
 - `react-frontend.md` — dashboard React components
 - `nats-messaging.md` — NATS subjects and message schemas
@@ -77,8 +77,8 @@ PRs must include:
 
 | Change Type | Required Docs |
 |------------|---------------|
-| New feature | Update `docs/` file, CHANGELOG entry, tests |
-| Bug fix | CHANGELOG entry, regression test |
+| New feature | Update the relevant maintained document and tests |
+| Bug fix | Add a regression test and update affected documentation |
 | Architecture change | ADR in `docs/adr/`, CLAUDE.md update if needed |
 | API change | `docs/08-api-reference.md`, Pydantic model update |
 | Config change | `.env.example`, `docs/02-server-setup.md` |
@@ -116,11 +116,12 @@ Verdicts: **SHIP** / **FIX-THEN-SHIP** / **RETHINK**
 ```
 aggregator/      Python FastAPI aggregator
 frontend/        React 18 dashboard
-openclaw-client/ Node.js MQTT agent listener
+openclaw-client/ Node.js NATS agent client
 nats/            NATS server config
 nginx/           Reverse proxy config
 e2e/             Playwright tests
 scripts/         Utility scripts
 docs/            Architecture docs, API reference, ADRs
-.claude/         Claude Code agents, rules, skills
+.agents/         Canonical shared verification skills
+.claude/         Claude-specific compatibility and area guides
 ```

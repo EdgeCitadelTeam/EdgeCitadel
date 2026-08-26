@@ -364,7 +364,6 @@ Each adapter is small on purpose. If an adapter is more than ~500 lines, the con
 - [`schemas/envelope.v1.json`](../schemas/envelope.v1.json) — strict JSON Schema for the wire format.
 - [`schemas/agent-card.v1.json`](../schemas/agent-card.v1.json) — A2A v1.0 Agent Card schema (rewritten in Task 2).
 - [`docs/05-messaging.md`](05-messaging.md) — operational view of subjects and persistence.
-- [`docs/superpowers/specs/2026-04-23-agent-messaging-design.md`](superpowers/specs/2026-04-23-agent-messaging-design.md) — full design spec underlying this contract.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Production deploy artifacts for EdgeCitadel Phase 5.
 Operator-facing setup guide: `docs/02-server-setup-linux.md`.
-Architectural rationale: `docs/adr/0009-host-deploy-architecture.md`.
+Architectural rationale: `docs/adr/0012-host-deploy-architecture.md`.
 Spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`.
 
 ## Single source of truth

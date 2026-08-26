@@ -1,208 +1,43 @@
-# EdgeCitadel Roadmap
+# Roadmap
 
-This file tracks deferred work and the path forward beyond what's currently implemented or scheduled. Two top-level sections:
+This file contains only work that is not implemented. Current behavior belongs
+in the product guides, and completed plans remain available in Git history.
+Priorities and delivery status are tracked in repository issues.
 
-1. **[Out of scope — deferred enhancements](#out-of-scope--deferred-enhancements)** — items intentionally cut from current specs, with the design hooks already in place to land them later without contract changes.
-2. **[Phase handover — delayed-to-later-phases](#phase-handover--delayed-to-later-phases)** — explicit work items pushed to specific future phases, each with the spec entry point.
+## Reliability and operations
 
-Last updated: 2026-05-17.
+- Make JetStream-dependent tests fail fast when a broker is unavailable.
+- Automate starting the host-side test adapters required by the isolated
+  Playwright agent round trips.
+- Decide whether registration and heartbeat events require a durable audit
+  history in addition to the current agent-state projection.
+- Add production evidence for backup restore, upgrade, rollback, and host
+  deployment on every supported platform.
 
-**Workflow:** in-flight phases are tracked as [GitHub Issues](https://github.com/zhonghaozhan/EdgeCitadel/issues): one `epic` issue per phase + one `sub-spec` issue per sub-phase. This file remains the canonical narrative; issues are the operational tracker. See the epic / sub-spec links beside each phase below.
+## Agent and task workflows
 
----
+- Decide whether task creation remains derived from message traffic or returns
+  as an explicit API and dashboard workflow.
+- Add further model backends as separate adapters when there is a maintained
+  deployment and test path for each one.
+- Define application-level idempotency requirements for handlers with external
+  side effects; transport deduplication alone cannot provide exactly-once side
+  effects.
 
-## Out of scope — deferred enhancements
+## Security and fleet scale
 
-Items intentionally NOT in the current spec scope. Each has been brainstormed and consciously deferred; landing them later should be a clean delta, not a redesign.
+- Replace shared development credentials with a documented production
+  authorization and credential-rotation design.
+- Validate queue, database, and dashboard behavior beyond the current small
+  single-host fleet assumptions before claiming larger-scale support.
+- Define artifact/object-storage handling for message bodies that should not be
+  carried in the canonical envelope.
 
-### Gemma adapter (Phase 2 spec)
+## Test-data isolation
 
-| Item | Reason deferred | Forward-compat hook |
-|---|---|---|
-| **Multi-skill dispatch** (`text.summarize`, `text.classify`, `code.explain`, ...) keyed by `payload.skill_id` | Single-skill is enough to validate the wire contract; per-skill prompt templates compound testing complexity | `skills` array in `config.yaml` is open-ended; a future skill_id dispatcher inside `handle()` adds dispatch without touching the envelope |
-| **Conversational memory** keyed by `context_id` (turn history → prepended into prompts) | Smoke scope; memory eviction policy is its own design problem (token budget, summarization, abandonment) | Spec preserves `context_id` from inbound to outbound result; future memory store keys on it |
-| **Token streaming** via `task.progress` envelopes (Ollama `stream=true` → batched updates) | Frontend has no WebSocket plumbing today; per-token NATS publishes have measurable cost without user-visible benefit | `capabilities.streaming` is `false`; flipping to `true` is schema-clean. `task.progress` envelope type already exists in v0.1 schema |
-| **Non-Ollama backends** (vLLM, llama.cpp, OpenAI-compatible, Anthropic API) | Different failure modes, different auth assumptions, different streaming protocols — each needs its own adapter | Backend is hidden behind `handle()`; a parallel `adapters/openai/` would mirror this directory's shape |
-| **Auto-pull on startup** (`ollama pull` if model missing) | 3–8 GB downloads mask "operator forgot to pull" as "adapter is slow"; failure mode confusion | Preflight already detects missing model and exits 2 with a clear message; auto-pull is one branch added |
-| **Container packaging** of the Gemma adapter | Ollama runs on the host; containerizing the adapter complicates `OLLAMA_HOST` networking. Phase 5 Mac Mini deploy can run both as host services | Adapter has no Docker assumptions today; future Dockerfile is additive |
-
-### Phase 1 follow-ups (loose ends from the v0.1 messaging rebuild)
-
-Items that surfaced during Phase 1 implementation but were out of plan scope:
-
-| Item | Severity | Notes |
-|---|---|---|
-| ~~**WebSocket endpoints** (`/ws/stream`, `/ws/agent/<id>`) — `frontend/src/hooks/useWebSocket.js` references them but `aggregator/main.py` doesn't ship them~~ | ~~Medium~~ | **Resolved** — `aggregator/websocket_hub.py` (new) tracks global + per-agent subscribers; `aggregator/main.py` adds `/ws/stream` and `/ws/agent/{id}` endpoints. `MessageRouter.on_outbox` broadcasts every persisted envelope (with the resolved `deployment` field attached so client-side filters work in real-time identically to historical /api/messages rows); `on_register`/`on_status`/`on_log` push typed `agent_registered`/`agent_status_change`/`log` events. Live verified: command and result frames arrive on `/ws/stream` in ~25ms vs ~3s polling lag — 100×+ faster. 5 unit tests at `aggregator/tests/test_websocket_hub.py`. The 3s ChatHistory poll stays as a fallback (covers historical pagination + WS gaps). |
-| ~~**Stale `.claude/rules/docker-infra.md` and `nats-messaging.md`**~~ | ~~Low~~ | **Resolved** — both rule files rewritten against shipped v0.1 reality (token-only NATS auth, MQTT off by default, nginx preserve-prefix proxy, aggregator-as-package Dockerfile, JetStream config in seconds). `e2e-testing.md` also refreshed: drops references to deleted helpers (mqtt-client/cleanup/test-data) and the unshipped WS, points at the smoke-config workaround. |
-| ~~**`httpx` not pinned in `aggregator/requirements.txt`**~~ | ~~Medium~~ | **Resolved** — `httpx>=0.27` added. FastAPI `TestClient` and any future async HTTP work now have an explicit pin. |
-| ~~**`OPENCLAW_API_KEY` env var preserved in `docker-compose.yml`**~~ | ~~Low~~ | **Resolved (retire)** — gone from `.env.example`, `docker-compose.yml`, README, CONTRIBUTING, `docs/02-server-setup.md`, `e2e/docker-compose.test.yml`. Aggregator never read it post-Phase-1; HTTP-level auth is a separate v0.2 design topic. |
-| ~~**Legacy `e2e/full-e2e.js`, `e2e/record-demo.js`, `openclaw-client/register.sh`, `openclaw-client/openclaw.conf.example`** still POST to the deleted `/api/publish` endpoint with hardcoded api-keys~~ | ~~Low~~ | **Resolved (delete)** — all four files removed. Each targeted endpoints that no longer exist (`/api/publish`, `/api/history`, `/api/logs`, `/api/messages/flow`, `/api/deployments/*`) and predate the v0.1 rebuild. `openclaw-client/index.js` is the current entry point and uses scoped tokens via `POST /api/openclaw/login`; no live workflow invoked the deleted files. `docs/10-testing.md` rewritten in the same pass. |
-| **JetStream test fixture slow-skip (~2 min/test without broker)** | Low — local dev annoyance | Add TCP probe before `nats-py.connect()` so unreachable broker fails fast |
-| **`python-backend.md` rule violations**: FastAPI endpoints lack `summary`/`description`; `database.py` has f-string in `PRAGMA table_info({name})` | Low — internal-only, no security risk; PRAGMA is a parameterless SQL form so f-string is acceptable here | Either refactor or update the rule to permit |
-| **TaskBoard "Create task" UX removed in Phase 1 Task 16** — no `/api/tasks` endpoint exists in v0.1 | Low — TaskBoard now derives task state from `/api/messages` filtered by `task_id` | Decide: re-add via new endpoint, or stay derived-only. Visible UX change. |
-| **Live-stack Phase 1 verification checklist (13 rows in `docs/CHANGELOG.md`)** | Required before tagging v0.1 | Operator step; cannot be automated |
-| ~~**`on_register` / `on_heartbeat` don't persist to `messages` table**~~ | ~~Low~~ | **Resolved (option b)** — smoke spec updated in `feat/gemma-adapter-impl` to assert only the persisted types (`command`, `result`); register/heartbeat continue to update the `agents` table only. Reversing this is a future call (per-row cost vs full audit observability). |
-| ~~**Phase 1 test stack inherited Phase 1 bugs**~~ | ~~Medium~~ | **Partially resolved** — `e2e/test-nats.conf` rewritten for token-only auth + MQTT off (matching dev contract; also bumped JetStream `max_file` to 2GB so the stream's 1GB `max_bytes` actually fits). `e2e/docker-compose.test.yml` build context fixed to repo root + Dockerfile path explicit + `NATS_TOKEN` propagated + `/api/system/status` healthcheck (replacing retired `/health`). `e2e/test-nginx.conf` `proxy_pass` slash bug fixed. `global-setup.js` API_URL pointed at `/api/system/status`. **Test stack now boots cleanly to the canonical v0.1 status.** Remaining: agent-level smokes (Phase 1 / Phase 2 round-trips) need host-side `shell` and `gemma` adapters pointed at the test broker (port 14222) — the test compose doesn't run them (Gemma can't be containerized cleanly because Ollama lives on the host). Until `global-setup.js` learns to spawn host adapters with `NATS_URL=nats://localhost:14222`, agent-round-trip tests should keep using the `playwright.smoke.config.js` bypass against the dev stack. |
-| **`adapters/_common/template.py` builds the registration card from YAML and publishes a `register` envelope, but never mirrors register/heartbeat to outbox** | Low — observability gap | Either persist via `on_register`/`on_heartbeat` (above) or have adapters mirror to outbox |
-
-### Test-data separation convention (introduced after Phase 2 walkthrough)
-
-The `messages` and `agents` tables both have a `deployment` column. As of the
-post-Phase-2 walkthrough fixes, the aggregator's `MessageRouter` now resolves
-each message's deployment by looking up the sender's (or recipient's) cached
-A2A card and reading `metadata.runtime.deployment` (default: `"default"`).
-Frontend `AgentSidebar` and `ChatHistory` filter out `deployment === "test"`
-unless the user toggles "Test data" on in the header.
-
-**Convention for test runners:**
-- Tests that need their own visible-but-hideable agent should register with
-  `runtime.deployment: test` in their `config.yaml` (or programmatically).
-  All messages they send AND results targeted at them get tagged `test`.
-- Tests that drive production agents (the current Playwright smoke does this
-  for `gemma-1` / `shell-1`) cannot be tagged this way today — they need
-  EITHER (a) a registered test runner agent that publishes the commands,
-  OR (b) an envelope-level `deployment` field (schema change). Tracked as a
-  follow-up below.
-
-| Item | Severity | Notes |
-|---|---|---|
-| ~~**Phase 2 Playwright smoke pollutes prod data**~~ | ~~Medium~~ | **Resolved** — `POST /api/command/{agent_id}` accepts `?sender_id=<name>` query param. When non-default, the aggregator auto-registers a synthetic A2A card with `runtime.deployment: test` for that sender (and the outbox mirror moves to `agents.{sender}.outbox`). All envelopes in the resulting task — command, outbox mirror, gemma's result — flow through `_deployment_for()` and tag `deployment=test`. The Phase 2 Playwright smoke now passes `?sender_id=test-runner` and asserts `result.deployment === 'test'`. Smoke turns invisible to the dashboard when the user's `showTestAgents` toggle is off. |
-| ~~**`/api/messages` endpoint doesn't accept a `deployment` filter param**~~ | ~~Low~~ | **Resolved** — `db.query_messages()` now accepts `deployment` (allowlist) and `exclude_deployment` (denylist) kwargs; both surfaced as query params on `/api/messages`. Frontend `ChatHistory` now passes `exclude_deployment=test` when `showTestAgents=false` so the server-side LIMIT only sees production rows (instead of post-fetch filter that could lose old prod rows behind a wall of test data). New test at `aggregator/tests/test_database.py::test_query_messages_deployment_filters`. |
-| **Logs tab content is sparse** — only lifecycle (register/shutdown) and handler errors publish log envelopes today. Per-command success info isn't logged | Low — by design (verbose) but operators may want it | Optional toggle for verbose mode that publishes a `log` envelope per completed command |
-
----
-
-## Phase handover — delayed-to-later-phases
-
-Each phase has its own spec/plan cycle when activated. The Phase 1 plan handoff section (`docs/superpowers/plans/2026-04-23-agent-messaging-v0.1-phase-1.md`) is the original source for these.
-
-### Phase 2.5 — Gemma adapter enhancements ✅ shipped 2026-04-30
-
-Items shipped:
-- Multi-skill dispatch (`payload.skill_id`) — 4 skills: `reasoning.chat`,
-  `text.summarize`, `text.classify` (JSON output), `code.explain`.
-- Conversational memory keyed by `context_id` — centralized SQLite
-  service in the aggregator, exposed via NATS request-reply on
-  `memory.turns.{get,put,delete}`. 30-day retention. See ADR-0008.
-- Token streaming via `task.progress` envelopes — hybrid 8-tokens-or-100ms
-  cadence; full text in final `result`.
-- Live UI rendering — synthetic streaming bubble in `ChatHistory.jsx`
-  with skill badges and 60s stall detection.
-
-Forward hooks for v0.3 semantic memory: `sqlite-vec` extension loaded at
-aggregator startup; `turn_embedding BLOB` column reserved.
-
-### Phase 3 — Operational hardening
-
-Two sessions, one plan. Builds on Phase 1's heartbeat + advisory infrastructure.
-
-#### Phase 3.1 — Watchdog adapter ✅ shipped 2026-04-29
-
-Native nats-py adapter at `adapters/watchdog/`. Subscribes
-`agents.*.register / .outbox / .heartbeat` and the MAX_DELIVERIES
-advisory. Three-path trigger model (heartbeat-staleness fast path,
-sticky-offline immediate, advisory backstop) with `Nats-Msg-Id:
-watchdog-syn-{task_id}` dedup. See `docs/adr/0007-watchdog-trigger-model.md`.
-
-#### Phase 3.2 — Dashboard agent-registry panel ✅ shipped 2026-04-29
-
-New `Registry` top-level tab + `GET /api/registry` snapshot endpoint +
-`agent_deleted` WS event + sidebar roles-based filter so infrastructure
-agents only appear in Registry, not Chat.
-
-### Phase 4 — Fleet orchestration & protocol extensions
-
-**Epic:** [#13](https://github.com/zhonghaozhan/EdgeCitadel/issues/13)
-
-Four sub-specs under one umbrella. Adds the first L2-conformant orchestrator (AG2), an MCP server exposing fleet primitives as tools, and an external A2A ingress gateway. ADR-0010 locks in-fleet delegation as NATS-native; ADR-0011 establishes MCP as the canonical tool-exposure protocol. Original roadmap ordering restored: 4.1 → 4.2 → 4.3 → 4.4.
-
-#### Phase 4.1 — AG2 adapter scaffold ([#14](https://github.com/zhonghaozhan/EdgeCitadel/issues/14))
-
-Pin `ag2>=0.12,<0.13`. Native runtime, single `reasoning.chat` skill, uses `memory.turns.*` like Gemma. Validates AG2 imports against the pinned wheel. `runtime.conformance: L1`. Indistinguishable from `gemma-1` on the fabric except for the `ag2` tag.
-
-#### Phase 4.2 — AG2 as L2 orchestrator + L2 substrate ([#15](https://github.com/zhonghaozhan/EdgeCitadel/issues/15))
-
-Custom AG2 function-tool `delegate(...)` publishes NATS-native `delegation` envelopes. Shared helpers extracted into `adapters/_common/l2_orchestrator.py` so future framework adapters (LangGraph, CrewAI, …) reuse the L2 contract without re-deriving it. Refuses delegations pre-emptively at `hop_count >= 7` (inbound). Cancel returns `task_state: rejected, payload.reason: "ag2_cancel_not_supported"`. `runtime.conformance` bumps to L2. `docs/06-p2p-delegation.md` rewritten in the same PR.
-
-#### Phase 4.3 — MCP server (first-class subscriber) ([#16](https://github.com/zhonghaozhan/EdgeCitadel/issues/16))
-
-New `mcp-server/` service. First-class NATS subscriber registered as `mcp-1` (`runtime.kind: gateway`). Speaks MCP over both stdio (Claude Desktop / Cursor) and HTTP+SSE (remote, including Hermes' built-in MCP client and AG2's `MCPToolkit`). Tools: `publish_command`, `list_agents`, `query_messages`, `cancel_task`, `delegate`. AG2's L2 orchestrator drinks own champagne via the MCP server.
-
-#### Phase 4.4 — External A2A ingress gateway ([#17](https://github.com/zhonghaozhan/EdgeCitadel/issues/17))
-
-Slim FastAPI service translating external A2A v1.0 HTTP+SSE into internal NATS commands. Role filter (`runtime.roles ∩ {reasoner, worker}`) gates which agents are exposed. Registered as `a2a-gateway` (`runtime.kind: gateway`). Strictly external-edge — never on the in-fleet delegation path (ADR-0010).
-
-Umbrella spec: `docs/superpowers/specs/2026-05-10-phase4-fleet-orchestration-umbrella-design.md` (gitignored — local). Sub-spec files land per-sub-phase.
-
-### Phase 5 — Host deploy ✅ shipped 2026-05-09
-
-Production deployment is live at `http://100.97.29.74/` (tailnet IP).
-Aggregator + NATS broker + dashboard run on the central EdgeCitadel host
-(Linux Ubuntu, the primary validated path; macOS is a forward-looking
-variant of the same design). `gemma-1` and `watchdog-1` registered as
-production agents; `us-mac-hermes` (Phase 6 bridge) registered from this
-Mac as the first cross-host agent. End-to-end NATS roundtrip verified
-through the production aggregator on 2026-05-09.
-
-Items shipped (PR #11):
-- `deploy/deploy-host.sh` script (manifest-driven, idempotent,
-  reversible, with `--check`/`--dry-run`/`--uninstall`).
-- systemd units for Ollama + Gemma + watchdog adapters, run as a
-  dedicated `edgecitadel` system user with full hardening (ADR-0009).
-  launchd plists for the macOS variant.
-- Backup strategy for `openclaw.db` (sqlite3 .backup) and JetStream
-  (nats stream/kv backup), local-only with documented upgrade path.
-- Tailnet ACL stanza in the platform setup guides.
-- Two parallel-structured setup guides: linux + macOS.
-- Python 3.12 baseline (matches aggregator Dockerfile; bump aspiration
-  to 3.13 deferred — no functional benefit identified).
-
-Spec file: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`.
-Plan file: `docs/superpowers/plans/2026-05-04-phase-5-host-deploy.md`.
-
-(Note: the original "openclaw browser launcher" deliverable was dropped
-during brainstorming. The standalone `~/.openclaw/` tool is a separate
-product Phase 5 doesn't manage; the browser-launcher concept also
-contradicts ADR-0005's bounded-blast-radius design.)
-
-### Phase 6 — Hermes bridge ✅ shipped 2026-05-09
-
-Plan: `docs/superpowers/plans/2026-05-06-hermes-bridge.md`. Spec: `docs/superpowers/specs/2026-05-05-hermes-bridge-design.md`. Branch: `feat/phase6-hermes-bridge`.
-
-Onboards Nous Research's Hermes Agent as the first `runtime.kind: bridge` adapter. Hermes runs locally on this Mac (`100.68.254.1` on the tailnet), keeps its own memory under `~/.hermes/`, and is exposed on the production NATS fabric (broker at `100.97.29.74:4222`) as `us-mac-hermes` via a thin SSE-translating adapter at `adapters/hermes/`. ADR-0009 locks the rule that bridge adapters retain upstream memory ownership (no `memory.turns.*` traffic). End-to-end roundtrip verified through the production aggregator on 2026-05-09.
-
-Items shipped:
-- `adapters/hermes/` (config + client + handler + tests + README; 38 unit tests).
-- `scripts/launchd/com.edgecitadel.hermes-{bridge,server}.plist`.
-- ADR-0009 (bridge adapters retain upstream memory ownership).
-- Doc updates: `agent-contract.md` (bridge subsection), `03-agent-registration.md` (local-adapter onboarding), `05-messaging.md` (`task.progress.payload.extra.upstream`), `agent-setup.md`, this file.
-- E2E spec: `e2e/tests/phase6-hermes-bridge.spec.js`.
-- `add-agent.sh` fix: prints both MQTT (1883) and NATS (4222) brokers with adapter-vs-browser guidance — closes a recurring footgun.
-
-Hermes upstream provider: `custom` endpoint pointed at OpenAI (`https://api.openai.com/v1`, model `gpt-5-mini`). Switching to local Ollama is a `~/.hermes/config.yaml` edit only — no bridge change needed.
-
-#### Phase 6 follow-up — streaming renders as multiple cards on the dashboard (RESOLVED 2026-05-09)
-
-**Symptom (observed 2026-05-09 against `http://100.97.29.74/`):** sending a single prompt to `us-mac-hermes` ("fetch a recent paper") produced ~30 message cards in the dashboard chat history instead of one growing/finalized bubble. Production `/api/messages` for the affected `task_id` showed 1 `result` envelope plus ~29 `task.progress` envelopes — that's correct on the wire; the bug was in the client merge.
-
-**Negative-test result:** the original hypothesis ("Gemma renders cleanly, Hermes fragments") was **falsified**. Gemma fragmented worse — a four-paragraph prompt produced 52 cards (capped by ChatHistory's page size; production held 500+ persisted progress envelopes for the same task). The bug was universal and latent since Phase 2.5; only became user-visible when Hermes started producing long-form replies through this path.
-
-**Root cause (two issues, both frontend):**
-1. `frontend/src/hooks/useWebSocket.js` read `env.payload?.delta`. The canonical streaming-chunk shape from `adapters/_common/pull_consumer.py:Context.publish_progress` is `payload.message`. Gemma's adapter happened to redundantly mirror the chunk to `payload.delta` via `extra={"delta": delta, ...}`; the Hermes bridge did not. So Hermes' synthetic streaming bubble stayed empty during streaming.
-2. `frontend/src/components/ChatHistory.jsx` merged the `/api/messages` poll results 1:1 with realtime envelopes and rendered every row as its own `MessageBubble`. Persisted `task.progress` rows therefore each became a bubble — fragmentation at the rendering layer, irrespective of the synthetic-bubble reducer working correctly.
-
-**Fix (frontend-only, no schema/wire changes):**
-- `useWebSocket.js`: read `env.payload?.message ?? env.payload?.delta ?? ''` so any adapter using the canonical `Context.publish_progress` works without each one having to remember to add `extra={"delta": ...}`.
-- `ChatHistory.jsx`: drop `type === 'task.progress'` from both `historicalMessages` and `realtimeMessages` before merging into the timeline, **unless** the operator selects `task.progress` from the type-filter dropdown (forensic opt-in). The synthetic streaming bubble built by `appStore.appendStreamDelta` remains the user-visible representation. Persistence is unchanged — `ConversationThread` and `MessageInspector` continue to see the raw rows.
-- `ChatHistory.jsx`: page-refresh recovery — when persisted `task.progress` rows exist for a task that has no `result` envelope yet **and** no live synthetic streaming bubble, build one collapsed `STREAMING` bubble per task by concatenating `payload.message` across the persisted chunks (chronologically). When the WebSocket reconnects and the live synthetic appears, the reconstructed bubble is suppressed in favor of the live one. The result envelope (when it lands) replaces both with the canonical full-text bubble.
-- `MessageBubble.jsx`: synthetic streaming bubbles now wear a distinct `STREAMING` badge (amber Activity icon) while live, falling back to the underlying type once `finalizeStream` lands or the stall timer fires.
-- Regression coverage: `e2e/tests/streaming-fragmentation-regression.spec.js`. Manual browser-driven verification scripts live under `e2e/scripts/` (not part of the regular suite — they target production data).
-
-**Verification:** ran a fresh long-response prompt through the production aggregator at `100.97.29.74` (NATS + persistence + WS broadcast all real) for both `gemma-1` and `us-mac-hermes`, observed via a local dev frontend (`vite.config.prodproxy.js`) with the fix loaded. Result for both: exactly **2 cards per task** (command + growing assistant bubble with live cursor `▍`), 0 fragmentation. Production wire data unchanged — Hermes task `941bd6c5…` still persisted 94 `task.progress` envelopes plus the final `result`. Production frontend bundle still ships the pre-fix code; deploy is operator-gated.
-
-### Optional / parking lot
-
-- **Per-agent JWT auth** (replaces shared `NATS_TOKEN`). v0.2+. Necessary for multi-tenant deployments.
-- **JetStream clustering.** Single-node broker is fine until a second persistent host joins (likely v0.3+).
-- **P2P transport (Zenoh).** v0.3+ exploration; only relevant if we want agent-to-agent communication that doesn't traverse the central broker.
-- **Token streaming over NATS for browser clients.** Currently planned via A2A SSE wrapper at Phase 4. Revisit if we want native NATS streaming for non-browser clients.
+The aggregator projects a message's `deployment` from the sender or recipient
+agent card. Tests should register a dedicated agent with
+`metadata.runtime.deployment: test`. A test that drives a production-registered
+agent cannot currently mark its messages as test data without changing the
+wire contract; solve that through a dedicated test publisher rather than an
+ad-hoc envelope field.

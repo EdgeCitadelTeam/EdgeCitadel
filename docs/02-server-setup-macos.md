@@ -107,5 +107,4 @@ Same as Linux guide §9 — see `/opt/edgecitadel/deploy/backup/README.md`.
 ## 11. See also
 
 - Linux guide: `02-server-setup-linux.md`
-- ADR-0009: `docs/adr/0009-host-deploy-architecture.md`
-- Spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`
+- ADR-0012: `docs/adr/0012-host-deploy-architecture.md`

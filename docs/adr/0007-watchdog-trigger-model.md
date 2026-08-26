@@ -10,7 +10,7 @@ Accepted (Phase 3.1, shipped 2026-04-29)
 
 ## Context and Problem Statement
 
-The v0.1 messaging spec (`docs/superpowers/specs/2026-04-23-agent-messaging-design.md`, rev 6, lines 759–778) pinned the watchdog's synthesised-failure trigger to the JetStream `MAX_DELIVERIES` advisory only, rejecting heartbeat-staleness as a trigger because it would have required the watchdog to subscribe to per-agent inbox traffic — incompatible with the WorkQueue's disjoint-filter rule on `AGENT_INBOX`.
+The original v0.1 design used only the JetStream `MAX_DELIVERIES` advisory for synthesized failures. It rejected heartbeat staleness because observing per-agent inbox traffic would conflict with the WorkQueue stream's disjoint-filter rule.
 
 That decision had a real cost: failure-detection latency for offline recipients equals `ack_wait × max_deliver`, which is 1.5 min for a shell adapter and 15 min for a Gemma-class LLM adapter. Senders (HTTP callers especially) hang for the full window. Phase 3 brainstorm revisited the constraint with one new observation: per ADR-0006, every adapter mirrors its inbox publishes to its own `agents.{self}.outbox` (plain NATS). The watchdog can derive in-flight task state from those mirrors **without** subscribing to inboxes.
 
@@ -76,7 +76,4 @@ The watchdog rebuilds in-flight state from outbox traffic on restart; no persist
 
 ## Related
 
-- Spec: `docs/superpowers/specs/2026-04-29-phase-3-watchdog-and-registry-design.md`
-- Plan: `docs/superpowers/plans/2026-04-29-phase-3-watchdog-and-registry.md`
-- Supersedes the "MAX_DELIVERIES only" passage in `docs/superpowers/specs/2026-04-23-agent-messaging-design.md` rev 6.
 - Builds on ADR-0006 (outbox mirror as authoritative audit path).
