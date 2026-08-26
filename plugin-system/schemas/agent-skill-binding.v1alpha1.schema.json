@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.io/schemas/agent-skill-binding.v1alpha1.schema.json",
+  "title": "EdgeCitadel Agent Skill Binding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "skillId",
+    "version",
+    "execution",
+    "schemas",
+    "requires",
+    "extensions"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "edgecitadel.io/v1alpha1"
+    },
+    "kind": {
+      "const": "AgentSkillBinding"
+    },
+    "skillId": {
+      "$ref": "#/$defs/qualifiedName"
+    },
+    "version": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": {
+          "const": "runtime-handler"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "schemas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "output": {
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledge", "network", "devices"],
+      "properties": {
+        "knowledge": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "network": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "devices": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "extensions": {
+      "$ref": "#/$defs/extensionMap"
+    }
+  },
+  "$defs": {
+    "qualifiedName": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*\\\\)(?!\\.\\.?$)(?!\\.\\.?/)(?!.*?/\\.\\.?(?:/|$))(?:[^/]+/)*[^/]+$"
+    },
+    "extensionMap": {
+      "type": "object",
+      "propertyNames": {
+        "anyOf": [
+          {
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$"
+          },
+          {
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[^\\s]+$"
+          }
+        ]
+      },
+      "additionalProperties": true
+    }
+  }
+}
