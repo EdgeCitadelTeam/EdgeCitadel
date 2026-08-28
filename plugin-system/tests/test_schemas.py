@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
@@ -14,6 +15,12 @@ def validator(name: str) -> Draft202012Validator:
     schema = json.loads((SCHEMAS / name).read_text())
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema)
+
+
+def test_supervisor_source_package_is_importable():
+    supervisor = importlib.import_module("edgecitadel_supervisor")
+
+    assert supervisor.__doc__
 
 
 def plugin_document() -> dict[str, object]:
