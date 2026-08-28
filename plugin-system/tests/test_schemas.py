@@ -14,7 +14,10 @@ SCHEMAS = Path(__file__).parents[1] / "schemas"
 def validator(name: str) -> Draft202012Validator:
     schema = json.loads((SCHEMAS / name).read_text())
     Draft202012Validator.check_schema(schema)
-    return Draft202012Validator(schema)
+    return Draft202012Validator(
+        schema,
+        format_checker=Draft202012Validator.FORMAT_CHECKER,
+    )
 
 
 def test_supervisor_source_package_is_importable():
@@ -175,3 +178,54 @@ def test_extension_maps_reject_malformed_absolute_uri_keys(
 ):
     with pytest.raises(ValidationError):
         validator(schema_name).validate(document)
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "document"),
+    [
+        (
+            "agent-plugin.v1alpha1.schema.json",
+            plugin_document(extensions={"x:foo#bar#baz": {}}),
+        ),
+        (
+            "agent-skill-binding.v1alpha1.schema.json",
+            binding_document(extensions={"x:foo#bar#baz": {}}),
+        ),
+    ],
+)
+def test_extension_maps_reject_absolute_uri_keys_with_repeated_fragments(
+    schema_name: str,
+    document: dict[str, object],
+):
+    with pytest.raises(ValidationError):
+        validator(schema_name).validate(document)
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "document"),
+    [
+        (
+            "agent-plugin.v1alpha1.schema.json",
+            plugin_document(
+                extensions={
+                    "com.example.feature": {},
+                    "https://[2001:db8::1]/schema": {},
+                }
+            ),
+        ),
+        (
+            "agent-skill-binding.v1alpha1.schema.json",
+            binding_document(
+                extensions={
+                    "com.example.feature": {},
+                    "https://[2001:db8::1]/schema": {},
+                }
+            ),
+        ),
+    ],
+)
+def test_extension_maps_accept_reverse_domain_and_ipv6_absolute_uri_keys(
+    schema_name: str,
+    document: dict[str, object],
+):
+    validator(schema_name).validate(document)
