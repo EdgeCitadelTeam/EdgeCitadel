@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Iterator
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -191,6 +192,20 @@ def test_empty_markdown_body_is_rejected(valid_package: Path) -> None:
     )
 
 
+def test_malformed_skill_frontmatter_uses_package_relative_path(
+    valid_package: Path,
+) -> None:
+    skill = valid_package / "skills" / "placeholder" / "SKILL.md"
+    skill.write_text("---\nname: [\n---\nbody\n")
+
+    with pytest.raises(ManifestLoadError, match="SKILL.md") as error:
+        discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/placeholder/SKILL.md"
+    )
+
+
 def test_binding_is_validated_with_format_checker(valid_package: Path) -> None:
     document = _load_binding(valid_package)
     document["extensions"] = {"x:<": {}}
@@ -349,6 +364,26 @@ def test_missing_skills_directory_is_rejected(valid_package: Path) -> None:
         discover_skills(valid_package, "missing")
 
     _assert_package_relative_error(error.value, valid_package, "missing")
+
+
+def test_skills_directory_inspection_error_uses_package_relative_path(
+    valid_package: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    skills = (valid_package / "skills").resolve()
+    original_iterdir = Path.iterdir
+
+    def fail_for_skills(path: Path) -> Iterator[Path]:
+        if path == skills:
+            raise OSError("do-not-leak")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_for_skills)
+
+    with pytest.raises(SkillDiscoveryError, match="skills") as error:
+        discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(error.value, valid_package, "skills")
+    assert "do-not-leak" not in str(error.value)
 
 
 def test_skill_record_declares_exact_public_fields() -> None:

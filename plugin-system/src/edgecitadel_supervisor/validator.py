@@ -123,7 +123,8 @@ def discover_skills(root: Path, skills_directory: str) -> tuple[SkillRecord, ...
         entries = sorted(skill_root.iterdir(), key=lambda path: path.name)
     except (OSError, RuntimeError, ValueError):
         raise SkillDiscoveryError(
-            f"Unable to inspect skills directory: {skill_root}"
+            "Unable to inspect skills directory: "
+            f"{_package_relative(plugin_root, skill_root)}"
         ) from None
 
     records: list[SkillRecord] = []
@@ -155,7 +156,12 @@ def discover_skills(root: Path, skills_directory: str) -> tuple[SkillRecord, ...
                 f"Skill directory {relative_directory} is missing {relative_binding_file}"
             )
 
-        metadata, body = load_skill_markdown(skill_file)
+        try:
+            metadata, body = load_skill_markdown(skill_file)
+        except ManifestLoadError:
+            raise ManifestLoadError(
+                f"Unable to load Agent Skill metadata: {relative_skill_file}"
+            ) from None
         name_value = metadata.get("name")
         if isinstance(name_value, str) and name_value in portable_names:
             raise DuplicateSkillError(f"Duplicate portable skill name: {name_value}")
