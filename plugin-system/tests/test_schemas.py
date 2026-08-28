@@ -20,7 +20,7 @@ def validator(name: str) -> Draft202012Validator:
     )
 
 
-def test_supervisor_source_package_is_importable():
+def test_supervisor_source_package_is_importable() -> None:
     supervisor = importlib.import_module("edgecitadel_supervisor")
 
     assert supervisor.__doc__
@@ -29,6 +29,7 @@ def test_supervisor_source_package_is_importable():
 def plugin_document(
     *,
     version: str = "0.1.0",
+    agent_id: str = "example-agent",
     extensions: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
@@ -53,7 +54,7 @@ def plugin_document(
         "skills": {"directory": "skills"},
         "agents": [
             {
-                "id": "example-agent",
+                "id": agent_id,
                 "skillNames": ["example"],
                 "listensBroadcast": False,
             }
@@ -109,11 +110,26 @@ def lock_document(*, version: str = "0.1.0") -> dict[str, object]:
     }
 
 
-def test_plugin_schema_accepts_separate_package_and_agent_identity():
+def test_plugin_schema_accepts_separate_package_and_agent_identity() -> None:
     validator("agent-plugin.v1alpha1.schema.json").validate(plugin_document())
 
 
-def test_plugin_schema_rejects_unknown_core_field():
+@pytest.mark.parametrize("agent_id", ["agent_1", "a" * 64])
+def test_plugin_schema_accepts_canonical_agent_ids(agent_id: str) -> None:
+    validator("agent-plugin.v1alpha1.schema.json").validate(
+        plugin_document(agent_id=agent_id)
+    )
+
+
+@pytest.mark.parametrize("agent_id", ["agent.1", "agent..1", "a" * 65])
+def test_plugin_schema_rejects_noncanonical_agent_ids(agent_id: str) -> None:
+    with pytest.raises(ValidationError):
+        validator("agent-plugin.v1alpha1.schema.json").validate(
+            plugin_document(agent_id=agent_id)
+        )
+
+
+def test_plugin_schema_rejects_unknown_core_field() -> None:
     document = plugin_document()
     document["unexpected"] = True
 
@@ -121,7 +137,7 @@ def test_plugin_schema_rejects_unknown_core_field():
         validator("agent-plugin.v1alpha1.schema.json").validate(document)
 
 
-def test_binding_schema_accepts_and_requires_runtime_execution_name():
+def test_binding_schema_accepts_and_requires_runtime_execution_name() -> None:
     document = binding_document()
     binding_validator = validator("agent-skill-binding.v1alpha1.schema.json")
     binding_validator.validate(document)
@@ -133,7 +149,7 @@ def test_binding_schema_accepts_and_requires_runtime_execution_name():
         binding_validator.validate(document)
 
 
-def test_lock_schema_requires_sorted_file_records_shape():
+def test_lock_schema_accepts_lock_record_shape() -> None:
     validator("plugin-lock.v1.schema.json").validate(lock_document())
 
 
@@ -154,7 +170,7 @@ def test_lock_schema_requires_sorted_file_records_shape():
 def test_schemas_reject_semver_numeric_prerelease_identifiers_with_leading_zeros(
     schema_name: str,
     document: dict[str, object],
-):
+) -> None:
     with pytest.raises(ValidationError):
         validator(schema_name).validate(document)
 
@@ -175,7 +191,7 @@ def test_schemas_reject_semver_numeric_prerelease_identifiers_with_leading_zeros
 def test_extension_maps_reject_malformed_absolute_uri_keys(
     schema_name: str,
     document: dict[str, object],
-):
+) -> None:
     with pytest.raises(ValidationError):
         validator(schema_name).validate(document)
 
@@ -196,7 +212,7 @@ def test_extension_maps_reject_malformed_absolute_uri_keys(
 def test_extension_maps_reject_absolute_uri_keys_with_repeated_fragments(
     schema_name: str,
     document: dict[str, object],
-):
+) -> None:
     with pytest.raises(ValidationError):
         validator(schema_name).validate(document)
 
@@ -227,5 +243,5 @@ def test_extension_maps_reject_absolute_uri_keys_with_repeated_fragments(
 def test_extension_maps_accept_reverse_domain_and_ipv6_absolute_uri_keys(
     schema_name: str,
     document: dict[str, object],
-):
+) -> None:
     validator(schema_name).validate(document)
