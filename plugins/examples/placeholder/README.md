@@ -18,9 +18,19 @@ The package identity is `local.placeholder`, the agent identity is `placeholder-
 
 Learned memory is stored externally by a future knowledge service. It must not mutate the installed package or its portable procedure memory.
 
+## Setup
+
+The commands below assume an activated `plugin-system` virtual environment. From `plugin-system/`, create and install it with:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[test]'
+```
+
 ## Safe commands
 
-From `plugin-system/`, the following commands inspect package data without importing or executing the runtime:
+From `plugin-system/`, `lock` validates package metadata and writes or regenerates `plugin.lock.json`. The `validate` command verifies the existing lock and emits deterministic inventory data; `validate` is read-only. Neither command imports or executes the runtime.
 
 ```bash
 python -m edgecitadel_supervisor lock ../plugins/examples/placeholder

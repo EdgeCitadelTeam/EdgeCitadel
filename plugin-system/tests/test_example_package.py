@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 import yaml
+from edgecitadel_supervisor.cli import main
 from edgecitadel_supervisor.inventory import build_inventory
 from edgecitadel_supervisor.validator import validate_package
 from jsonschema import Draft202012Validator
@@ -192,6 +193,10 @@ def test_package_readme_documents_validation_only_boundaries() -> None:
     assert "portable skill identity is `example.placeholder`" in readme
     assert "Learned memory is stored externally" in readme
     assert "must not mutate the installed package" in readme
+    assert "python3 -m venv .venv" in readme
+    assert "python -m pip install -e '.[test]'" in readme
+    assert "writes or regenerates `plugin.lock.json`" in readme
+    assert "`validate` is read-only" in readme
     assert "edgecitadel_supervisor lock" in readme
     assert "edgecitadel_supervisor validate" in readme
 
@@ -229,50 +234,32 @@ def test_placeholder_runtime_is_a_guarded_nonimplementation() -> None:
     assert ast.unparse(guard.body[0]) == "raise SystemExit(main())"
 
 
-def test_supervisor_source_has_no_dynamic_execution_path() -> None:
-    supervisor_root = Path(__file__).parents[1] / "src" / "edgecitadel_supervisor"
-    forbidden_modules = {"importlib", "subprocess"}
-    forbidden_builtin_calls = {
-        "__import__",
-        "compile",
-        "eval",
-        "exec",
-    }
-    forbidden_attribute_calls = {
-        "Popen",
-        "check_call",
-        "check_output",
-        "import_module",
-        "popen",
-        "system",
-    }
+def test_lock_and_validate_do_not_import_or_launch_runtime(
+    valid_package: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import_sentinel = tmp_path / "runtime-imported"
+    launch_sentinel = tmp_path / "runtime-launched"
+    runtime = valid_package / "runtime"
+    runtime.mkdir()
+    (runtime / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(import_sentinel)!r}).write_text('imported')\n",
+        encoding="utf-8",
+    )
+    (runtime / "__main__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(launch_sentinel)!r}).write_text('launched')\n",
+        encoding="utf-8",
+    )
 
-    for source_path in supervisor_root.glob("*.py"):
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        imported_modules = {
-            alias.name.split(".", maxsplit=1)[0]
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.Import, ast.ImportFrom))
-            for alias in (
-                node.names
-                if isinstance(node, ast.Import)
-                else [ast.alias(name=node.module or "")]
-            )
-        }
-        assert imported_modules.isdisjoint(forbidden_modules)
+    assert main(["lock", str(valid_package)]) == 0
+    assert not import_sentinel.exists()
+    assert not launch_sentinel.exists()
 
-        called_builtins = {
-            node.func.id
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        called_attributes = {
-            node.func.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-        }
-        assert called_builtins.isdisjoint(forbidden_builtin_calls)
-        assert called_attributes.isdisjoint(forbidden_attribute_calls)
+    capsys.readouterr()
+    assert main(["validate", str(valid_package)]) == 0
+    assert not import_sentinel.exists()
+    assert not launch_sentinel.exists()
 
 
 def test_placeholder_inventory_is_deterministic() -> None:
