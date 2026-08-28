@@ -78,10 +78,14 @@ def test_require_plugin_root_rejects_symlink(tmp_path: Path) -> None:
 
 def test_load_yaml_wraps_parser_failure(tmp_path: Path) -> None:
     path = tmp_path / "plugin.yaml"
-    path.write_text("metadata: [")
+    malformed = "metadata: ["
+    path.write_text(malformed)
 
-    with pytest.raises(ManifestLoadError, match="plugin.yaml"):
+    with pytest.raises(ManifestLoadError) as error:
         load_yaml(path)
+
+    assert path.name in str(error.value)
+    assert malformed not in str(error.value)
 
 
 def test_load_yaml_wraps_parser_recursion_failure(tmp_path: Path) -> None:
@@ -102,10 +106,14 @@ def test_load_yaml_rejects_non_mapping_root(tmp_path: Path) -> None:
 
 def test_load_json_wraps_parser_failure(tmp_path: Path) -> None:
     path = tmp_path / "plugin.lock.json"
-    path.write_text('{"lockVersion":')
+    malformed = '{"lockVersion":'
+    path.write_text(malformed)
 
-    with pytest.raises(ManifestLoadError, match="plugin.lock.json"):
+    with pytest.raises(ManifestLoadError) as error:
         load_json(path)
+
+    assert path.name in str(error.value)
+    assert malformed not in str(error.value)
 
 
 def test_load_json_wraps_parser_recursion_failure(tmp_path: Path) -> None:
@@ -142,10 +150,14 @@ def test_load_skill_markdown_rejects_crlf_frontmatter(tmp_path: Path) -> None:
 
 def test_load_skill_markdown_rejects_malformed_frontmatter(tmp_path: Path) -> None:
     path = tmp_path / "SKILL.md"
-    path.write_text("---\nname: [\n---\n# Procedure\n")
+    malformed = "name: ["
+    path.write_text(f"---\n{malformed}\n---\n# Procedure\n")
 
-    with pytest.raises(ManifestLoadError, match="frontmatter.*SKILL.md"):
+    with pytest.raises(ManifestLoadError) as error:
         load_skill_markdown(path)
+
+    assert path.name in str(error.value)
+    assert malformed not in str(error.value)
 
 
 def test_load_skill_markdown_wraps_parser_recursion_failure(tmp_path: Path) -> None:
@@ -173,7 +185,10 @@ def test_load_skill_markdown_returns_frontmatter_and_body(tmp_path: Path) -> Non
 
     metadata, body = load_skill_markdown(path)
 
-    assert metadata["name"] == "example"
+    assert metadata == {
+        "name": "example",
+        "description": "Use for examples.",
+    }
     assert body == "# Procedure\n"
 
 
