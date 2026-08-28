@@ -20,6 +20,8 @@
 - `openclaw-client/` - Node NATS client for agents
 - `e2e/` - Playwright end-to-end tests
 - `docs/` - architecture and operations
+- `plugin-system/` - Plugin schemas, SDK protocols, no-op supervisor, and hermetic tests
+- `plugins/` - Installable EdgeCitadel plugin packages and examples
 - Service `dashboard` is current; the old `dashboard/` directory is retired.
 
 ## Commands
@@ -30,6 +32,7 @@
 - Frontend build: `cd frontend && npm run build`
 - Client listener: `cd openclaw-client && npm start`
 - E2E tests: `cd e2e && npm test`
+- Plugin checks: `cd plugin-system && python -m pytest -q && python -m edgecitadel_supervisor validate ../plugins/examples/placeholder`
 
 ## Working rules
 - Inspect any nested `AGENTS.md` before editing in a subdirectory.

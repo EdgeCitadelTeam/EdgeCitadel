@@ -71,11 +71,13 @@ plugin-system/
   src/
     edgecitadel_plugin_sdk/
       __init__.py
+      _values.py
       lifecycle.py
       runtime.py
       skills.py
       knowledge.py
       transport.py
+      py.typed
     edgecitadel_supervisor/
       __init__.py
       __main__.py
@@ -89,7 +91,10 @@ plugin-system/
     test_cli.py
     test_inventory.py
     test_loader.py
+    test_example_package.py
+    test_sdk_contracts.py
     test_validator.py
+    typecheck_sdk_consumer.py
 
 plugins/
   README.md
@@ -120,6 +125,10 @@ plugins/
 `plugins/` contains only installable plugin packages. This prevents runtime
 framework code from becoming part of a plugin's distributable contents and lets
 the two trees evolve independently.
+
+In this milestone the supervisor locates its authoritative schemas from the
+repository source tree. Editable source installs are supported; ordinary wheel
+deployment of those schema resources is not yet supported or claimed.
 
 Adding both top-level directories requires updating the repository map in
 `AGENTS.md`. The initial scaffold does not modify aggregator, adapter, NATS, or
@@ -308,9 +317,20 @@ The Python SDK defines protocols and value types only:
 - `Transport`: register, receive, publish, and drain transport messages.
 - `LifecycleHooks`: optional hooks around supervisor lifecycle states.
 
+Flexible SDK fields are JSON-shaped `Mapping[str, object]` values. Their
+mapping/list/tuple trees are deeply snapshotted when value objects are created.
+`TransportMessage.to_mapping()` produces an independent, canonical
+envelope-shaped mapping without performing schema validation; validation remains
+a supervisor or future host responsibility.
+
+The SDK includes the PEP 561 `py.typed` marker. Its `runtime_checkable`
+Protocols check member presence only at runtime, while static Protocol checking
+enforces complete method signatures and return types.
+
 The scaffold contains no concrete transport, knowledge, identity, or sandbox
-implementation. Methods whose use would cross those boundaries raise a clear
-`NotImplementedError` describing the later milestone.
+implementation. The SDK Protocols define signatures rather than executable
+fallbacks, and the example runtime raises `NotImplementedError` instead of
+crossing those future boundaries.
 
 The interfaces avoid NATS-specific and framework-specific parameter types so a
 future non-Python plugin can implement the same process protocol.
@@ -384,8 +404,8 @@ exceptions:
 - `LockIntegrityError`
 
 CLI failures write one concise diagnostic to stderr and return a non-zero status.
-Diagnostics include the package-relative failing path and schema location but do
-not dump procedure contents or secret values.
+Diagnostics use package-relative failing paths and schema locations without
+disclosing the absolute package root, procedure contents, or secret values.
 
 ## Security boundaries
 
