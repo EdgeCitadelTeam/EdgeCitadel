@@ -104,6 +104,24 @@ def test_load_yaml_rejects_non_mapping_root(tmp_path: Path) -> None:
         load_yaml(path)
 
 
+def test_load_yaml_rejects_non_string_root_keys(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text("1: value\n")
+
+    with pytest.raises(ManifestLoadError, match="string keys.*plugin.yaml"):
+        load_yaml(path)
+
+
+def test_load_yaml_returns_mapping(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text("metadata:\n  name: example\nenabled: true\n")
+
+    assert load_yaml(path) == {
+        "metadata": {"name": "example"},
+        "enabled": True,
+    }
+
+
 def test_load_json_wraps_parser_failure(tmp_path: Path) -> None:
     path = tmp_path / "plugin.lock.json"
     malformed = '{"lockVersion":'
@@ -130,6 +148,14 @@ def test_load_json_rejects_non_mapping_root(tmp_path: Path) -> None:
 
     with pytest.raises(ManifestLoadError, match="mapping.*plugin.lock.json"):
         load_json(path)
+
+
+def test_load_json_returns_mapping(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.lock.json"
+    document = {"lockVersion": 1, "files": ["plugin.yaml"]}
+    path.write_text(json.dumps(document))
+
+    assert load_json(path) == document
 
 
 def test_load_skill_markdown_rejects_missing_frontmatter(tmp_path: Path) -> None:
@@ -174,6 +200,16 @@ def test_load_skill_markdown_rejects_unclosed_frontmatter(tmp_path: Path) -> Non
     path.write_text("---\nname: example\n# Procedure\n")
 
     with pytest.raises(ManifestLoadError, match="frontmatter.*SKILL.md"):
+        load_skill_markdown(path)
+
+
+def test_load_skill_markdown_rejects_non_string_frontmatter_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "SKILL.md"
+    path.write_text("---\n1: value\n---\n# Procedure\n")
+
+    with pytest.raises(ManifestLoadError, match="string keys.*SKILL.md"):
         load_skill_markdown(path)
 
 
@@ -240,3 +276,11 @@ def test_reject_symlinks_finds_nested_link(tmp_path: Path) -> None:
 
     with pytest.raises(UnsafePackagePathError, match="symbolic link"):
         reject_symlinks(tmp_path)
+
+
+def test_reject_symlinks_accepts_clean_nested_tree(tmp_path: Path) -> None:
+    skill = tmp_path / "skills" / "example"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# Procedure\n")
+
+    reject_symlinks(tmp_path)

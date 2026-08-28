@@ -398,6 +398,13 @@ This scaffold enforces only static package safety:
 - no environment or secret reads;
 - strict schema fields plus a namespaced extension escape hatch.
 
+These checks assume the package root is supervisor-owned and remains immutable
+for the duration of `lock` or `validate`. Validation is not safe against
+concurrent mutation of an externally writable tree. Future installation must
+stage or copy packages into supervisor-owned storage and atomically publish
+them, or otherwise validate an immutable snapshot. Descriptor-relative
+traversal and other runtime hardening are out of scope for this scaffold.
+
 It does not claim runtime isolation. Process sandboxing, signature verification,
 credential provisioning, broker ACL compilation, egress enforcement, and secret
 injection remain later supervisor capabilities.

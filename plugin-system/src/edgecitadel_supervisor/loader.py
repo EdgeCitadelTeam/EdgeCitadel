@@ -44,6 +44,8 @@ def load_yaml(path: Path) -> dict[str, object]:
 
     if not isinstance(document, dict):
         raise ManifestLoadError(f"Expected a mapping in YAML file: {path}")
+    if not all(isinstance(key, str) for key in document):
+        raise ManifestLoadError(f"Expected string keys in YAML file: {path}")
     return document
 
 
@@ -87,6 +89,10 @@ def load_skill_markdown(path: Path) -> tuple[dict[str, object], str]:
     if not isinstance(metadata, dict):
         raise ManifestLoadError(
             f"Expected a mapping in YAML frontmatter for skill file: {path}"
+        )
+    if not all(isinstance(key, str) for key in metadata):
+        raise ManifestLoadError(
+            f"Expected string keys in YAML frontmatter for skill file: {path}"
         )
     return metadata, body
 
