@@ -332,7 +332,7 @@ enforces complete method signatures and return types.
 
 The scaffold contains no concrete transport, knowledge, identity, or sandbox
 implementation. The SDK Protocols define signatures rather than executable
-fallbacks, and the example runtime raises `NotImplementedError` instead of
+fallbacks, and the example runtime raises `RuntimeError` instead of
 crossing those future boundaries.
 
 The interfaces avoid NATS-specific and framework-specific parameter types so a
@@ -407,10 +407,10 @@ exceptions:
 - `LockIntegrityError`
 
 CLI failures write one concise diagnostic to stderr and return a non-zero status.
-Diagnostics about content under a valid package root use package-relative paths
-and schema locations without disclosing procedure contents or secret values. An
-invalid or missing root argument may report the caller-supplied or resolved root
-path.
+Diagnostics may include identifiers, schema locations, and package-relative
+paths; an invalid or missing root argument may report the caller-supplied or
+resolved root path. They do not dump procedure bodies, secret values, or complete
+file contents.
 
 ## Security boundaries
 

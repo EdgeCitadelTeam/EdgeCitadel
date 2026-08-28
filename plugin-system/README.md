@@ -58,11 +58,11 @@ the typing gate.
 The scaffold safely parses YAML and JSON, applies strict schemas, checks package
 compatibility and agent-to-skill mappings, and resolves declared paths within
 the package. Validation rejects symbolic links and special filesystem nodes and
-uses canonical SHA-256 hashes and ordering. Diagnostics about content under a
-valid package root use package-relative paths and do not disclose file contents;
-an invalid or missing root argument may report the caller-supplied or resolved
-root path. Validation never imports package handlers or launches the declared
-runtime.
+uses canonical SHA-256 hashes and ordering. Diagnostics may include identifiers
+and package-relative paths; an invalid or missing root argument may report the
+caller-supplied or resolved root path. They do not dump procedure bodies, secret
+values, or complete file contents. Validation never imports package handlers or
+launches the declared runtime.
 
 These guarantees assume the package root is owned by the supervisor and remains
 immutable throughout `lock` or `validate`. They do not make validation safe
