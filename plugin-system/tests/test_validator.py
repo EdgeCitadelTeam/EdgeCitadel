@@ -13,11 +13,13 @@ import yaml
 from edgecitadel_supervisor.errors import (
     CompatibilityError,
     DuplicateSkillError,
+    LockIntegrityError,
     ManifestLoadError,
     ManifestValidationError,
     SkillDiscoveryError,
     UnsafePackagePathError,
 )
+from edgecitadel_supervisor.inventory import write_lock
 from edgecitadel_supervisor.validator import (
     SUPERVISOR_API_VERSION,
     SUPPORTED_PROTOCOLS,
@@ -151,13 +153,65 @@ def test_package_compatibility_constants_are_exact() -> None:
     assert SUPPORTED_PROTOCOLS == frozenset({"edgecitadel.plugin.v1"})
 
 
-def test_verify_integrity_is_forward_compatible_and_defaults_true(
+def test_verify_integrity_defaults_true_and_requires_lock(
     valid_package: Path,
 ) -> None:
     parameter = inspect.signature(validate_package).parameters["verify_integrity"]
 
     assert parameter.default is True
+    with pytest.raises(LockIntegrityError, match="plugin.lock.json"):
+        validate_package(valid_package)
+    assert (
+        validate_package(valid_package, verify_integrity=False).package_id
+        == "local.example"
+    )
+
+
+def test_structural_manifest_error_wins_before_missing_lock(
+    valid_package: Path,
+) -> None:
+    (valid_package / "plugin.yaml").write_text("[", encoding="utf-8")
+
+    with pytest.raises(ManifestLoadError, match="plugin.yaml"):
+        validate_package(valid_package)
+
+
+def test_structural_symlink_error_wins_before_missing_lock(
+    valid_package: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    outside.write_text("outside", encoding="utf-8")
+    (valid_package / "nested-link").symlink_to(outside)
+
+    with pytest.raises(UnsafePackagePathError, match="nested-link"):
+        validate_package(valid_package)
+
+
+def test_validate_package_verifies_existing_lock_by_default(
+    valid_package: Path,
+) -> None:
+    package = validate_package(valid_package, verify_integrity=False)
+    write_lock(package)
+
     assert validate_package(valid_package).package_id == "local.example"
+
+
+def test_validate_package_can_skip_modified_lock_verification(
+    valid_package: Path,
+) -> None:
+    package = validate_package(valid_package, verify_integrity=False)
+    write_lock(package)
+    (valid_package / "plugin.yaml").write_text(
+        (valid_package / "plugin.yaml").read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LockIntegrityError, match="Modified files"):
+        validate_package(valid_package)
+    assert (
+        validate_package(valid_package, verify_integrity=False).package_id
+        == "local.example"
+    )
 
 
 def test_rejects_unsupported_supervisor_api(valid_package: Path) -> None:

@@ -90,8 +90,7 @@ def validate_package(
     agent_skill_names = _build_agent_skill_names(agents, skills)
 
     metadata = cast(dict[str, object], manifest["metadata"])
-    _ = verify_integrity  # Task 5 will use this compatibility parameter.
-    return PackageRecord(
+    package = PackageRecord(
         root=plugin_root,
         manifest=manifest,
         package_id=f"{metadata['publisher']}.{metadata['name']}",
@@ -100,6 +99,11 @@ def validate_package(
         skills=skills,
         agent_skill_names=agent_skill_names,
     )
+    if verify_integrity:
+        from .inventory import verify_lock
+
+        verify_lock(package)
+    return package
 
 
 def _select_compatible_protocol(compatibility: dict[str, object]) -> str:
