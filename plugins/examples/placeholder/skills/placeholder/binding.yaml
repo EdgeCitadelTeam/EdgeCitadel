@@ -1,0 +1,20 @@
+apiVersion: edgecitadel.io/v1alpha1
+kind: AgentSkillBinding
+
+skillId: example.placeholder
+version: 0.1.0
+
+execution:
+  kind: runtime-handler
+  name: placeholder
+
+schemas:
+  input: schemas/input.json
+  output: schemas/output.json
+
+requires:
+  knowledge: []
+  network: []
+  devices: []
+
+extensions: {}
