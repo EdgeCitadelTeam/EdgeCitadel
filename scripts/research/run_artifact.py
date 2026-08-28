@@ -254,7 +254,7 @@ def _parse_run_args(
     ):
         raise ValueError("invalid artifact roots")
     source_root = (source_option or Path.cwd()).resolve()
-    output_root = (output_option or source_root / "docs/research/results/raw").resolve()
+    output_root = (output_option or source_root / "data/research/results/raw").resolve()
     if not source_root.is_dir():
         raise ValueError("invalid artifact roots")
     return (

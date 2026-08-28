@@ -20,7 +20,7 @@ Learned memory is stored externally by a future knowledge service. It must not m
 
 ## Setup
 
-The commands below assume an activated `plugin-system` virtual environment. From `plugin-system/`, create and install it with:
+The commands below assume an activated `plugin-toolkit` virtual environment. From `plugin-toolkit/`, create and install it with:
 
 ```bash
 python3 -m venv .venv
@@ -30,7 +30,7 @@ python -m pip install -e '.[test]'
 
 ## Safe commands
 
-From `plugin-system/`, `lock` validates package metadata and writes or regenerates `plugin.lock.json`. The `validate` command verifies the existing lock and emits deterministic inventory data; `validate` is read-only. Neither command imports or executes the runtime.
+From `plugin-toolkit/`, `lock` validates package metadata and writes or regenerates `plugin.lock.json`. The `validate` command verifies the existing lock and emits deterministic inventory data; `validate` is read-only. Neither command imports or executes the runtime.
 
 ```bash
 python -m edgecitadel_supervisor lock ../plugins/examples/placeholder

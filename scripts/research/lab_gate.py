@@ -1260,7 +1260,7 @@ def run_clean_checkout_gate(
     source_bundles = {
         "lifecycle": lifecycle.bundle.resolve(),
         "operator_smoke": (
-            root / "docs/research/results/lab" / operator_id
+            root / "data/research/results/lab" / operator_id
         ).resolve(),
     }
     for bundle in source_bundles.values():

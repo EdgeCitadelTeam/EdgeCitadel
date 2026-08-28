@@ -210,7 +210,7 @@ def test_clean_checkout_receipt_is_relative_and_uses_finalized_bundles(
     life = _result(repo_root, "lab-clean-life", 1)
     life.bundle.mkdir(parents=True, exist_ok=True)
     (life.bundle / "manifest.json").write_text("{}\n")
-    operator_bundle = repo_root / "docs/research/results/lab/lab-clean-ui"
+    operator_bundle = repo_root / "data/research/results/lab/lab-clean-ui"
     operator_bundle.mkdir(parents=True)
     (operator_bundle / "manifest.json").write_text("{}\n")
     receipt = tmp_path / "receipt.json"

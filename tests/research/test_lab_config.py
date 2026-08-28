@@ -135,8 +135,8 @@ def test_source_provenance_is_captured_before_outputs_and_is_path_scoped(tmp_pat
     repo = _git_repo(tmp_path / "source")
     before = capture_clean_source_provenance(repo)
     assert before.dirty is False
-    (repo / "docs/research/results/lab/run-1").mkdir(parents=True)
-    (repo / "docs/research/results/lab/run-1/raw.json").write_text("{}\n")
+    (repo / "data/research/results/lab/run-1").mkdir(parents=True)
+    (repo / "data/research/results/lab/run-1/raw.json").write_text("{}\n")
     assert capture_clean_source_provenance(repo) == before
     runtime = repo / "scripts/research/lab_runtime.py"
     runtime.write_text("# changed\n")

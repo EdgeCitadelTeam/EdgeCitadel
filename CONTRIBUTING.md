@@ -21,7 +21,6 @@ git checkout -b <type>/<short-description>
 # Examples:
 #   feat/jetstream-consumers
 #   fix/mqtt-reconnection
-#   docs/adr-p2p-delegation
 ```
 
 ### 2. Make changes
@@ -71,31 +70,6 @@ test(e2e): add agent offline detection tests
 PRs must include:
 - Clear description of what changed and why
 - Test coverage for new behavior
-- Documentation updates (see checklist below)
-
-## Documentation Checklist
-
-| Change Type | Required Docs |
-|------------|---------------|
-| New feature | Update the relevant maintained document and tests |
-| Bug fix | Add a regression test and update affected documentation |
-| Architecture change | ADR in `docs/adr/`, CLAUDE.md update if needed |
-| API change | `docs/08-api-reference.md`, Pydantic model update |
-| Config change | `.env.example`, `docs/02-server-setup.md` |
-| New NATS subject | `docs/05-messaging.md` |
-
-## Architecture Decision Records
-
-Significant technical decisions are documented as ADRs in `docs/adr/`.
-
-When to write an ADR:
-- Adding a new dependency or tool
-- Changing the messaging protocol or subject structure
-- Modifying the database schema
-- Changing authentication or authorization model
-- Introducing a new architectural pattern
-
-Use the template: `docs/adr/template.md`
 
 ## Code Review Standards
 
@@ -107,7 +81,6 @@ Reviewers check for:
 4. **Security** — No secrets in code? Input validated?
 5. **Tests** — New behavior covered? Existing tests pass?
 6. **Simplicity** — Is there a simpler way?
-7. **Documentation** — Docs updated per checklist above?
 
 Verdicts: **SHIP** / **FIX-THEN-SHIP** / **RETHINK**
 
@@ -121,7 +94,8 @@ nats/            NATS server config
 nginx/           Reverse proxy config
 e2e/             Playwright tests
 scripts/         Utility scripts
-docs/            Architecture docs, API reference, ADRs
+plugin-toolkit/  Plugin authoring SDK, schemas, validation, and tests
+plugins/         Independently distributable plugin packages
 .agents/         Canonical shared verification skills
 .claude/         Claude-specific compatibility and area guides
 ```

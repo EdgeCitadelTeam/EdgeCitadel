@@ -16,8 +16,6 @@ adapter for constrained devices and is disabled by default.
 - Playwright end-to-end tests for operator workflows.
 
 The canonical wire contract is [`schemas/envelope.v1.json`](schemas/envelope.v1.json).
-Subject ownership, durability, and delivery semantics are documented in
-[`docs/05-messaging.md`](docs/05-messaging.md).
 
 ## Quick start
 
@@ -45,12 +43,6 @@ curl --fail http://localhost/api/system/status
 Runtime data is written below `data/` and `nats/data/`; neither directory should
 be committed. Stop the stack with `docker compose down`.
 
-For a production host installation, follow
-[`docs/02-server-setup-linux.md`](docs/02-server-setup-linux.md). Agent authors
-should start with [`docs/agent-contract.md`](docs/agent-contract.md) and
-[`docs/03-agent-registration.md`](docs/03-agent-registration.md), rather than the
-legacy MQTT helper scripts.
-
 ## Architecture
 
 ```mermaid
@@ -73,9 +65,6 @@ flowchart LR
 
 Only `agents.{id}.inbox` is a durable work queue. Registration, heartbeat,
 status, logs, progress, outbox audit mirrors, and broadcasts use plain NATS.
-See [`docs/01-architecture.md`](docs/01-architecture.md) for component ownership
-and [`docs/05-messaging.md`](docs/05-messaging.md) for the complete subject list.
-
 ## Repository map
 
 | Path | Responsibility |
@@ -86,7 +75,8 @@ and [`docs/05-messaging.md`](docs/05-messaging.md) for the complete subject list
 | `nats/`, `nginx/` | Local stack configuration |
 | `deploy/` | Host installation and service management |
 | `e2e/` | Playwright operator-flow tests |
-| `docs/` | Current architecture, contracts, setup, and operations |
+| `plugin-toolkit/` | Repository-side plugin SDK, schemas, validation supervisor, and tests |
+| `plugins/` | Independently distributable plugin packages and examples |
 
 ## Development
 
@@ -107,10 +97,6 @@ npm ci && npm test
 Repository workflow and quality gates are defined once in [`AGENTS.md`](AGENTS.md).
 Tool-specific files may add integration details but do not replace those rules.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a change.
-
-## Documentation
-
-The maintained documentation index is [`docs/README.md`](docs/README.md).
 
 ## License
 

@@ -21,7 +21,7 @@ You are a senior code reviewer for the EdgeCitadel project — a hybrid NATS+MQT
 - If NATS subjects changed: are ALL publishers AND subscribers updated?
 - If message schemas changed: are both Python (aggregator) and JS (client) updated?
 - Subject naming follows `agents.{name}.{action}` / `tasks.{id}.{action}` pattern?
-- New subjects documented in `docs/05-messaging.md`?
+- New subjects covered by schemas and contract tests?
 
 ### Database
 - If SQLite schema changed: backward compatible?

@@ -462,7 +462,7 @@ def test_start_validates_tools_addresses_and_source_before_outputs(
         start_controller(args)
     assert timeline == []
     assert not (args.state_root / args.run_id).exists()
-    assert not (repo_root / "docs/research/results/lab/ec-lab-01").exists()
+    assert not (repo_root / "data/research/results/lab/ec-lab-01").exists()
 
 
 def test_start_journals_raw_and_service_secrets_before_acquisitions(

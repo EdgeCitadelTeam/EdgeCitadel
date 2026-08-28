@@ -9,11 +9,8 @@ paths:
 
 # NATS & Messaging Rules (v0.1+)
 
-> Authoritative sources: `docs/agent-contract.md`, `schemas/envelope.v1.json`,
-> ADR-0002 (JetStream WorkQueue), ADR-0003 (A2A vocabulary), ADR-0004 (MQTT
-> opt-in), ADR-0005 (browser-scoped token), ADR-0006 (outbox mirror),
-> ADR-0010 (NATS-native L2 delegation), ADR-0011 (MCP for tool exposure).
-> This file is short-form guidance for tools; conflicts in favor of the docs.
+> Authoritative source: `schemas/envelope.v1.json`.
+> This file is short-form guidance for tools; executable schemas and tests take precedence.
 
 ## Transport
 
@@ -68,7 +65,7 @@ the strict schema at `schemas/envelope.v1.json`:
 
 1. Define the subject in `aggregator/aggregator.py:AggregatorApp.start`.
 2. Add a handler on `MessageRouter` (validate via `_parse_and_validate`).
-3. Update `docs/05-messaging.md` (subject inventory + semantics).
+3. Update contract schemas and tests together.
 4. For new envelope types: extend `schemas/envelope.v1.json` (with
    conditional `if/then` rules for required-by-type) and add tests in
    `schemas/tests/test_envelope_schema.py`. Then update the validator

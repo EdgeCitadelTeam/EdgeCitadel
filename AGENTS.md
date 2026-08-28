@@ -17,12 +17,11 @@
 ## Repo map
 - `aggregator/` - Python FastAPI backend, NATS subscriptions, SQLite persistence
 - `frontend/` - React/Vite dashboard; the only UI source root
+- `adapters/` - Current agent runtime integrations and plugin-migration inputs
 - `openclaw-client/` - Node NATS client for agents
 - `e2e/` - Playwright end-to-end tests
-- `docs/` - architecture and operations
-- `plugin-system/` - Plugin schemas, SDK protocols, no-op supervisor, and hermetic tests
+- `plugin-toolkit/` - Repository-side plugin schemas, SDK protocols, validation supervisor, and tests
 - `plugins/` - Installable EdgeCitadel plugin packages and examples
-- Service `dashboard` is current; the old `dashboard/` directory is retired.
 
 ## Commands
 - Full stack: `docker compose up --build -d`
@@ -32,7 +31,7 @@
 - Frontend build: `cd frontend && npm run build`
 - Client listener: `cd openclaw-client && npm start`
 - E2E tests: `cd e2e && npm test`
-- Plugin checks (smoke): `cd plugin-system && python -m pytest -q && python -m edgecitadel_supervisor validate ../plugins/examples/placeholder`; see `plugin-system/README.md` for the full contributor gate.
+- Plugin checks (smoke): `cd plugin-toolkit && python -m pytest -q && python -m edgecitadel_supervisor validate ../plugins/examples/placeholder`; see `plugin-toolkit/README.md` for the full contributor gate.
 
 ## Working rules
 - Inspect any nested `AGENTS.md` before editing in a subdirectory.
@@ -43,22 +42,17 @@
 
 ## Quality gates
 - No secrets, tokens, or local config in committed files.
-- Schema/messaging changes update `docs/05-messaging.md` in the same PR.
-- Config changes update `.env.example` and relevant setup docs.
-- New host-level dependency (Phase 5+): edit `deploy/manifest.toml` only; deploy script and platform setup guides consume it. Do not embed dependency lists in prose.
+- Config changes update `.env.example`.
+- New host-level dependency (Phase 5+): edit `deploy/manifest.toml` only; deployment automation consumes it.
 - Verification: invoke the relevant `verify-*` skill (`verify-frontend`, `verify-backend`, `verify-infra`). Default smoke: `curl http://localhost:8222/healthz` and `curl http://localhost/api/system/status`.
 - Curl-only checks are not sufficient for UI or workflow changes. Playwright via `cd e2e && npm test` is the gate.
 
 ## Do Not
-- Don't edit the retired `dashboard/` directory; UI lives in `frontend/`.
-- Don't add new files at repo root; top-level config only, new docs go in `docs/`.
+- Don't add new files at repo root; top-level config only.
 - Don't commit `.Codex/settings.local.json`, `.env`, or anything in `data/`.
 - Don't treat curl checks as sufficient for UI/workflow changes; Playwright is the gate.
 - New entries: see "How this file is maintained" above. Format: `- YYYY-MM-DD Don't <thing>. (incident: <one-line context>)`
 
 ## Where to look
-- Architecture: `docs/01-architecture.md`
-- Messaging contracts: `docs/05-messaging.md`
-- Setup: `docs/agent-setup.md`
 - Operational workflows: `.agents/skills/` (verify-*, release, smoke-check, etc.)
 - Hook/permission config: `.claude/settings.json`

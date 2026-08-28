@@ -2,7 +2,7 @@
 
 `plugins/` contains installable, framework-neutral EdgeCitadel plugin packages.
 Host schemas, SDK protocols, validation logic, and tests live in
-[`../plugin-system/`](../plugin-system/). See the validation-only
+[`../plugin-toolkit/`](../plugin-toolkit/). See the validation-only
 [`examples/placeholder`](examples/placeholder/README.md) package for a complete
 example.
 
@@ -65,7 +65,7 @@ content hash, and provenance are record and audit metadata.
 
 ## Author workflow
 
-From an activated editable environment in `plugin-system/`:
+From an activated editable environment in `plugin-toolkit/`:
 
 1. Finalize every file in the package, including optional resources.
 2. Generate or regenerate the canonical lock:

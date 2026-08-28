@@ -1388,7 +1388,7 @@ def start_controller(args: argparse.Namespace) -> ControllerConfig:
     machine_id_sha256 = _controller_machine_id_sha256()
     state_dir = state_file.parent
     controller_config_file = state_dir / "controller.json"
-    evidence_dir = repo_root / "docs/research/results/lab" / run_id
+    evidence_dir = repo_root / "data/research/results/lab" / run_id
     if evidence_dir.exists():
         raise LabConfigError("lab evidence directory already exists")
     environment: ArtifactEnvironment | None = None

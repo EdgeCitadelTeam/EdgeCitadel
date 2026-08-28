@@ -15,10 +15,10 @@ from typing import Any
 from jsonschema import Draft202012Validator, ValidationError
 
 _GENERATED_PREFIXES = (
-    "docs/research/results/raw/",
-    "docs/research/results/derived/",
-    "docs/research/results/operator/",
-    "docs/research/results/lab/",
+    "data/research/results/raw/",
+    "data/research/results/derived/",
+    "data/research/results/operator/",
+    "data/research/results/lab/",
     "tmp/",
     ".pytest_cache/",
     "__pycache__/",

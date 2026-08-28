@@ -3,7 +3,13 @@ from scripts.research.benchmark_core import (
     command_envelope,
     delegation_envelope,
 )
-from scripts.research.run_agent_benchmark import parse_workloads
+from scripts.research.run_agent_benchmark import build_parser, parse_workloads
+
+
+def test_benchmark_default_output_uses_runtime_data_directory():
+    arguments = build_parser().parse_args([])
+
+    assert arguments.out_dir == "data/research/results"
 
 
 def test_parse_workloads_expands_native_slice():

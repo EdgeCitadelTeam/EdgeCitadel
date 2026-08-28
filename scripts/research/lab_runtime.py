@@ -14,7 +14,7 @@ from scripts.research.lab_config import LabConfigError, sha256_file, validate_ru
 IMAGE_ID_PREFIX = "sha256:"
 LAB_SOURCE_PATHS = (
     ".dockerignore", "aggregator", "frontend", "e2e", "nginx", "scripts/research",
-    "schemas", "docs/research/artifact.md", "docs/setup-lab-node.md",
+    "schemas",
 )
 
 

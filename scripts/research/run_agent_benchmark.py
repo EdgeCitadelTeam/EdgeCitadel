@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nats-url", default="nats://127.0.0.1:4222")
     parser.add_argument("--nats-token", default=None)
     parser.add_argument("--mqtt-url", default="mqtt://127.0.0.1:1883")
-    parser.add_argument("--out-dir", default="docs/research/results")
+    parser.add_argument("--out-dir", default="data/research/results")
     parser.add_argument("--target-agent", default="shell-1")
     parser.add_argument("--streaming-agent", default="gemma-1")
     parser.add_argument("--render-md", action="store_true")

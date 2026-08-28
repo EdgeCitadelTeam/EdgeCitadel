@@ -2,7 +2,7 @@
 .env*
 data/
 tmp/
-docs/research/results/raw/
+data/research/results/
 **/*credential*
 **/*token*
 **/*.webm

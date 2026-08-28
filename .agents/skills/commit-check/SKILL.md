@@ -44,11 +44,9 @@ grep -rn "password\|secret\|token\|api.key" --include="*.py" --include="*.js" --
 ```
 Flag any matches for manual review.
 
-## 6. Documentation Check
+## 6. Maintainer Check
 If the change introduces new features, API endpoints, or NATS subjects:
-- Is `docs/` updated?
-- Is `docs/CHANGELOG.md` updated?
-- If architectural: is there an ADR in `docs/adr/`?
+- Are user-facing instructions updated where the repository currently maintains them?
 
 ## Report
 Output a pass/fail checklist:
@@ -57,6 +55,6 @@ Output a pass/fail checklist:
 - [ ] Tests pass
 - [ ] Commit message valid
 - [ ] No secrets detected
-- [ ] Docs updated (if applicable)
+- [ ] User-facing instructions updated (if applicable)
 
 Block the commit if any required check fails.

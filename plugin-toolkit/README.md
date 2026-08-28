@@ -1,6 +1,6 @@
-# EdgeCitadel plugin system
+# EdgeCitadel plugin toolkit
 
-`plugin-system/` contains host-side infrastructure for validating installable
+`plugin-toolkit/` contains repository-side infrastructure for validating installable
 EdgeCitadel plugin packages. The `edgecitadel_supervisor` package owns safe
 loading, strict schemas, compatibility checks, canonical locks, and deterministic
 inventory. The separate `edgecitadel_plugin_sdk` package defines typed,
