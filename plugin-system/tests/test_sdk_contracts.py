@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast, get_type_hints
 
 import pytest
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 import edgecitadel_plugin_sdk
 from edgecitadel_plugin_sdk import (
@@ -468,6 +469,86 @@ def test_value_records_round_trip_through_dataclass_json_shapes() -> None:
     assert "message_type" not in documents[3]
     assert documents[3]["payload"]["args"]["items"] == [1, 2]
     assert documents[4]["detail"]["history"] == [{"attempt": 1}]
+
+
+def test_transport_message_serializes_a_canonical_command_envelope() -> None:
+    message = TransportMessage(
+        v=1,
+        id="123e4567-e89b-42d3-a456-426614174000",
+        type="command",
+        sender_id="sender",
+        timestamp="2026-08-28T12:00:00.000Z",
+        payload={"args": {"items": [{"value": "original"}]}},
+        recipient_id="recipient",
+        task_id="123e4567-e89b-42d3-b456-426614174001",
+    )
+    schema_path = Path(__file__).parents[2] / "schemas" / "envelope.v1.json"
+    validator = Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8"))
+    )
+
+    dataclass_mapping = asdict(message)
+    assert dataclass_mapping["context_id"] is None
+    assert dataclass_mapping["task_state"] is None
+    assert dataclass_mapping["agent_state"] is None
+    assert dataclass_mapping["hop_count"] is None
+    assert list(validator.iter_errors(dataclass_mapping))
+
+    wire_mapping = message.to_mapping()
+
+    assert set(wire_mapping) == {
+        "v",
+        "id",
+        "type",
+        "sender_id",
+        "timestamp",
+        "payload",
+        "recipient_id",
+        "task_id",
+    }
+    validator.validate(wire_mapping)
+    assert json.loads(json.dumps(wire_mapping)) == wire_mapping
+    wire_payload = cast(dict[str, object], wire_mapping["payload"])
+    wire_args = cast(dict[str, object], wire_payload["args"])
+    wire_items = cast(list[object], wire_args["items"])
+    wire_item = cast(dict[str, object], wire_items[0])
+    assert type(wire_payload) is dict
+    assert type(wire_args) is dict
+    assert type(wire_items) is list
+    assert type(wire_item) is dict
+    wire_item["value"] = "wire-mutated"
+    wire_items.append({"value": "wire-added"})
+
+    record_payload = cast(Mapping[str, object], message.payload["args"])
+    record_items = cast(tuple[object, ...], record_payload["items"])
+    record_item = cast(Mapping[str, object], record_items[0])
+    assert record_item["value"] == "original"
+    assert len(record_items) == 1
+    assert message.to_mapping()["payload"] is not wire_mapping["payload"]
+
+
+def test_transport_message_serialization_preserves_zero_hop_count() -> None:
+    message = TransportMessage(
+        v=1,
+        id="123e4567-e89b-42d3-a456-426614174000",
+        type="delegation",
+        sender_id="sender",
+        timestamp="2026-08-28T12:00:00.000Z",
+        payload={},
+        recipient_id="recipient",
+        task_id="123e4567-e89b-42d3-b456-426614174001",
+        context_id="123e4567-e89b-42d3-8456-426614174002",
+        hop_count=0,
+    )
+    schema_path = Path(__file__).parents[2] / "schemas" / "envelope.v1.json"
+    validator = Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8"))
+    )
+
+    wire_mapping = message.to_mapping()
+
+    assert wire_mapping["hop_count"] == 0
+    validator.validate(wire_mapping)
 
 
 class DummyRuntime:

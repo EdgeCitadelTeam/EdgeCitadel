@@ -1,4 +1,8 @@
-"""Private immutable containers for portable SDK values."""
+"""Private snapshots for JSON-shaped portable SDK mapping values.
+
+Mapping/list/tuple trees are recursively snapshotted. Arbitrary object graphs are
+outside the portable contract and scalar values are retained as supplied.
+"""
 
 from __future__ import annotations
 
@@ -40,3 +44,14 @@ def _freeze(value: object) -> object:
 
 def _freeze_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
     return _FrozenDict(value)
+
+
+def _thaw_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            cast(str, key): _thaw_value(nested_value)
+            for key, nested_value in value.items()
+        }
+    if isinstance(value, tuple):
+        return [_thaw_value(item) for item in value]
+    return value

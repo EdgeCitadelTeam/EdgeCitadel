@@ -112,7 +112,9 @@ async def exercise_sdk_contracts() -> None:
     await knowledge.propose(record)
     await transport.register("agent")
     async for message in transport.receive("agent"):
+        wire_message = message.to_mapping()
         await transport.publish(message)
+        wire_message.get("payload")
     await transport.drain()
     await hooks.before_transition(transition)
     await hooks.after_transition(transition)
