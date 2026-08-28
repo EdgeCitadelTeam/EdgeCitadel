@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import re
+import stat
 from pathlib import Path
 from typing import cast
 
@@ -15,11 +16,12 @@ from .errors import (
     ManifestValidationError,
     UnsafePackagePathError,
 )
-from .loader import load_json
+from .loader import load_json, load_yaml
 from .validator import PackageRecord, SkillRecord, validate_schema
 
 LOCK_FILENAME = "plugin.lock.json"
 _LOCK_SCHEMA = "plugin-lock.v1.schema.json"
+_PLUGIN_SCHEMA = "agent-plugin.v1alpha1.schema.json"
 _HASH_CHUNK_SIZE = 1024 * 1024
 _PORTABLE_SKILL_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
@@ -32,17 +34,24 @@ def sha256_file(path: Path) -> str:
 def package_files(root: Path) -> tuple[Path, ...]:
     """Return sorted regular package files, excluding the generated root lock."""
     try:
-        if root.is_symlink():
+        if stat.S_ISLNK(root.stat(follow_symlinks=False).st_mode):
             raise UnsafePackagePathError("Package contains symbolic link: .")
 
         files: list[Path] = []
         for path in root.rglob("*"):
             relative_path = path.relative_to(root).as_posix()
-            if path.is_symlink():
+            mode = path.stat(follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
                 raise UnsafePackagePathError(
                     f"Package contains symbolic link: {relative_path}"
                 )
-            if path.is_file() and relative_path != LOCK_FILENAME:
+            if stat.S_ISDIR(mode):
+                continue
+            if not stat.S_ISREG(mode):
+                raise UnsafePackagePathError(
+                    f"Package contains unsupported filesystem entry: {relative_path}"
+                )
+            if relative_path != LOCK_FILENAME:
                 files.append(path)
     except UnsafePackagePathError:
         raise
@@ -109,6 +118,7 @@ def verify_lock(package: PackageRecord) -> None:
     locked_package = cast(dict[str, object], lock["package"])
     locked_files = cast(list[dict[str, object]], lock["files"])
     locked_skills = cast(list[dict[str, object]], lock["skills"])
+    _require_canonical_lock_order(locked_files, locked_skills)
     issues = _duplicate_issues(duplicate_paths, duplicate_skills)
     issues.extend(_package_metadata_issues(package, locked_package))
     file_issues = _file_integrity_issues(package.root, actual_files, locked_files)
@@ -122,7 +132,7 @@ def verify_lock(package: PackageRecord) -> None:
 
 def build_inventory(package: PackageRecord) -> dict[str, object]:
     """Build deterministic JSON-compatible supervisor inventory data."""
-    manifest = package.manifest
+    manifest = _load_inventory_manifest(package.root)
     return {
         "package": {
             "id": package.package_id,
@@ -190,6 +200,22 @@ def _load_lock(root: Path) -> dict[str, object]:
         ) from None
 
 
+def _load_inventory_manifest(root: Path) -> dict[str, object]:
+    try:
+        manifest = load_yaml(root / "plugin.yaml")
+    except ManifestLoadError:
+        raise LockIntegrityError(
+            "Unable to load inventory manifest: plugin.yaml"
+        ) from None
+    try:
+        validate_schema(manifest, _PLUGIN_SCHEMA)
+    except ManifestValidationError:
+        raise LockIntegrityError(
+            "Inventory manifest failed schema validation: plugin.yaml"
+        ) from None
+    return copy.deepcopy(manifest)
+
+
 def _duplicate_file_paths(lock: dict[str, object]) -> tuple[str, ...]:
     files = lock.get("files")
     if not isinstance(files, list):
@@ -213,7 +239,7 @@ def _duplicate_skill_names(lock: dict[str, object]) -> tuple[str, ...]:
         for entry in skills
         if isinstance(entry, dict)
         and isinstance((name := entry.get("name")), str)
-        and _PORTABLE_SKILL_NAME.fullmatch(name) is not None
+        and _is_portable_skill_name(name)
     ]
     return _duplicates(names)
 
@@ -237,6 +263,18 @@ def _duplicate_issues(
     if skill_names:
         issues.append(f"Duplicate locked skill names: {', '.join(skill_names)}")
     return issues
+
+
+def _require_canonical_lock_order(
+    locked_files: list[dict[str, object]],
+    locked_skills: list[dict[str, object]],
+) -> None:
+    file_paths = [cast(str, entry["path"]) for entry in locked_files]
+    if len(file_paths) == len(set(file_paths)) and file_paths != sorted(file_paths):
+        raise LockIntegrityError(f"Noncanonical locked file order: {LOCK_FILENAME}")
+    skill_names = [cast(str, entry["name"]) for entry in locked_skills]
+    if len(skill_names) == len(set(skill_names)) and skill_names != sorted(skill_names):
+        raise LockIntegrityError(f"Noncanonical locked skill order: {LOCK_FILENAME}")
 
 
 def _package_metadata_issues(
@@ -322,6 +360,10 @@ def _is_safe_relative_path(value: str) -> bool:
         return False
     components = value.split("/")
     return all(component not in {"", ".", ".."} for component in components)
+
+
+def _is_portable_skill_name(value: str) -> bool:
+    return 1 <= len(value) <= 64 and _PORTABLE_SKILL_NAME.fullmatch(value) is not None
 
 
 def _package_relative(root: Path, path: Path) -> str:

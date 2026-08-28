@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -98,6 +100,22 @@ def test_package_files_reject_symlinks_without_absolute_paths(
 
     assert str(valid_package) not in str(error.value)
     assert str(outside) not in str(error.value)
+
+
+def test_package_files_reject_special_files_with_relative_paths(
+    valid_package: Path,
+) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFOs are not supported on this platform")
+    fifo = valid_package / "runtime-pipe"
+    os.mkfifo(fifo)
+
+    with pytest.raises(
+        (UnsafePackagePathError, LockIntegrityError), match="runtime-pipe"
+    ) as error:
+        package_files(valid_package)
+
+    assert str(valid_package) not in str(error.value)
 
 
 def test_build_lock_is_deterministic_canonical_and_uses_typed_identity(
@@ -264,6 +282,63 @@ def test_verify_lock_does_not_report_unsafe_duplicate_path_values(
     assert "do-not-leak" not in str(error.value)
 
 
+def test_verify_lock_does_not_report_overlong_duplicate_skill_names(
+    valid_package: Path,
+) -> None:
+    package = _package(valid_package)
+    lock = build_lock(package)
+    skills = lock["skills"]
+    assert isinstance(skills, list)
+    overlong_name = "a" * 65
+    skills.extend(
+        [
+            {
+                "name": overlong_name,
+                "skillId": "example.first",
+                "version": "0.1.0",
+                "contentSha256": "0" * 64,
+            },
+            {
+                "name": overlong_name,
+                "skillId": "example.second",
+                "version": "0.1.0",
+                "contentSha256": "1" * 64,
+            },
+        ]
+    )
+    _write_lock_document(valid_package, lock)
+
+    with pytest.raises(LockIntegrityError, match="failed schema validation") as error:
+        verify_lock(package)
+
+    assert overlong_name not in str(error.value)
+
+
+def test_verify_lock_rejects_noncanonical_file_order(valid_package: Path) -> None:
+    package = _package(valid_package)
+    lock = build_lock(package)
+    files = lock["files"]
+    assert isinstance(files, list)
+    files.reverse()
+    _write_lock_document(valid_package, lock)
+
+    with pytest.raises(LockIntegrityError, match="Noncanonical locked file order"):
+        verify_lock(package)
+
+
+def test_verify_lock_rejects_noncanonical_skill_order(valid_package: Path) -> None:
+    _add_skill(valid_package, "alpha", "example.alpha")
+    package = _package(valid_package)
+    lock = build_lock(package)
+    skills = lock["skills"]
+    assert isinstance(skills, list)
+    skills.reverse()
+    _write_lock_document(valid_package, lock)
+
+    with pytest.raises(LockIntegrityError, match="Noncanonical locked skill order"):
+        verify_lock(package)
+
+
 @pytest.mark.parametrize(
     ("mutation", "message", "expected"),
     [
@@ -382,3 +457,45 @@ def test_build_inventory_is_deterministic_json_compatible_and_path_free(
     assert [skill["name"] for skill in skills] == ["alpha", "placeholder"]
     assert all("contentSha256" in skill for skill in skills)
     assert str(valid_package) not in json.dumps(first)
+
+
+def test_build_inventory_reloads_validated_supplemental_manifest_fields(
+    valid_package: Path,
+) -> None:
+    package = _package(valid_package)
+    expected = {
+        field: copy.deepcopy(package.manifest[field])
+        for field in ("compatibility", "runtime", "permissions", "security")
+    }
+    compatibility = package.manifest["compatibility"]
+    runtime = package.manifest["runtime"]
+    permissions = package.manifest["permissions"]
+    security = package.manifest["security"]
+    assert isinstance(compatibility, dict)
+    assert isinstance(runtime, dict)
+    assert isinstance(permissions, dict)
+    assert isinstance(security, dict)
+    compatibility["protocols"] = ["mutated.protocol"]
+    runtime["command"] = ["mutated"]
+    permissions["knowledge"] = {"do-not-serialize"}
+    security["secrets"] = ["mutated-secret"]
+
+    inventory = build_inventory(package)
+
+    assert json.loads(json.dumps(inventory)) == inventory
+    for field, value in expected.items():
+        assert inventory[field] == value
+
+
+@pytest.mark.parametrize("contents", ["[", "kind: NotAPlugin\n"])
+def test_build_inventory_translates_source_manifest_errors(
+    valid_package: Path, contents: str
+) -> None:
+    package = _package(valid_package)
+    (valid_package / "plugin.yaml").write_text(contents, encoding="utf-8")
+
+    with pytest.raises(LockIntegrityError, match="plugin.yaml") as error:
+        build_inventory(package)
+
+    assert contents.strip() not in str(error.value)
+    assert str(valid_package) not in str(error.value)
