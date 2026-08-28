@@ -72,8 +72,11 @@ def test_require_plugin_root_rejects_symlink(tmp_path: Path) -> None:
     root = tmp_path / "plugin"
     root.symlink_to(target, target_is_directory=True)
 
-    with pytest.raises(UnsafePackagePathError, match="symbolic link"):
+    with pytest.raises(UnsafePackagePathError, match="symbolic link") as error:
         require_plugin_root(root)
+
+    assert str(error.value).endswith(": .")
+    assert str(root) not in str(error.value)
 
 
 def test_load_yaml_wraps_parser_failure(tmp_path: Path) -> None:
@@ -110,6 +113,16 @@ def test_load_yaml_rejects_non_string_root_keys(tmp_path: Path) -> None:
 
     with pytest.raises(ManifestLoadError, match="string keys.*plugin.yaml"):
         load_yaml(path)
+
+
+def test_load_yaml_rejects_nested_non_string_mapping_keys(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text("extensions:\n  - 1: do-not-leak\n")
+
+    with pytest.raises(ManifestLoadError, match="string keys.*plugin.yaml") as error:
+        load_yaml(path)
+
+    assert "do-not-leak" not in str(error.value)
 
 
 def test_load_yaml_returns_mapping(tmp_path: Path) -> None:
@@ -213,6 +226,20 @@ def test_load_skill_markdown_rejects_non_string_frontmatter_keys(
         load_skill_markdown(path)
 
 
+def test_load_skill_markdown_rejects_nested_non_string_mapping_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "SKILL.md"
+    path.write_text(
+        "---\nname: example\nmetadata:\n  1: do-not-leak\n---\n# Procedure\n"
+    )
+
+    with pytest.raises(ManifestLoadError, match="string keys.*SKILL.md") as error:
+        load_skill_markdown(path)
+
+    assert "do-not-leak" not in str(error.value)
+
+
 def test_load_skill_markdown_returns_frontmatter_and_body(tmp_path: Path) -> None:
     path = tmp_path / "SKILL.md"
     path.write_text(
@@ -274,8 +301,24 @@ def test_reject_symlinks_finds_nested_link(tmp_path: Path) -> None:
     nested.mkdir()
     (nested / "escape").symlink_to(target)
 
-    with pytest.raises(UnsafePackagePathError, match="symbolic link"):
+    with pytest.raises(UnsafePackagePathError, match="symbolic link") as error:
         reject_symlinks(tmp_path)
+
+    assert "skills/escape" in str(error.value)
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_reject_symlinks_reports_root_with_relative_marker(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    root = tmp_path / "plugin"
+    root.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(UnsafePackagePathError, match="symbolic link") as error:
+        reject_symlinks(root)
+
+    assert str(error.value).endswith(": .")
+    assert str(root) not in str(error.value)
 
 
 def test_reject_symlinks_accepts_clean_nested_tree(tmp_path: Path) -> None:

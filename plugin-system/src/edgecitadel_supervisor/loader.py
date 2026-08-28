@@ -15,9 +15,7 @@ def require_plugin_root(path: str | Path) -> Path:
     candidate = Path(path)
     try:
         if candidate.is_symlink():
-            raise UnsafePackagePathError(
-                f"Plugin root must not be a symbolic link: {candidate}"
-            )
+            raise UnsafePackagePathError("Plugin root must not be a symbolic link: .")
         root = candidate.resolve(strict=False)
         exists = root.exists()
         is_directory = root.is_dir()
@@ -44,8 +42,10 @@ def load_yaml(path: Path) -> dict[str, object]:
 
     if not isinstance(document, dict):
         raise ManifestLoadError(f"Expected a mapping in YAML file: {path}")
-    if not all(isinstance(key, str) for key in document):
-        raise ManifestLoadError(f"Expected string keys in YAML file: {path}")
+    try:
+        _require_string_mapping_keys(document, "YAML file", path)
+    except RecursionError:
+        raise ManifestLoadError(f"Unable to load YAML file: {path}") from None
     return document
 
 
@@ -90,10 +90,12 @@ def load_skill_markdown(path: Path) -> tuple[dict[str, object], str]:
         raise ManifestLoadError(
             f"Expected a mapping in YAML frontmatter for skill file: {path}"
         )
-    if not all(isinstance(key, str) for key in metadata):
+    try:
+        _require_string_mapping_keys(metadata, "YAML frontmatter for skill file", path)
+    except RecursionError:
         raise ManifestLoadError(
-            f"Expected string keys in YAML frontmatter for skill file: {path}"
-        )
+            f"Unable to parse YAML frontmatter in skill file: {path}"
+        ) from None
     return metadata, body
 
 
@@ -123,14 +125,28 @@ def reject_symlinks(root: Path) -> None:
     """Reject symbolic links anywhere in a plugin package tree."""
     try:
         if root.is_symlink():
-            raise UnsafePackagePathError(f"Package contains symbolic link: {root}")
+            raise UnsafePackagePathError("Package contains symbolic link: .")
 
         for path in root.rglob("*"):
             if path.is_symlink():
-                raise UnsafePackagePathError(f"Package contains symbolic link: {path}")
+                relative_path = path.relative_to(root).as_posix()
+                raise UnsafePackagePathError(
+                    f"Package contains symbolic link: {relative_path}"
+                )
     except UnsafePackagePathError:
         raise
     except (OSError, RuntimeError, ValueError):
         raise UnsafePackagePathError(
-            f"Unable to inspect package paths safely within: {root}"
+            "Unable to inspect package paths safely within: ."
         ) from None
+
+
+def _require_string_mapping_keys(value: object, description: str, path: Path) -> None:
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise ManifestLoadError(f"Expected string keys in {description}: {path}")
+        for nested_value in value.values():
+            _require_string_mapping_keys(nested_value, description, path)
+    elif isinstance(value, list):
+        for nested_value in value:
+            _require_string_mapping_keys(nested_value, description, path)

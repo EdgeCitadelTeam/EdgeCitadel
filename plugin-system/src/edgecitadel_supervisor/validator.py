@@ -11,7 +11,7 @@ from typing import cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from .errors import (
     CompatibilityError,
@@ -82,14 +82,40 @@ def validate_package(
         ) from None
 
     compatibility = cast(dict[str, object], manifest["compatibility"])
+    protocol = _select_compatible_protocol(compatibility)
+
+    skills_config = cast(dict[str, object], manifest["skills"])
+    skills = discover_skills(plugin_root, cast(str, skills_config["directory"]))
+    agents = cast(list[dict[str, object]], manifest["agents"])
+    agent_skill_names = _build_agent_skill_names(agents, skills)
+
+    metadata = cast(dict[str, object], manifest["metadata"])
+    _ = verify_integrity  # Task 5 will use this compatibility parameter.
+    return PackageRecord(
+        root=plugin_root,
+        manifest=manifest,
+        package_id=f"{metadata['publisher']}.{metadata['name']}",
+        package_version=cast(str, metadata["version"]),
+        protocol=protocol,
+        skills=skills,
+        agent_skill_names=agent_skill_names,
+    )
+
+
+def _select_compatible_protocol(compatibility: dict[str, object]) -> str:
     supervisor_api = cast(str, compatibility["supervisorApi"])
+    if not supervisor_api.strip():
+        raise ManifestValidationError(
+            "Plugin manifest has an invalid supervisor API compatibility specifier"
+        )
     try:
         supervisor_specifier = SpecifierSet(supervisor_api)
-    except InvalidSpecifier:
+        supports_supervisor_api = SUPERVISOR_API_VERSION in supervisor_specifier
+    except (InvalidSpecifier, InvalidVersion):
         raise ManifestValidationError(
             "Plugin manifest has an invalid supervisor API compatibility specifier"
         ) from None
-    if SUPERVISOR_API_VERSION not in supervisor_specifier:
+    if not supports_supervisor_api:
         raise CompatibilityError(
             "Plugin does not support the current supervisor API version"
         )
@@ -102,13 +128,14 @@ def validate_package(
         raise CompatibilityError(
             "Plugin must declare exactly one supported process protocol"
         )
+    return supported_protocols[0]
 
-    skills_config = cast(dict[str, object], manifest["skills"])
-    skills = discover_skills(plugin_root, cast(str, skills_config["directory"]))
+
+def _build_agent_skill_names(
+    agents: list[dict[str, object]], skills: tuple[SkillRecord, ...]
+) -> dict[str, tuple[str, ...]]:
     portable_skill_names = {skill.name for skill in skills}
-
     agent_skill_names: dict[str, tuple[str, ...]] = {}
-    agents = cast(list[dict[str, object]], manifest["agents"])
     for agent in agents:
         agent_id = cast(str, agent["id"])
         if agent_id in agent_skill_names:
@@ -124,18 +151,7 @@ def validate_package(
                 f"Agent {agent_id} references unknown skill: {unknown_skill}"
             )
         agent_skill_names[agent_id] = tuple(skill_names)
-
-    metadata = cast(dict[str, object], manifest["metadata"])
-    _ = verify_integrity  # Task 5 will use this compatibility parameter.
-    return PackageRecord(
-        root=plugin_root,
-        manifest=manifest,
-        package_id=f"{metadata['publisher']}.{metadata['name']}",
-        package_version=cast(str, metadata["version"]),
-        protocol=supported_protocols[0],
-        skills=skills,
-        agent_skill_names=agent_skill_names,
-    )
+    return agent_skill_names
 
 
 def validate_schema(document: object, schema_name: str) -> None:

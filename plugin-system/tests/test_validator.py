@@ -120,6 +120,20 @@ def test_package_record_is_frozen(valid_package: Path) -> None:
         package.package_id = "renamed"  # type: ignore[misc]
 
 
+def test_agent_skill_mapping_does_not_alias_manifest(valid_package: Path) -> None:
+    package = validate_package(valid_package, verify_integrity=False)
+    agents = package.manifest["agents"]
+    assert isinstance(agents, list)
+    agent = agents[0]
+    assert isinstance(agent, dict)
+    skill_names = agent["skillNames"]
+    assert isinstance(skill_names, list)
+
+    skill_names.append("missing")
+
+    assert package.agent_skill_names == {"example-agent": ("placeholder",)}
+
+
 def test_package_record_declares_exact_public_fields() -> None:
     assert tuple(PackageRecord.__dataclass_fields__) == (
         "root",
@@ -162,6 +176,18 @@ def test_rejects_malformed_supervisor_api_without_leaking_value(
         validate_package(valid_package, verify_integrity=False)
 
     assert "do-not-leak" not in str(error.value)
+
+
+@pytest.mark.parametrize("supervisor_api", ["   ", "===not-a-version"])
+def test_rejects_invalid_supervisor_api_forms_with_stable_redacted_error(
+    valid_package: Path, supervisor_api: str
+) -> None:
+    _replace_compatibility(valid_package, supervisor_api, "supervisorApi")
+
+    with pytest.raises(ManifestValidationError, match="supervisor API") as error:
+        validate_package(valid_package, verify_integrity=False)
+
+    assert supervisor_api not in str(error.value)
 
 
 def test_rejects_unsupported_process_protocol(valid_package: Path) -> None:
@@ -281,6 +307,20 @@ def test_missing_plugin_manifest_uses_redacted_package_relative_error(
     _assert_package_relative_error(error.value, valid_package, "plugin.yaml")
 
 
+def test_nested_non_string_manifest_key_is_rejected_by_loader(
+    valid_package: Path,
+) -> None:
+    document = _load_manifest(valid_package)
+    document["extensions"] = {1: {}}
+    _write_manifest(valid_package, document)
+
+    with pytest.raises(ManifestLoadError, match="plugin.yaml") as error:
+        validate_package(valid_package, verify_integrity=False)
+
+    _assert_package_relative_error(error.value, valid_package, "plugin.yaml")
+    assert "1" not in str(error.value)
+
+
 def test_symlinked_package_root_is_rejected_before_manifest_read(
     valid_package: Path, tmp_path: Path
 ) -> None:
@@ -288,8 +328,12 @@ def test_symlinked_package_root_is_rejected_before_manifest_read(
     symlink = tmp_path / "package-link"
     symlink.symlink_to(valid_package, target_is_directory=True)
 
-    with pytest.raises(UnsafePackagePathError, match="symbolic link"):
+    with pytest.raises(UnsafePackagePathError, match="symbolic link") as error:
         validate_package(symlink, verify_integrity=False)
+
+    assert str(error.value).endswith(": .")
+    assert str(symlink) not in str(error.value)
+    assert str(valid_package) not in str(error.value)
 
 
 def test_nested_symlink_is_rejected_before_manifest_read(
@@ -300,8 +344,11 @@ def test_nested_symlink_is_rejected_before_manifest_read(
     target.write_text("outside")
     (valid_package / "nested-link").symlink_to(target)
 
-    with pytest.raises(UnsafePackagePathError, match="symbolic link"):
+    with pytest.raises(UnsafePackagePathError, match="symbolic link") as error:
         validate_package(valid_package, verify_integrity=False)
+
+    assert "nested-link" in str(error.value)
+    assert str(valid_package) not in str(error.value)
 
 
 def test_discover_skills_combines_portable_and_binding_metadata(
