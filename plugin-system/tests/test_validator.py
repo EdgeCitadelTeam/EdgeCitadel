@@ -321,6 +321,20 @@ def test_nested_non_string_manifest_key_is_rejected_by_loader(
     assert "1" not in str(error.value)
 
 
+def test_non_json_manifest_extension_is_rejected_by_loader(
+    valid_package: Path,
+) -> None:
+    document = _load_manifest(valid_package)
+    document["extensions"] = {"value": {"do-not-leak"}}
+    _write_manifest(valid_package, document)
+
+    with pytest.raises(ManifestLoadError, match="plugin.yaml") as error:
+        validate_package(valid_package, verify_integrity=False)
+
+    _assert_package_relative_error(error.value, valid_package, "plugin.yaml")
+    assert "do-not-leak" not in str(error.value)
+
+
 def test_symlinked_package_root_is_rejected_before_manifest_read(
     valid_package: Path, tmp_path: Path
 ) -> None:

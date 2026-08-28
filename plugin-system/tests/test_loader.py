@@ -111,7 +111,7 @@ def test_load_yaml_rejects_non_string_root_keys(tmp_path: Path) -> None:
     path = tmp_path / "plugin.yaml"
     path.write_text("1: value\n")
 
-    with pytest.raises(ManifestLoadError, match="string keys.*plugin.yaml"):
+    with pytest.raises(ManifestLoadError, match="JSON-compatible.*plugin.yaml"):
         load_yaml(path)
 
 
@@ -119,10 +119,62 @@ def test_load_yaml_rejects_nested_non_string_mapping_keys(tmp_path: Path) -> Non
     path = tmp_path / "plugin.yaml"
     path.write_text("extensions:\n  - 1: do-not-leak\n")
 
-    with pytest.raises(ManifestLoadError, match="string keys.*plugin.yaml") as error:
+    with pytest.raises(
+        ManifestLoadError, match="JSON-compatible.*plugin.yaml"
+    ) as error:
         load_yaml(path)
 
     assert "do-not-leak" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "yaml_value",
+    [
+        "!!set {do-not-leak: null}",
+        "2026-08-27",
+        "!!binary ZG8tbm90LWxlYWs=",
+        ".nan",
+        ".inf",
+        "-.inf",
+    ],
+)
+def test_load_yaml_rejects_nested_non_json_values(
+    tmp_path: Path, yaml_value: str
+) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text(f"extensions:\n  value: {yaml_value}\n")
+
+    with pytest.raises(
+        ManifestLoadError, match="JSON-compatible.*plugin.yaml"
+    ) as error:
+        load_yaml(path)
+
+    assert yaml_value not in str(error.value)
+    assert "do-not-leak" not in str(error.value)
+
+
+def test_load_yaml_accepts_nested_json_values(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text(
+        "extensions:\n"
+        "  nullValue: null\n"
+        "  boolValue: true\n"
+        "  stringValue: value\n"
+        "  intValue: 1\n"
+        "  floatValue: 1.5\n"
+        "  listValue: [null, false, value, 2, 2.5]\n"
+        "  mappingValue: {nested: value}\n"
+    )
+
+    assert load_yaml(path)["extensions"] == {
+        "nullValue": None,
+        "boolValue": True,
+        "stringValue": "value",
+        "intValue": 1,
+        "floatValue": 1.5,
+        "listValue": [None, False, "value", 2, 2.5],
+        "mappingValue": {"nested": "value"},
+    }
 
 
 def test_load_yaml_returns_mapping(tmp_path: Path) -> None:
@@ -169,6 +221,19 @@ def test_load_json_returns_mapping(tmp_path: Path) -> None:
     path.write_text(json.dumps(document))
 
     assert load_json(path) == document
+
+
+@pytest.mark.parametrize("json_value", ["NaN", "Infinity", "-Infinity"])
+def test_load_json_rejects_non_finite_floats(tmp_path: Path, json_value: str) -> None:
+    path = tmp_path / "plugin.lock.json"
+    path.write_text(f'{{"value": {json_value}}}')
+
+    with pytest.raises(
+        ManifestLoadError, match="JSON-compatible.*plugin.lock.json"
+    ) as error:
+        load_json(path)
+
+    assert json_value not in str(error.value)
 
 
 def test_load_skill_markdown_rejects_missing_frontmatter(tmp_path: Path) -> None:
@@ -222,7 +287,7 @@ def test_load_skill_markdown_rejects_non_string_frontmatter_keys(
     path = tmp_path / "SKILL.md"
     path.write_text("---\n1: value\n---\n# Procedure\n")
 
-    with pytest.raises(ManifestLoadError, match="string keys.*SKILL.md"):
+    with pytest.raises(ManifestLoadError, match="JSON-compatible.*SKILL.md"):
         load_skill_markdown(path)
 
 
@@ -234,10 +299,22 @@ def test_load_skill_markdown_rejects_nested_non_string_mapping_keys(
         "---\nname: example\nmetadata:\n  1: do-not-leak\n---\n# Procedure\n"
     )
 
-    with pytest.raises(ManifestLoadError, match="string keys.*SKILL.md") as error:
+    with pytest.raises(ManifestLoadError, match="JSON-compatible.*SKILL.md") as error:
         load_skill_markdown(path)
 
     assert "do-not-leak" not in str(error.value)
+
+
+def test_load_skill_markdown_rejects_nested_non_json_value(tmp_path: Path) -> None:
+    path = tmp_path / "SKILL.md"
+    path.write_text(
+        "---\nname: example\nextensions:\n  value: .nan\n---\n# Procedure\n"
+    )
+
+    with pytest.raises(ManifestLoadError, match="JSON-compatible.*SKILL.md") as error:
+        load_skill_markdown(path)
+
+    assert ".nan" not in str(error.value)
 
 
 def test_load_skill_markdown_returns_frontmatter_and_body(tmp_path: Path) -> None:

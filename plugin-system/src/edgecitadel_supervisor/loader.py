@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -43,7 +45,7 @@ def load_yaml(path: Path) -> dict[str, object]:
     if not isinstance(document, dict):
         raise ManifestLoadError(f"Expected a mapping in YAML file: {path}")
     try:
-        _require_string_mapping_keys(document, "YAML file", path)
+        _require_json_compatible_value(document, "YAML file", path)
     except RecursionError:
         raise ManifestLoadError(f"Unable to load YAML file: {path}") from None
     return document
@@ -58,6 +60,10 @@ def load_json(path: Path) -> dict[str, object]:
 
     if not isinstance(document, dict):
         raise ManifestLoadError(f"Expected a mapping in JSON file: {path}")
+    try:
+        _require_json_compatible_value(document, "JSON file", path)
+    except RecursionError:
+        raise ManifestLoadError(f"Unable to load JSON file: {path}") from None
     return document
 
 
@@ -91,7 +97,9 @@ def load_skill_markdown(path: Path) -> tuple[dict[str, object], str]:
             f"Expected a mapping in YAML frontmatter for skill file: {path}"
         )
     try:
-        _require_string_mapping_keys(metadata, "YAML frontmatter for skill file", path)
+        _require_json_compatible_value(
+            metadata, "YAML frontmatter for skill file", path
+        )
     except RecursionError:
         raise ManifestLoadError(
             f"Unable to parse YAML frontmatter in skill file: {path}"
@@ -141,12 +149,22 @@ def reject_symlinks(root: Path) -> None:
         ) from None
 
 
-def _require_string_mapping_keys(value: object, description: str, path: Path) -> None:
-    if isinstance(value, dict):
-        if not all(isinstance(key, str) for key in value):
-            raise ManifestLoadError(f"Expected string keys in {description}: {path}")
-        for nested_value in value.values():
-            _require_string_mapping_keys(nested_value, description, path)
-    elif isinstance(value, list):
-        for nested_value in value:
-            _require_string_mapping_keys(nested_value, description, path)
+def _require_json_compatible_value(value: object, description: str, path: Path) -> None:
+    value_type = type(value)
+    if value is None or value_type is bool or value_type is str or value_type is int:
+        return
+    if value_type is float:
+        if math.isfinite(cast(float, value)):
+            return
+    elif value_type is list:
+        for nested_value in cast(list[object], value):
+            _require_json_compatible_value(nested_value, description, path)
+        return
+    elif value_type is dict:
+        mapping = cast(dict[object, object], value)
+        if all(type(key) is str for key in mapping):
+            for nested_value in mapping.values():
+                _require_json_compatible_value(nested_value, description, path)
+            return
+
+    raise ManifestLoadError(f"Non-JSON-compatible data in {description}: {path}")
