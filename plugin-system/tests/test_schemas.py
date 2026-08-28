@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 
-
 SCHEMAS = Path(__file__).parents[1] / "schemas"
 
 
@@ -245,3 +244,43 @@ def test_extension_maps_accept_reverse_domain_and_ipv6_absolute_uri_keys(
     document: dict[str, object],
 ) -> None:
     validator(schema_name).validate(document)
+
+
+@pytest.mark.parametrize("control", ["\x00", "\n", "\x1b", "\x7f"])
+@pytest.mark.parametrize(
+    ("schema_name", "document_factory", "path_location"),
+    [
+        (
+            "agent-plugin.v1alpha1.schema.json",
+            plugin_document,
+            ("skills", "directory"),
+        ),
+        (
+            "agent-skill-binding.v1alpha1.schema.json",
+            binding_document,
+            ("schemas", "input"),
+        ),
+        (
+            "plugin-lock.v1.schema.json",
+            lock_document,
+            ("files", 0, "path"),
+        ),
+    ],
+)
+def test_relative_paths_reject_control_characters(
+    control: str,
+    schema_name: str,
+    document_factory: object,
+    path_location: tuple[object, ...],
+) -> None:
+    assert callable(document_factory)
+    document = document_factory()
+    target: object = document
+    for component in path_location[:-1]:
+        assert isinstance(target, (dict, list))
+        target = target[component]  # type: ignore[index]
+    assert isinstance(target, (dict, list))
+    target[path_location[-1]] = f"safe{control}path"  # type: ignore[index]
+
+    with pytest.raises(ValidationError):
+        validator(schema_name).validate(document)

@@ -15,8 +15,9 @@ from .errors import (
     ManifestLoadError,
     ManifestValidationError,
     UnsafePackagePathError,
+    format_path,
 )
-from .loader import load_json, load_yaml
+from .loader import load_json_with_source, load_yaml
 from .validator import PackageRecord, SkillRecord, validate_schema
 
 LOCK_FILENAME = "plugin.lock.json"
@@ -40,16 +41,22 @@ def package_files(root: Path) -> tuple[Path, ...]:
         files: list[Path] = []
         for path in root.rglob("*"):
             relative_path = path.relative_to(root).as_posix()
+            if _contains_control_characters(relative_path):
+                raise UnsafePackagePathError(
+                    "Package path contains control characters: "
+                    f"{format_path(relative_path)}"
+                )
             mode = path.stat(follow_symlinks=False).st_mode
             if stat.S_ISLNK(mode):
                 raise UnsafePackagePathError(
-                    f"Package contains symbolic link: {relative_path}"
+                    f"Package contains symbolic link: {format_path(relative_path)}"
                 )
             if stat.S_ISDIR(mode):
                 continue
             if not stat.S_ISREG(mode):
                 raise UnsafePackagePathError(
-                    f"Package contains unsupported filesystem entry: {relative_path}"
+                    "Package contains unsupported filesystem entry: "
+                    f"{format_path(relative_path)}"
                 )
             if relative_path != LOCK_FILENAME:
                 files.append(path)
@@ -101,7 +108,7 @@ def write_lock(package: PackageRecord) -> Path:
 def verify_lock(package: PackageRecord) -> None:
     """Verify a canonical package record against its schema-valid lock file."""
     actual_files = package_files(package.root)
-    lock = _load_lock(package.root)
+    lock, lock_source = _load_lock(package.root)
     duplicate_paths = _duplicate_file_paths(lock)
     duplicate_skills = _duplicate_skill_names(lock)
 
@@ -118,8 +125,15 @@ def verify_lock(package: PackageRecord) -> None:
     locked_package = cast(dict[str, object], lock["package"])
     locked_files = cast(list[dict[str, object]], lock["files"])
     locked_skills = cast(list[dict[str, object]], lock["skills"])
+    duplicate_issues = _duplicate_issues(duplicate_paths, duplicate_skills)
+    if not duplicate_issues:
+        canonical_source = json.dumps(lock, indent=2, sort_keys=True) + "\n"
+        if lock_source != canonical_source:
+            raise LockIntegrityError(
+                f"Plugin lock is not exact canonical JSON: {LOCK_FILENAME}"
+            )
     _require_canonical_lock_order(locked_files, locked_skills)
-    issues = _duplicate_issues(duplicate_paths, duplicate_skills)
+    issues = duplicate_issues
     issues.extend(_package_metadata_issues(package, locked_package))
     file_issues = _file_integrity_issues(package.root, actual_files, locked_files)
     issues.extend(file_issues)
@@ -191,9 +205,9 @@ def _ordered_skills(package: PackageRecord) -> tuple[SkillRecord, ...]:
     return tuple(sorted(package.skills, key=lambda skill: skill.name))
 
 
-def _load_lock(root: Path) -> dict[str, object]:
+def _load_lock(root: Path) -> tuple[dict[str, object], str]:
     try:
-        return load_json(root / LOCK_FILENAME)
+        return load_json_with_source(root / LOCK_FILENAME)
     except ManifestLoadError:
         raise LockIntegrityError(
             f"Unable to load plugin lock: {LOCK_FILENAME}"
@@ -314,11 +328,18 @@ def _file_integrity_issues(
 
     issues: list[str] = []
     if missing:
-        issues.append(f"Missing locked files: {', '.join(missing)}")
+        issues.append(
+            f"Missing locked files: {', '.join(format_path(path) for path in missing)}"
+        )
     if modified:
-        issues.append(f"Modified files: {', '.join(modified)}")
+        issues.append(
+            f"Modified files: {', '.join(format_path(path) for path in modified)}"
+        )
     if unlisted:
-        issues.append(f"Unlisted package files: {', '.join(unlisted)}")
+        issues.append(
+            "Unlisted package files: "
+            f"{', '.join(format_path(path) for path in unlisted)}"
+        )
     return issues
 
 
@@ -354,7 +375,12 @@ def _skill_integrity_issues(
 
 
 def _is_safe_relative_path(value: str) -> bool:
-    if not value or value.startswith("/") or "\\" in value:
+    if (
+        not value
+        or _contains_control_characters(value)
+        or value.startswith("/")
+        or "\\" in value
+    ):
         return False
     if len(value) >= 3 and value[0].isalpha() and value[1:3] == ":/":
         return False
@@ -376,4 +402,9 @@ def _package_relative(root: Path, path: Path) -> str:
 
 
 def _redacted_path(path: Path) -> str:
-    return path.as_posix() if not path.is_absolute() else path.name
+    value = path.as_posix() if not path.is_absolute() else path.name
+    return format_path(value)
+
+
+def _contains_control_characters(value: str) -> bool:
+    return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)

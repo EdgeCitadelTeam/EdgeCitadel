@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import inspect
 import json
 import shutil
@@ -294,7 +295,7 @@ def test_duplicate_agent_ids_are_rejected_explicitly(valid_package: Path) -> Non
     document = _load_manifest(valid_package)
     agents = document["agents"]
     assert isinstance(agents, list)
-    agents.append(dict(agents[0]))
+    agents.append(copy.deepcopy(agents[0]))
     _write_manifest(valid_package, document)
 
     with pytest.raises(ManifestValidationError, match="Duplicate agent ID"):
@@ -373,6 +374,22 @@ def test_nested_non_string_manifest_key_is_rejected_by_loader(
 
     _assert_package_relative_error(error.value, valid_package, "plugin.yaml")
     assert "1" not in str(error.value)
+
+
+def test_duplicate_plugin_manifest_key_is_rejected_without_leaking_value(
+    valid_package: Path,
+) -> None:
+    manifest = valid_package / "plugin.yaml"
+    manifest.write_text(
+        manifest.read_text().replace(
+            "kind: AgentPlugin\n", "kind: AgentPlugin\nkind: do-not-leak\n"
+        )
+    )
+
+    with pytest.raises(ManifestLoadError, match="plugin.yaml") as error:
+        validate_package(valid_package, verify_integrity=False)
+
+    assert "do-not-leak" not in str(error.value)
 
 
 def test_non_json_manifest_extension_is_rejected_by_loader(
@@ -539,6 +556,79 @@ def test_agent_skill_description_accepts_1024_characters() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("license", "Apache-2.0"),
+        ("compatibility", "a" * 500),
+        ("metadata", {"version": "0.1.0", "author": "Example"}),
+        ("allowed-tools", "Read Grep WebFetch"),
+        ("future-field", {"nested": ["forward-compatible"]}),
+    ],
+)
+def test_agent_skill_metadata_accepts_optional_and_unknown_fields(
+    field: str, value: object
+) -> None:
+    metadata: dict[str, object] = {
+        "name": "placeholder",
+        "description": "Valid.",
+        field: value,
+    }
+
+    validate_skill_metadata(metadata, "placeholder")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("license", ["do-not-leak"]),
+        ("compatibility", "x" * 501),
+        ("metadata", {"version": 1, "secret": "do-not-leak"}),
+        ("allowed-tools", ["do-not-leak"]),
+    ],
+)
+def test_agent_skill_metadata_rejects_invalid_optional_fields_without_values(
+    field: str, value: object
+) -> None:
+    metadata: dict[str, object] = {
+        "name": "placeholder",
+        "description": "Valid.",
+        field: value,
+    }
+
+    with pytest.raises(ManifestValidationError, match=field) as error:
+        validate_skill_metadata(metadata, "placeholder")
+
+    assert "do-not-leak" not in str(error.value)
+    assert "x" * 501 not in str(error.value)
+
+
+def test_binding_version_is_authoritative_when_skill_metadata_version_is_absent(
+    valid_package: Path,
+) -> None:
+    skill_file = valid_package / "skills" / "placeholder" / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text().replace("metadata:\n  version: '0.1.0'\n", "")
+    )
+
+    skill = discover_skills(valid_package, "skills")[0]
+
+    assert skill.version == "0.1.0"
+
+
+def test_skill_metadata_version_must_equal_binding_version_without_leaking_values(
+    valid_package: Path,
+) -> None:
+    skill_file = valid_package / "skills" / "placeholder" / "SKILL.md"
+    skill_file.write_text(skill_file.read_text().replace("0.1.0", "9.9.9"))
+
+    with pytest.raises(ManifestValidationError, match="version.*binding") as error:
+        discover_skills(valid_package, "skills")
+
+    assert "0.1.0" not in str(error.value)
+    assert "9.9.9" not in str(error.value)
+
+
 def test_empty_markdown_body_is_rejected(valid_package: Path) -> None:
     skill = valid_package / "skills" / "placeholder" / "SKILL.md"
     skill.write_text(
@@ -581,6 +671,23 @@ def test_binding_is_validated_with_format_checker(valid_package: Path) -> None:
     )
 
 
+def test_duplicate_binding_key_is_rejected_without_leaking_value(
+    valid_package: Path,
+) -> None:
+    binding = valid_package / "skills" / "placeholder" / "binding.yaml"
+    binding.write_text(
+        binding.read_text().replace(
+            "kind: AgentSkillBinding\n",
+            "kind: AgentSkillBinding\nkind: do-not-leak\n",
+        )
+    )
+
+    with pytest.raises(ManifestLoadError, match="binding.yaml") as error:
+        discover_skills(valid_package, "skills")
+
+    assert "do-not-leak" not in str(error.value)
+
+
 def test_malformed_binding_error_uses_package_relative_path(
     valid_package: Path,
 ) -> None:
@@ -621,6 +728,18 @@ def test_referenced_schema_must_be_a_json_mapping(
     )
 
 
+def test_duplicate_referenced_schema_key_is_rejected_without_leaking_value(
+    valid_package: Path,
+) -> None:
+    schema = valid_package / "skills" / "placeholder" / "schemas/input.json"
+    schema.write_text('{"type":"object","type":"do-not-leak"}')
+
+    with pytest.raises(ManifestLoadError, match="input.json") as error:
+        discover_skills(valid_package, "skills")
+
+    assert "do-not-leak" not in str(error.value)
+
+
 def test_referenced_schema_must_be_valid_draft_2020_12_schema(
     valid_package: Path,
 ) -> None:
@@ -630,6 +749,55 @@ def test_referenced_schema_must_be_valid_draft_2020_12_schema(
     with pytest.raises(ManifestValidationError, match="input.json") as error:
         discover_skills(valid_package, "skills")
 
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/placeholder/schemas/input.json"
+    )
+
+
+@pytest.mark.parametrize("keyword", ["$ref", "$dynamicRef"])
+def test_referenced_schema_accepts_local_fragment_references(
+    valid_package: Path, keyword: str
+) -> None:
+    schema = valid_package / "skills" / "placeholder" / "schemas/input.json"
+    schema.write_text(
+        json.dumps(
+            {
+                "$defs": {"payload": {"type": "string"}},
+                "properties": {"payload": {keyword: "#/$defs/payload"}},
+            }
+        )
+    )
+
+    skills = discover_skills(valid_package, "skills")
+
+    assert [skill.name for skill in skills] == ["placeholder"]
+
+
+@pytest.mark.parametrize(
+    ("keyword", "reference"),
+    [
+        ("$ref", "https://do-not-leak.example/schema.json"),
+        ("$ref", "file:///do-not-leak/schema.json"),
+        ("$ref", "schemas/do-not-leak.json"),
+        ("$dynamicRef", "https://do-not-leak.example/schema.json"),
+    ],
+)
+def test_referenced_schema_rejects_nonfragment_references_without_leaking_value(
+    valid_package: Path, keyword: str, reference: str
+) -> None:
+    schema = valid_package / "skills" / "placeholder" / "schemas/input.json"
+    schema.write_text(
+        json.dumps(
+            {"$defs": {"nested": {"properties": {"payload": {keyword: reference}}}}}
+        )
+    )
+
+    with pytest.raises(
+        ManifestValidationError, match="local fragment.*input.json"
+    ) as error:
+        discover_skills(valid_package, "skills")
+
+    assert reference not in str(error.value)
     _assert_package_relative_error(
         error.value, valid_package, "skills/placeholder/schemas/input.json"
     )

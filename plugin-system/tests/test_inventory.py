@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import edgecitadel_supervisor.loader as loader_module
 from edgecitadel_supervisor.errors import LockIntegrityError, UnsafePackagePathError
 from edgecitadel_supervisor.inventory import (
     LOCK_FILENAME,
@@ -28,7 +29,9 @@ def _package(valid_package: Path) -> PackageRecord:
 
 
 def _write_lock_document(root: Path, document: dict[str, object]) -> None:
-    (root / LOCK_FILENAME).write_text(json.dumps(document), encoding="utf-8")
+    (root / LOCK_FILENAME).write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _add_skill(root: Path, name: str, skill_id: str) -> None:
@@ -116,6 +119,21 @@ def test_package_files_reject_special_files_with_relative_paths(
         package_files(valid_package)
 
     assert str(valid_package) not in str(error.value)
+
+
+@pytest.mark.parametrize("filename", ["bad\nname", "bad\x1bname"])
+def test_package_files_reject_control_character_names_with_escaped_diagnostics(
+    valid_package: Path, filename: str
+) -> None:
+    (valid_package / filename).write_text("data", encoding="utf-8")
+
+    with pytest.raises(UnsafePackagePathError, match="control characters") as error:
+        package_files(valid_package)
+
+    message = str(error.value)
+    assert "\n" not in message
+    assert "\x1b" not in message
+    assert "bad\\nname" in message or "bad\\x1bname" in message
 
 
 def test_build_lock_is_deterministic_canonical_and_uses_typed_identity(
@@ -240,6 +258,59 @@ def test_verify_lock_translates_load_and_schema_errors(
         assert contents not in str(error.value)
 
 
+def test_verify_lock_rejects_duplicate_json_keys_without_leaking_value(
+    valid_package: Path,
+) -> None:
+    package = _package(valid_package)
+    write_lock(package)
+    lock_path = valid_package / LOCK_FILENAME
+    lock_path.write_text(
+        lock_path.read_text().replace(
+            '  "lockVersion": 1,\n',
+            '  "lockVersion": 1,\n  "lockVersion": "do-not-leak",\n',
+        )
+    )
+
+    with pytest.raises(LockIntegrityError, match="Unable to load plugin lock") as error:
+        verify_lock(package)
+
+    assert "do-not-leak" not in str(error.value)
+
+
+def test_verify_lock_rejects_oversized_document_without_leaking_content(
+    valid_package: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _package(valid_package)
+    write_lock(package)
+    monkeypatch.setattr(loader_module, "MAX_STRUCTURED_DOCUMENT_BYTES", 16)
+
+    with pytest.raises(LockIntegrityError, match="plugin.lock.json") as error:
+        verify_lock(package)
+
+    assert "lockVersion" not in str(error.value)
+
+
+@pytest.mark.parametrize("path_value", ["safe\npath", "safe\x1bpath", "safe\x7fpath"])
+def test_verify_lock_rejects_control_character_paths_without_terminal_injection(
+    valid_package: Path, path_value: str
+) -> None:
+    package = _package(valid_package)
+    lock = build_lock(package)
+    files = lock["files"]
+    assert isinstance(files, list)
+    files[0]["path"] = path_value
+    _write_lock_document(valid_package, lock)
+
+    with pytest.raises(LockIntegrityError, match="failed schema validation") as error:
+        verify_lock(package)
+
+    message = str(error.value)
+    assert path_value not in message
+    assert "\n" not in message
+    assert "\x1b" not in message
+    assert "\x7f" not in message
+
+
 def test_verify_lock_reports_duplicate_paths_even_with_different_hashes(
     valid_package: Path,
 ) -> None:
@@ -337,6 +408,36 @@ def test_verify_lock_rejects_noncanonical_skill_order(valid_package: Path) -> No
 
     with pytest.raises(LockIntegrityError, match="Noncanonical locked skill order"):
         verify_lock(package)
+
+
+@pytest.mark.parametrize("representation", ["compact", "reordered", "no-newline"])
+def test_verify_lock_requires_exact_canonical_json_bytes(
+    valid_package: Path, representation: str
+) -> None:
+    package = _package(valid_package)
+    lock = build_lock(package)
+    if representation == "compact":
+        content = json.dumps(lock, sort_keys=True) + "\n"
+    elif representation == "reordered":
+        content = json.dumps(lock, indent=2, sort_keys=False) + "\n"
+    else:
+        content = json.dumps(lock, indent=2, sort_keys=True)
+    (valid_package / LOCK_FILENAME).write_text(content, encoding="utf-8")
+
+    with pytest.raises(LockIntegrityError, match="canonical JSON"):
+        verify_lock(package)
+
+
+def test_noncanonical_lock_error_precedes_semantic_drift(valid_package: Path) -> None:
+    package = _package(valid_package)
+    lock = build_lock(package)
+    (valid_package / LOCK_FILENAME).write_text(json.dumps(lock), encoding="utf-8")
+    (valid_package / "plugin.yaml").write_text("modified", encoding="utf-8")
+
+    with pytest.raises(LockIntegrityError, match="canonical JSON") as error:
+        verify_lock(package)
+
+    assert "Modified files" not in str(error.value)
 
 
 @pytest.mark.parametrize(

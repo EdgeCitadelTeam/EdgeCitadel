@@ -37,7 +37,9 @@ python -m edgecitadel_supervisor validate ../plugins/examples/placeholder
 ```
 
 Finalize every package file before running `lock`; any subsequent package byte
-change requires regenerating the lock.
+change requires regenerating the lock. `validate` requires the lock's exact
+canonical bytes: two-space indentation, recursively sorted object keys, and one
+final newline.
 
 ## Maintained contributor gate
 
@@ -55,14 +57,29 @@ the typing gate.
 
 ## Static guarantees and trust boundary
 
-The scaffold safely parses YAML and JSON, applies strict schemas, checks package
-compatibility and agent-to-skill mappings, and resolves declared paths within
-the package. Validation rejects symbolic links and special filesystem nodes and
-uses canonical SHA-256 hashes and ordering. Diagnostics may include identifiers
-and package-relative paths; an invalid or missing root argument may report the
-caller-supplied or resolved root path. They do not dump procedure bodies, secret
-values, or complete file contents. Validation never imports package handlers or
-launches the declared runtime.
+The scaffold rejects duplicate YAML and JSON mapping keys. Untrusted structured
+documents are limited to 1 MiB, `SKILL.md` to 2 MiB, and its frontmatter to
+64 KiB; parsed trees are limited to depth 64 and 100,000 traversed values. YAML
+anchors or aliases that reuse a container are rejected. Validation applies
+strict schemas, accepts only local-fragment (`#...`) `$ref` and `$dynamicRef`
+values in skill input/output schemas, checks compatibility and agent-to-skill
+mappings, and resolves declared paths within the package. Portable paths exclude
+absolute paths, traversal, backslashes, C0 controls, and DEL. Validation also
+rejects symbolic links and special filesystem nodes and uses canonical SHA-256
+hashes and ordering.
+
+Recognized optional Agent Skills frontmatter fields are `license` (string),
+`compatibility` (string, at most 500 characters), `metadata` (string-to-string
+mapping), and experimental `allowed-tools` (space-separated string). Unknown
+frontmatter fields remain accepted for forward compatibility. If
+`metadata.version` is present, it must equal `binding.yaml` `version`; otherwise
+the binding version is authoritative.
+
+Diagnostics may include identifiers and escaped package-relative paths; an
+invalid or missing root argument may report the escaped caller-supplied or
+resolved root path. They do not dump procedure bodies, secret values, or complete
+file contents. Validation never imports package handlers or launches the
+declared runtime.
 
 These guarantees assume the package root is owned by the supervisor and remains
 immutable throughout `lock` or `validate`. They do not make validation safe

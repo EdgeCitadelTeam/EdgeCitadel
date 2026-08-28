@@ -19,6 +19,7 @@ from .errors import (
     ManifestLoadError,
     ManifestValidationError,
     SkillDiscoveryError,
+    format_path,
 )
 from .loader import (
     load_json,
@@ -161,19 +162,21 @@ def _build_agent_skill_names(
 def validate_schema(document: object, schema_name: str) -> None:
     """Validate a document with an authoritative bundled project schema."""
     if Path(schema_name).name != schema_name:
-        raise ManifestValidationError(f"Unknown validation schema: {schema_name}")
+        raise ManifestValidationError(
+            f"Unknown validation schema: {format_path(schema_name)}"
+        )
 
     schema_path = _SCHEMA_DIRECTORY / schema_name
     try:
         schema_document = json.loads(schema_path.read_text(encoding="utf-8"))
     except (OSError, RecursionError, UnicodeError, ValueError, json.JSONDecodeError):
         raise ManifestValidationError(
-            f"Unable to load validation schema: {schema_name}"
+            f"Unable to load validation schema: {format_path(schema_name)}"
         ) from None
 
     if not isinstance(schema_document, dict):
         raise ManifestValidationError(
-            f"Validation schema is not an object: {schema_name}"
+            f"Validation schema is not an object: {format_path(schema_name)}"
         )
 
     try:
@@ -184,18 +187,18 @@ def validate_schema(document: object, schema_name: str) -> None:
         ).validate(document)
     except SchemaError:
         raise ManifestValidationError(
-            f"Invalid authoritative validation schema: {schema_name}"
+            f"Invalid authoritative validation schema: {format_path(schema_name)}"
         ) from None
     except ValidationError as error:
         location = ".".join(str(component) for component in error.absolute_path)
-        context = f" at {location}" if location else ""
+        context = f" at {format_path(location)}" if location else ""
         raise ManifestValidationError(
-            f"Document failed validation against {schema_name}{context}"
+            f"Document failed validation against {format_path(schema_name)}{context}"
         ) from None
 
 
 def validate_skill_metadata(metadata: dict[str, object], directory_name: str) -> None:
-    """Validate the required portable Agent Skills frontmatter fields."""
+    """Validate recognized Agent Skills frontmatter fields."""
     name = metadata.get("name")
     if (
         not isinstance(name, str)
@@ -208,7 +211,8 @@ def validate_skill_metadata(metadata: dict[str, object], directory_name: str) ->
         )
     if name != directory_name:
         raise ManifestValidationError(
-            f"Agent Skill name must match its directory name: {directory_name}"
+            "Agent Skill name must match its directory name: "
+            f"{format_path(directory_name)}"
         )
 
     description = metadata.get("description")
@@ -220,6 +224,32 @@ def validate_skill_metadata(metadata: dict[str, object], directory_name: str) ->
         raise ManifestValidationError(
             "Agent Skill description must be a nonempty string of at most 1024 characters"
         )
+
+    if "license" in metadata and not isinstance(metadata["license"], str):
+        raise ManifestValidationError("Agent Skill license must be a string")
+
+    compatibility = metadata.get("compatibility")
+    if "compatibility" in metadata and (
+        not isinstance(compatibility, str) or len(compatibility) > 500
+    ):
+        raise ManifestValidationError(
+            "Agent Skill compatibility must be a string of at most 500 characters"
+        )
+
+    skill_metadata = metadata.get("metadata")
+    if "metadata" in metadata and (
+        not isinstance(skill_metadata, dict)
+        or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in skill_metadata.items()
+        )
+    ):
+        raise ManifestValidationError(
+            "Agent Skill metadata must map strings to strings"
+        )
+
+    if "allowed-tools" in metadata and not isinstance(metadata["allowed-tools"], str):
+        raise ManifestValidationError("Agent Skill allowed-tools must be a string")
 
 
 def discover_skills(root: Path, skills_directory: str) -> tuple[SkillRecord, ...]:
@@ -325,6 +355,14 @@ def _build_skill_record(
             f"Invalid skill binding at {relative_binding}: {error}"
         ) from None
 
+    skill_metadata = metadata.get("metadata")
+    if isinstance(skill_metadata, dict):
+        metadata_version = skill_metadata.get("version")
+        if metadata_version is not None and metadata_version != binding["version"]:
+            raise ManifestValidationError(
+                "Agent Skill metadata version must match binding version"
+            )
+
     input_document = _load_referenced_schema(plugin_root, input_schema)
     output_document = _load_referenced_schema(plugin_root, output_schema)
     _validate_referenced_schema(
@@ -374,8 +412,26 @@ def _validate_referenced_schema(document: dict[str, object], path: str) -> None:
         Draft202012Validator.check_schema(document)
     except SchemaError:
         raise ManifestValidationError(
-            f"Referenced JSON Schema is invalid: {path}"
+            f"Referenced JSON Schema is invalid: {format_path(path)}"
         ) from None
+
+    stack: list[object] = [document]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            for key, nested_value in value.items():
+                if (
+                    key in {"$ref", "$dynamicRef"}
+                    and isinstance(nested_value, str)
+                    and not nested_value.startswith("#")
+                ):
+                    raise ManifestValidationError(
+                        "Referenced JSON Schema references must use a local fragment: "
+                        f"{format_path(path)}"
+                    )
+                stack.append(nested_value)
+        elif isinstance(value, list):
+            stack.extend(value)
 
 
 def _load_referenced_schema(root: Path, path: Path) -> dict[str, object]:
@@ -389,4 +445,4 @@ def _load_referenced_schema(root: Path, path: Path) -> dict[str, object]:
 
 
 def _package_relative(root: Path, path: Path) -> str:
-    return path.relative_to(root).as_posix()
+    return format_path(path.relative_to(root).as_posix())

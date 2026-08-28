@@ -41,16 +41,21 @@ separate from every `agents[].id`, the portable `SKILL.md` name, the public A2A
 
 ## Procedure and binding boundaries
 
-`SKILL.md` is portable, immutable procedural memory. Its frontmatter owns the
-portable name and activation description; its body owns the instructions,
-workflow, examples, and success criteria. Optional `references/`, `scripts/`,
-and `assets/` support progressive disclosure and remain inert during static
-validation.
+`SKILL.md` is portable, immutable procedural memory. Its frontmatter requires the
+portable name and activation description. It may also declare a string `license`,
+a string `compatibility` of at most 500 characters, string-to-string `metadata`,
+and the experimental space-separated `allowed-tools` string; unknown fields are
+accepted for forward compatibility. Its body owns the instructions, workflow,
+examples, and success criteria. Optional `references/`, `scripts/`, and `assets/`
+support progressive disclosure and remain inert during static validation.
 
 `binding.yaml` supplies the EdgeCitadel-specific execution binding, A2A skill
-ID, input/output schema references, and capability requirements. The referenced
-JSON Schemas are the typed skill boundary. Keeping these concerns outside
-`SKILL.md` preserves procedure portability across runtimes.
+ID, input/output schema references, and capability requirements. Its `version`
+is authoritative when `SKILL.md` omits `metadata.version`; when present, the two
+versions must agree. The referenced JSON Schemas are the typed skill boundary
+and may use only fragment-local `$ref` or `$dynamicRef` values beginning with
+`#`. Keeping these concerns outside `SKILL.md` preserves procedure portability
+across runtimes and prevents validation from retrieving another schema.
 
 Learned procedural memory must never rewrite an installed package. A future
 external `KnowledgeStore` record contains `plugin_id`, `skill_id`,
@@ -70,15 +75,19 @@ From an activated editable environment in `plugin-system/`:
 4. Run `python -m pytest -q`.
 
 Regenerate the lock after any package byte changes. `validate` never repairs or
-rewrites the package.
+rewrites the package and rejects a lock unless its bytes exactly match the
+two-space-indented, sorted-key JSON representation with one final newline.
 
 ## Trust and non-goals
 
 Treat package contents as untrusted input until the supervisor has validated a
-supervisor-owned immutable package root. Static checks use safe YAML/JSON
-loading, strict schemas, contained paths, canonical hashes, and rejection of
-symbolic links and special filesystem nodes. A manifest only requests
-capabilities; it does not grant them.
+supervisor-owned immutable package root. YAML and JSON reject duplicate keys;
+structured files are limited to 1 MiB, `SKILL.md` to 2 MiB, frontmatter to
+64 KiB, trees to depth 64 and 100,000 traversed values, and YAML container aliases
+are rejected. Static checks also use strict schemas, local-fragment-only schema
+references, control-free contained relative paths, canonical hashes, and
+rejection of symbolic links and special filesystem nodes. A manifest only
+requests capabilities; it does not grant them.
 
 This scaffold does not launch runtimes, implement transport or identity,
 provision secrets, enforce a sandbox, grant permissions, persist learned memory,

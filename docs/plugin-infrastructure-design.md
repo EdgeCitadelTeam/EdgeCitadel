@@ -188,7 +188,8 @@ The schema requires a normalized package name, separate publisher, semantic
 version, display metadata, supervisor compatibility range, supported process
 protocols, non-empty runtime command, relative skills directory, at least one
 agent identity, complete permission categories, and known sandbox/restart
-policies. Paths may not be absolute or escape the plugin root.
+policies. Paths may not be absolute, contain backslashes, C0 controls or DEL, or
+escape the plugin root.
 
 The stable package identity is `<publisher>.<name>`; it is distinct from every
 entry in `agents[]`. The first package contains one agent, but the schema does not
@@ -204,10 +205,12 @@ Unsupported core fields are rejected.
 ### Portable procedure
 
 Every immediate child directory under `skills.directory` represents one skill
-and contains a standard `SKILL.md`. Its YAML frontmatter supplies the portable
-skill name, activation description, compatibility statement, and version
-metadata; its Markdown body contains instructions, examples, edge cases, and
-success criteria.
+and contains a standard `SKILL.md`. Its YAML frontmatter requires the portable
+skill name and activation description. Recognized optional fields are a string
+`license`, a string `compatibility` of at most 500 characters, string-to-string
+`metadata`, and the experimental space-separated `allowed-tools` string. Unknown
+frontmatter fields remain accepted for forward compatibility. The Markdown body
+contains instructions, examples, edge cases, and success criteria.
 
 ```markdown
 ---
@@ -264,6 +267,10 @@ The supervisor combines `binding.skillId` with the name and description from
 `SKILL.md` to form the future Agent Card skill catalog. Execution-specific fields
 remain private to the package and are not exposed automatically.
 
+`binding.version` is authoritative when `SKILL.md` omits
+`metadata.version`. When the optional metadata version is present, it must agree
+with the binding version.
+
 `execution.name` is an opaque identifier interpreted only by the plugin runtime.
 It is deliberately not a Python import path, allowing other languages and agent
 frameworks to use the same package contract.
@@ -276,7 +283,10 @@ and output schemas make the procedure boundary inspectable without requiring a
 particular agent framework.
 
 The scaffold validates `SKILL.md` frontmatter, `binding.yaml`, and referenced
-schemas. It does not interpret procedure content or import the handler.
+schemas. Referenced schema `$ref` and `$dynamicRef` strings must begin with `#`,
+so validation accepts local fragments without resolving or retrieving network,
+file, or relative external references. It does not interpret procedure content
+or import the handler.
 
 ### Learned procedural memory
 
@@ -307,8 +317,10 @@ cryptographic signing and publisher verification remain later work.
 
 The lockfile does not list or hash itself and contains no generation timestamp or
 other volatile value. The `lock` command structurally validates the package and
-writes canonical JSON with lexicographically sorted paths; the `validate` command
-then verifies that canonical record without modifying the package.
+writes canonical JSON with two-space indentation, recursively sorted object keys,
+lexicographically sorted paths, and one final newline. The `validate` command
+requires those exact bytes before semantic drift checks and never modifies the
+package.
 
 ## SDK extension boundaries
 
@@ -365,18 +377,21 @@ python -m edgecitadel_supervisor validate ../plugins/examples/placeholder
 It performs these steps:
 
 1. Resolve and verify the plugin root.
-2. Load `plugin.yaml` with safe YAML parsing.
+2. Load `plugin.yaml` with safe YAML parsing and duplicate-key rejection.
 3. Validate it against the plugin schema.
 4. Check declared supervisor and process-protocol compatibility.
 5. Resolve `skills.directory` without following paths outside the package.
 6. Reject every symbolic link in the package.
 7. Discover skill directories in deterministic name order.
 8. Validate each `SKILL.md` frontmatter and directory-name match.
-9. Validate each `binding.yaml` against the binding schema.
+9. Validate each `binding.yaml` against the binding schema and require an
+   optional `SKILL.md` metadata version to agree with its version.
 10. Reject duplicate portable names and A2A skill IDs.
-11. Verify every referenced schema stays inside its skill directory.
+11. Verify every referenced schema stays inside its skill directory and uses
+    only local-fragment references.
 12. Verify `agents[].skillNames` refers only to packaged skills.
-13. Recompute and verify `plugin.lock.json` file hashes.
+13. Require exact canonical `plugin.lock.json` bytes, then recompute and verify
+    file hashes.
 14. Emit a deterministic JSON inventory containing package identity,
     compatibility, runtime metadata, agent-to-skill mappings, requested
     permissions, skill metadata, and content hashes.
@@ -408,16 +423,21 @@ exceptions:
 
 CLI failures write one concise diagnostic to stderr and return a non-zero status.
 Diagnostics may include identifiers, schema locations, and package-relative
-paths; an invalid or missing root argument may report the caller-supplied or
-resolved root path. They do not dump procedure bodies, secret values, or complete
-file contents.
+paths with control characters escaped; an invalid or missing root argument may
+report the escaped caller-supplied or resolved root path. They do not dump
+procedure bodies, secret values, or complete file contents.
 
 ## Security boundaries
 
 This scaffold enforces only static package safety:
 
-- safe YAML loading;
-- no absolute, parent-traversing, or symlinked package references;
+- safe YAML loading and duplicate-key rejection for every YAML/JSON mapping;
+- 1 MiB JSON/YAML, 2 MiB `SKILL.md`, and 64 KiB frontmatter byte limits;
+- depth 64 and 100,000-traversed-value limits, with shared YAML container aliases
+  rejected by identity;
+- no absolute, parent-traversing, backslash-containing, control-containing, or
+  symlinked package references;
+- no external referenced-schema retrieval;
 - no handler imports during validation;
 - no subprocess execution;
 - no environment or secret reads;

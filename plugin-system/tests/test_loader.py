@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import edgecitadel_supervisor.loader as loader_module
 from edgecitadel_supervisor.errors import (
     CompatibilityError,
     DuplicateSkillError,
@@ -91,6 +92,16 @@ def test_load_yaml_wraps_parser_failure(tmp_path: Path) -> None:
 
     assert path.name in str(error.value)
     assert malformed not in str(error.value)
+
+
+def test_load_yaml_rejects_duplicate_keys_at_nested_depth(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text("metadata:\n  name: first\n  name: do-not-leak\n")
+
+    with pytest.raises(ManifestLoadError, match="plugin.yaml") as error:
+        load_yaml(path)
+
+    assert "do-not-leak" not in str(error.value)
 
 
 def test_load_yaml_wraps_parser_recursion_failure(tmp_path: Path) -> None:
@@ -201,6 +212,16 @@ def test_load_json_wraps_parser_failure(tmp_path: Path) -> None:
     assert malformed not in str(error.value)
 
 
+def test_load_json_rejects_duplicate_keys_at_nested_depth(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.lock.json"
+    path.write_text('{"package": {"id": "first", "id": "do-not-leak"}}')
+
+    with pytest.raises(ManifestLoadError, match="plugin.lock.json") as error:
+        load_json(path)
+
+    assert "do-not-leak" not in str(error.value)
+
+
 def test_load_json_wraps_parser_recursion_failure(tmp_path: Path) -> None:
     path = tmp_path / "plugin.lock.json"
     path.write_text("[" * 500_000 + "]" * 500_000)
@@ -264,6 +285,176 @@ def test_load_skill_markdown_rejects_malformed_frontmatter(tmp_path: Path) -> No
 
     assert path.name in str(error.value)
     assert malformed not in str(error.value)
+
+
+def test_load_skill_markdown_rejects_duplicate_frontmatter_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "SKILL.md"
+    path.write_text(
+        "---\nmetadata:\n  version: first\n  version: do-not-leak\n---\nbody\n"
+    )
+
+    with pytest.raises(ManifestLoadError, match="frontmatter.*SKILL.md") as error:
+        load_skill_markdown(path)
+
+    assert "do-not-leak" not in str(error.value)
+
+
+def test_load_skill_markdown_rejects_merge_key_container_aliases(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "SKILL.md"
+    path.write_text(
+        "---\nbase: &base\n  value: first\nmetadata:\n  <<: *base\n---\nbody\n"
+    )
+
+    with pytest.raises(ManifestLoadError, match="aliases.*frontmatter"):
+        load_skill_markdown(path)
+
+
+@pytest.mark.parametrize(
+    ("loader_name", "filename", "contents"),
+    [
+        ("load_yaml", "plugin.yaml", "value: 1\n"),
+        ("load_yaml", "binding.yaml", "value: 1\n"),
+        ("load_json", "schema.json", '{"value":1}'),
+    ],
+)
+def test_structured_loaders_reject_oversized_documents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loader_name: str,
+    filename: str,
+    contents: str,
+) -> None:
+    path = tmp_path / filename
+    path.write_text(contents)
+    monkeypatch.setattr(loader_module, "MAX_STRUCTURED_DOCUMENT_BYTES", 4)
+
+    with pytest.raises(ManifestLoadError, match="size limit") as error:
+        getattr(loader_module, loader_name)(path)
+
+    assert filename in str(error.value)
+    assert contents.strip() not in str(error.value)
+
+
+def test_load_skill_markdown_rejects_oversized_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "SKILL.md"
+    path.write_text("---\nname: example\n---\nbody\n")
+    monkeypatch.setattr(loader_module, "MAX_SKILL_MARKDOWN_BYTES", 8)
+
+    with pytest.raises(ManifestLoadError, match="size limit") as error:
+        load_skill_markdown(path)
+
+    assert path.name in str(error.value)
+    assert "example" not in str(error.value)
+
+
+def test_load_skill_markdown_rejects_oversized_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "SKILL.md"
+    path.write_text("---\nname: example\n---\nbody\n")
+    monkeypatch.setattr(loader_module, "MAX_SKILL_FRONTMATTER_BYTES", 4)
+
+    with pytest.raises(ManifestLoadError, match="frontmatter.*size limit") as error:
+        load_skill_markdown(path)
+
+    assert path.name in str(error.value)
+    assert "example" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("loader_name", "filename", "contents"),
+    [
+        ("load_yaml", "plugin.yaml", "root:\n  child:\n    value: 1\n"),
+        ("load_json", "schema.json", '{"root":{"child":{"value":1}}}'),
+    ],
+)
+def test_structured_loaders_enforce_nesting_depth_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loader_name: str,
+    filename: str,
+    contents: str,
+) -> None:
+    path = tmp_path / filename
+    path.write_text(contents)
+    monkeypatch.setattr(loader_module, "MAX_DOCUMENT_DEPTH", 2)
+
+    with pytest.raises(ManifestLoadError, match="nesting limit") as error:
+        getattr(loader_module, loader_name)(path)
+
+    assert "value" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("loader_name", "filename", "contents"),
+    [
+        ("load_yaml", "plugin.yaml", "values: [1, 2, 3]\n"),
+        ("load_json", "schema.json", '{"values":[1,2,3]}'),
+    ],
+)
+def test_structured_loaders_enforce_node_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loader_name: str,
+    filename: str,
+    contents: str,
+) -> None:
+    path = tmp_path / filename
+    path.write_text(contents)
+    monkeypatch.setattr(loader_module, "MAX_DOCUMENT_NODES", 3)
+
+    with pytest.raises(ManifestLoadError, match="node limit"):
+        getattr(loader_module, loader_name)(path)
+
+
+def test_load_yaml_rejects_shared_container_aliases_without_recursing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text("shared: &shared\n  nested: [1]\nfirst: *shared\nsecond: *shared\n")
+
+    with pytest.raises(ManifestLoadError, match="aliases.*plugin.yaml") as error:
+        load_yaml(path)
+
+    assert "nested" not in str(error.value)
+
+
+def test_load_yaml_rejects_merge_key_container_aliases(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text(
+        "base: &base\n  value: first\nmerged:\n  <<: *base\n  other: do-not-leak\n"
+    )
+
+    with pytest.raises(ManifestLoadError, match="plugin.yaml") as error:
+        load_yaml(path)
+
+    assert "do-not-leak" not in str(error.value)
+
+
+def test_load_yaml_allows_scalar_aliases(tmp_path: Path) -> None:
+    path = tmp_path / "plugin.yaml"
+    path.write_text("first: &value shared\nsecond: *value\n")
+
+    assert load_yaml(path) == {"first": "shared", "second": "shared"}
+
+
+def test_loader_diagnostic_escapes_control_characters_in_path(tmp_path: Path) -> None:
+    path = tmp_path / "bad\n\x1b.yaml"
+    path.write_text("[")
+
+    with pytest.raises(ManifestLoadError) as error:
+        load_yaml(path)
+
+    message = str(error.value)
+    assert "bad\\n\\x1b.yaml" in message
+    assert "\n" not in message
+    assert "\x1b" not in message
 
 
 def test_load_skill_markdown_wraps_parser_recursion_failure(tmp_path: Path) -> None:
@@ -358,10 +549,11 @@ def test_resolve_package_path_rejects_parent_traversal(tmp_path: Path) -> None:
 def test_resolve_package_path_wraps_invalid_path(tmp_path: Path) -> None:
     relative = "bad\0name"
 
-    with pytest.raises(UnsafePackagePathError, match="resolve") as error:
+    with pytest.raises(UnsafePackagePathError, match="control characters") as error:
         resolve_package_path(tmp_path, relative)
 
-    assert repr(relative) in str(error.value)
+    assert "bad\\x00name" in str(error.value)
+    assert "\0" not in str(error.value)
 
 
 def test_resolve_package_path_uses_base_within_root(tmp_path: Path) -> None:

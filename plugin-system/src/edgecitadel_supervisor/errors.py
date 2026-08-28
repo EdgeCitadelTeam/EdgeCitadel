@@ -1,5 +1,30 @@
 """Stable errors raised while inspecting plugin packages."""
 
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def format_path(path: str | Path) -> str:
+    """Escape terminal control characters while preserving ordinary path text."""
+    escaped: list[str] = []
+    named_controls = {
+        "\b": r"\b",
+        "\t": r"\t",
+        "\n": r"\n",
+        "\f": r"\f",
+        "\r": r"\r",
+    }
+    for character in str(path):
+        codepoint = ord(character)
+        if character in named_controls:
+            escaped.append(named_controls[character])
+        elif codepoint < 0x20 or codepoint == 0x7F:
+            escaped.append(f"\\x{codepoint:02x}")
+        else:
+            escaped.append(character)
+    return "".join(escaped)
+
 
 class PluginError(RuntimeError):
     """Base class for plugin package failures."""
