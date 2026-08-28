@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import shutil
 from collections.abc import Iterator
@@ -10,6 +11,7 @@ import pytest
 import yaml
 
 from edgecitadel_supervisor.errors import (
+    CompatibilityError,
     DuplicateSkillError,
     ManifestLoadError,
     ManifestValidationError,
@@ -17,11 +19,47 @@ from edgecitadel_supervisor.errors import (
     UnsafePackagePathError,
 )
 from edgecitadel_supervisor.validator import (
+    SUPERVISOR_API_VERSION,
+    SUPPORTED_PROTOCOLS,
+    PackageRecord,
     SkillRecord,
     discover_skills,
+    validate_package,
     validate_schema,
     validate_skill_metadata,
 )
+
+
+def _load_manifest(root: Path) -> dict[str, object]:
+    document = yaml.safe_load((root / "plugin.yaml").read_text())
+    assert isinstance(document, dict)
+    return document
+
+
+def _write_manifest(root: Path, document: dict[str, object]) -> None:
+    (root / "plugin.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
+
+
+def _replace_compatibility(root: Path, value: object, field: str) -> None:
+    document = _load_manifest(root)
+    compatibility = document["compatibility"]
+    assert isinstance(compatibility, dict)
+    compatibility[field] = value
+    _write_manifest(root, document)
+
+
+def _replace_protocols(root: Path, protocols: list[str]) -> None:
+    _replace_compatibility(root, protocols, "protocols")
+
+
+def _replace_agent_skills(root: Path, skill_names: list[str]) -> None:
+    document = _load_manifest(root)
+    agents = document["agents"]
+    assert isinstance(agents, list)
+    agent = agents[0]
+    assert isinstance(agent, dict)
+    agent["skillNames"] = skill_names
+    _write_manifest(root, document)
 
 
 def _load_binding(root: Path, skill_name: str = "placeholder") -> dict[str, object]:
@@ -55,6 +93,215 @@ def _assert_package_relative_error(
     message = str(error)
     assert expected_path in message
     assert str(root) not in message
+
+
+def test_validate_package_returns_package_and_skill_records(
+    valid_package: Path,
+) -> None:
+    original_manifest = _load_manifest(valid_package)
+
+    package = validate_package(str(valid_package), verify_integrity=False)
+
+    assert isinstance(package, PackageRecord)
+    assert package.root == valid_package.resolve()
+    assert package.manifest == original_manifest
+    assert package.package_id == "local.example"
+    assert package.package_version == "0.1.0"
+    assert package.protocol == "edgecitadel.plugin.v1"
+    assert [skill.name for skill in package.skills] == ["placeholder"]
+    assert package.agent_skill_names == {"example-agent": ("placeholder",)}
+    assert _load_manifest(valid_package) == original_manifest
+
+
+def test_package_record_is_frozen(valid_package: Path) -> None:
+    package = validate_package(valid_package, verify_integrity=False)
+
+    with pytest.raises(FrozenInstanceError):
+        package.package_id = "renamed"  # type: ignore[misc]
+
+
+def test_package_record_declares_exact_public_fields() -> None:
+    assert tuple(PackageRecord.__dataclass_fields__) == (
+        "root",
+        "manifest",
+        "package_id",
+        "package_version",
+        "protocol",
+        "skills",
+        "agent_skill_names",
+    )
+
+
+def test_package_compatibility_constants_are_exact() -> None:
+    assert str(SUPERVISOR_API_VERSION) == "0.1.0"
+    assert SUPPORTED_PROTOCOLS == frozenset({"edgecitadel.plugin.v1"})
+
+
+def test_verify_integrity_is_forward_compatible_and_defaults_true(
+    valid_package: Path,
+) -> None:
+    parameter = inspect.signature(validate_package).parameters["verify_integrity"]
+
+    assert parameter.default is True
+    assert validate_package(valid_package).package_id == "local.example"
+
+
+def test_rejects_unsupported_supervisor_api(valid_package: Path) -> None:
+    _replace_compatibility(valid_package, ">=9.0.0", "supervisorApi")
+
+    with pytest.raises(CompatibilityError, match="supervisor API"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+def test_rejects_malformed_supervisor_api_without_leaking_value(
+    valid_package: Path,
+) -> None:
+    _replace_compatibility(valid_package, "do-not-leak", "supervisorApi")
+
+    with pytest.raises(ManifestValidationError, match="supervisor API") as error:
+        validate_package(valid_package, verify_integrity=False)
+
+    assert "do-not-leak" not in str(error.value)
+
+
+def test_rejects_unsupported_process_protocol(valid_package: Path) -> None:
+    _replace_protocols(valid_package, ["edgecitadel.plugin.v9"])
+
+    with pytest.raises(CompatibilityError, match="process protocol"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+def test_selects_only_supported_declared_protocol(valid_package: Path) -> None:
+    _replace_protocols(
+        valid_package,
+        ["vendor.plugin.v2", "edgecitadel.plugin.v1", "vendor.plugin.v1"],
+    )
+
+    package = validate_package(valid_package, verify_integrity=False)
+
+    assert package.protocol == "edgecitadel.plugin.v1"
+
+
+def test_rejects_ambiguous_supported_protocols(
+    valid_package: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _replace_protocols(
+        valid_package,
+        ["edgecitadel.plugin.v1", "edgecitadel.plugin.v2"],
+    )
+    monkeypatch.setattr(
+        "edgecitadel_supervisor.validator.SUPPORTED_PROTOCOLS",
+        frozenset({"edgecitadel.plugin.v1", "edgecitadel.plugin.v2"}),
+    )
+
+    with pytest.raises(CompatibilityError, match="process protocol"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+def test_duplicate_declared_protocols_remain_schema_invalid(
+    valid_package: Path,
+) -> None:
+    _replace_protocols(
+        valid_package,
+        ["edgecitadel.plugin.v1", "edgecitadel.plugin.v1"],
+    )
+
+    with pytest.raises(ManifestValidationError, match="agent-plugin"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+def test_duplicate_agent_ids_are_rejected_explicitly(valid_package: Path) -> None:
+    document = _load_manifest(valid_package)
+    agents = document["agents"]
+    assert isinstance(agents, list)
+    agents.append(dict(agents[0]))
+    _write_manifest(valid_package, document)
+
+    with pytest.raises(ManifestValidationError, match="Duplicate agent ID"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+def test_rejects_unknown_agent_skill_name(valid_package: Path) -> None:
+    _replace_agent_skills(valid_package, ["missing"])
+
+    with pytest.raises(ManifestValidationError, match="unknown skill"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+def test_agent_skill_mapping_preserves_declared_order(valid_package: Path) -> None:
+    _copy_skill(valid_package, "second", "second")
+    binding = _load_binding(valid_package, "second")
+    binding["skillId"] = "example.second"
+    _write_binding(valid_package, binding, "second")
+    _replace_agent_skills(valid_package, ["second", "placeholder"])
+
+    package = validate_package(valid_package, verify_integrity=False)
+
+    assert package.agent_skill_names == {"example-agent": ("second", "placeholder")}
+
+
+def test_empty_agent_skill_names_are_allowed_by_schema(valid_package: Path) -> None:
+    _replace_agent_skills(valid_package, [])
+
+    package = validate_package(valid_package, verify_integrity=False)
+
+    assert package.agent_skill_names == {"example-agent": ()}
+
+
+def test_duplicate_agent_skill_names_remain_schema_invalid(
+    valid_package: Path,
+) -> None:
+    _replace_agent_skills(valid_package, ["placeholder", "placeholder"])
+
+    with pytest.raises(ManifestValidationError, match="agent-plugin"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+@pytest.mark.parametrize("contents", ["[", "- not-a-mapping\n"])
+def test_malformed_plugin_manifest_uses_redacted_package_relative_error(
+    valid_package: Path, contents: str
+) -> None:
+    (valid_package / "plugin.yaml").write_text(contents)
+
+    with pytest.raises(ManifestLoadError, match="plugin.yaml") as error:
+        validate_package(valid_package, verify_integrity=False)
+
+    _assert_package_relative_error(error.value, valid_package, "plugin.yaml")
+    assert contents.strip() not in str(error.value)
+
+
+def test_missing_plugin_manifest_uses_redacted_package_relative_error(
+    valid_package: Path,
+) -> None:
+    (valid_package / "plugin.yaml").unlink()
+
+    with pytest.raises(ManifestLoadError, match="plugin.yaml") as error:
+        validate_package(valid_package, verify_integrity=False)
+
+    _assert_package_relative_error(error.value, valid_package, "plugin.yaml")
+
+
+def test_symlinked_package_root_is_rejected_before_manifest_read(
+    valid_package: Path, tmp_path: Path
+) -> None:
+    (valid_package / "plugin.yaml").write_text("[")
+    symlink = tmp_path / "package-link"
+    symlink.symlink_to(valid_package, target_is_directory=True)
+
+    with pytest.raises(UnsafePackagePathError, match="symbolic link"):
+        validate_package(symlink, verify_integrity=False)
+
+
+def test_nested_symlink_is_rejected_before_manifest_read(
+    valid_package: Path, tmp_path: Path
+) -> None:
+    (valid_package / "plugin.yaml").write_text("[")
+    target = tmp_path / "outside"
+    target.write_text("outside")
+    (valid_package / "nested-link").symlink_to(target)
+
+    with pytest.raises(UnsafePackagePathError, match="symbolic link"):
+        validate_package(valid_package, verify_integrity=False)
 
 
 def test_discover_skills_combines_portable_and_binding_metadata(

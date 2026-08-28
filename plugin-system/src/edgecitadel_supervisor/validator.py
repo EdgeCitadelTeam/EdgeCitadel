@@ -10,8 +10,11 @@ from typing import cast
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import Version
 
 from .errors import (
+    CompatibilityError,
     DuplicateSkillError,
     ManifestLoadError,
     ManifestValidationError,
@@ -27,8 +30,11 @@ from .loader import (
 )
 
 _PORTABLE_SKILL_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_PLUGIN_SCHEMA = "agent-plugin.v1alpha1.schema.json"
 _BINDING_SCHEMA = "agent-skill-binding.v1alpha1.schema.json"
 _SCHEMA_DIRECTORY = Path(__file__).resolve().parents[2] / "schemas"
+SUPERVISOR_API_VERSION = Version("0.1.0")
+SUPPORTED_PROTOCOLS = frozenset({"edgecitadel.plugin.v1"})
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,93 @@ class SkillRecord:
     binding_file: Path
     input_schema: Path
     output_schema: Path
+
+
+@dataclass(frozen=True)
+class PackageRecord:
+    root: Path
+    manifest: dict[str, object]
+    package_id: str
+    package_version: str
+    protocol: str
+    skills: tuple[SkillRecord, ...]
+    agent_skill_names: dict[str, tuple[str, ...]]
+
+
+def validate_package(
+    root: str | Path, *, verify_integrity: bool = True
+) -> PackageRecord:
+    """Validate a plugin package without importing or executing its contents."""
+    plugin_root = require_plugin_root(root)
+    reject_symlinks(plugin_root)
+
+    try:
+        manifest = load_yaml(plugin_root / "plugin.yaml")
+    except ManifestLoadError:
+        raise ManifestLoadError("Unable to load plugin manifest: plugin.yaml") from None
+
+    try:
+        validate_schema(manifest, _PLUGIN_SCHEMA)
+    except ManifestValidationError as error:
+        raise ManifestValidationError(
+            f"Invalid plugin manifest at plugin.yaml: {error}"
+        ) from None
+
+    compatibility = cast(dict[str, object], manifest["compatibility"])
+    supervisor_api = cast(str, compatibility["supervisorApi"])
+    try:
+        supervisor_specifier = SpecifierSet(supervisor_api)
+    except InvalidSpecifier:
+        raise ManifestValidationError(
+            "Plugin manifest has an invalid supervisor API compatibility specifier"
+        ) from None
+    if SUPERVISOR_API_VERSION not in supervisor_specifier:
+        raise CompatibilityError(
+            "Plugin does not support the current supervisor API version"
+        )
+
+    declared_protocols = cast(list[str], compatibility["protocols"])
+    supported_protocols = tuple(
+        protocol for protocol in declared_protocols if protocol in SUPPORTED_PROTOCOLS
+    )
+    if len(supported_protocols) != 1:
+        raise CompatibilityError(
+            "Plugin must declare exactly one supported process protocol"
+        )
+
+    skills_config = cast(dict[str, object], manifest["skills"])
+    skills = discover_skills(plugin_root, cast(str, skills_config["directory"]))
+    portable_skill_names = {skill.name for skill in skills}
+
+    agent_skill_names: dict[str, tuple[str, ...]] = {}
+    agents = cast(list[dict[str, object]], manifest["agents"])
+    for agent in agents:
+        agent_id = cast(str, agent["id"])
+        if agent_id in agent_skill_names:
+            raise ManifestValidationError(f"Duplicate agent ID: {agent_id}")
+
+        skill_names = cast(list[str], agent["skillNames"])
+        unknown_skill = next(
+            (name for name in skill_names if name not in portable_skill_names),
+            None,
+        )
+        if unknown_skill is not None:
+            raise ManifestValidationError(
+                f"Agent {agent_id} references unknown skill: {unknown_skill}"
+            )
+        agent_skill_names[agent_id] = tuple(skill_names)
+
+    metadata = cast(dict[str, object], manifest["metadata"])
+    _ = verify_integrity  # Task 5 will use this compatibility parameter.
+    return PackageRecord(
+        root=plugin_root,
+        manifest=manifest,
+        package_id=f"{metadata['publisher']}.{metadata['name']}",
+        package_version=cast(str, metadata["version"]),
+        protocol=supported_protocols[0],
+        skills=skills,
+        agent_skill_names=agent_skill_names,
+    )
 
 
 def validate_schema(document: object, schema_name: str) -> None:
