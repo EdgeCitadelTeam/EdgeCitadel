@@ -47,8 +47,10 @@ def test_domain_errors_inherit_plugin_error(error_type: type[PluginError]) -> No
 def test_require_plugin_root_rejects_missing_directory(tmp_path: Path) -> None:
     missing = tmp_path / "missing-plugin"
 
-    with pytest.raises(PluginNotFoundError, match="missing-plugin"):
+    with pytest.raises(PluginNotFoundError) as error:
         require_plugin_root(missing)
+
+    assert str(error.value) == f"Plugin root not found: {missing.resolve()}"
 
 
 def test_require_plugin_root_rejects_regular_file(tmp_path: Path) -> None:

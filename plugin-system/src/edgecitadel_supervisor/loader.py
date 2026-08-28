@@ -29,7 +29,7 @@ def require_plugin_root(path: str | Path) -> Path:
         ) from None
 
     if not exists:
-        raise PluginNotFoundError(f"Plugin root does not exist: {root}")
+        raise PluginNotFoundError(f"Plugin root not found: {root}")
     if not is_directory:
         raise PluginNotFoundError(f"Plugin root is not a directory: {root}")
     return root
