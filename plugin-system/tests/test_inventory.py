@@ -292,6 +292,22 @@ def test_verify_lock_reports_file_drift_deterministically(
     assert str(valid_package) not in str(error.value)
 
 
+def test_verify_lock_reports_missing_skill_file_before_rehashing(
+    valid_package: Path,
+) -> None:
+    package = _package(valid_package)
+    write_lock(package)
+    package.skills[0].skill_file.unlink()
+
+    with pytest.raises(LockIntegrityError) as error:
+        verify_lock(package)
+
+    message = str(error.value)
+    assert "Missing locked files: skills/placeholder/SKILL.md" in message
+    assert "Unable to hash" not in message
+    assert str(valid_package) not in message
+
+
 def test_verify_lock_reports_mismatched_package_metadata(valid_package: Path) -> None:
     package = _package(valid_package)
     lock = build_lock(package)

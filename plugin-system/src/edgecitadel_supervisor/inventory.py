@@ -111,7 +111,10 @@ def verify_lock(package: PackageRecord) -> None:
     locked_skills = cast(list[dict[str, object]], lock["skills"])
     issues = _duplicate_issues(duplicate_paths, duplicate_skills)
     issues.extend(_package_metadata_issues(package, locked_package))
-    issues.extend(_file_integrity_issues(package.root, actual_files, locked_files))
+    file_issues = _file_integrity_issues(package.root, actual_files, locked_files)
+    issues.extend(file_issues)
+    if file_issues:
+        raise LockIntegrityError("; ".join(issues))
     issues.extend(_skill_integrity_issues(package, locked_skills))
     if issues:
         raise LockIntegrityError("; ".join(issues))
