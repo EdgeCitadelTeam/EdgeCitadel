@@ -16,7 +16,7 @@ the current source-layout schema lookup model.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[test]'
+python -m pip install -e '.[test,type]'
 ```
 
 ## Package commands
@@ -50,17 +50,19 @@ python -m edgecitadel_supervisor validate ../plugins/examples/placeholder
 mypy --strict src/edgecitadel_plugin_sdk tests/typecheck_sdk_consumer.py
 ```
 
-The test extra installs pytest but not mypy. Contributors running the typing gate
-must make `mypy` available in their environment.
+The combined extras install both pytest and the constrained mypy version used by
+the typing gate.
 
 ## Static guarantees and trust boundary
 
 The scaffold safely parses YAML and JSON, applies strict schemas, checks package
 compatibility and agent-to-skill mappings, and resolves declared paths within
-the package. Validation rejects symbolic links and special filesystem nodes,
-uses canonical SHA-256 hashes and ordering, and emits package-relative,
-content-redacted diagnostics. It never imports package handlers or launches the
-declared runtime.
+the package. Validation rejects symbolic links and special filesystem nodes and
+uses canonical SHA-256 hashes and ordering. Diagnostics about content under a
+valid package root use package-relative paths and do not disclose file contents;
+an invalid or missing root argument may report the caller-supplied or resolved
+root path. Validation never imports package handlers or launches the declared
+runtime.
 
 These guarantees assume the package root is owned by the supervisor and remains
 immutable throughout `lock` or `validate`. They do not make validation safe

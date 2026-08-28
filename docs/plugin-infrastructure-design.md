@@ -2,7 +2,8 @@
 
 **Status:** Approved for implementation on 2026-08-26
 
-**Source:** `/Users/yefanzhang/Downloads/deep-research-report.md`
+**Source basis:** Public specifications and official project documentation cited
+under [Research basis](#research-basis).
 
 ## Goal
 
@@ -280,9 +281,11 @@ schemas. It does not interpret procedure content or import the handler.
 ### Learned procedural memory
 
 Runtime-learned procedures must not rewrite the installed package. The SDK
-defines a placeholder `KnowledgeStore` protocol for future persistence using a
-record keyed by plugin identity, skill ID, skill version, namespace, revision,
-content hash, and provenance.
+defines a placeholder `KnowledgeStore` protocol for future persistence.
+`KnowledgeRecord` contains `plugin_id`, `skill_id`, `skill_version`, `namespace`,
+`revision`, `content_hash`, and `provenance`. `KnowledgeStore.read()` looks up a
+record by the first four fields; revision, content hash, and provenance are
+record and audit metadata.
 
 The plugin manifest requests the knowledge namespaces it may use. A later policy
 layer resolves those requests into grants. This keeps reviewed package procedures
@@ -404,8 +407,10 @@ exceptions:
 - `LockIntegrityError`
 
 CLI failures write one concise diagnostic to stderr and return a non-zero status.
-Diagnostics use package-relative failing paths and schema locations without
-disclosing the absolute package root, procedure contents, or secret values.
+Diagnostics about content under a valid package root use package-relative paths
+and schema locations without disclosing procedure contents or secret values. An
+invalid or missing root argument may report the caller-supplied or resolved root
+path.
 
 ## Security boundaries
 

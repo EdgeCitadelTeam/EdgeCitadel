@@ -53,8 +53,10 @@ JSON Schemas are the typed skill boundary. Keeping these concerns outside
 `SKILL.md` preserves procedure portability across runtimes.
 
 Learned procedural memory must never rewrite an installed package. A future
-external `KnowledgeStore` will hold records keyed by plugin identity, skill ID,
-skill version, namespace, revision, content hash, and provenance.
+external `KnowledgeStore` record contains `plugin_id`, `skill_id`,
+`skill_version`, `namespace`, `revision`, `content_hash`, and `provenance`.
+`KnowledgeStore.read()` looks up records by the first four fields; revision,
+content hash, and provenance are record and audit metadata.
 
 ## Author workflow
 

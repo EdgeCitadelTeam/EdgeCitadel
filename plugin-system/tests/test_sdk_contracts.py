@@ -665,3 +665,16 @@ def test_sdk_distribution_declares_pep561_marker() -> None:
     assert pyproject["tool"]["setuptools"]["package-data"][
         "edgecitadel_plugin_sdk"
     ] == ["py.typed"]
+
+
+def test_contributor_typing_gate_has_an_installable_dependency_extra() -> None:
+    project_root = Path(__file__).parents[1]
+    pyproject = tomllib.loads(
+        (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    readme = (project_root / "README.md").read_text(encoding="utf-8")
+
+    assert pyproject["project"]["optional-dependencies"].get("type") == [
+        "mypy>=1.13,<2"
+    ]
+    assert "python -m pip install -e '.[test,type]'" in readme

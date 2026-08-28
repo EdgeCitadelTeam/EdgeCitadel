@@ -32,7 +32,7 @@
 - Frontend build: `cd frontend && npm run build`
 - Client listener: `cd openclaw-client && npm start`
 - E2E tests: `cd e2e && npm test`
-- Plugin checks: `cd plugin-system && python -m pytest -q && python -m edgecitadel_supervisor validate ../plugins/examples/placeholder`
+- Plugin checks (smoke): `cd plugin-system && python -m pytest -q && python -m edgecitadel_supervisor validate ../plugins/examples/placeholder`; see `plugin-system/README.md` for the full contributor gate.
 
 ## Working rules
 - Inspect any nested `AGENTS.md` before editing in a subdirectory.
@@ -61,4 +61,4 @@
 - Messaging contracts: `docs/05-messaging.md`
 - Setup: `docs/agent-setup.md`
 - Operational workflows: `.agents/skills/` (verify-*, release, smoke-check, etc.)
-- Hook/permission config: `.Codex/settings.json`
+- Hook/permission config: `.claude/settings.json`
