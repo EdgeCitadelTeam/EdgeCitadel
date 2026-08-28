@@ -13,6 +13,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 from .errors import (
     DuplicateSkillError,
+    ManifestLoadError,
     ManifestValidationError,
     SkillDiscoveryError,
 )
@@ -114,7 +115,9 @@ def discover_skills(root: Path, skills_directory: str) -> tuple[SkillRecord, ...
     reject_symlinks(plugin_root)
     skill_root = resolve_package_path(plugin_root, skills_directory)
     if not skill_root.is_dir():
-        raise SkillDiscoveryError(f"Skills directory does not exist: {skill_root}")
+        raise SkillDiscoveryError(
+            f"Skills directory does not exist: {_package_relative(plugin_root, skill_root)}"
+        )
 
     try:
         entries = sorted(skill_root.iterdir(), key=lambda path: path.name)
@@ -133,70 +136,98 @@ def discover_skills(root: Path, skills_directory: str) -> tuple[SkillRecord, ...
 
         skill_file = directory / "SKILL.md"
         binding_file = directory / "binding.yaml"
+        relative_directory = _package_relative(plugin_root, directory)
+        relative_skill_file = _package_relative(plugin_root, skill_file)
+        relative_binding_file = _package_relative(plugin_root, binding_file)
         has_skill_file = skill_file.is_file()
         has_binding_file = binding_file.is_file()
         if not has_skill_file and not has_binding_file:
-            continue
+            raise SkillDiscoveryError(
+                "Skill directory is incomplete; missing "
+                f"{relative_skill_file} and {relative_binding_file}"
+            )
         if not has_skill_file:
             raise SkillDiscoveryError(
-                f"Skill directory {directory.name} is missing SKILL.md: {directory}"
+                f"Skill directory {relative_directory} is missing {relative_skill_file}"
             )
         if not has_binding_file:
             raise SkillDiscoveryError(
-                f"Skill directory {directory.name} is missing binding.yaml: {directory}"
+                f"Skill directory {relative_directory} is missing {relative_binding_file}"
             )
 
         metadata, body = load_skill_markdown(skill_file)
         name_value = metadata.get("name")
         if isinstance(name_value, str) and name_value in portable_names:
             raise DuplicateSkillError(f"Duplicate portable skill name: {name_value}")
-        validate_skill_metadata(metadata, directory.name)
-        name = cast(str, name_value)
-        description = cast(str, metadata["description"])
-        portable_names.add(name)
-        if not body.strip():
-            raise ManifestValidationError(
-                f"Agent Skill Markdown body must be nonempty: {skill_file}"
-            )
-
-        binding = load_yaml(binding_file)
-        try:
-            input_schema, output_schema = _resolve_binding_schema_paths(
-                directory, binding
-            )
-            validate_schema(binding, _BINDING_SCHEMA)
-        except ManifestValidationError as error:
-            raise ManifestValidationError(
-                f"Invalid skill binding at {binding_file}: {error}"
-            ) from None
-
-        skill_id = cast(str, binding["skillId"])
-        if skill_id in skill_ids:
-            raise DuplicateSkillError(f"Duplicate A2A skill ID: {skill_id}")
-        skill_ids.add(skill_id)
-
-        input_document = load_json(input_schema)
-        output_document = load_json(output_schema)
-        _validate_referenced_schema(input_document, input_schema)
-        _validate_referenced_schema(output_document, output_schema)
-
-        execution = cast(dict[str, object], binding["execution"])
-        records.append(
-            SkillRecord(
-                name=name,
-                description=description,
-                skill_id=skill_id,
-                version=cast(str, binding["version"]),
-                execution_name=cast(str, execution["name"]),
-                directory=directory,
-                skill_file=skill_file,
-                binding_file=binding_file,
-                input_schema=input_schema,
-                output_schema=output_schema,
-            )
+        record = _build_skill_record(
+            plugin_root,
+            directory,
+            metadata,
+            body,
         )
+        portable_names.add(record.name)
+        if record.skill_id in skill_ids:
+            raise DuplicateSkillError(f"Duplicate A2A skill ID: {record.skill_id}")
+        skill_ids.add(record.skill_id)
+        records.append(record)
 
     return tuple(sorted(records, key=lambda record: record.name))
+
+
+def _build_skill_record(
+    plugin_root: Path,
+    directory: Path,
+    metadata: dict[str, object],
+    body: str,
+) -> SkillRecord:
+    skill_file = directory / "SKILL.md"
+    binding_file = directory / "binding.yaml"
+    validate_skill_metadata(metadata, directory.name)
+    name = cast(str, metadata["name"])
+    description = cast(str, metadata["description"])
+    if not body.strip():
+        raise ManifestValidationError(
+            "Agent Skill Markdown body must be nonempty: "
+            f"{_package_relative(plugin_root, skill_file)}"
+        )
+
+    relative_binding = _package_relative(plugin_root, binding_file)
+    try:
+        binding = load_yaml(binding_file)
+    except ManifestLoadError:
+        raise ManifestLoadError(
+            f"Unable to load skill binding: {relative_binding}"
+        ) from None
+    try:
+        input_schema, output_schema = _resolve_binding_schema_paths(directory, binding)
+        validate_schema(binding, _BINDING_SCHEMA)
+    except ManifestValidationError as error:
+        raise ManifestValidationError(
+            f"Invalid skill binding at {relative_binding}: {error}"
+        ) from None
+
+    input_document = _load_referenced_schema(plugin_root, input_schema)
+    output_document = _load_referenced_schema(plugin_root, output_schema)
+    _validate_referenced_schema(
+        input_document, _package_relative(plugin_root, input_schema)
+    )
+    _validate_referenced_schema(
+        output_document, _package_relative(plugin_root, output_schema)
+    )
+
+    execution = cast(dict[str, object], binding["execution"])
+    return SkillRecord(
+        name=name,
+        description=description,
+        skill_id=cast(str, binding["skillId"]),
+        version=cast(str, binding["version"]),
+        execution_name=cast(str, execution["name"]),
+        directory=directory,
+        skill_file=skill_file,
+        binding_file=binding_file,
+        input_schema=input_schema,
+        output_schema=output_schema,
+    )
 
 
 def _resolve_binding_schema_paths(
@@ -219,10 +250,24 @@ def _resolve_binding_schema_paths(
     )
 
 
-def _validate_referenced_schema(document: dict[str, object], path: Path) -> None:
+def _validate_referenced_schema(document: dict[str, object], path: str) -> None:
     try:
         Draft202012Validator.check_schema(document)
     except SchemaError:
         raise ManifestValidationError(
             f"Referenced JSON Schema is invalid: {path}"
         ) from None
+
+
+def _load_referenced_schema(root: Path, path: Path) -> dict[str, object]:
+    relative_path = _package_relative(root, path)
+    try:
+        return load_json(path)
+    except ManifestLoadError:
+        raise ManifestLoadError(
+            f"Unable to load referenced JSON Schema: {relative_path}"
+        ) from None
+
+
+def _package_relative(root: Path, path: Path) -> str:
+    return path.relative_to(root).as_posix()

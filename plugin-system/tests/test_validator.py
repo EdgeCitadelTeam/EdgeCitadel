@@ -48,6 +48,14 @@ def _copy_skill(valid_package: Path, directory_name: str, portable_name: str) ->
     return destination
 
 
+def _assert_package_relative_error(
+    error: Exception, root: Path, expected_path: str
+) -> None:
+    message = str(error)
+    assert expected_path in message
+    assert str(root) not in message
+
+
 def test_discover_skills_combines_portable_and_binding_metadata(
     valid_package: Path,
 ) -> None:
@@ -175,8 +183,12 @@ def test_empty_markdown_body_is_rejected(valid_package: Path) -> None:
         "description: Use when validating an example package.\n---\n  \n\t\n"
     )
 
-    with pytest.raises(ManifestValidationError, match="Markdown body"):
+    with pytest.raises(ManifestValidationError, match="Markdown body") as error:
         discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/placeholder/SKILL.md"
+    )
 
 
 def test_binding_is_validated_with_format_checker(valid_package: Path) -> None:
@@ -184,15 +196,37 @@ def test_binding_is_validated_with_format_checker(valid_package: Path) -> None:
     document["extensions"] = {"x:<": {}}
     _write_binding(valid_package, document)
 
-    with pytest.raises(ManifestValidationError, match="binding.yaml"):
+    with pytest.raises(ManifestValidationError, match="binding.yaml") as error:
         discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/placeholder/binding.yaml"
+    )
+
+
+def test_malformed_binding_error_uses_package_relative_path(
+    valid_package: Path,
+) -> None:
+    binding = valid_package / "skills" / "placeholder" / "binding.yaml"
+    binding.write_text("[")
+
+    with pytest.raises(ManifestLoadError, match="binding.yaml") as error:
+        discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/placeholder/binding.yaml"
+    )
 
 
 def test_missing_referenced_schema_is_rejected(valid_package: Path) -> None:
     (valid_package / "skills" / "placeholder" / "schemas/input.json").unlink()
 
-    with pytest.raises(ManifestLoadError, match="input.json"):
+    with pytest.raises(ManifestLoadError, match="input.json") as error:
         discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/placeholder/schemas/input.json"
+    )
 
 
 @pytest.mark.parametrize("contents", ["[]", "not-json"])
@@ -202,8 +236,12 @@ def test_referenced_schema_must_be_a_json_mapping(
     schema = valid_package / "skills" / "placeholder" / "schemas/input.json"
     schema.write_text(contents)
 
-    with pytest.raises(ManifestLoadError, match="input.json"):
+    with pytest.raises(ManifestLoadError, match="input.json") as error:
         discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/placeholder/schemas/input.json"
+    )
 
 
 def test_referenced_schema_must_be_valid_draft_2020_12_schema(
@@ -212,8 +250,12 @@ def test_referenced_schema_must_be_valid_draft_2020_12_schema(
     schema = valid_package / "skills" / "placeholder" / "schemas/input.json"
     schema.write_text(json.dumps({"type": 7}))
 
-    with pytest.raises(ManifestValidationError, match="input.json"):
+    with pytest.raises(ManifestValidationError, match="input.json") as error:
         discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/placeholder/schemas/input.json"
+    )
 
 
 def test_validate_schema_uses_authoritative_editable_source_layout(
@@ -259,27 +301,54 @@ def test_partial_skill_directory_is_rejected_deterministically(
     partial.mkdir()
     (partial / "SKILL.md").write_text("---\nname: partial\n---\nbody\n")
 
-    with pytest.raises(SkillDiscoveryError, match="partial.*binding.yaml"):
+    with pytest.raises(SkillDiscoveryError, match="partial.*binding.yaml") as error:
         discover_skills(valid_package, "skills")
 
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/partial/binding.yaml"
+    )
 
-def test_non_skill_entries_and_nested_skill_directories_are_ignored(
-    valid_package: Path,
-) -> None:
+
+def test_non_directory_entries_are_ignored(valid_package: Path) -> None:
     (valid_package / "skills" / "README.md").write_text("Skills")
-    nested = valid_package / "skills" / "container" / "nested"
-    nested.mkdir(parents=True)
-    (nested / "SKILL.md").write_text("invalid")
-    (nested / "binding.yaml").write_text("invalid")
 
     skills = discover_skills(valid_package, "skills")
 
     assert [skill.name for skill in skills] == ["placeholder"]
 
 
+def test_immediate_directory_with_only_nested_skill_is_rejected(
+    valid_package: Path,
+) -> None:
+    nested = valid_package / "skills" / "container" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "SKILL.md").write_text("invalid")
+    (nested / "binding.yaml").write_text("invalid")
+
+    with pytest.raises(SkillDiscoveryError, match="SKILL.md.*binding.yaml") as error:
+        discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(error.value, valid_package, "skills/container")
+
+
+def test_skill_directory_missing_skill_file_is_rejected(valid_package: Path) -> None:
+    partial = valid_package / "skills" / "partial"
+    partial.mkdir()
+    (partial / "binding.yaml").write_text("invalid")
+
+    with pytest.raises(SkillDiscoveryError, match="partial.*SKILL.md") as error:
+        discover_skills(valid_package, "skills")
+
+    _assert_package_relative_error(
+        error.value, valid_package, "skills/partial/SKILL.md"
+    )
+
+
 def test_missing_skills_directory_is_rejected(valid_package: Path) -> None:
-    with pytest.raises(SkillDiscoveryError, match="missing"):
+    with pytest.raises(SkillDiscoveryError, match="missing") as error:
         discover_skills(valid_package, "missing")
+
+    _assert_package_relative_error(error.value, valid_package, "missing")
 
 
 def test_skill_record_declares_exact_public_fields() -> None:
