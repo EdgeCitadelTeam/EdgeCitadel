@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from types import MappingProxyType
 from typing import Protocol, runtime_checkable
+
+from ._values import _freeze_mapping
 
 
 class LifecycleState(str, Enum):
@@ -33,7 +34,7 @@ class LifecycleTransition:
 
     def __post_init__(self) -> None:
         if self.detail is not None:
-            object.__setattr__(self, "detail", MappingProxyType(dict(self.detail)))
+            object.__setattr__(self, "detail", _freeze_mapping(self.detail))
 
 
 @runtime_checkable

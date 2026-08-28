@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Protocol, runtime_checkable
+
+from ._values import _freeze_mapping
 
 
 @dataclass(frozen=True)
@@ -21,12 +22,8 @@ class SkillDescriptor:
     output_schema: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "input_schema", MappingProxyType(dict(self.input_schema))
-        )
-        object.__setattr__(
-            self, "output_schema", MappingProxyType(dict(self.output_schema))
-        )
+        object.__setattr__(self, "input_schema", _freeze_mapping(self.input_schema))
+        object.__setattr__(self, "output_schema", _freeze_mapping(self.output_schema))
 
 
 @runtime_checkable
@@ -35,4 +32,4 @@ class SkillProvider(Protocol):
 
     def list_skills(self) -> tuple[SkillDescriptor, ...]: ...
 
-    def resolve(self, skill_id: str) -> SkillDescriptor | None: ...
+    def resolve_by_name(self, name: str) -> SkillDescriptor | None: ...

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ast
 import inspect
+import json
+import tomllib
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import FrozenInstanceError, fields, is_dataclass
+from dataclasses import FrozenInstanceError, asdict, fields, is_dataclass
 from pathlib import Path
-from typing import get_type_hints
+from typing import cast, get_type_hints
 
 import pytest
 
@@ -100,7 +103,7 @@ def test_agent_runtime_has_exact_async_surface() -> None:
 
 
 def test_remaining_protocols_expose_only_the_reserved_methods() -> None:
-    assert _public_methods(SkillProvider) == {"list_skills", "resolve"}
+    assert _public_methods(SkillProvider) == {"list_skills", "resolve_by_name"}
     assert _public_methods(KnowledgeStore) == {"read", "propose"}
     assert _public_methods(Transport) == {"register", "receive", "publish", "drain"}
     assert _public_methods(LifecycleHooks) == {
@@ -131,8 +134,8 @@ def test_protocol_signatures_use_only_portable_values() -> None:
         get_type_hints(SkillProvider.list_skills)["return"]
         == tuple[SkillDescriptor, ...]
     )
-    assert get_type_hints(SkillProvider.resolve) == {
-        "skill_id": str,
+    assert get_type_hints(SkillProvider.resolve_by_name) == {
+        "name": str,
         "return": SkillDescriptor | None,
     }
     assert get_type_hints(KnowledgeStore.read) == {
@@ -167,7 +170,7 @@ def test_protocol_signatures_use_only_portable_values() -> None:
         "return": type(None),
     }
     assert _parameters(SkillProvider.list_skills) == ("self",)
-    assert _parameters(SkillProvider.resolve) == ("self", "skill_id")
+    assert _parameters(SkillProvider.resolve_by_name) == ("self", "name")
     assert _parameters(KnowledgeStore.read) == (
         "self",
         "plugin_id",
@@ -210,10 +213,13 @@ def test_value_records_are_frozen_and_preserve_their_fields() -> None:
         provenance=("task:123",),
     )
     message = TransportMessage(
+        v=1,
+        id="message-id",
+        type="command",
         sender_id="sender",
-        recipient_id=None,
-        message_type="request",
+        timestamp="2026-08-28T12:00:00.000Z",
         payload={"task": "123"},
+        recipient_id=None,
     )
     transition = LifecycleTransition(
         plugin_id="local.example",
@@ -225,7 +231,14 @@ def test_value_records_are_frozen_and_preserve_their_fields() -> None:
     assert context.configuration == {"mode": "test"}
     assert skill.skill_id == "example.placeholder"
     assert record.provenance == ("task:123",)
-    assert message.recipient_id is None
+    assert (
+        message.recipient_id,
+        message.task_id,
+        message.context_id,
+        message.task_state,
+        message.agent_state,
+        message.hop_count,
+    ) == (None, None, None, None, None, None)
     assert transition.next_state is LifecycleState.READY
 
     for value in (context, skill, record, message, transition):
@@ -261,10 +274,18 @@ def test_value_records_have_exact_typed_fields() -> None:
             "provenance": tuple[str, ...],
         },
         TransportMessage: {
+            "v": int,
+            "id": str,
+            "type": str,
             "sender_id": str,
-            "recipient_id": str | None,
-            "message_type": str,
+            "timestamp": str,
             "payload": Mapping[str, object],
+            "recipient_id": str | None,
+            "task_id": str | None,
+            "context_id": str | None,
+            "task_state": str | None,
+            "agent_state": str | None,
+            "hop_count": int | None,
         },
         LifecycleTransition: {
             "plugin_id": str,
@@ -281,39 +302,172 @@ def test_value_records_have_exact_typed_fields() -> None:
         assert get_type_hints(record_type) == expected_annotations
 
 
-def test_mapping_fields_do_not_alias_mutable_inputs() -> None:
-    configuration: dict[str, object] = {"mode": "test"}
-    input_schema: dict[str, object] = {"type": "object"}
-    payload: dict[str, object] = {"task": "123"}
-    detail: dict[str, object] = {"attempt": 1}
+def _assert_deeply_frozen(
+    frozen_mapping: Mapping[str, object], caller_mapping: dict[str, object]
+) -> None:
+    caller_nested = cast(dict[str, object], caller_mapping["nested"])
+    caller_items = cast(list[object], caller_nested["items"])
+    caller_item = cast(dict[str, object], caller_items[0])
+    caller_mapping.clear()
+    caller_item["value"] = "caller-mutated"
+    caller_items.append({"value": "caller-added"})
 
-    context = RuntimeContext("plugin", "agent", configuration, {})
-    skill = SkillDescriptor(
-        "name", "description", "skill.id", "1.0.0", "execute", input_schema, {}
+    frozen_nested = cast(Mapping[str, object], frozen_mapping["nested"])
+    frozen_items = cast(tuple[object, ...], frozen_nested["items"])
+    frozen_item = cast(Mapping[str, object], frozen_items[0])
+    assert frozen_item["value"] == "original"
+    assert len(frozen_items) == 1
+    with pytest.raises(TypeError):
+        frozen_mapping["new"] = "value"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        frozen_item["value"] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        frozen_items[0] = "changed"  # type: ignore[index]
+    mutable_view = cast(dict[str, object], frozen_mapping)
+    mutators: tuple[Callable[[], object], ...] = (
+        mutable_view.clear,
+        lambda: mutable_view.pop("nested"),
+        mutable_view.popitem,
+        lambda: mutable_view.setdefault("new", "value"),
+        lambda: mutable_view.update({"new": "value"}),
+        lambda: mutable_view.__delitem__("nested"),
     )
-    message = TransportMessage("sender", None, "request", payload)
+    for mutate in mutators:
+        with pytest.raises(TypeError):
+            mutate()
+
+
+def test_runtime_context_mapping_is_deeply_immutable_and_unaliased() -> None:
+    configuration: dict[str, object] = {"nested": {"items": [{"value": "original"}]}}
+    metadata: dict[str, object] = {"nested": {"items": [{"value": "original"}]}}
+    context = RuntimeContext("plugin", "agent", configuration, metadata)
+
+    _assert_deeply_frozen(context.configuration, configuration)
+    _assert_deeply_frozen(context.metadata, metadata)
+
+
+def test_skill_descriptor_mapping_is_deeply_immutable_and_unaliased() -> None:
+    input_schema: dict[str, object] = {"nested": {"items": [{"value": "original"}]}}
+    output_schema: dict[str, object] = {"nested": {"items": [{"value": "original"}]}}
+    skill = SkillDescriptor(
+        "name",
+        "description",
+        "skill.id",
+        "1.0.0",
+        "execute",
+        input_schema,
+        output_schema,
+    )
+
+    _assert_deeply_frozen(skill.input_schema, input_schema)
+    _assert_deeply_frozen(skill.output_schema, output_schema)
+
+
+def test_lifecycle_detail_mapping_is_deeply_immutable_and_unaliased() -> None:
+    detail: dict[str, object] = {"nested": {"items": [{"value": "original"}]}}
     transition = LifecycleTransition(
         "plugin", LifecycleState.STARTING, LifecycleState.READY, detail
     )
-    configuration["mode"] = "changed"
-    input_schema["type"] = "string"
-    payload["task"] = "changed"
-    detail["attempt"] = 2
 
-    assert context.configuration == {"mode": "test"}
-    assert skill.input_schema == {"type": "object"}
-    assert message.payload == {"task": "123"}
-    assert transition.detail == {"attempt": 1}
+    assert transition.detail is not None
+    _assert_deeply_frozen(transition.detail, detail)
 
-    for mapping in (
-        context.configuration,
-        skill.input_schema,
-        message.payload,
-        transition.detail,
-    ):
-        assert mapping is not None
-        with pytest.raises(TypeError):
-            mapping["new"] = "value"  # type: ignore[index]
+
+def test_transport_payload_mapping_is_deeply_immutable_and_unaliased() -> None:
+    payload: dict[str, object] = {"nested": {"items": [{"value": "original"}]}}
+    message = TransportMessage(
+        1,
+        "message-id",
+        "command",
+        "sender",
+        "2026-08-28T12:00:00.000Z",
+        payload,
+    )
+
+    _assert_deeply_frozen(message.payload, payload)
+
+
+def test_value_records_round_trip_through_dataclass_json_shapes() -> None:
+    documents = [
+        json.loads(
+            json.dumps(
+                asdict(
+                    RuntimeContext(
+                        "plugin",
+                        "agent",
+                        {"nested": {"items": ["one", "two"]}},
+                        {"labels": ["local"]},
+                    )
+                )
+            )
+        ),
+        json.loads(
+            json.dumps(
+                asdict(
+                    SkillDescriptor(
+                        "name",
+                        "description",
+                        "skill.id",
+                        "1.0.0",
+                        "execute",
+                        {"type": "object", "required": ["query"]},
+                        {"type": "object"},
+                    )
+                )
+            )
+        ),
+        json.loads(
+            json.dumps(
+                asdict(
+                    KnowledgeRecord(
+                        "plugin",
+                        "skill.id",
+                        "1.0.0",
+                        "namespace",
+                        1,
+                        "0" * 64,
+                        ("task:1",),
+                    )
+                )
+            )
+        ),
+        json.loads(
+            json.dumps(
+                asdict(
+                    TransportMessage(
+                        1,
+                        "message-id",
+                        "command",
+                        "sender",
+                        "2026-08-28T12:00:00.000Z",
+                        {"args": {"items": [1, 2]}},
+                        recipient_id="recipient",
+                        task_id="task-id",
+                    )
+                )
+            )
+        ),
+        json.loads(
+            json.dumps(
+                asdict(
+                    LifecycleTransition(
+                        "plugin",
+                        LifecycleState.STARTING,
+                        LifecycleState.READY,
+                        {"history": [{"attempt": 1}]},
+                    )
+                )
+            )
+        ),
+    ]
+
+    assert documents[0]["configuration"]["nested"]["items"] == ["one", "two"]
+    assert documents[1]["input_schema"]["required"] == ["query"]
+    assert documents[2]["provenance"] == ["task:1"]
+    assert documents[3]["type"] == "command"
+    assert "message_type" not in documents[3]
+    assert documents[3]["payload"]["args"]["items"] == [1, 2]
+    assert documents[4]["detail"]["history"] == [{"attempt": 1}]
 
 
 class DummyRuntime:
@@ -331,7 +485,7 @@ class DummySkillProvider:
     def list_skills(self) -> tuple[SkillDescriptor, ...]:
         return ()
 
-    def resolve(self, skill_id: str) -> SkillDescriptor | None:
+    def resolve_by_name(self, name: str) -> SkillDescriptor | None:
         return None
 
 
@@ -351,7 +505,15 @@ class DummyTransport:
     def receive(self, agent_id: str) -> AsyncIterator[TransportMessage]:
         async def messages() -> AsyncIterator[TransportMessage]:
             if False:
-                yield TransportMessage("sender", agent_id, "unused", {})
+                yield TransportMessage(
+                    1,
+                    "message-id",
+                    "command",
+                    "sender",
+                    "2026-08-28T12:00:00.000Z",
+                    {},
+                    recipient_id=agent_id,
+                )
 
         return messages()
 
@@ -393,11 +555,32 @@ def test_package_reexports_the_complete_public_api() -> None:
         assert getattr(edgecitadel_plugin_sdk, name) is globals()[name]
 
 
-def test_sdk_has_no_framework_or_infrastructure_dependencies() -> None:
+def test_sdk_imports_no_framework_or_infrastructure_dependencies() -> None:
     source_root = Path(edgecitadel_plugin_sdk.__file__).parent
-    source = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted(source_root.glob("*.py"))
-    ).lower()
-    prohibited = ("pathlib", "yaml", "nats", "fastapi", "pydantic", "starlette")
+    imported_roots: set[str] = set()
+    for path in sorted(source_root.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_roots.update(
+                    alias.name.partition(".")[0] for alias in node.names
+                )
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported_roots.add(node.module.partition(".")[0])
 
-    assert all(term not in source for term in prohibited)
+    prohibited = {"pathlib", "yaml", "nats", "fastapi", "pydantic", "starlette"}
+
+    assert imported_roots.isdisjoint(prohibited)
+
+
+def test_sdk_distribution_declares_pep561_marker() -> None:
+    project_root = Path(__file__).parents[1]
+    package_root = project_root / "src" / "edgecitadel_plugin_sdk"
+    pyproject = tomllib.loads(
+        (project_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+
+    assert (package_root / "py.typed").is_file()
+    assert pyproject["tool"]["setuptools"]["package-data"][
+        "edgecitadel_plugin_sdk"
+    ] == ["py.typed"]

@@ -21,6 +21,9 @@ edgecitadel-supervisor = "edgecitadel_supervisor.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+edgecitadel_plugin_sdk = ["py.typed"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

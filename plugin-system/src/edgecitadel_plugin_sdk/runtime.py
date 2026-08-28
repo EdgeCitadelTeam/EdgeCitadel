@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Protocol, runtime_checkable
+
+from ._values import _freeze_mapping
 
 
 @dataclass(frozen=True)
@@ -18,10 +19,8 @@ class RuntimeContext:
     metadata: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "configuration", MappingProxyType(dict(self.configuration))
-        )
-        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "configuration", _freeze_mapping(self.configuration))
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
 
 
 @runtime_checkable
