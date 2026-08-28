@@ -2,7 +2,27 @@
 
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path
+
+
+def contains_control_characters(value: str) -> bool:
+    """Return whether text contains any Unicode control character."""
+    return any(unicodedata.category(character) == "Cc" for character in value)
+
+
+def is_portable_relative_path(value: str) -> bool:
+    """Return whether a POSIX-relative path is portable package metadata."""
+    if (
+        not value
+        or contains_control_characters(value)
+        or value.startswith("/")
+        or "\\" in value
+    ):
+        return False
+    if len(value) >= 3 and value[0].isalpha() and value[1:3] == ":/":
+        return False
+    return all(component not in {"", ".", ".."} for component in value.split("/"))
 
 
 def format_path(path: str | Path) -> str:
@@ -19,7 +39,9 @@ def format_path(path: str | Path) -> str:
         codepoint = ord(character)
         if character in named_controls:
             escaped.append(named_controls[character])
-        elif codepoint < 0x20 or codepoint == 0x7F:
+        elif character == "\\":
+            escaped.append(r"\\")
+        elif unicodedata.category(character) == "Cc":
             escaped.append(f"\\x{codepoint:02x}")
         else:
             escaped.append(character)

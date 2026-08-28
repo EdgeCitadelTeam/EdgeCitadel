@@ -76,7 +76,8 @@ From an activated editable environment in `plugin-system/`:
 
 Regenerate the lock after any package byte changes. `validate` never repairs or
 rewrites the package and rejects a lock unless its bytes exactly match the
-two-space-indented, sorted-key JSON representation with one final newline.
+two-space-indented, sorted-key JSON representation with one final newline and,
+after semantic checks, the current generated lock record.
 
 ## Trust and non-goals
 
@@ -88,6 +89,10 @@ are rejected. Static checks also use strict schemas, local-fragment-only schema
 references, control-free contained relative paths, canonical hashes, and
 rejection of symbolic links and special filesystem nodes. A manifest only
 requests capabilities; it does not grant them.
+
+Portable package paths reject absolute and drive paths, backslashes, empty or dot
+components, traversal, and all Unicode `Cc` control characters. Ordinary Unicode
+filenames are allowed.
 
 This scaffold does not launch runtimes, implement transport or identity,
 provision secrets, enforce a sandbox, grant permissions, persist learned memory,

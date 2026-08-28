@@ -246,7 +246,9 @@ def test_extension_maps_accept_reverse_domain_and_ipv6_absolute_uri_keys(
     validator(schema_name).validate(document)
 
 
-@pytest.mark.parametrize("control", ["\x00", "\n", "\x1b", "\x7f"])
+@pytest.mark.parametrize(
+    "control", ["\x00", "\n", "\x1b", "\x7f", "\x80", "\x9b", "\x9f"]
+)
 @pytest.mark.parametrize(
     ("schema_name", "document_factory", "path_location"),
     [
@@ -284,3 +286,35 @@ def test_relative_paths_reject_control_characters(
 
     with pytest.raises(ValidationError):
         validator(schema_name).validate(document)
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "document"),
+    [
+        (
+            "agent-plugin.v1alpha1.schema.json",
+            {**plugin_document(), "skills": {"directory": "技能"}},
+        ),
+        (
+            "agent-skill-binding.v1alpha1.schema.json",
+            {
+                **binding_document(),
+                "schemas": {
+                    "input": "schemas/输入.json",
+                    "output": "schemas/输出.json",
+                },
+            },
+        ),
+        (
+            "plugin-lock.v1.schema.json",
+            {
+                **lock_document(),
+                "files": [{"path": "资料/café.json", "sha256": "0" * 64}],
+            },
+        ),
+    ],
+)
+def test_relative_paths_accept_normal_unicode_names(
+    schema_name: str, document: dict[str, object]
+) -> None:
+    validator(schema_name).validate(document)

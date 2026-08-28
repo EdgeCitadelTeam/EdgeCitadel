@@ -127,13 +127,42 @@ def test_package_files_reject_control_character_names_with_escaped_diagnostics(
 ) -> None:
     (valid_package / filename).write_text("data", encoding="utf-8")
 
-    with pytest.raises(UnsafePackagePathError, match="control characters") as error:
+    with pytest.raises(UnsafePackagePathError, match="portable") as error:
         package_files(valid_package)
 
     message = str(error.value)
     assert "\n" not in message
     assert "\x1b" not in message
     assert "bad\\nname" in message or "bad\\x1bname" in message
+
+
+@pytest.mark.parametrize(
+    ("filename", "escaped"),
+    [("bad\\name", r"bad\\name"), ("bad\u009bname", r"bad\x9bname")],
+)
+def test_package_files_reject_nonportable_names_with_escaped_diagnostics(
+    valid_package: Path, filename: str, escaped: str
+) -> None:
+    (valid_package / filename).write_text("data", encoding="utf-8")
+
+    with pytest.raises(UnsafePackagePathError, match="portable") as error:
+        package_files(valid_package)
+
+    message = str(error.value)
+    assert escaped in message
+    assert "\u009b" not in message
+    assert message.count("\n") == 0
+
+
+def test_package_files_allow_normal_unicode_names(valid_package: Path) -> None:
+    unicode_file = valid_package / "café-文件.txt"
+    unicode_file.write_text("data", encoding="utf-8")
+
+    assert unicode_file in package_files(valid_package)
+    lock = build_lock(_package(valid_package))
+    files = lock["files"]
+    assert isinstance(files, list)
+    assert "café-文件.txt" in {entry["path"] for entry in files}
 
 
 def test_build_lock_is_deterministic_canonical_and_uses_typed_identity(
@@ -438,6 +467,20 @@ def test_noncanonical_lock_error_precedes_semantic_drift(valid_package: Path) ->
         verify_lock(package)
 
     assert "Modified files" not in str(error.value)
+
+
+def test_verify_lock_rejects_numeric_equivalent_non_generated_lock_version(
+    valid_package: Path,
+) -> None:
+    package = _package(valid_package)
+    lock = build_lock(package)
+    lock["lockVersion"] = 1.0
+    _write_lock_document(valid_package, lock)
+
+    with pytest.raises(
+        LockIntegrityError, match="differs from generated canonical record"
+    ):
+        verify_lock(package)
 
 
 @pytest.mark.parametrize(

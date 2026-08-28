@@ -69,6 +69,29 @@ def test_lock_overwrites_invalid_existing_lock(valid_package: Path) -> None:
     assert lock["package"]["id"] == "local.example"
 
 
+@pytest.mark.parametrize(
+    ("filename", "escaped"),
+    [("bad\\name", r"bad\\name"), ("bad\u009bname", r"bad\x9bname")],
+)
+def test_lock_rejects_nonportable_package_file_without_writing_lock(
+    valid_package: Path,
+    capsys: pytest.CaptureFixture[str],
+    filename: str,
+    escaped: str,
+) -> None:
+    (valid_package / filename).write_text("data", encoding="utf-8")
+
+    assert main(["lock", str(valid_package)]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("\n") == 1
+    assert "portable" in captured.err
+    assert escaped in captured.err
+    assert "\u009b" not in captured.err
+    assert not (valid_package / "plugin.lock.json").exists()
+
+
 def test_validate_does_not_modify_lock(
     valid_package: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -15,6 +15,7 @@ from .errors import (
     ManifestLoadError,
     PluginNotFoundError,
     UnsafePackagePathError,
+    contains_control_characters,
     format_path,
 )
 
@@ -217,7 +218,7 @@ def resolve_package_path(
 ) -> Path:
     """Resolve a relative path while requiring it to remain inside a package."""
     relative_path = Path(relative)
-    if _contains_control_characters(relative):
+    if contains_control_characters(relative):
         raise UnsafePackagePathError(
             f"Package path contains control characters: {format_path(relative)}"
         )
@@ -350,7 +351,3 @@ def _require_json_compatible_value(
             (nested_value, depth + 1)
             for nested_value in reversed(tuple(mapping.values()))
         )
-
-
-def _contains_control_characters(value: str) -> bool:
-    return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)

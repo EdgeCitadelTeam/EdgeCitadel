@@ -188,8 +188,9 @@ The schema requires a normalized package name, separate publisher, semantic
 version, display metadata, supervisor compatibility range, supported process
 protocols, non-empty runtime command, relative skills directory, at least one
 agent identity, complete permission categories, and known sandbox/restart
-policies. Paths may not be absolute, contain backslashes, C0 controls or DEL, or
-escape the plugin root.
+policies. Paths may not be absolute, contain backslashes, empty or dot
+components, traversal, or Unicode `Cc` control characters, or escape the plugin
+root. Ordinary Unicode names remain portable.
 
 The stable package identity is `<publisher>.<name>`; it is distinct from every
 entry in `agents[]`. The first package contains one agent, but the schema does not
@@ -319,8 +320,10 @@ The lockfile does not list or hash itself and contains no generation timestamp o
 other volatile value. The `lock` command structurally validates the package and
 writes canonical JSON with two-space indentation, recursively sorted object keys,
 lexicographically sorted paths, and one final newline. The `validate` command
-requires those exact bytes before semantic drift checks and never modifies the
-package.
+requires that exact serialization before semantic drift checks. After semantic
+integrity succeeds, it requires the raw bytes to equal the current generator
+output, catching JSON values such as numeric `1.0` that compare equal to the
+generated integer `1`. It never modifies the package.
 
 ## SDK extension boundaries
 
@@ -390,8 +393,8 @@ It performs these steps:
 11. Verify every referenced schema stays inside its skill directory and uses
     only local-fragment references.
 12. Verify `agents[].skillNames` refers only to packaged skills.
-13. Require exact canonical `plugin.lock.json` bytes, then recompute and verify
-    file hashes.
+13. Require exact canonical `plugin.lock.json` bytes, recompute and verify file
+    hashes, then require byte equality with the generated canonical record.
 14. Emit a deterministic JSON inventory containing package identity,
     compatibility, runtime metadata, agent-to-skill mappings, requested
     permissions, skill metadata, and content hashes.
@@ -435,8 +438,8 @@ This scaffold enforces only static package safety:
 - 1 MiB JSON/YAML, 2 MiB `SKILL.md`, and 64 KiB frontmatter byte limits;
 - depth 64 and 100,000-traversed-value limits, with shared YAML container aliases
   rejected by identity;
-- no absolute, parent-traversing, backslash-containing, control-containing, or
-  symlinked package references;
+- no absolute, parent-traversing, backslash-containing, Unicode-control-containing,
+  or symlinked package references;
 - no external referenced-schema retrieval;
 - no handler imports during validation;
 - no subprocess execution;

@@ -16,6 +16,7 @@ from .errors import (
     ManifestValidationError,
     UnsafePackagePathError,
     format_path,
+    is_portable_relative_path,
 )
 from .loader import load_json_with_source, load_yaml
 from .validator import PackageRecord, SkillRecord, validate_schema
@@ -41,10 +42,9 @@ def package_files(root: Path) -> tuple[Path, ...]:
         files: list[Path] = []
         for path in root.rglob("*"):
             relative_path = path.relative_to(root).as_posix()
-            if _contains_control_characters(relative_path):
+            if not is_portable_relative_path(relative_path):
                 raise UnsafePackagePathError(
-                    "Package path contains control characters: "
-                    f"{format_path(relative_path)}"
+                    f"Package path is not portable: {format_path(relative_path)}"
                 )
             mode = path.stat(follow_symlinks=False).st_mode
             if stat.S_ISLNK(mode):
@@ -143,6 +143,12 @@ def verify_lock(package: PackageRecord) -> None:
     if issues:
         raise LockIntegrityError("; ".join(issues))
 
+    generated_source = json.dumps(build_lock(package), indent=2, sort_keys=True) + "\n"
+    if lock_source != generated_source:
+        raise LockIntegrityError(
+            f"Plugin lock differs from generated canonical record: {LOCK_FILENAME}"
+        )
+
 
 def build_inventory(package: PackageRecord) -> dict[str, object]:
     """Build deterministic JSON-compatible supervisor inventory data."""
@@ -239,7 +245,7 @@ def _duplicate_file_paths(lock: dict[str, object]) -> tuple[str, ...]:
         for entry in files
         if isinstance(entry, dict)
         and isinstance((path := entry.get("path")), str)
-        and _is_safe_relative_path(path)
+        and is_portable_relative_path(path)
     ]
     return _duplicates(paths)
 
@@ -374,20 +380,6 @@ def _skill_integrity_issues(
     return issues
 
 
-def _is_safe_relative_path(value: str) -> bool:
-    if (
-        not value
-        or _contains_control_characters(value)
-        or value.startswith("/")
-        or "\\" in value
-    ):
-        return False
-    if len(value) >= 3 and value[0].isalpha() and value[1:3] == ":/":
-        return False
-    components = value.split("/")
-    return all(component not in {"", ".", ".."} for component in components)
-
-
 def _is_portable_skill_name(value: str) -> bool:
     return 1 <= len(value) <= 64 and _PORTABLE_SKILL_NAME.fullmatch(value) is not None
 
@@ -404,7 +396,3 @@ def _package_relative(root: Path, path: Path) -> str:
 def _redacted_path(path: Path) -> str:
     value = path.as_posix() if not path.is_absolute() else path.name
     return format_path(value)
-
-
-def _contains_control_characters(value: str) -> bool:
-    return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)

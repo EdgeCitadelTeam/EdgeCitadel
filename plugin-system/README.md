@@ -39,7 +39,8 @@ python -m edgecitadel_supervisor validate ../plugins/examples/placeholder
 Finalize every package file before running `lock`; any subsequent package byte
 change requires regenerating the lock. `validate` requires the lock's exact
 canonical bytes: two-space indentation, recursively sorted object keys, and one
-final newline.
+final newline. After semantic integrity checks, it also requires those bytes to
+equal the current lock generator output exactly.
 
 ## Maintained contributor gate
 
@@ -64,9 +65,10 @@ anchors or aliases that reuse a container are rejected. Validation applies
 strict schemas, accepts only local-fragment (`#...`) `$ref` and `$dynamicRef`
 values in skill input/output schemas, checks compatibility and agent-to-skill
 mappings, and resolves declared paths within the package. Portable paths exclude
-absolute paths, traversal, backslashes, C0 controls, and DEL. Validation also
-rejects symbolic links and special filesystem nodes and uses canonical SHA-256
-hashes and ordering.
+absolute paths, empty or dot components, traversal, backslashes, and every
+Unicode `Cc` control character; ordinary Unicode names remain allowed.
+Validation also rejects symbolic links and special filesystem nodes and uses
+canonical SHA-256 hashes and ordering.
 
 Recognized optional Agent Skills frontmatter fields are `license` (string),
 `compatibility` (string, at most 500 characters), `metadata` (string-to-string
