@@ -1,6 +1,6 @@
-// Phase 6 E2E — Hermes bridge adapter.
+// Phase 6 E2E — Hermes bridge Plugin.
 // Requires: hermes serve running on :8642 (or a mock fixture), and
-// the bridge adapter running with HERMES_TOKEN configured.
+// the bridge Plugin running with HERMES_TOKEN configured.
 // Skipped automatically if us-mac-hermes is not registered within 10s.
 
 import { test, expect } from '@playwright/test';
@@ -21,7 +21,7 @@ test.describe('Phase 6 — Hermes bridge', () => {
 
   test('us-mac-hermes registers with bridge runtime kind', async ({ request }) => {
     const card = await waitForAgent(request, HERMES_AGENT_ID);
-    test.skip(!card, 'us-mac-hermes not online — install hermes locally and start the bridge adapter to run this spec');
+    test.skip(!card, 'us-mac-hermes not online — install Hermes locally and start its Plugin to run this spec');
     expect(card.metadata['runtime.kind']).toBe('bridge');
     expect(card.metadata['runtime.upstream']).toBe('hermes-agent');
     expect(card.metadata['runtime.tags']).toContain('external-memory');

@@ -109,7 +109,7 @@ def validate_package(
 
 def _select_compatible_protocol(compatibility: dict[str, object]) -> str:
     supervisor_api = cast(str, compatibility["supervisorApi"])
-    if not supervisor_api.strip():
+    if not supervisor_api.strip() or supervisor_api.lstrip().startswith("==="):
         raise ManifestValidationError(
             "Plugin manifest has an invalid supervisor API compatibility specifier"
         )

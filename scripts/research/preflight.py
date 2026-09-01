@@ -163,9 +163,8 @@ async def run_preflight(request: PreflightRequest) -> PreflightReport:
         and request.resolved_config.get("lab_variant")
         in {"lifecycle", "operator-smoke", "operator-evidence"}
     )
-    agents_valid = (
-        (lab_controller and all(request.expected_agents))
-        or (bool(request.expected_agents) and all(request.expected_agents))
+    agents_valid = (lab_controller and all(request.expected_agents)) or (
+        bool(request.expected_agents) and all(request.expected_agents)
     )
     config_mode_valid = (
         request.resolved_config.get("mode") == request.mode or lab_controller
@@ -199,7 +198,13 @@ async def run_preflight(request: PreflightRequest) -> PreflightReport:
         authenticated = credential_valid
         ready_agents = list(request.expected_agents)
         ready_agents_valid = True
-        endpoint_names = ("app_url", "agg_url", "nats_url", "monitor_url", "inventory_url")
+        endpoint_names = (
+            "app_url",
+            "agg_url",
+            "nats_url",
+            "monitor_url",
+            "inventory_url",
+        )
         topology_mode_valid = all(
             isinstance(request.resolved_config.get(name), str)
             and bool(request.resolved_config.get(name))

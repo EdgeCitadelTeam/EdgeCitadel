@@ -113,6 +113,38 @@ def test_plugin_schema_accepts_separate_package_and_agent_identity() -> None:
     validator("agent-plugin.v1alpha1.schema.json").validate(plugin_document())
 
 
+def test_plugin_schema_accepts_portable_python_requirements_path() -> None:
+    document = plugin_document()
+    document["runtime"]["pythonRequirements"] = "requirements.txt"
+
+    validator("agent-plugin.v1alpha1.schema.json").validate(document)
+
+
+def test_plugin_schema_accepts_explicit_environment_variables() -> None:
+    document = plugin_document()
+    document["runtime"]["environmentVariables"] = ["MODEL_NAME", "LOG_LEVEL"]
+
+    validator("agent-plugin.v1alpha1.schema.json").validate(document)
+
+
+@pytest.mark.parametrize("name", ["lowercase", "BAD-NAME", "1INVALID"])
+def test_plugin_schema_rejects_invalid_environment_variable(name: str) -> None:
+    document = plugin_document()
+    document["runtime"]["environmentVariables"] = [name]
+
+    with pytest.raises(ValidationError):
+        validator("agent-plugin.v1alpha1.schema.json").validate(document)
+
+
+@pytest.mark.parametrize("path", ["/requirements.txt", "../requirements.txt"])
+def test_plugin_schema_rejects_unsafe_python_requirements_path(path: str) -> None:
+    document = plugin_document()
+    document["runtime"]["pythonRequirements"] = path
+
+    with pytest.raises(ValidationError):
+        validator("agent-plugin.v1alpha1.schema.json").validate(document)
+
+
 @pytest.mark.parametrize("agent_id", ["agent_1", "a" * 64])
 def test_plugin_schema_accepts_canonical_agent_ids(agent_id: str) -> None:
     validator("agent-plugin.v1alpha1.schema.json").validate(

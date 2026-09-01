@@ -124,7 +124,9 @@ async def test_assert_stack_ready_wraps_connection_errors(monkeypatch):
             request = httpx.Request("GET", url)
             raise httpx.ConnectError("boom", request=request)
 
-    monkeypatch.setattr("scripts.research.benchmark_core.httpx.AsyncClient", BrokenClient)
+    monkeypatch.setattr(
+        "scripts.research.benchmark_core.httpx.AsyncClient", BrokenClient
+    )
 
     with pytest.raises(RuntimeError, match="stack preflight failed"):
         await assert_stack_ready("http://localhost/api")

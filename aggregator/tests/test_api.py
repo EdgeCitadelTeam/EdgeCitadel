@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from nats.js.errors import ServiceUnavailableError
 
 from aggregator import validator as validator_module
 from aggregator.main import make_app
@@ -59,17 +60,26 @@ def test_post_command_returns_task_id(client, monkeypatch):
 def test_post_command_rejects_stale_registered_agent(client):
     from aggregator import database as db
 
-    db.upsert_agent_card({
-        "name": "eu-amd-hermes", "description": "x", "version": "0",
-        "url": "u", "provider": {"organization": "x"},
-        "capabilities": {}, "securitySchemes": {},
-        "metadata": {"runtime.kind": "native", "runtime.roles": ["worker"],
-                     "runtime.heartbeat_interval_sec": 30}},
-        timestamp="2026-04-23T10:00:00.000Z")
+    db.upsert_agent_card(
+        {
+            "name": "eu-amd-hermes",
+            "description": "x",
+            "version": "0",
+            "url": "u",
+            "provider": {"organization": "x"},
+            "capabilities": {},
+            "securitySchemes": {},
+            "metadata": {
+                "runtime.kind": "native",
+                "runtime.roles": ["worker"],
+                "runtime.heartbeat_interval_sec": 30,
+            },
+        },
+        timestamp="2026-04-23T10:00:00.000Z",
+    )
     db.update_heartbeat("eu-amd-hermes", "2000-01-01T00:00:00.000Z")
 
-    r = client.post("/api/command/eu-amd-hermes",
-                    json={"body": "weather in London"})
+    r = client.post("/api/command/eu-amd-hermes", json={"body": "weather in London"})
 
     assert r.status_code == 409
     assert "offline" in r.text
@@ -147,6 +157,34 @@ def test_post_command_correlation_preserves_actual_producer_shape(
     correlated = validator_module.normalize_task_correlation(env)
     assert correlated["context_id"] == env["task_id"]
     assert correlated["hop_count"] == 0
+
+
+def test_post_command_reports_unreachable_durable_destination_as_not_accepted(
+    client: TestClient,
+) -> None:
+    app = cast(FastAPI, client.app)
+    route = next(
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/api/command/{agent_id}"
+    )
+    state = cast(
+        dict[str, Any], inspect.getclosurevars(route.endpoint).nonlocals["state"]
+    )
+    state["app"] = SimpleNamespace(
+        router=SimpleNamespace(
+            js=SimpleNamespace(
+                publish=AsyncMock(side_effect=ServiceUnavailableError())
+            ),
+            nc=SimpleNamespace(publish=AsyncMock(), drain=AsyncMock()),
+            cache={},
+        )
+    )
+
+    response = client.post("/api/command/remote-edge-agent", json={"body": "test"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"].endswith("command was not accepted")
 
 
 def test_delete_agent_removes_card(client):

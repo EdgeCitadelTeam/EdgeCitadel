@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+# Runtime tests import built-in Plugins directly from their lock-validated source
+# trees. Do not let the interpreter contaminate those packages with untracked
+# bytecode and make validation depend on test order.
+sys.dont_write_bytecode = True
 
 
 @pytest.fixture

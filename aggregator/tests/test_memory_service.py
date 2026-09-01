@@ -1,4 +1,5 @@
 """Tests for MemoryService NATS handlers (mocks NATS client)."""
+
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
@@ -26,21 +27,36 @@ def _msg(payload: dict) -> MagicMock:
 
 
 def test_estimate_tokens_byte_4_heuristic():
-    assert estimate_tokens("") == 1            # floor
-    assert estimate_tokens("hello world") == 11 // 4   # 2
+    assert estimate_tokens("") == 1  # floor
+    assert estimate_tokens("hello world") == 11 // 4  # 2
     assert estimate_tokens("a" * 100) == 25
 
 
 @pytest.mark.asyncio
 async def test_put_then_get_roundtrip():
     svc = MemoryService(nc=AsyncMock())
-    await svc.on_put(_msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                           "role": "user", "content": "hello"}))
-    await svc.on_put(_msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                           "role": "assistant", "content": "hi back"}))
+    await svc.on_put(
+        _msg(
+            {
+                "context_id": "ctx-1",
+                "agent_id": "gemma-1",
+                "role": "user",
+                "content": "hello",
+            }
+        )
+    )
+    await svc.on_put(
+        _msg(
+            {
+                "context_id": "ctx-1",
+                "agent_id": "gemma-1",
+                "role": "assistant",
+                "content": "hi back",
+            }
+        )
+    )
 
-    get_msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                    "token_budget": 1000})
+    get_msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1", "token_budget": 1000})
     await svc.on_get(get_msg)
     reply = json.loads(get_msg.respond.call_args.args[0])
     assert len(reply["turns"]) == 2
@@ -55,10 +71,17 @@ async def test_get_respects_token_budget():
     # Insert 10 turns of ~100 tokens each (content ~400 bytes)
     big = "x" * 400
     for i in range(10):
-        await svc.on_put(_msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                               "role": "user", "content": big}))
-    get_msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                    "token_budget": 250})
+        await svc.on_put(
+            _msg(
+                {
+                    "context_id": "ctx-1",
+                    "agent_id": "gemma-1",
+                    "role": "user",
+                    "content": big,
+                }
+            )
+        )
+    get_msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1", "token_budget": 250})
     await svc.on_get(get_msg)
     reply = json.loads(get_msg.respond.call_args.args[0])
     assert len(reply["turns"]) == 2  # 100 + 100 fits; third would exceed
@@ -68,12 +91,27 @@ async def test_get_respects_token_budget():
 @pytest.mark.asyncio
 async def test_get_filters_by_agent_id():
     svc = MemoryService(nc=AsyncMock())
-    await svc.on_put(_msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                           "role": "user", "content": "from gemma"}))
-    await svc.on_put(_msg({"context_id": "ctx-1", "agent_id": "ag2-1",
-                           "role": "user", "content": "from ag2"}))
-    get_msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                    "token_budget": 1000})
+    await svc.on_put(
+        _msg(
+            {
+                "context_id": "ctx-1",
+                "agent_id": "gemma-1",
+                "role": "user",
+                "content": "from gemma",
+            }
+        )
+    )
+    await svc.on_put(
+        _msg(
+            {
+                "context_id": "ctx-1",
+                "agent_id": "ag2-1",
+                "role": "user",
+                "content": "from ag2",
+            }
+        )
+    )
+    get_msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1", "token_budget": 1000})
     await svc.on_get(get_msg)
     reply = json.loads(get_msg.respond.call_args.args[0])
     assert len(reply["turns"]) == 1
@@ -83,8 +121,9 @@ async def test_get_filters_by_agent_id():
 @pytest.mark.asyncio
 async def test_put_invalid_role_rejected():
     svc = MemoryService(nc=AsyncMock())
-    msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                "role": "robot", "content": "x"})
+    msg = _msg(
+        {"context_id": "ctx-1", "agent_id": "gemma-1", "role": "robot", "content": "x"}
+    )
     await svc.on_put(msg)
     reply = json.loads(msg.respond.call_args.args[0])
     assert reply == {"error": "invalid_role"}
@@ -112,8 +151,16 @@ async def test_get_missing_fields_rejected():
 async def test_delete_purges_only_target():
     svc = MemoryService(nc=AsyncMock())
     for ctx in ("a", "b"):
-        await svc.on_put(_msg({"context_id": ctx, "agent_id": "gemma-1",
-                               "role": "user", "content": "x"}))
+        await svc.on_put(
+            _msg(
+                {
+                    "context_id": ctx,
+                    "agent_id": "gemma-1",
+                    "role": "user",
+                    "content": "x",
+                }
+            )
+        )
     msg = _msg({"context_id": "a"})
     await svc.on_delete(msg)
     reply = json.loads(msg.respond.call_args.args[0])
@@ -123,9 +170,17 @@ async def test_delete_purges_only_target():
 @pytest.mark.asyncio
 async def test_skill_id_persisted_in_put():
     svc = MemoryService(nc=AsyncMock())
-    await svc.on_put(_msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                           "role": "user", "content": "x",
-                           "skill_id": "text.summarize"}))
+    await svc.on_put(
+        _msg(
+            {
+                "context_id": "ctx-1",
+                "agent_id": "gemma-1",
+                "role": "user",
+                "content": "x",
+                "skill_id": "text.summarize",
+            }
+        )
+    )
     rows = db.fetch_recent_turns(agent_id="gemma-1", context_id="ctx-1")
     assert rows[0]["skill_id"] == "text.summarize"
 
@@ -133,23 +188,39 @@ async def test_skill_id_persisted_in_put():
 @pytest.mark.asyncio
 async def test_concurrent_writes_serialized():
     svc = MemoryService(nc=AsyncMock())
-    msgs = [_msg({"context_id": "c", "agent_id": "gemma-1",
-                  "role": "user", "content": f"turn-{i}"}) for i in range(10)]
+    msgs = [
+        _msg(
+            {
+                "context_id": "c",
+                "agent_id": "gemma-1",
+                "role": "user",
+                "content": f"turn-{i}",
+            }
+        )
+        for i in range(10)
+    ]
     await asyncio.gather(*(svc.on_put(m) for m in msgs))
     rows = db.fetch_recent_turns(agent_id="gemma-1", context_id="c", limit=20)
     assert len(rows) == 10
     ids = sorted(r["id"] for r in rows)
-    assert ids == list(range(ids[0], ids[0] + 10))   # contiguous monotonic
+    assert ids == list(range(ids[0], ids[0] + 10))  # contiguous monotonic
 
 
 @pytest.mark.asyncio
 async def test_get_token_budget_null_uses_default():
     """JSON null on token_budget falls back to DEFAULT_TOKEN_BUDGET, no crash."""
     svc = MemoryService(nc=AsyncMock())
-    await svc.on_put(_msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                           "role": "user", "content": "hi"}))
-    msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                "token_budget": None})
+    await svc.on_put(
+        _msg(
+            {
+                "context_id": "ctx-1",
+                "agent_id": "gemma-1",
+                "role": "user",
+                "content": "hi",
+            }
+        )
+    )
+    msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1", "token_budget": None})
     await svc.on_get(msg)
     reply = json.loads(msg.respond.call_args.args[0])
     assert "turns" in reply  # responded with data, did not crash
@@ -159,8 +230,7 @@ async def test_get_token_budget_null_uses_default():
 async def test_get_token_budget_non_numeric_rejected():
     """Non-numeric token_budget yields invalid_token_budget error envelope."""
     svc = MemoryService(nc=AsyncMock())
-    msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1",
-                "token_budget": "many"})
+    msg = _msg({"context_id": "ctx-1", "agent_id": "gemma-1", "token_budget": "many"})
     await svc.on_get(msg)
     reply = json.loads(msg.respond.call_args.args[0])
     assert reply == {"error": "invalid_token_budget"}

@@ -38,7 +38,7 @@ categories:
         cmd: bash -c '[[ "$(stat -c %a /etc/edgecitadel/env)" == "640" ]]'
         remediation: "sudo chmod 0640 /etc/edgecitadel/env"
       - name: opt-edgecitadel-exists
-        cmd: bash -c '[[ -d /opt/edgecitadel && -d /opt/edgecitadel/adapters ]]'
+        cmd: bash -c '[[ -d /opt/edgecitadel && -d /opt/edgecitadel/plugins ]]'
         remediation: "sudo deploy-host.sh --update --source-dir /root/snap/EdgeCitadel"
       - name: var-lib-edgecitadel-owned
         cmd: bash -c '[[ "$(stat -c %U /var/lib/edgecitadel)" == "edgecitadel" ]]'
@@ -56,13 +56,13 @@ categories:
         cmd: bash -c 'model=$(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.models --format lines | head -1); ollama list | awk "{print \$1}" | grep -qx "$model"'
         remediation: "sudo -u edgecitadel ollama pull $(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.models --format lines | head -1)"
 
-  - name: Adapter venvs
+  - name: Plugin runtimes
     checks:
       - name: gemma-venv-current
-        cmd: bash -c '[[ "$(sha256sum /opt/edgecitadel/adapters/gemma/requirements.txt | cut -d" " -f1)" == "$(cat /var/lib/edgecitadel/venvs/gemma/.requirements.sha 2>/dev/null)" ]]'
+        cmd: bash -c '[[ "$(sha256sum /opt/edgecitadel/plugins/gemma/edgecitadel_gemma_plugin/requirements.txt /opt/edgecitadel/plugins/gemma/plugin.lock.json | sha256sum | cut -d" " -f1)" == "$(cat /var/lib/edgecitadel/venvs/gemma/.requirements.sha 2>/dev/null)" ]]'
         remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
       - name: watchdog-venv-current
-        cmd: bash -c '[[ "$(sha256sum /opt/edgecitadel/adapters/watchdog/requirements.txt | cut -d" " -f1)" == "$(cat /var/lib/edgecitadel/venvs/watchdog/.requirements.sha 2>/dev/null)" ]]'
+        cmd: bash -c '[[ "$(sha256sum /opt/edgecitadel/plugins/watchdog/edgecitadel_watchdog_plugin/requirements.txt /opt/edgecitadel/plugins/watchdog/plugin.lock.json | sha256sum | cut -d" " -f1)" == "$(cat /var/lib/edgecitadel/venvs/watchdog/.requirements.sha 2>/dev/null)" ]]'
         remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
       - name: shell-venv-installed
         cmd: bash -c '[[ -x /var/lib/edgecitadel/venvs/shell/bin/python ]]'
@@ -81,7 +81,7 @@ categories:
         remediation: "sudo systemctl start edgecitadel-watchdog"
       - name: shell-unit-installed-not-enabled
         cmd: bash -c 'systemctl cat edgecitadel-shell >/dev/null 2>&1 && ! systemctl is-enabled --quiet edgecitadel-shell'
-        remediation: "shell adapter is opt-in; if intentionally enabled, ignore this check"
+        remediation: "Shell Plugin is opt-in; if intentionally enabled, ignore this check"
 
   - name: Hardening
     checks:

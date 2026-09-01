@@ -48,7 +48,14 @@ async def _register(nc: NATS, agent_id: str) -> None:
     await nc.flush()
 
 
-async def _publish_result(nc: NATS, js: Any, agent_id: str, inbound: dict[str, Any], payload: dict[str, Any], state: str = "completed") -> None:
+async def _publish_result(
+    nc: NATS,
+    js: Any,
+    agent_id: str,
+    inbound: dict[str, Any],
+    payload: dict[str, Any],
+    state: str = "completed",
+) -> None:
     out = result_envelope(
         sender_id=agent_id,
         recipient_id=inbound["sender_id"],
@@ -94,7 +101,9 @@ class ResultWaiter:
             future.set_result(env)
 
     async def wait(self, task_id: str, timeout: float = 30) -> dict[str, Any]:
-        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
         self._pending[task_id] = future
         try:
             return await asyncio.wait_for(future, timeout=timeout)
@@ -102,7 +111,9 @@ class ResultWaiter:
             self._pending.pop(task_id, None)
 
 
-async def _handle_e2(agent_id: str, env: dict[str, Any], nc: NATS, js: Any, waiter: ResultWaiter) -> None:
+async def _handle_e2(
+    agent_id: str, env: dict[str, Any], nc: NATS, js: Any, waiter: ResultWaiter
+) -> None:
     if agent_id == "bench-worker":
         await _publish_result(nc, js, agent_id, env, {"body": "worker complete"})
         return
@@ -124,7 +135,11 @@ async def _handle_e2(agent_id: str, env: dict[str, Any], nc: NATS, js: Any, wait
         js,
         agent_id,
         {**env, "context_id": context_id},
-        {"body": "delegator complete", "child_task_id": child["task_id"], "child_state": child_result.get("task_state")},
+        {
+            "body": "delegator complete",
+            "child_task_id": child["task_id"],
+            "child_state": child_result.get("task_state"),
+        },
     )
 
 
@@ -134,9 +149,13 @@ NEXT_HOP = {
 }
 
 
-async def _handle_e3(agent_id: str, env: dict[str, Any], nc: NATS, js: Any, waiter: ResultWaiter) -> None:
+async def _handle_e3(
+    agent_id: str, env: dict[str, Any], nc: NATS, js: Any, waiter: ResultWaiter
+) -> None:
     if env.get("hop_count", 0) >= 8:
-        await _publish_result(nc, js, agent_id, env, {"error": "hop_count_exceeded"}, state="rejected")
+        await _publish_result(
+            nc, js, agent_id, env, {"error": "hop_count_exceeded"}, state="rejected"
+        )
         return
     if agent_id == "bench-hop-3":
         await _publish_result(nc, js, agent_id, env, {"body": "hop-3 complete"})
@@ -144,7 +163,9 @@ async def _handle_e3(agent_id: str, env: dict[str, Any], nc: NATS, js: Any, wait
 
     next_agent = NEXT_HOP.get(agent_id)
     if not next_agent:
-        await _publish_result(nc, js, agent_id, env, {"error": "unknown_hop"}, state="failed")
+        await _publish_result(
+            nc, js, agent_id, env, {"error": "unknown_hop"}, state="failed"
+        )
         return
 
     context_id = env.get("context_id") or str(uuid.uuid4())
@@ -168,7 +189,9 @@ async def _handle_e3(agent_id: str, env: dict[str, Any], nc: NATS, js: Any, wait
     )
 
 
-async def _subscribe_agent(nc: NATS, js: Any, agent_id: str, scenario: str, waiter: ResultWaiter) -> None:
+async def _subscribe_agent(
+    nc: NATS, js: Any, agent_id: str, scenario: str, waiter: ResultWaiter
+) -> None:
     async def cb(msg: Any) -> None:
         try:
             env = json.loads(msg.data)
@@ -188,11 +211,15 @@ async def run(scenario: str) -> None:
     nc = await _connect()
     try:
         js = nc.jetstream()
-        await ensure_stream(js)
         waiter = ResultWaiter()
         await nc.subscribe("agents.*.outbox", cb=waiter.watch)
-        agents = ["bench-delegator", "bench-worker"] if scenario == "e2" else ["bench-hop-1", "bench-hop-2", "bench-hop-3", "bench-hop-limit"]
+        agents = (
+            ["bench-delegator", "bench-worker"]
+            if scenario == "e2"
+            else ["bench-hop-1", "bench-hop-2", "bench-hop-3", "bench-hop-limit"]
+        )
         for agent_id in agents:
+            await ensure_stream(js, agent_id)
             await _register(nc, agent_id)
             await _subscribe_agent(nc, js, agent_id, scenario, waiter)
         while RUNNING:

@@ -36,15 +36,26 @@ from scripts.research.preflight import PreflightReport
 
 def _config(tmp_path: Path) -> ControllerConfig:
     return ControllerConfig(
-        run_id="ec-lab-01", lab_variant="lifecycle", controller_host_id="controller-lab-01",
-        compose_project="edgecitadel-artifact-ec-lab-01", bind_host="127.0.0.1",
-        advertised_host="127.0.0.1", advertised_ip="127.0.0.1", app_url="http://127.0.0.1:18080",
-        agg_url="http://127.0.0.1:18080", nats_url="nats://127.0.0.1:14222",
-        monitor_url="http://127.0.0.1:18222", inventory_url="http://127.0.0.1:18080/api/lab/status",
-        controller_machine_id_sha256="a" * 64, source_commit="d" * 40, source_snapshot_sha256="e" * 64,
+        run_id="ec-lab-01",
+        lab_variant="lifecycle",
+        controller_host_id="controller-lab-01",
+        compose_project="edgecitadel-artifact-ec-lab-01",
+        bind_host="127.0.0.1",
+        advertised_host="127.0.0.1",
+        advertised_ip="127.0.0.1",
+        app_url="http://127.0.0.1:18080",
+        agg_url="http://127.0.0.1:18080",
+        nats_url="nats://127.0.0.1:14222",
+        monitor_url="http://127.0.0.1:18222",
+        inventory_url="http://127.0.0.1:18080/api/lab/status",
+        controller_machine_id_sha256="a" * 64,
+        source_commit="d" * 40,
+        source_snapshot_sha256="e" * 64,
         credential_sha256="b" * 64,
-        credential_file=tmp_path / "scratch/transport-token", fixture_image_id="sha256:" + "c" * 64,
-        state_dir=tmp_path / "state", evidence_dir=tmp_path / "evidence",
+        credential_file=tmp_path / "scratch/transport-token",
+        fixture_image_id="sha256:" + "c" * 64,
+        state_dir=tmp_path / "state",
+        evidence_dir=tmp_path / "evidence",
     )
 
 
@@ -78,7 +89,9 @@ def _ownership_state(
 
 
 class _FakeStartEnvironment:
-    def __init__(self, scratch_root: Path, repo_root: Path, timeline: list[str]) -> None:
+    def __init__(
+        self, scratch_root: Path, repo_root: Path, timeline: list[str]
+    ) -> None:
         self.run_id = "ec-lab-01"
         self.scratch_dir = scratch_root / self.run_id
         self.credential_file = self.scratch_dir / "transport-token"
@@ -142,11 +155,15 @@ def _start_harness(
         'authorization { token: "$NATS_TOKEN" }\n'
     )
     (repo_root / "scripts/research/docker-compose.lab.yml").write_text("services: {}\n")
-    (repo_root / "scripts/research/toolchain.json").write_text(json.dumps({
-        "nats_image": "nats@sha256:" + "a" * 64,
-        "python_version": "3.12",
-        "uv_version": "0.8.13",
-    }))
+    (repo_root / "scripts/research/toolchain.json").write_text(
+        json.dumps(
+            {
+                "nats_image": "nats@sha256:" + "a" * 64,
+                "python_version": "3.12",
+                "uv_version": "0.8.13",
+            }
+        )
+    )
     (repo_root / "schemas").mkdir()
     (repo_root / "schemas/research-manifest.v1.json").write_text("{}\n")
     timeline: list[str] = []
@@ -168,12 +185,15 @@ def _start_harness(
     monkeypatch.setattr(
         controller_module,
         "capture_clean_source_provenance",
-        lambda root: timeline.append("source") or SourceProvenance(
-            "d" * 40, False, "e" * 64, "f" * 64
-        ),
+        lambda root: timeline.append("source")
+        or SourceProvenance("d" * 40, False, "e" * 64, "f" * 64),
     )
-    monkeypatch.setattr(controller_module, "_controller_machine_id_sha256", lambda: "1" * 64)
-    monkeypatch.setattr(controller_module, "_validate_host_platform", lambda: None, raising=False)
+    monkeypatch.setattr(
+        controller_module, "_controller_machine_id_sha256", lambda: "1" * 64
+    )
+    monkeypatch.setattr(
+        controller_module, "_validate_host_platform", lambda: None, raising=False
+    )
     monkeypatch.setenv("EC_ARTIFACT_SCRATCH_ROOT", str(scratch_root))
     args = Namespace(
         run_id="ec-lab-01",
@@ -202,12 +222,19 @@ def _successful_preflight(config: ControllerConfig) -> PreflightReport:
 
 def test_controller_ownership_state_round_trips_atomically(tmp_path: Path) -> None:
     state = ControllerOwnershipState(
-        schema_version="lab-controller-state.v1", phase="active", config=_config(tmp_path),
-        compose_file=tmp_path / "docker-compose.lab.yml", compose_environment={"LAB_RUN_ID": "ec-lab-01"},
-        artifact_scratch_root=tmp_path / "scratch", raw_credential_file=tmp_path / "scratch/transport-token",
-        service_env_file=tmp_path / "state/service.env", owned_resources=(OwnedResource("network", "lab-net"),),
-        completed_cleanup_steps=("compose-down",), exported_image_paths=(tmp_path / "fixture.tar",),
-        controller_argv=("lab_controller.py", "start"), started_at="2026-07-27T00:00:00Z",
+        schema_version="lab-controller-state.v1",
+        phase="active",
+        config=_config(tmp_path),
+        compose_file=tmp_path / "docker-compose.lab.yml",
+        compose_environment={"LAB_RUN_ID": "ec-lab-01"},
+        artifact_scratch_root=tmp_path / "scratch",
+        raw_credential_file=tmp_path / "scratch/transport-token",
+        service_env_file=tmp_path / "state/service.env",
+        owned_resources=(OwnedResource("network", "lab-net"),),
+        completed_cleanup_steps=("compose-down",),
+        exported_image_paths=(tmp_path / "fixture.tar",),
+        controller_argv=("lab_controller.py", "start"),
+        started_at="2026-07-27T00:00:00Z",
     )
     path = tmp_path / "state/controller-state.json"
     write_controller_state(path, state)
@@ -240,11 +267,14 @@ def test_controller_preflight_passes_raw_credential_path_to_shared_preflight(
 
     replies = {
         "/api/system/status": {
-            "nats_connected": True, "jetstream_stream_ok": True,
+            "nats_connected": True,
+            "jetstream_stream_ok": True,
         },
         "/api/lab/status": {
             "run_id": config.run_id,
-            "reservations": [], "reservation_events": [], "node_reports": [],
+            "reservations": [],
+            "reservation_events": [],
+            "node_reports": [],
         },
         "/api/registry": [
             {"agent_id": "fixture-1", "agent_state": "online"},
@@ -268,15 +298,23 @@ def test_controller_preflight_passes_raw_credential_path_to_shared_preflight(
             return False
 
     def opener(request, **_kwargs):
-        return Response(next(value for suffix, value in replies.items() if request.full_url.endswith(suffix)))
+        return Response(
+            next(
+                value
+                for suffix, value in replies.items()
+                if request.full_url.endswith(suffix)
+            )
+        )
 
     monkeypatch.setattr(lab_preflight, "run_preflight", shared)
-    report = __import__("asyncio").run(lab_preflight.run_controller_preflight(
-        config,
-        config.credential_file,
-        ("fixture-1",),
-        opener=opener,
-    ))
+    report = __import__("asyncio").run(
+        lab_preflight.run_controller_preflight(
+            config,
+            config.credential_file,
+            ("fixture-1",),
+            opener=opener,
+        )
+    )
 
     assert captured["request"].credential_file is config.credential_file
     assert captured["request"].resolved_config == config.to_dict()
@@ -300,32 +338,21 @@ def test_controller_preflight_passes_raw_credential_path_to_shared_preflight(
         "/varz": {"mqtt": {}},
     }
 
-    class Response:
-        status = 200
-
-        def __init__(self, value):
-            self.value = value
-
-        def read(self):
-            return json.dumps(self.value).encode()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
     def malformed_opener(request, **_kwargs):
-        return Response(next(
-            value
-            for suffix, value in malformed_replies.items()
-            if request.full_url.endswith(suffix)
-        ))
+        return Response(
+            next(
+                value
+                for suffix, value in malformed_replies.items()
+                if request.full_url.endswith(suffix)
+            )
+        )
 
     monkeypatch.setattr(lab_preflight, "run_preflight", real_shared_preflight)
-    malformed_report = __import__("asyncio").run(lab_preflight.run_controller_preflight(
-        config, config.credential_file, opener=malformed_opener
-    ))
+    malformed_report = __import__("asyncio").run(
+        lab_preflight.run_controller_preflight(
+            config, config.credential_file, opener=malformed_opener
+        )
+    )
 
     assert malformed_report.valid is False
     assert "registry_ready failed" in malformed_report.errors
@@ -333,21 +360,40 @@ def test_controller_preflight_passes_raw_credential_path_to_shared_preflight(
     assert "malformed" not in json.dumps(malformed_report.to_dict())
 
 
-def test_start_rejects_an_existing_active_state_before_runtime_work(tmp_path: Path) -> None:
+def test_start_rejects_an_existing_active_state_before_runtime_work(
+    tmp_path: Path,
+) -> None:
     config = _config(tmp_path)
     state_file = tmp_path / "lab/ec-lab-01/controller-state.json"
-    write_controller_state(state_file, ControllerOwnershipState(
-        schema_version="lab-controller-state.v1", phase="active", config=config,
-        compose_file=tmp_path / "docker-compose.lab.yml", compose_environment={},
-        artifact_scratch_root=tmp_path / "scratch", raw_credential_file=config.credential_file,
-        service_env_file=tmp_path / "service.env", owned_resources=(), completed_cleanup_steps=(),
-        exported_image_paths=(), controller_argv=(), started_at="2026-07-27T00:00:00Z",
-    ))
+    write_controller_state(
+        state_file,
+        ControllerOwnershipState(
+            schema_version="lab-controller-state.v1",
+            phase="active",
+            config=config,
+            compose_file=tmp_path / "docker-compose.lab.yml",
+            compose_environment={},
+            artifact_scratch_root=tmp_path / "scratch",
+            raw_credential_file=config.credential_file,
+            service_env_file=tmp_path / "service.env",
+            owned_resources=(),
+            completed_cleanup_steps=(),
+            exported_image_paths=(),
+            controller_argv=(),
+            started_at="2026-07-27T00:00:00Z",
+        ),
+    )
     with pytest.raises(LabConfigError, match="active"):
-        start_controller(Namespace(
-            run_id="ec-lab-01", host_id="controller-lab-01", lab_variant="lifecycle",
-            bind_host="127.0.0.1", advertise_host="127.0.0.1", state_root=tmp_path / "lab",
-        ))
+        start_controller(
+            Namespace(
+                run_id="ec-lab-01",
+                host_id="controller-lab-01",
+                lab_variant="lifecycle",
+                bind_host="127.0.0.1",
+                advertise_host="127.0.0.1",
+                state_root=tmp_path / "lab",
+            )
+        )
 
 
 def test_interrupted_state_replacement_preserves_a_complete_document(
@@ -426,15 +472,17 @@ def test_start_validates_tools_addresses_and_source_before_outputs(
         "getaddrinfo",
         lambda *_args, **_kwargs: [(2, 1, 6, "", ("100.64.10.10", 0))],
     )
-    remote = Namespace(**{
-        **vars(args),
-        "bind_host": "100.64.10.10",
-        "advertise_host": "controller-lab.internal",
-        "http_port": 18080,
-        "nats_port": 14222,
-        "monitor_port": 18222,
-        "trusted_network_confirm": True,
-    })
+    remote = Namespace(
+        **{
+            **vars(args),
+            "bind_host": "100.64.10.10",
+            "advertise_host": "controller-lab.internal",
+            "http_port": 18080,
+            "nats_port": 14222,
+            "monitor_port": 18222,
+            "trusted_network_confirm": True,
+        }
+    )
     network = controller_module._validate_start_network(remote)
     assert network == ("100.64.10.10", "100.64.10.10", "18080", "14222", "18222")
     with pytest.raises(LabConfigError, match="trusted network"):
@@ -456,7 +504,9 @@ def test_start_validates_tools_addresses_and_source_before_outputs(
     monkeypatch.setattr(
         controller_module,
         "capture_clean_source_provenance",
-        lambda _root: (_ for _ in ()).throw(LabConfigError("source paths must be clean")),
+        lambda _root: (_ for _ in ()).throw(
+            LabConfigError("source paths must be clean")
+        ),
     )
     with pytest.raises(LabConfigError, match="source paths must be clean"):
         start_controller(args)
@@ -470,12 +520,17 @@ def test_start_journals_raw_and_service_secrets_before_acquisitions(
 ) -> None:
     args, environment, _repo_root, timeline = _start_harness(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        controller_module, "_validate_toolchain", lambda *_args, **_kwargs: {
-            "python": "Python 3.12.11", "docker": "Docker 28.0.0",
-            "docker_compose": "2.38.2", "git": "git version 2.50.1",
-            "node": "not-required", "npm": "not-required",
+        controller_module,
+        "_validate_toolchain",
+        lambda *_args, **_kwargs: {
+            "python": "Python 3.12.11",
+            "docker": "Docker 28.0.0",
+            "docker_compose": "2.38.2",
+            "git": "git version 2.50.1",
+            "node": "not-required",
+            "npm": "not-required",
             "playwright": "not-required",
-        }
+        },
     )
     observed: dict[str, object] = {}
     real_unlink = Path.unlink
@@ -490,8 +545,12 @@ def test_start_journals_raw_and_service_secrets_before_acquisitions(
     environment.cleanup_completed = False
     monkeypatch.setattr(Path, "unlink", unlink)
 
-    def stop_after_journal(state: ControllerOwnershipState, **_kwargs: object) -> object:
-        persisted = load_controller_state(args.state_root / args.run_id / "controller-state.json")
+    def stop_after_journal(
+        state: ControllerOwnershipState, **_kwargs: object
+    ) -> object:
+        persisted = load_controller_state(
+            args.state_root / args.run_id / "controller-state.json"
+        )
         raw = persisted.raw_credential_file.read_bytes()
         service = persisted.service_env_file.read_bytes()
         observed.update(state=persisted, raw=raw, service=service)
@@ -515,7 +574,9 @@ def test_start_journals_raw_and_service_secrets_before_acquisitions(
         start_controller(args)
     assert observed["state"]
     assert timeline[:3] == ["source", "environment-create", "nats-validation"]
-    failed = load_controller_state(args.state_root / args.run_id / "controller-state.json")
+    failed = load_controller_state(
+        args.state_root / args.run_id / "controller-state.json"
+    )
     assert failed.phase == "failed"
     assert failed.artifact_scratch_root == environment.scratch_dir.parent
     assert failed.raw_credential_file.exists()
@@ -539,13 +600,16 @@ def test_start_journals_raw_and_service_secrets_before_acquisitions(
         ),
     )
     assert cleanup["completed"] is True
-    assert load_controller_state(
-        args.state_root / args.run_id / "controller-state.json"
-    ).phase == "stopped"
+    assert (
+        load_controller_state(
+            args.state_root / args.run_id / "controller-state.json"
+        ).phase
+        == "stopped"
+    )
 
 
 def test_nats_validation_precedes_build_and_retains_only_status_and_hash(
-    tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     state_file, state = _ownership_state(tmp_path, phase="starting")
     del state_file
@@ -556,10 +620,13 @@ def test_nats_validation_precedes_build_and_retains_only_status_and_hash(
     state.service_env_file.write_text("NATS_TOKEN=" + "n" * 64 + "\n")
     nats_config = state.service_env_file.with_name("nats-lab.conf")
     nats_config.write_text('authorization { token: "$NATS_TOKEN" }\n')
-    state = replace(state, compose_environment={
-        "LAB_NATS_CONFIG": str(nats_config),
-        "LAB_NATS_IMAGE": "nats@sha256:" + "a" * 64,
-    })
+    state = replace(
+        state,
+        compose_environment={
+            "LAB_NATS_CONFIG": str(nats_config),
+            "LAB_NATS_IMAGE": "nats@sha256:" + "a" * 64,
+        },
+    )
     calls: list[list[str]] = []
 
     def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -568,12 +635,24 @@ def test_nats_validation_precedes_build_and_retains_only_status_and_hash(
 
     with pytest.raises(LabConfigError, match="NATS configuration validation failed"):
         controller_module._validate_nats_configuration(state, runner=runner)
-    assert calls == [[
-        "docker", "run", "--rm", "--env-file", str(state.service_env_file),
-        "--mount", f"type=bind,src={nats_config},dst=/etc/nats/nats.conf,readonly",
-        state.compose_environment["LAB_NATS_IMAGE"], "-t", "-c", "/etc/nats/nats.conf",
-    ]]
-    receipt = json.loads((state.config.evidence_dir / "nats-validation.json").read_text())
+    assert calls == [
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--env-file",
+            str(state.service_env_file),
+            "--mount",
+            f"type=bind,src={nats_config},dst=/etc/nats/nats.conf,readonly",
+            state.compose_environment["LAB_NATS_IMAGE"],
+            "-t",
+            "-c",
+            "/etc/nats/nats.conf",
+        ]
+    ]
+    receipt = json.loads(
+        (state.config.evidence_dir / "nats-validation.json").read_text()
+    )
     assert receipt == {
         "config_sha256": controller_module.sha256_file(nats_config),
         "exit_status": 1,
@@ -585,11 +664,19 @@ def test_start_builds_immutable_images_and_retains_runtime_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     args, environment, _repo_root, timeline = _start_harness(tmp_path, monkeypatch)
-    monkeypatch.setattr(controller_module, "_validate_toolchain", lambda *_a, **_k: {
-        "python": "Python 3.12.11", "docker": "Docker 28.0.0",
-        "docker_compose": "2.38.2", "git": "git version 2.50.1",
-        "node": "not-required", "npm": "not-required", "playwright": "not-required",
-    })
+    monkeypatch.setattr(
+        controller_module,
+        "_validate_toolchain",
+        lambda *_a, **_k: {
+            "python": "Python 3.12.11",
+            "docker": "Docker 28.0.0",
+            "docker_compose": "2.38.2",
+            "git": "git version 2.50.1",
+            "node": "not-required",
+            "npm": "not-required",
+            "playwright": "not-required",
+        },
+    )
     image_ids = {
         "edgecitadel-lab-aggregator:ec-lab-01": "sha256:" + "2" * 64,
         "edgecitadel-lab-dashboard:ec-lab-01": "sha256:" + "3" * 64,
@@ -631,14 +718,18 @@ def test_start_builds_immutable_images_and_retains_runtime_evidence(
     assert config.advertised_ip == "127.0.0.1"
     assert config.app_url == "http://127.0.0.1:18080"
     assert timeline[-1] == "compose-up"
-    state = load_controller_state(args.state_root / args.run_id / "controller-state.json")
+    state = load_controller_state(
+        args.state_root / args.run_id / "controller-state.json"
+    )
     assert state.phase == "active"
-    assert state.compose_environment["LAB_AGGREGATOR_IMAGE"] == image_ids[
-        "edgecitadel-lab-aggregator:ec-lab-01"
-    ]
-    assert state.compose_environment["LAB_DASHBOARD_IMAGE"] == image_ids[
-        "edgecitadel-lab-dashboard:ec-lab-01"
-    ]
+    assert (
+        state.compose_environment["LAB_AGGREGATOR_IMAGE"]
+        == image_ids["edgecitadel-lab-aggregator:ec-lab-01"]
+    )
+    assert (
+        state.compose_environment["LAB_DASHBOARD_IMAGE"]
+        == image_ids["edgecitadel-lab-dashboard:ec-lab-01"]
+    )
     image_names = {item.name for item in state.owned_resources if item.kind == "image"}
     assert image_names == {
         "edgecitadel-lab-aggregator:ec-lab-01",
@@ -665,19 +756,31 @@ def test_image_inspect_failure_removes_exact_tags_and_private_files(
     for failure in ("application", "fixture"):
         case = tmp_path / failure
         args, environment, _repo_root, _timeline = _start_harness(case, monkeypatch)
-        monkeypatch.setattr(controller_module, "_validate_toolchain", lambda *_a, **_k: {
-            "python": "Python 3.12.11", "docker": "Docker 28.0.0",
-            "docker_compose": "2.38.2", "git": "git version 2.50.1",
-            "node": "not-required", "npm": "not-required", "playwright": "not-required",
-        })
+        monkeypatch.setattr(
+            controller_module,
+            "_validate_toolchain",
+            lambda *_a, **_k: {
+                "python": "Python 3.12.11",
+                "docker": "Docker 28.0.0",
+                "docker_compose": "2.38.2",
+                "git": "git version 2.50.1",
+                "node": "not-required",
+                "npm": "not-required",
+                "playwright": "not-required",
+            },
+        )
         calls: list[list[str]] = []
 
-        def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        def runner(
+            argv: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
             calls.append(list(argv))
             if argv[:3] == ["docker", "image", "inspect"]:
                 if failure == "application" and "aggregator" in argv[-1]:
                     return subprocess.CompletedProcess(argv, 0, "mutable\n", "")
-                return subprocess.CompletedProcess(argv, 0, "sha256:" + "2" * 64 + "\n", "")
+                return subprocess.CompletedProcess(
+                    argv, 0, "sha256:" + "2" * 64 + "\n", ""
+                )
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         monkeypatch.setattr(controller_module.subprocess, "run", runner)
@@ -685,12 +788,18 @@ def test_image_inspect_failure_removes_exact_tags_and_private_files(
             monkeypatch.setattr(
                 controller_module,
                 "build_fixture_image",
-                lambda *_a, **_k: (_ for _ in ()).throw(LabConfigError("fixture inspect failed")),
+                lambda *_a, **_k: (_ for _ in ()).throw(
+                    LabConfigError("fixture inspect failed")
+                ),
             )
-        monkeypatch.setattr(controller_module, "finalize_bundle", lambda *_args: "INVALID")
+        monkeypatch.setattr(
+            controller_module, "finalize_bundle", lambda *_args: "INVALID"
+        )
         with pytest.raises((LabConfigError, RuntimeError)):
             start_controller(args)
-        state = load_controller_state(args.state_root / args.run_id / "controller-state.json")
+        state = load_controller_state(
+            args.state_root / args.run_id / "controller-state.json"
+        )
         assert state.phase == "failed"
         assert not state.raw_credential_file.exists()
         assert not state.service_env_file.exists()
@@ -711,11 +820,19 @@ def test_compose_start_failure_rolls_back_once_and_persists_failed_phase(
     environment.cleanup_remaining = (
         OwnedResource("network", "edgecitadel-artifact-ec-lab-01_default"),
     )
-    monkeypatch.setattr(controller_module, "_validate_toolchain", lambda *_a, **_k: {
-        "python": "Python 3.12.11", "docker": "Docker 28.0.0",
-        "docker_compose": "2.38.2", "git": "git version 2.50.1",
-        "node": "not-required", "npm": "not-required", "playwright": "not-required",
-    })
+    monkeypatch.setattr(
+        controller_module,
+        "_validate_toolchain",
+        lambda *_a, **_k: {
+            "python": "Python 3.12.11",
+            "docker": "Docker 28.0.0",
+            "docker_compose": "2.38.2",
+            "git": "git version 2.50.1",
+            "node": "not-required",
+            "npm": "not-required",
+            "playwright": "not-required",
+        },
+    )
     removed: list[str] = []
     removal_attempts: dict[str, int] = {}
 
@@ -723,7 +840,12 @@ def test_compose_start_failure_rolls_back_once_and_persists_failed_phase(
         if argv[:3] == ["docker", "image", "inspect"]:
             if removal_attempts.get(argv[-1], 0):
                 return subprocess.CompletedProcess(argv, 0, "present\n", "")
-            return subprocess.CompletedProcess(argv, 0, "sha256:" + ("2" if "aggregator" in argv[-1] else "3") * 64 + "\n", "")
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                "sha256:" + ("2" if "aggregator" in argv[-1] else "3") * 64 + "\n",
+                "",
+            )
         if argv[:3] == ["docker", "image", "rm"]:
             removed.append(argv[-1])
             removal_attempts[argv[-1]] = removal_attempts.get(argv[-1], 0) + 1
@@ -733,24 +855,28 @@ def test_compose_start_failure_rolls_back_once_and_persists_failed_phase(
 
     monkeypatch.setattr(controller_module.subprocess, "run", runner)
     monkeypatch.setattr(
-        controller_module, "build_fixture_image", lambda *_a, **_k: FixtureImage(
+        controller_module,
+        "build_fixture_image",
+        lambda *_a, **_k: FixtureImage(
             "sha256:" + "4" * 64, "5" * 64, "6" * 64, "2026-07-27T00:00:00Z"
-        )
+        ),
     )
     monkeypatch.setattr(controller_module, "finalize_bundle", lambda *_args: "INVALID")
     with pytest.raises(RuntimeError, match="compose start failed"):
         start_controller(args)
-    state = load_controller_state(args.state_root / args.run_id / "controller-state.json")
+    state = load_controller_state(
+        args.state_root / args.run_id / "controller-state.json"
+    )
     assert state.phase == "failed"
     assert environment.cleanup_calls == 1
     assert environment.cleanup_compose_file == state.compose_file
     assert environment.cleanup_compose_env["LAB_AGGREGATOR_IMAGE"] == (
         "sha256:" + "2" * 64
     )
-    assert set(removed) >= {item.name for item in state.owned_resources if item.kind == "image"}
-    cleanup = json.loads(
-        (args.state_root / args.run_id / "cleanup.json").read_text()
-    )
+    assert set(removed) >= {
+        item.name for item in state.owned_resources if item.kind == "image"
+    }
+    cleanup = json.loads((args.state_root / args.run_id / "cleanup.json").read_text())
     assert cleanup["completed"] is False
     assert cleanup["owned_resources_removed"] is False
     assert cleanup["remaining"] == [
@@ -782,24 +908,40 @@ def test_compose_start_failure_rolls_back_once_and_persists_failed_phase(
         ),
     )
     assert recovered["completed"] is True
-    assert load_controller_state(
-        args.state_root / args.run_id / "controller-state.json"
-    ).phase == "stopped"
+    assert (
+        load_controller_state(
+            args.state_root / args.run_id / "controller-state.json"
+        ).phase
+        == "stopped"
+    )
 
 
 def test_failed_preflight_removes_secrets_before_one_invalid_finalization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     args, environment, _repo_root, _timeline = _start_harness(tmp_path, monkeypatch)
-    monkeypatch.setattr(controller_module, "_validate_toolchain", lambda *_a, **_k: {
-        "python": "Python 3.12.11", "docker": "Docker 28.0.0",
-        "docker_compose": "2.38.2", "git": "git version 2.50.1",
-        "node": "not-required", "npm": "not-required", "playwright": "not-required",
-    })
+    monkeypatch.setattr(
+        controller_module,
+        "_validate_toolchain",
+        lambda *_a, **_k: {
+            "python": "Python 3.12.11",
+            "docker": "Docker 28.0.0",
+            "docker_compose": "2.38.2",
+            "git": "git version 2.50.1",
+            "node": "not-required",
+            "npm": "not-required",
+            "playwright": "not-required",
+        },
+    )
 
     def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if argv[:3] == ["docker", "image", "inspect"]:
-            return subprocess.CompletedProcess(argv, 0, "sha256:" + ("2" if "aggregator" in argv[-1] else "3") * 64 + "\n", "")
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                "sha256:" + ("2" if "aggregator" in argv[-1] else "3") * 64 + "\n",
+                "",
+            )
         if argv[:2] == ["docker", "compose"] and "config" in argv:
             return subprocess.CompletedProcess(argv, 0, "services: {}\n", "")
         if argv[:2] == ["docker", "compose"] and "port" in argv:
@@ -809,21 +951,28 @@ def test_failed_preflight_removes_secrets_before_one_invalid_finalization(
 
     monkeypatch.setattr(controller_module.subprocess, "run", runner)
     monkeypatch.setattr(
-        controller_module, "build_fixture_image", lambda *_a, **_k: FixtureImage(
+        controller_module,
+        "build_fixture_image",
+        lambda *_a, **_k: FixtureImage(
             "sha256:" + "4" * 64, "5" * 64, "6" * 64, "2026-07-27T00:00:00Z"
-        )
+        ),
     )
     monkeypatch.setattr(
         controller_module,
         "run_controller_preflight",
         lambda config, _credential: PreflightReport(
-            False, "2026-07-27T00:00:01Z", (), ("registry_ready failed",),
+            False,
+            "2026-07-27T00:00:01Z",
+            (),
+            ("registry_ready failed",),
             config.to_dict(),
         ),
     )
     finalizations: list[str] = []
     real_finalizer = controller_module.finalize_bundle
-    real_schema = Path(__file__).resolve().parents[2] / "schemas/research-manifest.v1.json"
+    real_schema = (
+        Path(__file__).resolve().parents[2] / "schemas/research-manifest.v1.json"
+    )
     (_repo_root / "schemas/research-manifest.v1.json").write_bytes(
         real_schema.read_bytes()
     )
@@ -839,15 +988,20 @@ def test_failed_preflight_removes_secrets_before_one_invalid_finalization(
     monkeypatch.setattr(Path, "unlink", unlink)
 
     def finalizer(_bundle: Path, manifest: object, _schema: Path) -> str:
-        state = load_controller_state(args.state_root / args.run_id / "controller-state.json")
+        state = load_controller_state(
+            args.state_root / args.run_id / "controller-state.json"
+        )
         assert not state.raw_credential_file.exists()
         assert not state.service_env_file.exists()
         assert manifest["status"] == "INVALID"
-        assert real_finalizer(
-            _bundle,
-            manifest,
-            _repo_root / "schemas/research-manifest.v1.json",
-        ) == "INVALID"
+        assert (
+            real_finalizer(
+                _bundle,
+                manifest,
+                _repo_root / "schemas/research-manifest.v1.json",
+            )
+            == "INVALID"
+        )
         assert (_bundle / "manifest.json").is_file()
         finalizations.append("INVALID")
         return "INVALID"
@@ -957,7 +1111,9 @@ def test_fresh_process_stop_uses_only_persisted_ownership_and_preserves_foreign_
         elif "run_artifact.py" in " ".join(argv):
             assert argv == [
                 str(controller_module._repo_root() / "scripts/research/run-python"),
-                str(controller_module._repo_root() / "scripts/research/run_artifact.py"),
+                str(
+                    controller_module._repo_root() / "scripts/research/run_artifact.py"
+                ),
                 "cleanup",
                 "--run-id",
                 run_id,
@@ -1160,9 +1316,12 @@ def test_stop_resume_skips_completed_compose_and_artifact_steps(
         ),
     )
     assert receipt_cleanup == retained_cleanup
-    assert json.loads(
-        (receipt_state.config.evidence_dir / "raw/lab/cleanup.json").read_text()
-    ) == retained_cleanup
+    assert (
+        json.loads(
+            (receipt_state.config.evidence_dir / "raw/lab/cleanup.json").read_text()
+        )
+        == retained_cleanup
+    )
 
 
 def test_stopped_state_returns_cached_cleanup_without_docker_or_refinalizing(
@@ -1191,12 +1350,15 @@ def test_stopped_state_returns_cached_cleanup_without_docker_or_refinalizing(
         raising=False,
     )
 
-    assert stop_controller(
-        state_file,
-        runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cached stop called Docker")
-        ),
-    ) == cleanup
+    assert (
+        stop_controller(
+            state_file,
+            runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("cached stop called Docker")
+            ),
+        )
+        == cleanup
+    )
     assert load_controller_state(state_file) == state
 
     steps = (
@@ -1233,9 +1395,7 @@ def test_stopped_state_returns_cached_cleanup_without_docker_or_refinalizing(
     )
     checks: list[tuple[Path, str, Path]] = []
 
-    def checker(
-        bundle: Path, *, expected_kind: str, source_root: Path
-    ) -> CheckReport:
+    def checker(bundle: Path, *, expected_kind: str, source_root: Path) -> CheckReport:
         checks.append((bundle, expected_kind, source_root))
         return CheckReport(True, ())
 
@@ -1249,12 +1409,15 @@ def test_stopped_state_returns_cached_cleanup_without_docker_or_refinalizing(
         raising=False,
     )
 
-    assert stop_controller(
-        recovery_state_file,
-        runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("completed step repeated")
-        ),
-    ) == recovery_cleanup
+    assert (
+        stop_controller(
+            recovery_state_file,
+            runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("completed step repeated")
+            ),
+        )
+        == recovery_cleanup
+    )
     recovered = load_controller_state(recovery_state_file)
     assert recovered.phase == "stopped"
     assert recovered.completed_cleanup_steps[-1] == "manifest-finalized"
@@ -1297,12 +1460,15 @@ def test_stopped_state_returns_cached_cleanup_without_docker_or_refinalizing(
             ),
         ),
     )
-    assert stop_controller(
-        invalid_state_file,
-        runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("sealed invalid recovery repeated Docker")
-        ),
-    ) == recovery_cleanup
+    assert (
+        stop_controller(
+            invalid_state_file,
+            runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("sealed invalid recovery repeated Docker")
+            ),
+        )
+        == recovery_cleanup
+    )
     assert load_controller_state(invalid_state_file).phase == "stopped"
 
 
@@ -1340,7 +1506,9 @@ def test_successful_stop_writes_complete_cleanup_and_finalizes_once(
 
     manifest = {"status": "PENDING"}
     finalizer_calls: list[str] = []
-    monkeypatch.setattr(controller_module, "_snapshot_stop_evidence", snapshot, raising=False)
+    monkeypatch.setattr(
+        controller_module, "_snapshot_stop_evidence", snapshot, raising=False
+    )
     monkeypatch.setattr(
         controller_module,
         "_docker_inventory",
@@ -1401,13 +1569,24 @@ def test_export_uses_persisted_immutable_fixture_and_journals_output(
 ) -> None:
     config = _config(tmp_path)
     state_file = tmp_path / "lab/ec-lab-01/controller-state.json"
-    write_controller_state(state_file, ControllerOwnershipState(
-        schema_version="lab-controller-state.v1", phase="active", config=config,
-        compose_file=tmp_path / "docker-compose.lab.yml", compose_environment={},
-        artifact_scratch_root=tmp_path / "scratch", raw_credential_file=config.credential_file,
-        service_env_file=tmp_path / "service.env", owned_resources=(), completed_cleanup_steps=(),
-        exported_image_paths=(), controller_argv=(), started_at="2026-07-27T00:00:00Z",
-    ))
+    write_controller_state(
+        state_file,
+        ControllerOwnershipState(
+            schema_version="lab-controller-state.v1",
+            phase="active",
+            config=config,
+            compose_file=tmp_path / "docker-compose.lab.yml",
+            compose_environment={},
+            artifact_scratch_root=tmp_path / "scratch",
+            raw_credential_file=config.credential_file,
+            service_env_file=tmp_path / "service.env",
+            owned_resources=(),
+            completed_cleanup_steps=(),
+            exported_image_paths=(),
+            controller_argv=(),
+            started_at="2026-07-27T00:00:00Z",
+        ),
+    )
     output = tmp_path / "exports/fixture.tar"
     result_file = tmp_path / "exports/result.json"
     calls: list[list[str]] = []
@@ -1419,7 +1598,16 @@ def test_export_uses_persisted_immutable_fixture_and_journals_output(
 
     result = export_fixture_image(state_file, output, result_file, runner=runner)
 
-    assert calls == [["docker", "image", "save", "--output", str(output) + ".tmp", config.fixture_image_id]]
+    assert calls == [
+        [
+            "docker",
+            "image",
+            "save",
+            "--output",
+            str(output) + ".tmp",
+            config.fixture_image_id,
+        ]
+    ]
     assert result == {
         "fixture_image_id": config.fixture_image_id,
         "output": str(output),
@@ -1467,22 +1655,33 @@ def test_export_uses_persisted_immutable_fixture_and_journals_output(
         _config(invalid_root), fixture_image_id="sha256:" + "z" * 64
     )
     invalid_state_file = invalid_root / "lab/ec-lab-01/controller-state.json"
-    write_controller_state(invalid_state_file, ControllerOwnershipState(
-        schema_version="lab-controller-state.v1", phase="active", config=invalid_config,
-        compose_file=invalid_root / "docker-compose.lab.yml", compose_environment={},
-        artifact_scratch_root=invalid_root / "scratch",
-        raw_credential_file=invalid_config.credential_file,
-        service_env_file=invalid_root / "service.env", owned_resources=(),
-        completed_cleanup_steps=(),
-        exported_image_paths=(), controller_argv=(), started_at="2026-07-27T00:00:00Z",
-    ))
+    write_controller_state(
+        invalid_state_file,
+        ControllerOwnershipState(
+            schema_version="lab-controller-state.v1",
+            phase="active",
+            config=invalid_config,
+            compose_file=invalid_root / "docker-compose.lab.yml",
+            compose_environment={},
+            artifact_scratch_root=invalid_root / "scratch",
+            raw_credential_file=invalid_config.credential_file,
+            service_env_file=invalid_root / "service.env",
+            owned_resources=(),
+            completed_cleanup_steps=(),
+            exported_image_paths=(),
+            controller_argv=(),
+            started_at="2026-07-27T00:00:00Z",
+        ),
+    )
 
     with pytest.raises(LabConfigError, match="not immutable"):
         export_fixture_image(
             invalid_state_file,
             invalid_root / "fixture.tar",
             invalid_root / "result.json",
-            runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("docker")),
+            runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("docker")
+            ),
         )
 
 
@@ -1517,9 +1716,7 @@ def test_qualify_cli_prints_exactly_one_classification_line(
     monkeypatch.setattr(
         controller_module,
         "qualify_controller",
-        lambda _state_file: LabQualification(
-            "remote-qualified", False, True, ()
-        ),
+        lambda _state_file: LabQualification("remote-qualified", False, True, ()),
     )
     monkeypatch.setattr(
         sys,
@@ -1558,7 +1755,9 @@ def test_task6_summary_surface_is_derived_from_canonical_evidence(
     controller_module._write_task6_evidence(bundle, manifest)
 
     assert (bundle / "compose.resolved.yml").read_text() == "services: {}\n"
-    assert json.loads((bundle / "versions.json").read_text()) == manifest["dependencies"]
+    assert (
+        json.loads((bundle / "versions.json").read_text()) == manifest["dependencies"]
+    )
     assert json.loads((bundle / "images.json").read_text()) == manifest["images"]
     assert json.loads((bundle / "identities.json").read_text()) == {
         "controller": manifest["controller"],

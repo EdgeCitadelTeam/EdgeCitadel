@@ -4,6 +4,7 @@ Schema is canonical (A2A-aligned): no legacy `receiver_id`/`message_type`
 columns. The outbox mirror is the authoritative source for dashboard
 conversation views (see ADR-0006).
 """
+
 import json
 import os
 import sqlite3
@@ -44,6 +45,16 @@ CREATE TABLE IF NOT EXISTS agents (
     heartbeat_interval_sec  INTEGER NOT NULL DEFAULT 30
 );
 
+CREATE TABLE IF NOT EXISTS enrollment_invitations (
+    token_hash      TEXT PRIMARY KEY,
+    agent_id        TEXT NOT NULL,
+    created_at      REAL NOT NULL,
+    expires_at      REAL NOT NULL,
+    redeemed_at     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_enrollment_expiry
+    ON enrollment_invitations(expires_at);
+
 CREATE TABLE IF NOT EXISTS poison_events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id        TEXT NOT NULL,
@@ -77,6 +88,7 @@ DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS agents;
 DROP TABLE IF EXISTS poison_events;
 DROP TABLE IF EXISTS conversation_turns;
+DROP TABLE IF EXISTS enrollment_invitations;
 """
 
 
@@ -111,8 +123,7 @@ def init_db(path: str, wipe: bool = False) -> None:
             c.executescript(_DROP_SQL)
         c.executescript(SCHEMA_SQL)
         columns = {
-            row[1]
-            for row in c.execute("PRAGMA table_info(messages)").fetchall()
+            row[1] for row in c.execute("PRAGMA table_info(messages)").fetchall()
         }
         if "duplicate_count" not in columns:
             c.execute(
@@ -122,21 +133,27 @@ def init_db(path: str, wipe: bool = False) -> None:
         # Best-effort load of sqlite-vec extension for future semantic memory.
         # Aggregator boots fine without it; v0.3 will populate turn_embedding.
         try:
-            import sqlite_vec        # noqa: F401 — provides loadable extension
+            import sqlite_vec  # noqa: F401 — provides loadable extension
+
             c.enable_load_extension(True)
             sqlite_vec.load(c)
             c.enable_load_extension(False)
             import logging
+
             logging.getLogger(__name__).info(
-                "sqlite-vec loaded; v0.3 semantic memory ready")
+                "sqlite-vec loaded; v0.3 semantic memory ready"
+            )
         except Exception as e:  # noqa: BLE001
             import logging
+
             logging.getLogger(__name__).warning(
                 "sqlite-vec not available (%s); semantic memory deferred",
-                type(e).__name__)
+                type(e).__name__,
+            )
 
 
 # ── Messages ───────────────────────────────────────────────────────────
+
 
 def insert_message(env: dict, deployment: str = "default") -> None:
     with _conn() as c:
@@ -146,10 +163,22 @@ def insert_message(env: dict, deployment: str = "default") -> None:
                (id, v, type, sender_id, recipient_id, task_id, context_id,
                 task_state, agent_state, hop_count, timestamp, payload, deployment)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (env["id"], env.get("v", 1), env["type"], env["sender_id"],
-             env.get("recipient_id"), env.get("task_id"), env.get("context_id"),
-             env.get("task_state"), env.get("agent_state"), env.get("hop_count"),
-             env["timestamp"], json.dumps(env.get("payload", {})), deployment))
+            (
+                env["id"],
+                env.get("v", 1),
+                env["type"],
+                env["sender_id"],
+                env.get("recipient_id"),
+                env.get("task_id"),
+                env.get("context_id"),
+                env.get("task_state"),
+                env.get("agent_state"),
+                env.get("hop_count"),
+                env["timestamp"],
+                json.dumps(env.get("payload", {})),
+                deployment,
+            ),
+        )
         if cursor.rowcount == 0:
             c.execute(
                 """UPDATE messages
@@ -159,29 +188,42 @@ def insert_message(env: dict, deployment: str = "default") -> None:
             )
 
 
-def query_messages(*, agent_id: str | None = None, task_id: str | None = None,
-                   context_id: str | None = None, type: str | None = None,
-                   since_ts: str | None = None,
-                   deployment: str | None = None,
-                   exclude_deployment: str | None = None,
-                   limit: int = 500) -> list[dict]:
+def query_messages(
+    *,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    context_id: str | None = None,
+    type: str | None = None,
+    since_ts: str | None = None,
+    deployment: str | None = None,
+    exclude_deployment: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
     q = "SELECT messages.rowid AS observation_index, messages.* FROM messages WHERE 1=1"
     params: list = []
     if agent_id:
-        q += " AND (sender_id = ? OR recipient_id = ?)"; params += [agent_id, agent_id]
+        q += " AND (sender_id = ? OR recipient_id = ?)"
+        params += [agent_id, agent_id]
     if task_id:
-        q += " AND task_id = ?"; params.append(task_id)
+        q += " AND task_id = ?"
+        params.append(task_id)
     if context_id:
-        q += " AND context_id = ?"; params.append(context_id)
+        q += " AND context_id = ?"
+        params.append(context_id)
     if type:
-        q += " AND type = ?"; params.append(type)
+        q += " AND type = ?"
+        params.append(type)
     if since_ts:
-        q += " AND timestamp >= ?"; params.append(since_ts)
+        q += " AND timestamp >= ?"
+        params.append(since_ts)
     if deployment:
-        q += " AND deployment = ?"; params.append(deployment)
+        q += " AND deployment = ?"
+        params.append(deployment)
     if exclude_deployment:
-        q += " AND deployment != ?"; params.append(exclude_deployment)
-    q += " ORDER BY messages.rowid DESC LIMIT ?"; params.append(limit)
+        q += " AND deployment != ?"
+        params.append(exclude_deployment)
+    q += " ORDER BY messages.rowid DESC LIMIT ?"
+    params.append(limit)
     with _conn() as c:
         rows = [dict(r) for r in c.execute(q, params).fetchall()]
     for r in rows:
@@ -201,9 +243,11 @@ def table_columns(name: str) -> set[str]:
 
 # ── Agents ─────────────────────────────────────────────────────────────
 
+
 def upsert_agent_card(card: dict, timestamp: str) -> None:
     with _conn() as c:
-        c.execute("""INSERT INTO agents
+        c.execute(
+            """INSERT INTO agents
                      (agent_id, card_json, last_register, agent_state,
                       heartbeat_interval_sec, deployment)
                      VALUES (?, ?, ?, 'online', ?, ?)
@@ -213,29 +257,42 @@ def upsert_agent_card(card: dict, timestamp: str) -> None:
                        agent_state = 'online',
                        heartbeat_interval_sec = excluded.heartbeat_interval_sec,
                        deployment = excluded.deployment""",
-                  (card["name"], json.dumps(card), timestamp,
-                   card["metadata"]["runtime.heartbeat_interval_sec"],
-                   card["metadata"].get("runtime.deployment")))
+            (
+                card["name"],
+                json.dumps(card),
+                timestamp,
+                card["metadata"]["runtime.heartbeat_interval_sec"],
+                card["metadata"].get("runtime.deployment"),
+            ),
+        )
 
 
 def update_heartbeat(agent_id: str, ts: str) -> None:
     with _conn() as c:
-        c.execute("UPDATE agents SET last_heartbeat = ?, agent_state = 'online' "
-                  "WHERE agent_id = ?", (ts, agent_id))
+        c.execute(
+            "UPDATE agents SET last_heartbeat = ?, agent_state = 'online' "
+            "WHERE agent_id = ?",
+            (ts, agent_id),
+        )
 
 
 def update_agent_state(agent_id: str, state: str) -> None:
     with _conn() as c:
-        c.execute("UPDATE agents SET agent_state = ? WHERE agent_id = ?",
-                  (state, agent_id))
+        c.execute(
+            "UPDATE agents SET agent_state = ? WHERE agent_id = ?", (state, agent_id)
+        )
 
 
 def list_agents() -> list[dict]:
     with _conn() as c:
-        rows = [dict(r) for r in c.execute(
-            "SELECT agent_id, card_json, agent_state, last_heartbeat, "
-            "last_register, deployment, heartbeat_interval_sec "
-            "FROM agents").fetchall()]
+        rows = [
+            dict(r)
+            for r in c.execute(
+                "SELECT agent_id, card_json, agent_state, last_heartbeat, "
+                "last_register, deployment, heartbeat_interval_sec "
+                "FROM agents"
+            ).fetchall()
+        ]
     for r in rows:
         r["card"] = json.loads(r.pop("card_json"))
     return rows
@@ -252,26 +309,76 @@ def delete_agent(agent_id: str) -> bool:
         return cur.rowcount > 0
 
 
+# ── One-time enrollment invitations ──────────────────────────────────
+
+
+def create_enrollment_invitation(
+    *, token_hash: str, agent_id: str, created_at: float, expires_at: float
+) -> None:
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO enrollment_invitations
+               (token_hash, agent_id, created_at, expires_at, redeemed_at)
+               VALUES (?, ?, ?, ?, NULL)""",
+            (token_hash, agent_id, created_at, expires_at),
+        )
+
+
+def redeem_enrollment_invitation(*, token_hash: str, redeemed_at: float) -> str | None:
+    """Consume one unexpired invitation and return its reserved agent id."""
+    with _conn() as c:
+        row = c.execute(
+            """SELECT agent_id FROM enrollment_invitations
+               WHERE token_hash = ? AND redeemed_at IS NULL AND expires_at > ?""",
+            (token_hash, redeemed_at),
+        ).fetchone()
+        if row is None:
+            return None
+        changed = c.execute(
+            """UPDATE enrollment_invitations SET redeemed_at = ?
+               WHERE token_hash = ? AND redeemed_at IS NULL AND expires_at > ?""",
+            (redeemed_at, token_hash, redeemed_at),
+        ).rowcount
+        return str(row["agent_id"]) if changed == 1 else None
+
+
 # ── Poison events ──────────────────────────────────────────────────────
 
-def insert_poison_event(*, agent_id: str, consumer: str, task_id: str | None,
-                        original_sender: str | None, detected_at: str,
-                        advisory: dict) -> None:
+
+def insert_poison_event(
+    *,
+    agent_id: str,
+    consumer: str,
+    task_id: str | None,
+    original_sender: str | None,
+    detected_at: str,
+    advisory: dict,
+) -> None:
     with _conn() as c:
-        c.execute("""INSERT INTO poison_events
+        c.execute(
+            """INSERT INTO poison_events
                      (agent_id, consumer, task_id, original_sender,
                       detected_at, advisory_json)
                      VALUES (?, ?, ?, ?, ?, ?)""",
-                  (agent_id, consumer, task_id, original_sender, detected_at,
-                   json.dumps(advisory)))
+            (
+                agent_id,
+                consumer,
+                task_id,
+                original_sender,
+                detected_at,
+                json.dumps(advisory),
+            ),
+        )
 
 
 def recent_poison(agent_id: str | None = None, limit: int = 100) -> list[dict]:
     q = "SELECT * FROM poison_events"
     params: list = []
     if agent_id:
-        q += " WHERE agent_id = ?"; params = [agent_id]
-    q += " ORDER BY detected_at DESC LIMIT ?"; params.append(limit)
+        q += " WHERE agent_id = ?"
+        params = [agent_id]
+    q += " ORDER BY detected_at DESC LIMIT ?"
+    params.append(limit)
     with _conn() as c:
         return [dict(r) for r in c.execute(q, params).fetchall()]
 
@@ -280,15 +387,17 @@ def count_poison_by_agent() -> dict[str, int]:
     """Return {agent_id: count} for poison_events. Used by /api/registry."""
     with _conn() as c:
         rows = c.execute(
-            "SELECT agent_id, COUNT(*) AS n FROM poison_events "
-            "GROUP BY agent_id").fetchall()
+            "SELECT agent_id, COUNT(*) AS n FROM poison_events GROUP BY agent_id"
+        ).fetchall()
     return {r["agent_id"]: r["n"] for r in rows}
 
 
 # ── Conversation memory (Phase 2.5) ────────────────────────────────────
 
-def fetch_recent_turns(*, agent_id: str, context_id: str,
-                       limit: int = 200) -> list[dict]:
+
+def fetch_recent_turns(
+    *, agent_id: str, context_id: str, limit: int = 200
+) -> list[dict]:
     """Return turns newest-first; caller walks token budget."""
     with _conn() as c:
         rows = c.execute(
@@ -296,25 +405,35 @@ def fetch_recent_turns(*, agent_id: str, context_id: str,
             "FROM conversation_turns "
             "WHERE agent_id = ? AND context_id = ? "
             "ORDER BY created_at DESC, id DESC LIMIT ?",
-            (agent_id, context_id, limit)).fetchall()
+            (agent_id, context_id, limit),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
-def insert_turn(*, context_id: str, agent_id: str, role: str, content: str,
-                token_count: int, skill_id: str | None) -> int:
+def insert_turn(
+    *,
+    context_id: str,
+    agent_id: str,
+    role: str,
+    content: str,
+    token_count: int,
+    skill_id: str | None,
+) -> int:
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO conversation_turns "
             "(context_id, agent_id, role, content, token_count, skill_id) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (context_id, agent_id, role, content, token_count, skill_id))
+            (context_id, agent_id, role, content, token_count, skill_id),
+        )
         return cur.lastrowid
 
 
 def delete_turns_by_context(*, context_id: str) -> int:
     with _conn() as c:
-        cur = c.execute("DELETE FROM conversation_turns WHERE context_id = ?",
-                        (context_id,))
+        cur = c.execute(
+            "DELETE FROM conversation_turns WHERE context_id = ?", (context_id,)
+        )
         return cur.rowcount
 
 
@@ -327,7 +446,8 @@ def purge_idle_contexts(*, idle_seconds: int) -> int:
             "(SELECT context_id FROM conversation_turns "
             " GROUP BY context_id "
             " HAVING MAX(created_at) < unixepoch('now') - ?)",
-            (idle_seconds,))
+            (idle_seconds,),
+        )
         return cur.rowcount
 
 
@@ -335,11 +455,13 @@ def list_conversations(agent_id: str | None = None) -> list[dict]:
     """Group conversation_turns by (agent_id, context_id) for the
     /api/conversations endpoint. Returns one row per conversation with
     aggregate fields."""
-    q = ("SELECT agent_id, context_id, COUNT(*) AS turns, "
-         "SUM(token_count) AS tokens, "
-         "MIN(created_at) AS first_seen, MAX(created_at) AS last_seen, "
-         "GROUP_CONCAT(DISTINCT skill_id) AS skills_csv "
-         "FROM conversation_turns")
+    q = (
+        "SELECT agent_id, context_id, COUNT(*) AS turns, "
+        "SUM(token_count) AS tokens, "
+        "MIN(created_at) AS first_seen, MAX(created_at) AS last_seen, "
+        "GROUP_CONCAT(DISTINCT skill_id) AS skills_csv "
+        "FROM conversation_turns"
+    )
     params: list = []
     if agent_id:
         q += " WHERE agent_id = ?"
@@ -349,15 +471,17 @@ def list_conversations(agent_id: str | None = None) -> list[dict]:
         rows = [dict(r) for r in c.execute(q, params).fetchall()]
     out = []
     for r in rows:
-        out.append({
-            "context_id": r["context_id"],
-            "agent_id": r["agent_id"],
-            "turns": r["turns"],
-            "tokens": r["tokens"] or 0,
-            "first_seen": _iso_from_epoch(r["first_seen"]),
-            "last_seen": _iso_from_epoch(r["last_seen"]),
-            "skills": [s for s in (r["skills_csv"] or "").split(",") if s],
-        })
+        out.append(
+            {
+                "context_id": r["context_id"],
+                "agent_id": r["agent_id"],
+                "turns": r["turns"],
+                "tokens": r["tokens"] or 0,
+                "first_seen": _iso_from_epoch(r["first_seen"]),
+                "last_seen": _iso_from_epoch(r["last_seen"]),
+                "skills": [s for s in (r["skills_csv"] or "").split(",") if s],
+            }
+        )
     return out
 
 
@@ -366,5 +490,6 @@ def _iso_from_epoch(ts: float | None) -> str | None:
     if ts is None:
         return None
     from datetime import datetime, timezone
+
     dt = datetime.fromtimestamp(ts, tz=timezone.utc)
     return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")

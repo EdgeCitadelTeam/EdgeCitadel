@@ -24,9 +24,9 @@ from nats.errors import Error as NATSError
 
 import nats
 import scripts.research.modes.core_nats as core_module
-from adapters._common.task_executor import InjectedCrash, TaskExecutor
-from adapters._common.task_types import PublicationReceipt
-from adapters._common.validator import canonical_json, default_validator
+from edgecitadel_plugin_runtime.task_executor import InjectedCrash, TaskExecutor
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.validator import canonical_json, default_validator
 from scripts.research.modes.base import EventSink, Mode, TaskTransport
 from scripts.research.modes.core_nats import CoreNatsTransport
 from tests.research.nats_server import NatsServer
@@ -2782,8 +2782,13 @@ def test_jetstream_config_is_exact_and_durable_names_are_role_hashed() -> None:
         "discard": "old",
         "duplicate_window_ns": 300_000_000_000,
     }
-    assert durable_name("task", "run-1", "worker-1") == "ec_task_975199eb4b31d34b70d5b90b"
-    assert durable_name("result", "run-1", "worker-1") == "ec_result_ef6835bd04ff28ddeb7242cb"
+    assert (
+        durable_name("task", "run-1", "worker-1") == "ec_task_975199eb4b31d34b70d5b90b"
+    )
+    assert (
+        durable_name("result", "run-1", "worker-1")
+        == "ec_result_ef6835bd04ff28ddeb7242cb"
+    )
     assert durable_name("transient", "run-1", "observer-1") == (
         "ec_transient_cbcd7085c8510080924d6137"
     )
@@ -2821,9 +2826,7 @@ def test_durable_mode_public_exports_and_constructor_seams_are_exact() -> None:
         "sleep",
     )
     assert tuple(durable_signature.parameters) == tuple(
-        parameter
-        for parameter in edge_signature.parameters
-        if parameter != "ablation"
+        parameter for parameter in edge_signature.parameters if parameter != "ablation"
     )
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
@@ -2871,9 +2874,7 @@ async def test_durable_publications_use_exact_puback_headers_and_receipts(
         ) -> SimpleNamespace:
             self.calls.append((subject, data, dict(kwargs)))
             stream = (
-                "TRANSIENT_EVENTS"
-                if subject.endswith("heartbeat")
-                else "AGENT_INBOX"
+                "TRANSIENT_EVENTS" if subject.endswith("heartbeat") else "AGENT_INBOX"
             )
             return SimpleNamespace(stream=stream, seq=len(self.calls), duplicate=True)
 
@@ -2927,7 +2928,9 @@ async def test_durable_publications_use_exact_puback_headers_and_receipts(
         connection_factory=_as_connection_factory(connect),
     )
     monkeypatch.setattr(edge_full, "_ensure_streams", streams)
-    await edge_full.submit_task(_command(envelope_id="10000000-0000-4000-8000-000000000002"))
+    await edge_full.submit_task(
+        _command(envelope_id="10000000-0000-4000-8000-000000000002")
+    )
     assert connection.js.calls[-1] == (
         "agents.worker-1.inbox",
         canonical_json(_command(envelope_id="10000000-0000-4000-8000-000000000002")),
@@ -2953,7 +2956,10 @@ async def test_durable_publications_use_exact_puback_headers_and_receipts(
 
     edge_receipt = await edge_full.publish_progress(_progress())
     assert connection.core_calls == [
-        ("agents.worker-1.task_progress.20000000-0000-4000-8000-000000000001", canonical_json(_progress()))
+        (
+            "agents.worker-1.task_progress.20000000-0000-4000-8000-000000000001",
+            canonical_json(_progress()),
+        )
     ]
     assert edge_receipt.stream is None
     assert edge_receipt.duplicate is None
@@ -3261,7 +3267,10 @@ async def test_edgecitadel_ablations_report_real_jetstream_deduplication(
         )
         assert first_without_dedup.duplicate is None
         assert second_without_dedup.duplicate is None
-        assert second_without_dedup.stream_sequence == first_without_dedup.stream_sequence + 1
+        assert (
+            second_without_dedup.stream_sequence
+            == first_without_dedup.stream_sequence + 1
+        )
     finally:
         if full is not None:
             await full.close()
@@ -3575,7 +3584,9 @@ async def test_all_durable_receiver_registration_stays_outside_jetstream(
         _assert_owned_docker_inventory_empty()
 
 
-def test_durable_mode_resolved_configs_are_exact_fresh_and_transport_compatible() -> None:
+def test_durable_mode_resolved_configs_are_exact_fresh_and_transport_compatible() -> (
+    None
+):
     from scripts.research.modes.all_durable import AllDurableTransport
     from scripts.research.modes.edgecitadel import EdgeCitadelTransport
 
@@ -3611,22 +3622,50 @@ def test_durable_mode_resolved_configs_are_exact_fresh_and_transport_compatible(
     )
 
     expected = (
-        (edge_none, Mode.EDGECITADEL, False, {
-            "mode": "edgecitadel", "ablation": "none", "nats_msg_id": False,
-            "outcome_ledger": False,
-        }),
-        (edge_broker, Mode.EDGECITADEL, False, {
-            "mode": "edgecitadel", "ablation": "broker-only", "nats_msg_id": True,
-            "outcome_ledger": False,
-        }),
-        (edge_full, Mode.EDGECITADEL, True, {
-            "mode": "edgecitadel", "ablation": "full-contract", "nats_msg_id": True,
-            "outcome_ledger": True,
-        }),
-        (durable, Mode.ALL_DURABLE, True, {
-            "mode": "all-durable", "ablation": "full-contract", "nats_msg_id": True,
-            "outcome_ledger": True,
-        }),
+        (
+            edge_none,
+            Mode.EDGECITADEL,
+            False,
+            {
+                "mode": "edgecitadel",
+                "ablation": "none",
+                "nats_msg_id": False,
+                "outcome_ledger": False,
+            },
+        ),
+        (
+            edge_broker,
+            Mode.EDGECITADEL,
+            False,
+            {
+                "mode": "edgecitadel",
+                "ablation": "broker-only",
+                "nats_msg_id": True,
+                "outcome_ledger": False,
+            },
+        ),
+        (
+            edge_full,
+            Mode.EDGECITADEL,
+            True,
+            {
+                "mode": "edgecitadel",
+                "ablation": "full-contract",
+                "nats_msg_id": True,
+                "outcome_ledger": True,
+            },
+        ),
+        (
+            durable,
+            Mode.ALL_DURABLE,
+            True,
+            {
+                "mode": "all-durable",
+                "ablation": "full-contract",
+                "nats_msg_id": True,
+                "outcome_ledger": True,
+            },
+        ),
     )
     for transport, mode, ledger_enabled, config in expected:
         assert _accept_task_transport(transport) is transport

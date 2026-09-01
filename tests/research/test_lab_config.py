@@ -46,7 +46,9 @@ def _git_repo(root: Path) -> Path:
     (root / "scripts/research/Dockerfile").write_text("FROM scratch\n")
     (root / "scripts/research/requirements.lock.txt").write_text("# lock\n")
     subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "tests@example.invalid"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tests@example.invalid"], cwd=root, check=True
+    )
     subprocess.run(["git", "config", "user.name", "tests"], cwd=root, check=True)
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(["git", "commit", "--quiet", "-m", "initial"], cwd=root, check=True)
@@ -63,7 +65,9 @@ def test_slice_dependencies_are_exact_public_contracts() -> None:
     assert os.access("scripts/research/run-python", os.X_OK)
     assert Path("scripts/research/requirements.lock.txt").is_file()
     assert Path("scripts/research/toolchain.json").is_file()
-    assert LAB_NGINX_IMAGE.endswith("5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de")
+    assert LAB_NGINX_IMAGE.endswith(
+        "5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"
+    )
     assert Path("e2e/playwright.evidence.config.js").is_file()
 
 
@@ -92,7 +96,9 @@ def test_credential_errors_never_echo_malformed_content(tmp_path: Path) -> None:
     assert "line 1" in str(error.value)
 
 
-def test_raw_credential_and_service_env_are_distinct_private_formats(tmp_path: Path) -> None:
+def test_raw_credential_and_service_env_are_distinct_private_formats(
+    tmp_path: Path,
+) -> None:
     raw = tmp_path / "nats.creds"
     service_env = tmp_path / "service.env"
     token = "4" * 64
@@ -110,7 +116,17 @@ def test_raw_credential_and_service_env_are_distinct_private_formats(tmp_path: P
 
 def test_private_config_serializes_no_crash_as_json_null(tmp_path: Path) -> None:
     path = tmp_path / "native-control.json"
-    config = NativeControlConfig("ec-lab-01", "shell-1", "edgecitadel", "echo", 125, None, 1000, "/run/state/outcomes.sqlite", "/run/state/side-effects.sqlite")
+    config = NativeControlConfig(
+        "ec-lab-01",
+        "shell-1",
+        "edgecitadel",
+        "echo",
+        125,
+        None,
+        1000,
+        "/run/state/outcomes.sqlite",
+        "/run/state/side-effects.sqlite",
+    )
     write_private_json(path, asdict(config))
     assert json.loads(path.read_text())["crash_point"] is None
     assert path.stat().st_mode & 0o777 == 0o600
@@ -126,12 +142,18 @@ def test_fixture_build_returns_and_uses_only_immutable_image_id(tmp_path: Path) 
 
     image = build_fixture_image(repo_root, "ec-lab-01", runner)
     assert image.image_id == "sha256:" + "3" * 64
-    assert image.dockerfile_sha256 == sha256_file(repo_root / "scripts/research/Dockerfile")
-    assert image.requirements_lock_sha256 == sha256_file(repo_root / "scripts/research/requirements.lock.txt")
+    assert image.dockerfile_sha256 == sha256_file(
+        repo_root / "scripts/research/Dockerfile"
+    )
+    assert image.requirements_lock_sha256 == sha256_file(
+        repo_root / "scripts/research/requirements.lock.txt"
+    )
     assert calls[-1][-1] == "edgecitadel-lab-fixture:ec-lab-01"
 
 
-def test_source_provenance_is_captured_before_outputs_and_is_path_scoped(tmp_path: Path) -> None:
+def test_source_provenance_is_captured_before_outputs_and_is_path_scoped(
+    tmp_path: Path,
+) -> None:
     repo = _git_repo(tmp_path / "source")
     before = capture_clean_source_provenance(repo)
     assert before.dirty is False

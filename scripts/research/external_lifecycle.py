@@ -11,7 +11,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Protocol
 
-from adapters._common.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
 from scripts.research.fixtures.native_control import NativeControlConfig
 from scripts.research.modes.base import Mode
 from scripts.research.workload_matrix import CrashPoint

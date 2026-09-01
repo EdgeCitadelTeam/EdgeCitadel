@@ -2,6 +2,10 @@
 
 Browser-side process that connects to the EdgeCitadel NATS plane on behalf of an operator session. Publishes `register` / `heartbeat` / `status` on plain NATS using an account-scoped `OPENCLAW_TOKEN`, dispatches commands through the aggregator HTTP API, and observes task results on the per-session subject prefix `openclaw.{session_id}.results.*`.
 
+This client is intentionally not an Agent Plugin. It represents an untrusted,
+short-lived browser/operator session with a scoped token; installing it through
+the host Plugin Supervisor would collapse the trust boundary described below.
+
 This is the v0.1 clean rebuild on `@nats-io/nats-core` + `@nats-io/transport-node`. The legacy MQTT listener (`mqtt-listener.js`, paho-mqtt) is removed.
 
 ## Why a scoped token
@@ -60,5 +64,5 @@ Tests are stand-alone (no NATS broker required). They exercise the envelope buil
 ## Layout
 
 - `index.js` — top-level runner; opens the NATS connection, publishes register/heartbeats, subscribes results, handles shutdown.
-- `src/nats-session.js` — envelope builders (`buildRegisterEnvelope`, `buildHeartbeatEnvelope`, `buildStatusEnvelope`, `buildCommandEnvelope`) and the strict envelope validator. Same canonical shape as the Python adapters.
+- `src/nats-session.js` — envelope builders (`buildRegisterEnvelope`, `buildHeartbeatEnvelope`, `buildStatusEnvelope`, `buildCommandEnvelope`) and the strict envelope validator. Same canonical shape as Python Plugin runtimes.
 - `tests/nats-session.test.js` — node:test cases covering register/heartbeat shape, legacy-field rejection, and command envelope acceptance.

@@ -1,0 +1,42 @@
+apiVersion: edgecitadel.io/v1alpha1
+kind: AgentPlugin
+
+metadata:
+  name: homeassistant
+  displayName: Home Assistant Agent
+  description: Executes bounded allowlisted Home Assistant observations and actions.
+  version: 0.1.0
+  publisher: edgecitadel
+
+compatibility:
+  supervisorApi: ">=0.1.0,<0.2.0"
+  protocols: [edgecitadel.plugin.v1]
+
+runtime:
+  command: [python, -m, edgecitadel_homeassistant_plugin]
+  pythonRequirements: edgecitadel_homeassistant_plugin/requirements.txt
+  environmentVariables: [HA_BASE_URL, HA_ALLOWED_LIGHTS, HA_ALLOWED_ENTITIES, HA_ALLOWED_CAMERAS, HA_CAMERA_ROIS, HA_MAX_SEQUENCE_STEPS, LOG_LEVEL]
+  healthTimeoutSeconds: 30
+  restartPolicy: on-failure
+
+skills:
+  directory: skills
+
+agents:
+  - id: homeassistant-1
+    skillNames: [read-state, control-light, read-camera-luma, run-sequence]
+    listensBroadcast: false
+
+permissions:
+  knowledge: []
+  messaging:
+    outboundAgents: [aggregator]
+  network:
+    outbound: [home-assistant]
+  devices: [smart-home]
+
+security:
+  sandbox: restricted
+  secrets: [HA_TOKEN_FILE]
+
+extensions: {}

@@ -81,14 +81,15 @@ class CheckReport:
         if not self.valid:
             raise ArtifactInvalid(
                 "; ".join(
-                    f"{item.code}: {item.path}: {item.message}"
-                    for item in self.issues
+                    f"{item.code}: {item.path}: {item.message}" for item in self.issues
                 )
             )
 
 
 def _report(issues: Sequence[ArtifactIssue]) -> CheckReport:
-    ordered = tuple(sorted(issues, key=lambda item: (item.code, item.path, item.message)))
+    ordered = tuple(
+        sorted(issues, key=lambda item: (item.code, item.path, item.message))
+    )
     return CheckReport(not ordered, ordered)
 
 
@@ -101,7 +102,9 @@ def _read_json(path: Path, issues: list[ArtifactIssue]) -> object | None:
         return None
 
 
-def _issue(issues: list[ArtifactIssue], code: str, path: Path | str, message: str) -> None:
+def _issue(
+    issues: list[ArtifactIssue], code: str, path: Path | str, message: str
+) -> None:
     issues.append(ArtifactIssue(code, str(path), message))
 
 
@@ -111,11 +114,25 @@ def _operator_issues(
     issues: list[ArtifactIssue] = []
     projects = manifest.get("projects")
     if not isinstance(projects, Mapping) or set(projects) != set(OPERATOR_PROJECTS):
-        _issue(issues, "OPERATOR_PROJECTS_INVALID", "manifest.json", "desktop and mobile projects are required")
+        _issue(
+            issues,
+            "OPERATOR_PROJECTS_INVALID",
+            "manifest.json",
+            "desktop and mobile projects are required",
+        )
         return issues
-    task_ids = [projects[name].get("task_id") for name in OPERATOR_PROJECTS if isinstance(projects[name], Mapping)]
+    task_ids = [
+        projects[name].get("task_id")
+        for name in OPERATOR_PROJECTS
+        if isinstance(projects[name], Mapping)
+    ]
     if len(task_ids) != 2 or len(set(task_ids)) != 2:
-        _issue(issues, "OPERATOR_TASK_IDS_NOT_DISTINCT", "manifest.json", "desktop and mobile task IDs must differ")
+        _issue(
+            issues,
+            "OPERATOR_TASK_IDS_NOT_DISTINCT",
+            "manifest.json",
+            "desktop and mobile task IDs must differ",
+        )
     for name in OPERATOR_PROJECTS:
         expected = projects[name]
         if not isinstance(expected, Mapping):
@@ -123,14 +140,25 @@ def _operator_issues(
         project_root = Path("raw/playwright") / name
         api_root = Path("raw/api") / name
         required = (
-            project_root / "chat.png", project_root / "tasks.png", project_root / "video.webm",
-            project_root / "trace.zip", project_root / "operator-metadata.json",
-            api_root / "system-status.json", api_root / "registry.json", api_root / "messages.json", api_root / "queue.json",
+            project_root / "chat.png",
+            project_root / "tasks.png",
+            project_root / "video.webm",
+            project_root / "trace.zip",
+            project_root / "operator-metadata.json",
+            api_root / "system-status.json",
+            api_root / "registry.json",
+            api_root / "messages.json",
+            api_root / "queue.json",
         )
         missing = False
         for relative in required:
             if not (bundle / relative).is_file():
-                _issue(issues, "OPERATOR_ARTIFACT_MISSING", relative, "required operator artifact is absent")
+                _issue(
+                    issues,
+                    "OPERATOR_ARTIFACT_MISSING",
+                    relative,
+                    "required operator artifact is absent",
+                )
                 missing = True
         if missing:
             continue
@@ -142,36 +170,148 @@ def _operator_issues(
         if not isinstance(metadata, Mapping) or not isinstance(messages, list):
             continue
         if metadata.get("project") != name:
-            _issue(issues, "OPERATOR_METADATA_MISMATCH", project_root / "operator-metadata.json", "metadata project differs from directory")
+            _issue(
+                issues,
+                "OPERATOR_METADATA_MISMATCH",
+                project_root / "operator-metadata.json",
+                "metadata project differs from directory",
+            )
         for key, value in expected.items():
             if metadata.get(key) != value:
-                _issue(issues, "OPERATOR_METADATA_MISMATCH", project_root / "operator-metadata.json", f"{name} {key} does not match manifest")
+                _issue(
+                    issues,
+                    "OPERATOR_METADATA_MISMATCH",
+                    project_root / "operator-metadata.json",
+                    f"{name} {key} does not match manifest",
+                )
         if expected.get("command_body") != expected.get("nonce"):
-            _issue(issues, "OPERATOR_COMMAND_BODY_MISMATCH", "manifest.json", f"{name} command body differs from nonce")
+            _issue(
+                issues,
+                "OPERATOR_COMMAND_BODY_MISMATCH",
+                "manifest.json",
+                f"{name} command body differs from nonce",
+            )
         if expected.get("expected_output") != f"edgecitadel:{expected.get('nonce')}":
-            _issue(issues, "OPERATOR_OUTPUT_MISMATCH", "manifest.json", f"{name} output is not deterministic")
-        if any(not isinstance(row, Mapping) or row.get("task_id") != expected.get("task_id") for row in messages):
-            _issue(issues, "OPERATOR_CROSS_PROJECT_TASK", api_root / "messages.json", f"{name} contains another task")
-        commands = [row for row in messages if isinstance(row, Mapping) and row.get("type") == "command"]
-        terminals = [row for row in messages if isinstance(row, Mapping) and row.get("type") == "result" and row.get("task_state") in TERMINAL_STATES]
-        if len(commands) != 1 or commands[0].get("payload", {}).get("body") != expected.get("command_body"):
-            _issue(issues, "OPERATOR_COMMAND_COUNT_OR_BODY", api_root / "messages.json", f"{name} must contain one exact command")
-        if len(terminals) != 1 or terminals[0].get("task_state") != "completed" or terminals[0].get("payload", {}).get("body") != expected.get("expected_output"):
-            _issue(issues, "OPERATOR_TERMINAL_COUNT_OR_BODY", api_root / "messages.json", f"{name} must contain one completed result")
+            _issue(
+                issues,
+                "OPERATOR_OUTPUT_MISMATCH",
+                "manifest.json",
+                f"{name} output is not deterministic",
+            )
+        if any(
+            not isinstance(row, Mapping)
+            or row.get("task_id") != expected.get("task_id")
+            for row in messages
+        ):
+            _issue(
+                issues,
+                "OPERATOR_CROSS_PROJECT_TASK",
+                api_root / "messages.json",
+                f"{name} contains another task",
+            )
+        commands = [
+            row
+            for row in messages
+            if isinstance(row, Mapping) and row.get("type") == "command"
+        ]
+        terminals = [
+            row
+            for row in messages
+            if isinstance(row, Mapping)
+            and row.get("type") == "result"
+            and row.get("task_state") in TERMINAL_STATES
+        ]
+        if len(commands) != 1 or commands[0].get("payload", {}).get(
+            "body"
+        ) != expected.get("command_body"):
+            _issue(
+                issues,
+                "OPERATOR_COMMAND_COUNT_OR_BODY",
+                api_root / "messages.json",
+                f"{name} must contain one exact command",
+            )
+        if (
+            len(terminals) != 1
+            or terminals[0].get("task_state") != "completed"
+            or terminals[0].get("payload", {}).get("body")
+            != expected.get("expected_output")
+        ):
+            _issue(
+                issues,
+                "OPERATOR_TERMINAL_COUNT_OR_BODY",
+                api_root / "messages.json",
+                f"{name} must contain one completed result",
+            )
         if len(commands) == 1:
             context_id = commands[0].get("context_id")
-            correlated = [row for row in messages if isinstance(row, Mapping) and row.get("type") in {"task.progress", "result"}]
-            if not context_id or commands[0].get("hop_count") != 0 or any(row.get("context_id") != context_id or row.get("hop_count") != 0 for row in correlated):
-                _issue(issues, "OPERATOR_CORRELATION_MISMATCH", api_root / "messages.json", f"{name} correlation is not preserved")
-        if not isinstance(status, Mapping) or status.get("nats_connected") is not True or status.get("jetstream_stream_ok") is not True:
-            _issue(issues, "OPERATOR_SYSTEM_UNHEALTHY", api_root / "system-status.json", f"{name} system status is unhealthy")
-        shell = [row for row in registry if isinstance(row, Mapping) and row.get("agent_id") == "shell-1"] if isinstance(registry, list) else []
+            correlated = [
+                row
+                for row in messages
+                if isinstance(row, Mapping)
+                and row.get("type") in {"task.progress", "result"}
+            ]
+            if (
+                not context_id
+                or commands[0].get("hop_count") != 0
+                or any(
+                    row.get("context_id") != context_id or row.get("hop_count") != 0
+                    for row in correlated
+                )
+            ):
+                _issue(
+                    issues,
+                    "OPERATOR_CORRELATION_MISMATCH",
+                    api_root / "messages.json",
+                    f"{name} correlation is not preserved",
+                )
+        if (
+            not isinstance(status, Mapping)
+            or status.get("nats_connected") is not True
+            or status.get("jetstream_stream_ok") is not True
+        ):
+            _issue(
+                issues,
+                "OPERATOR_SYSTEM_UNHEALTHY",
+                api_root / "system-status.json",
+                f"{name} system status is unhealthy",
+            )
+        shell = (
+            [
+                row
+                for row in registry
+                if isinstance(row, Mapping) and row.get("agent_id") == "shell-1"
+            ]
+            if isinstance(registry, list)
+            else []
+        )
         if len(shell) != 1 or shell[0].get("agent_state") != "online":
-            _issue(issues, "OPERATOR_SHELL_NOT_ONLINE", api_root / "registry.json", f"{name} requires one online shell-1")
-        elif shell[0].get("card", {}).get("metadata", {}).get("runtime.conformance") != "L1":
-            _issue(issues, "OPERATOR_CONFORMANCE_MISMATCH", api_root / "registry.json", f"{name} shell-1 is not L1")
-        if not isinstance(queue, Mapping) or queue.get("pending") != 0 or queue.get("ack_pending") != 0:
-            _issue(issues, "OPERATOR_QUEUE_NOT_DRAINED", api_root / "queue.json", f"{name} queue is not drained")
+            _issue(
+                issues,
+                "OPERATOR_SHELL_NOT_ONLINE",
+                api_root / "registry.json",
+                f"{name} requires one online shell-1",
+            )
+        elif (
+            shell[0].get("card", {}).get("metadata", {}).get("runtime.conformance")
+            != "L1"
+        ):
+            _issue(
+                issues,
+                "OPERATOR_CONFORMANCE_MISMATCH",
+                api_root / "registry.json",
+                f"{name} shell-1 is not L1",
+            )
+        if (
+            not isinstance(queue, Mapping)
+            or queue.get("pending") != 0
+            or queue.get("ack_pending") != 0
+        ):
+            _issue(
+                issues,
+                "OPERATOR_QUEUE_NOT_DRAINED",
+                api_root / "queue.json",
+                f"{name} queue is not drained",
+            )
     runtime_path = bundle / "raw/runtime/launcher-summary.json"
     cleanup_path = bundle / "raw/runtime/cleanup.json"
     runtime = _read_json(runtime_path, issues)
@@ -179,26 +319,73 @@ def _operator_issues(
     if not isinstance(runtime, Mapping) or not isinstance(cleanup, Mapping):
         return issues
     if runtime.get("cleanup") != cleanup:
-        _issue(issues, "OPERATOR_RUNTIME_MISMATCH", runtime_path, "runtime cleanup copies disagree")
+        _issue(
+            issues,
+            "OPERATOR_RUNTIME_MISMATCH",
+            runtime_path,
+            "runtime cleanup copies disagree",
+        )
     resources = cleanup.get("resources")
     if cleanup.get("valid") is not True or not isinstance(resources, Mapping):
         _issue(issues, "OPERATOR_CLEANUP_INVALID", cleanup_path, "cleanup is invalid")
-    elif any(resources.get(name) != [] for name in ("containers", "networks", "volumes", "owned_build_images")):
-        _issue(issues, "OPERATOR_CLEANUP_RESIDUE", cleanup_path, "cleanup left owned resources")
+    elif any(
+        resources.get(name) != []
+        for name in ("containers", "networks", "volumes", "owned_build_images")
+    ):
+        _issue(
+            issues,
+            "OPERATOR_CLEANUP_RESIDUE",
+            cleanup_path,
+            "cleanup left owned resources",
+        )
     report = _read_json(bundle / "playwright-results.json", issues)
-    if not isinstance(report, Mapping) or report.get("schema_version") != "playwright-operator-results.v1":
-        _issue(issues, "OPERATOR_REPORT_INVALID", "playwright-results.json", "portable Playwright report is invalid")
+    if (
+        not isinstance(report, Mapping)
+        or report.get("schema_version") != "playwright-operator-results.v1"
+    ):
+        _issue(
+            issues,
+            "OPERATOR_REPORT_INVALID",
+            "playwright-results.json",
+            "portable Playwright report is invalid",
+        )
     if source_root is None:
-        _issue(issues, "OPERATOR_SOURCE_ROOT_REQUIRED", "manifest.json", "operator source verification requires source_root")
+        _issue(
+            issues,
+            "OPERATOR_SOURCE_ROOT_REQUIRED",
+            "manifest.json",
+            "operator source verification requires source_root",
+        )
     else:
         source = capture_source_provenance(source_root)
         expected_source = manifest.get("source", {})
-        if not isinstance(expected_source, Mapping) or source.commit != expected_source.get("commit"):
-            _issue(issues, "OPERATOR_SOURCE_COMMIT_MISMATCH", "manifest.json", "source HEAD differs from capture commit")
+        if not isinstance(
+            expected_source, Mapping
+        ) or source.commit != expected_source.get("commit"):
+            _issue(
+                issues,
+                "OPERATOR_SOURCE_COMMIT_MISMATCH",
+                "manifest.json",
+                "source HEAD differs from capture commit",
+            )
         if source.git_dirty:
-            _issue(issues, "OPERATOR_SOURCE_DIRTY", "manifest.json", "operator source paths are dirty")
-        if not isinstance(expected_source, Mapping) or source.source_sha256 != expected_source.get("source_sha256") or list(source.paths) != expected_source.get("paths"):
-            _issue(issues, "OPERATOR_SOURCE_SNAPSHOT_MISMATCH", "manifest.json", "relevant source differs from capture source")
+            _issue(
+                issues,
+                "OPERATOR_SOURCE_DIRTY",
+                "manifest.json",
+                "operator source paths are dirty",
+            )
+        if (
+            not isinstance(expected_source, Mapping)
+            or source.source_sha256 != expected_source.get("source_sha256")
+            or list(source.paths) != expected_source.get("paths")
+        ):
+            _issue(
+                issues,
+                "OPERATOR_SOURCE_SNAPSHOT_MISMATCH",
+                "manifest.json",
+                "relevant source differs from capture source",
+            )
     return issues
 
 
@@ -219,7 +406,9 @@ def _lab_issues(
     ]
 
 
-def check_bundle(bundle: Path, *, expected_kind: str | None = None, source_root: Path | None = None) -> CheckReport:
+def check_bundle(
+    bundle: Path, *, expected_kind: str | None = None, source_root: Path | None = None
+) -> CheckReport:
     bundle = bundle.resolve()
     issues: list[ArtifactIssue] = []
     manifest_path = bundle / "manifest.json"
@@ -240,14 +429,30 @@ def check_bundle(bundle: Path, *, expected_kind: str | None = None, source_root:
         )
     kind = manifest.get("evidence_kind")
     if expected_kind is not None and kind != expected_kind:
-        _issue(issues, "ARTIFACT_KIND_MISMATCH", manifest_path, "bundle kind differs from request")
+        _issue(
+            issues,
+            "ARTIFACT_KIND_MISMATCH",
+            manifest_path,
+            "bundle kind differs from request",
+        )
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, Mapping):
-        _issue(issues, "ARTIFACTS_INVALID", manifest_path, "artifact digest map is invalid")
+        _issue(
+            issues, "ARTIFACTS_INVALID", manifest_path, "artifact digest map is invalid"
+        )
     else:
-        actual = {path.relative_to(bundle).as_posix(): file_sha256(path) for path in bundle.rglob("*") if path.is_file() and path.name != "manifest.json"}
+        actual = {
+            path.relative_to(bundle).as_posix(): file_sha256(path)
+            for path in bundle.rglob("*")
+            if path.is_file() and path.name != "manifest.json"
+        }
         if actual != dict(artifacts):
-            _issue(issues, "ARTIFACT_HASH_MISMATCH", manifest_path, "artifact digest map does not match bundle")
+            _issue(
+                issues,
+                "ARTIFACT_HASH_MISMATCH",
+                manifest_path,
+                "artifact digest map does not match bundle",
+            )
     base_valid = not issues
     if manifest.get("status") != "PASS":
         _issue(
@@ -257,9 +462,17 @@ def check_bundle(bundle: Path, *, expected_kind: str | None = None, source_root:
             "bundle is explicitly invalid",
         )
     if kind == "operator":
-        issues.extend(_operator_issues(bundle, manifest, source_root.resolve() if source_root else None))
+        issues.extend(
+            _operator_issues(
+                bundle, manifest, source_root.resolve() if source_root else None
+            )
+        )
     if kind == "lab" and base_valid:
-        issues.extend(_lab_issues(bundle, manifest, source_root.resolve() if source_root else None))
+        issues.extend(
+            _lab_issues(
+                bundle, manifest, source_root.resolve() if source_root else None
+            )
+        )
     return _report(issues)
 
 
@@ -399,7 +612,9 @@ def _workload_evidence_error(
         )
         if any(not isinstance(subtrial, Mapping) for subtrial in subtrials):
             return "W5 crash subtrials must be objects"
-        subtrial_rows = [subtrial for subtrial in subtrials if isinstance(subtrial, Mapping)]
+        subtrial_rows = [
+            subtrial for subtrial in subtrials if isinstance(subtrial, Mapping)
+        ]
         for field in fields:
             values = [subtrial.get(field) for subtrial in subtrial_rows]
             if any(type(value) is not int or value < 0 for value in values):
@@ -421,7 +636,10 @@ def _workload_evidence_error(
             or not isinstance(accepted, (list, tuple))
             or not isinstance(sequences, (list, tuple))
             or not isinstance(duplicates, (list, tuple))
-            or any(len(value) != 2 for value in (envelope_ids, accepted, sequences, duplicates))
+            or any(
+                len(value) != 2
+                for value in (envelope_ids, accepted, sequences, duplicates)
+            )
         ):
             return "W6a retry evidence must contain two publication receipts"
         if (
@@ -457,7 +675,10 @@ def _workload_evidence_error(
         elapsed = window.get("retry_elapsed_seconds")
         retention = window.get("ledger_retention_seconds")
         if (
-            any(type(value) is not int or value < 0 for value in (broker, elapsed, retention))
+            any(
+                type(value) is not int or value < 0
+                for value in (broker, elapsed, retention)
+            )
             or elapsed <= broker  # type: ignore[operator]
             or elapsed >= retention  # type: ignore[operator]
             or counts.get("accepted") != 2
@@ -519,10 +740,7 @@ def _observation_issues(
             path,
             f"declared outcome {outcome!r} contradicts observed {inferred_outcome!r}",
         )
-    counts = {
-        name: observation[name]
-        for name in _OBSERVATION_COUNTS
-    }
+    counts = {name: observation[name] for name in _OBSERVATION_COUNTS}
     evidence_error = _workload_evidence_error(
         workload,
         observation.get("workload_evidence"),
@@ -649,9 +867,7 @@ def _schedule_issues(
     total_blocks = warmup + measured
     block_cells: dict[int, list[tuple[str, str, str, str, int]]] = {}
     run_ids: list[str] = []
-    normalized_rows: list[
-        tuple[str, int, bool, tuple[str, str, str, str, int]]
-    ] = []
+    normalized_rows: list[tuple[str, int, bool, tuple[str, str, str, str, int]]] = []
     timeouts = config.get("workload_timeouts")
     timeout_mismatch = False
     for row in schedule:
@@ -867,13 +1083,14 @@ def check_campaign(
         or not isinstance(expected_source.get("commit"), str)
         or re.fullmatch(r"[0-9a-f]{40}", str(expected_source.get("commit"))) is None
         or not isinstance(expected_source.get("source_sha256"), str)
-        or re.fullmatch(
-            r"[0-9a-f]{64}", str(expected_source.get("source_sha256"))
-        )
+        or re.fullmatch(r"[0-9a-f]{64}", str(expected_source.get("source_sha256")))
         is None
         or not isinstance(expected_source.get("paths"), list)
         or not expected_source.get("paths")
-        or any(type(item) is not str or not item for item in expected_source.get("paths", []))
+        or any(
+            type(item) is not str or not item
+            for item in expected_source.get("paths", [])
+        )
     ):
         _issue(
             issues,
@@ -933,10 +1150,9 @@ def check_campaign(
                 bundle,
                 "schedule, manifest, and trial run IDs differ",
             )
-        if (
-            manifest.get("campaign_id") != metadata.get("campaign_id")
-            or manifest.get("profile") != metadata.get("profile")
-        ):
+        if manifest.get("campaign_id") != metadata.get("campaign_id") or manifest.get(
+            "profile"
+        ) != metadata.get("profile"):
             _issue(
                 issues,
                 "CAMPAIGN_BUNDLE_METADATA_MISMATCH",
@@ -1014,8 +1230,7 @@ def check_campaign(
             trial.get("block") != row.get("block")
             or trial.get("measured") != row.get("measured")
             or _cell_key(trial.get("cell")) != _cell_key(row.get("cell"))
-            or _cell_key(manifest.get("workload_config"))
-            != _cell_key(row.get("cell"))
+            or _cell_key(manifest.get("workload_config")) != _cell_key(row.get("cell"))
         ):
             _issue(
                 issues,
@@ -1095,15 +1310,21 @@ def check_campaign(
             cell = _cell_key(row.get("cell"))
             workload = cell[0] if cell is not None else None
             evidence = observation.get("workload_evidence")
-            expected_evidence = {
-                "W5": "crash_subtrials",
-                "W6a": "wire_retry",
-                "W6b": "semantic_retry",
-                "W6c": "collision",
-            }.get(workload) if workload is not None else None
+            expected_evidence = (
+                {
+                    "W5": "crash_subtrials",
+                    "W6a": "wire_retry",
+                    "W6b": "semantic_retry",
+                    "W6c": "collision",
+                }.get(workload)
+                if workload is not None
+                else None
+            )
             if expected_evidence is not None and (
                 not isinstance(evidence, Mapping)
-                or not isinstance(evidence.get(expected_evidence), (Mapping, list, tuple))
+                or not isinstance(
+                    evidence.get(expected_evidence), (Mapping, list, tuple)
+                )
             ):
                 _issue(
                     issues,

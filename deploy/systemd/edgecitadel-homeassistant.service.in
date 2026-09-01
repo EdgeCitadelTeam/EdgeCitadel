@@ -1,6 +1,6 @@
 [Unit]
-Description=EdgeCitadel — Home Assistant environment adapter
-Documentation=file:///opt/edgecitadel/adapters/homeassistant/README.md
+Description=EdgeCitadel — Home Assistant Plugin runtime
+Documentation=file:///opt/edgecitadel/plugins/homeassistant/README.md
 After=network-online.target docker.service
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 User=edgecitadel
 Group=edgecitadel
-WorkingDirectory=/opt/edgecitadel
+WorkingDirectory=/opt/edgecitadel/plugins/homeassistant
 
 EnvironmentFile=/etc/edgecitadel/env
 EnvironmentFile=/etc/edgecitadel/homeassistant.env
@@ -16,7 +16,7 @@ Environment="NATS_URL=nats://localhost:4222"
 Environment="HA_MAX_SEQUENCE_STEPS=32"
 Environment="PYTHONUNBUFFERED=1"
 
-ExecStart=/var/lib/edgecitadel/venvs/homeassistant/bin/python -m adapters.homeassistant.adapter
+ExecStart=/var/lib/edgecitadel/venvs/homeassistant/bin/python -m edgecitadel_homeassistant_plugin
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=20

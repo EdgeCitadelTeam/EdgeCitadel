@@ -528,12 +528,16 @@ async def run_cell(
     if cell.workload == "W6a":
         receipts.append(await transport.submit_task(envelope))
         workload_evidence["wire_retry"] = {
-            "envelope_ids": [getattr(receipt, "envelope_id", None) for receipt in receipts],
+            "envelope_ids": [
+                getattr(receipt, "envelope_id", None) for receipt in receipts
+            ],
             "accepted": [getattr(receipt, "accepted", None) for receipt in receipts],
             "stream_sequences": [
                 getattr(receipt, "stream_sequence", None) for receipt in receipts
             ],
-            "duplicate_flags": [getattr(receipt, "duplicate", None) for receipt in receipts],
+            "duplicate_flags": [
+                getattr(receipt, "duplicate", None) for receipt in receipts
+            ],
         }
     if cell.workload == "W6b":
         if not isinstance(observers, Mapping):

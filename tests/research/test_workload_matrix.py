@@ -7,7 +7,7 @@ from time import perf_counter_ns
 
 import pytest
 
-from adapters._common.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
 from scripts.research.modes.base import ObservedEnvelope
 from scripts.research.workload_matrix import (
     CrashPoint,
@@ -506,8 +506,9 @@ async def test_w6b_uses_a_new_wire_id_with_the_same_logical_request() -> None:
     assert observation.initiated == 1
     assert observation.accepted == 2
     assert observation.publication_attempts == 2
-    assert observation.workload_evidence["semantic_retry"]["task_id"] == (
-        transport.submissions[0]["task_id"]
+    assert (
+        observation.workload_evidence["semantic_retry"]["task_id"]
+        == (transport.submissions[0]["task_id"])
     )
 
 

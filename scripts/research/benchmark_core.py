@@ -74,8 +74,12 @@ def _metric(values: list[float]) -> dict[str, float] | None:
 
 
 def summarize(trials: list[TrialResult]) -> dict[str, Any]:
-    task_latencies = [t.task_latency_ms for t in trials if t.task_latency_ms is not None]
-    first_progress = [t.first_progress_ms for t in trials if t.first_progress_ms is not None]
+    task_latencies = [
+        t.task_latency_ms for t in trials if t.task_latency_ms is not None
+    ]
+    first_progress = [
+        t.first_progress_ms for t in trials if t.first_progress_ms is not None
+    ]
     recovery = [t.recovery_ms for t in trials if t.recovery_ms is not None]
     return {
         "trial_count": len(trials),
@@ -202,7 +206,9 @@ def delegation_envelope(
     return env
 
 
-def cancel_envelope(*, sender_id: str, recipient_id: str, task_id: str) -> dict[str, Any]:
+def cancel_envelope(
+    *, sender_id: str, recipient_id: str, task_id: str
+) -> dict[str, Any]:
     return {
         "v": 1,
         "id": _uuid4(),
@@ -347,7 +353,9 @@ async def wait_for_context_messages(
     raise TimeoutError(f"not enough context results for context_id={context_id}")
 
 
-async def query_poison(api_base: str, *, agent_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+async def query_poison(
+    api_base: str, *, agent_id: str | None = None, limit: int = 100
+) -> list[dict[str, Any]]:
     params: dict[str, Any] = {"limit": limit}
     if agent_id:
         params["agent_id"] = agent_id

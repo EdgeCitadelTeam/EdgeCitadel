@@ -4,6 +4,7 @@ services:
     command: ["-c", "/etc/nats/nats.conf"]
     ports:
       - "4222:4222"
+      - "7422:7422"
       - "8222:8222"
       # 1883 is bound unconditionally; the MQTT listener inside the broker
       # is gated by the `mqtt {}` block in nats.conf (rendered from
@@ -17,6 +18,8 @@ services:
       - ./nats/data:/data
     environment:
       - NATS_TOKEN=${NATS_TOKEN}
+      - NATS_LEAF_USERNAME=${NATS_LEAF_USERNAME}
+      - NATS_LEAF_PASSWORD=${NATS_LEAF_PASSWORD}
       - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
@@ -37,6 +40,9 @@ services:
       - DB_PATH=/data/openclaw.db
       - NATS_URL=nats://nats:4222
       - NATS_TOKEN=${NATS_TOKEN}
+      - NATS_LEAF_USERNAME=${NATS_LEAF_USERNAME}
+      - NATS_LEAF_PASSWORD=${NATS_LEAF_PASSWORD}
+      - EDGECITADEL_ADMIN_TOKEN=${EDGECITADEL_ADMIN_TOKEN}
     expose:
       - "8000"
     depends_on:

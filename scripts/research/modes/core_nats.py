@@ -24,8 +24,8 @@ from nats.errors import AuthorizationError
 from nats.errors import Error as NATSError
 
 import nats
-from adapters._common.task_types import PublicationReceipt
-from adapters._common.validator import (
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.validator import (
     ValidationError,
     canonical_json,
     default_validator,
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from nats.aio.msg import Msg
     from nats.aio.subscription import Subscription
 
-    from adapters._common.task_executor import TaskExecutor
+    from edgecitadel_plugin_runtime.task_executor import TaskExecutor
 
 CoordinatorRestart = Callable[[], Awaitable[str | None]]
 WorkerOperation = Callable[[str], Awaitable[None]]

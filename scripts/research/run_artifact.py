@@ -380,11 +380,16 @@ def _monotonic_latency_ns(observation: Mapping[str, object]) -> int:
 def _application_bytes(events: list[object]) -> int:
     total = 0
     for event in events:
-        if not isinstance(event, Mapping) or event.get("event") != "transport.publication_accepted":
+        if (
+            not isinstance(event, Mapping)
+            or event.get("event") != "transport.publication_accepted"
+        ):
             continue
         data = event.get("data")
         receipt = data.get("receipt") if isinstance(data, Mapping) else None
-        value = receipt.get("application_bytes") if isinstance(receipt, Mapping) else None
+        value = (
+            receipt.get("application_bytes") if isinstance(receipt, Mapping) else None
+        )
         if type(value) is not int or value < 0:
             raise ValueError("invalid publication application-byte receipt")
         total += value
@@ -405,7 +410,9 @@ def _transport_resource_deltas(observation: Mapping[str, object]) -> dict[str, i
     final_connections = final.get("connection_bytes")
     if initial_connections is None or final_connections is None:
         raise ValueError("missing transport connection counters")
-    if not isinstance(initial_connections, Mapping) or not isinstance(final_connections, Mapping):
+    if not isinstance(initial_connections, Mapping) or not isinstance(
+        final_connections, Mapping
+    ):
         raise TypeError("invalid transport connection counters")
     if set(initial_connections) != set(final_connections):
         raise ValueError("transport connection membership changed during trial")
@@ -471,7 +478,9 @@ def _run_with_host_resource_sampling(
             if active is None and _trial_window_ready(environment.control_dir, "start"):
                 active = sampler.start_active_window(_RESOURCE_COMPONENTS)
                 _acknowledge_trial_window(environment.control_dir, "start")
-            if active is not None and _trial_window_ready(environment.control_dir, "end"):
+            if active is not None and _trial_window_ready(
+                environment.control_dir, "end"
+            ):
                 window = active.finish(outcome="runner-complete")
                 _acknowledge_trial_window(environment.control_dir, "end")
                 break
@@ -807,9 +816,9 @@ def main(
         factory: Callable[[str, str, Path], _RunEnvironment] = (
             environment_factory or ArtifactEnvironment.create
         )
-        runner: Callable[
-            [Repetition, _RunEnvironment, SourceProvenance], None
-        ] = repetition_runner or run_repetition
+        runner: Callable[[Repetition, _RunEnvironment, SourceProvenance], None] = (
+            repetition_runner or run_repetition
+        )
         for repetition in schedule.repetitions:
             environment = factory(
                 repetition.run_id, repetition.cell.mode, campaign_path / "bundles"

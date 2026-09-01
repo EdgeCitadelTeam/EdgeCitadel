@@ -2,7 +2,7 @@
 the WebSocket protocol surface we depend on is a single async send_text;
 the test substitutes a stub object that records what would have been
 sent."""
-import asyncio
+
 import json
 import pytest
 from aggregator.websocket_hub import WebSocketHub
@@ -28,8 +28,13 @@ async def test_global_subscriber_receives_envelope():
     ws = FakeWS()
     await hub.add_global(ws)
 
-    env = {"v": 1, "type": "command", "sender_id": "agg",
-           "recipient_id": "shell-1", "task_id": "t1"}
+    env = {
+        "v": 1,
+        "type": "command",
+        "sender_id": "agg",
+        "recipient_id": "shell-1",
+        "task_id": "t1",
+    }
     await hub.broadcast(env)
 
     assert len(ws.sent) == 1
@@ -49,16 +54,19 @@ async def test_per_agent_subscriber_filtered():
     await hub.add_agent("gemma-1", gemma_ws)
 
     # Envelope only mentions shell-1
-    env = {"v": 1, "type": "command", "sender_id": "agg",
-           "recipient_id": "shell-1"}
+    env = {"v": 1, "type": "command", "sender_id": "agg", "recipient_id": "shell-1"}
     await hub.broadcast(env)
 
     assert len(shell_ws.sent) == 1
     assert len(gemma_ws.sent) == 0
 
     # Envelope mentions both via sender + recipient
-    env2 = {"v": 1, "type": "delegation", "sender_id": "shell-1",
-            "recipient_id": "gemma-1"}
+    env2 = {
+        "v": 1,
+        "type": "delegation",
+        "sender_id": "shell-1",
+        "recipient_id": "gemma-1",
+    }
     await hub.broadcast(env2)
 
     assert len(shell_ws.sent) == 2

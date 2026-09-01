@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# deploy/lib/setup-venvs.sh — create per-adapter Python venvs.
+# deploy/lib/setup-venvs.sh — create per-Plugin Python venvs.
 #
 # Usage: ./setup-venvs.sh [--dry-run] [--source-dir PATH]
 #
-# Creates /var/lib/edgecitadel/venvs/<name>/ for each adapter in
-# manifest.toml's [adapters].enabled and .optional_disabled.
-# Records sha256 of <source-dir>/adapters/<name>/requirements.txt at
+# Creates /var/lib/edgecitadel/venvs/<name>/ for each Plugin in
+# manifest.toml's [plugins].enabled and .optional_disabled.
+# Records sha256 of the Plugin requirements and lockfile at
 # <venv>/.requirements.sha so subsequent runs skip pip when unchanged.
 
 set -euo pipefail
@@ -45,11 +45,11 @@ PYTHON_BIN="python${PY_VERSION}"
 
 require_command "$PYTHON_BIN"
 
-_read_manifest adapters.enabled
+_read_manifest plugins.enabled
 enabled=("${_OUT[@]:-}")
-_read_manifest adapters.optional_disabled
+_read_manifest plugins.optional_disabled
 optional=("${_OUT[@]:-}")
-ALL_ADAPTERS=("${enabled[@]}" "${optional[@]}")
+ALL_PLUGINS=("${enabled[@]}" "${optional[@]}")
 
 # Real install requires root (skipped in dry-run).
 if [[ "${DRY_RUN:-0}" != "1" ]]; then
@@ -59,43 +59,41 @@ fi
 run mkdir -p "$VENV_ROOT"
 run chown edgecitadel:edgecitadel "$VENV_ROOT" 2>/dev/null || true
 
-for adapter in "${ALL_ADAPTERS[@]}"; do
-  VENV="${VENV_ROOT}/${adapter}"
-  REQ="${SOURCE_DIR}/adapters/${adapter}/requirements.txt"
+for plugin in "${ALL_PLUGINS[@]}"; do
+  VENV="${VENV_ROOT}/${plugin}"
+  PLUGIN_ROOT="${SOURCE_DIR}/plugins/${plugin}"
+  REQ="${PLUGIN_ROOT}/edgecitadel_${plugin}_plugin/requirements.txt"
 
   if [[ ! -f "$REQ" && "$DRY_RUN" != "1" ]]; then
-    log_warn "$adapter: requirements.txt not found at $REQ — skipping"
+    log_warn "$plugin: requirements.txt not found at $REQ — skipping"
     continue
   fi
 
   CURRENT_SHA=""
   if [[ -f "$REQ" ]]; then
-    CURRENT_SHA="$(sha256sum "$REQ" | cut -d' ' -f1)"
+    CURRENT_SHA="$(sha256sum "$REQ" "${PLUGIN_ROOT}/plugin.lock.json" | sha256sum | cut -d' ' -f1)"
   fi
   RECORDED_SHA=""
   [[ -f "${VENV}/.requirements.sha" ]] && RECORDED_SHA="$(cat "${VENV}/.requirements.sha")"
 
   if [[ -d "$VENV" && "$CURRENT_SHA" == "$RECORDED_SHA" && -n "$CURRENT_SHA" ]]; then
-    log_info "$adapter: venv up-to-date (sha matches)"
+    log_info "$plugin: venv up-to-date (sha matches)"
     continue
   fi
 
   if [[ ! -d "$VENV" ]]; then
-    log_info "$adapter: creating venv at $VENV"
+    log_info "$plugin: creating venv at $VENV"
     run sudo -u edgecitadel "$PYTHON_BIN" -m venv "$VENV"
   fi
 
-  log_info "$adapter: pip install -r $REQ"
+  log_info "$plugin: installing shared runtime and declared dependencies"
   run sudo -u edgecitadel "${VENV}/bin/pip" install --upgrade --quiet pip
-  run sudo -u edgecitadel "${VENV}/bin/pip" install --quiet -r "$REQ"
-  # Adapters are NOT pip-installed: the repo has no setup.py/pyproject.toml.
-  # Adapter modules are imported via `python -m adapters.<name>.adapter` from
-  # the systemd unit's WorkingDirectory=/opt/edgecitadel (cwd on sys.path).
+  run sudo -u edgecitadel "${VENV}/bin/pip" install --quiet -e "${SOURCE_DIR}/plugin-toolkit" -r "$REQ"
 
   if [[ "$DRY_RUN" != "1" ]]; then
     echo -n "$CURRENT_SHA" | sudo -u edgecitadel tee "${VENV}/.requirements.sha" >/dev/null
   fi
-  log_info "$adapter: venv ready"
+  log_info "$plugin: venv ready"
 done
 
 log_info "setup-venvs.sh: complete"

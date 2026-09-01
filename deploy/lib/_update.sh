@@ -8,10 +8,10 @@ do_update() {
       "${SOURCE_DIR}/" /opt/edgecitadel/
   run chown -R edgecitadel:edgecitadel /opt/edgecitadel
 
-  # Re-run venv setup (will skip unchanged adapters via sha)
+  # Re-run venv setup (will skip unchanged plugins via sha)
   run "${LIB_DIR}/setup-venvs.sh" --source-dir /opt/edgecitadel
 
-  # Restart adapter services to pick up new code
+  # Restart Plugin services to pick up new code.
   for u in edgecitadel-gemma edgecitadel-watchdog; do
     if systemctl is-active --quiet "$u"; then
       log_info "restarting $u"

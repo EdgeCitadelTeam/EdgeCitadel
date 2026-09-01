@@ -2,8 +2,9 @@
 
 `plugins/` contains installable, framework-neutral EdgeCitadel plugin packages.
 Host schemas, SDK protocols, validation logic, and tests live in
-[`../plugin-toolkit/`](../plugin-toolkit/). See the validation-only
-[`examples/placeholder`](examples/placeholder/README.md) package for a complete
+[`../plugin-toolkit/`](../plugin-toolkit/). See
+[`examples/echo`](examples/echo/README.md) for a working lifecycle example and
+[`examples/placeholder`](examples/placeholder/README.md) for a validation-only
 example.
 
 ## Authoring layout
@@ -12,7 +13,7 @@ example.
 my-plugin/
   plugin.yaml
   plugin.lock.json
-  runtime/
+  unique_python_package/
   skills/
     my-skill/
       SKILL.md
@@ -30,8 +31,8 @@ my-plugin/
   security intent.
 - `plugin.lock.json` is the generated canonical inventory and SHA-256 integrity
   record for every other regular package file.
-- `runtime/` holds the future out-of-process implementation named by the
-  manifest; static validation never imports or executes it.
+- The runtime package holds the out-of-process implementation named by the manifest;
+  static validation never imports or executes it.
 - Every immediate child directory of `skills.directory` is one packaged skill
   and must contain both `SKILL.md` and `binding.yaml`.
 
@@ -81,6 +82,22 @@ after semantic checks, the current generated lock record.
 
 ## Trust and non-goals
 
+End users install through the unified lifecycle after a host has created or
+joined a fleet:
+
+```bash
+./scripts/edgecitadel plugin install ./plugins/examples/echo
+./scripts/edgecitadel plugin install gemma
+./scripts/edgecitadel plugin install watchdog
+```
+
+Host enrollment and agent registration are separate. `edgecitadel join` gives
+the host broker configuration according to `single-client` or `nats_leaf`;
+starting a plugin reconciles its exact destination inbox, then publishes the
+Agent Card and heartbeat that make each declared agent visible in the registry.
+Plugins do not select the mode. In `nats_leaf`, they receive only the Edge-local
+endpoint, client token, and Edge JetStream domain—not the upstream Leaf identity.
+
 Treat package contents as untrusted input until the supervisor has validated a
 supervisor-owned immutable package root. YAML and JSON reject duplicate keys;
 structured files are limited to 1 MiB, `SKILL.md` to 2 MiB, frontmatter to
@@ -94,7 +111,16 @@ Portable package paths reject absolute and drive paths, backslashes, empty or do
 components, traversal, and all Unicode `Cc` control characters. Ordinary Unicode
 filenames are allowed.
 
-This scaffold does not launch runtimes, implement transport or identity,
-provision secrets, enforce a sandbox, grant permissions, persist learned memory,
-sign packages, or verify publishers. Package authors must not infer any of those
-runtime guarantees from successful static validation.
+Static toolkit validation alone does not launch runtimes, implement transport or
+identity, provision secrets, enforce a sandbox, grant permissions, persist
+learned memory, sign packages, or verify publishers. The root CLI currently adds
+local process control and enrolled broker injection, but v0.1 permission and
+sandbox declarations remain reviewable intent rather than an OS enforcement
+boundary. Package authors must not infer runtime guarantees from validation.
+
+Python Plugins may declare a lock-covered `runtime.pythonRequirements` file.
+The Supervisor installs it with the shared Plugin runtime into a private,
+versioned environment. Parent-process environment values are not inherited by
+default: a Plugin receives only a small runtime baseline, names listed in
+`runtime.environmentVariables`, names listed in `security.secrets`, and its
+mode-selected NATS client settings. Plugins never receive Leaf credentials.

@@ -1,6 +1,6 @@
 [Unit]
-Description=EdgeCitadel — Gemma reasoner adapter (Phase 5)
-Documentation=file:///opt/edgecitadel/adapters/gemma/README.md
+Description=EdgeCitadel — Gemma Plugin runtime (Phase 5)
+Documentation=file:///opt/edgecitadel/plugins/gemma/README.md
 After=network-online.target edgecitadel-ollama.service docker.service
 # Wants (not Requires) — gemma can survive ollama-restart and retries
 # the Ollama HTTP call internally.
@@ -10,7 +10,7 @@ Wants=network-online.target edgecitadel-ollama.service
 Type=simple
 User=edgecitadel
 Group=edgecitadel
-WorkingDirectory=/opt/edgecitadel
+WorkingDirectory=/opt/edgecitadel/plugins/gemma
 
 EnvironmentFile=/etc/edgecitadel/env
 Environment="NATS_URL=nats://localhost:4222"
@@ -20,7 +20,7 @@ Environment="OLLAMA_MODEL=gemma4:e2b"
 Environment="OLLAMA_TIMEOUT_SEC=120"
 Environment="PYTHONUNBUFFERED=1"
 
-ExecStart=/var/lib/edgecitadel/venvs/gemma/bin/python -m adapters.gemma.adapter
+ExecStart=/var/lib/edgecitadel/venvs/gemma/bin/python -m edgecitadel_gemma_plugin
 
 Restart=on-failure
 RestartSec=10

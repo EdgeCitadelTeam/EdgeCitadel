@@ -85,19 +85,22 @@ def test_campaign_schema_rejects_a_missing_workload_timeout() -> None:
 
 
 def test_resource_application_bytes_sum_only_canonical_publication_receipts() -> None:
-    assert run_artifact._application_bytes(
-        [
-            {"event": "fixture.ready"},
-            {
-                "event": "transport.publication_accepted",
-                "data": {"receipt": {"application_bytes": 12}},
-            },
-            {
-                "event": "transport.publication_accepted",
-                "data": {"receipt": {"application_bytes": 8}},
-            },
-        ]
-    ) == 20
+    assert (
+        run_artifact._application_bytes(
+            [
+                {"event": "fixture.ready"},
+                {
+                    "event": "transport.publication_accepted",
+                    "data": {"receipt": {"application_bytes": 12}},
+                },
+                {
+                    "event": "transport.publication_accepted",
+                    "data": {"receipt": {"application_bytes": 8}},
+                },
+            ]
+        )
+        == 20
+    )
 
 
 def test_transport_resource_deltas_use_paired_monotonic_snapshots() -> None:

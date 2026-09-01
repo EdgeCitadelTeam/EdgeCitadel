@@ -37,7 +37,9 @@ def _is_non_loopback_ip(value: object) -> bool:
         address = ipaddress.ip_address(value)
     except ValueError:
         return False
-    return address.version == 4 and not address.is_loopback and not address.is_unspecified
+    return (
+        address.version == 4 and not address.is_loopback and not address.is_unspecified
+    )
 
 
 def _valid_host_report(report: Mapping[str, object]) -> bool:
@@ -187,7 +189,10 @@ def _queued_reconnect_complete(
                 sequences = (before.get("sequence"), after.get("sequence"))
                 if (
                     all(isinstance(value, str) for value in values)
-                    and str(values[0]) < str(values[1]) < str(values[2]) < str(values[3])
+                    and str(values[0])
+                    < str(values[1])
+                    < str(values[2])
+                    < str(values[3])
                     and all(type(value) is int for value in sequences)
                     and int(sequences[0]) < int(sequences[1])
                 ):

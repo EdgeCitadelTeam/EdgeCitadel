@@ -1,12 +1,35 @@
 # EdgeCitadel plugin toolkit
 
-`plugin-toolkit/` contains repository-side infrastructure for validating installable
-EdgeCitadel plugin packages. The `edgecitadel_supervisor` package owns safe
+`plugin-toolkit/` contains the shared Python Plugin runtime and repository-side
+infrastructure for validating installable EdgeCitadel Plugin packages. The
+`edgecitadel_supervisor` package owns safe
 loading, strict schemas, compatibility checks, canonical locks, and deterministic
-inventory. The separate `edgecitadel_plugin_sdk` package defines typed,
+inventory. The `edgecitadel_plugin_runtime` package owns Agent Card, heartbeat,
+durable inbox, result, and JetStream primitives. The separate
+`edgecitadel_plugin_sdk` package defines typed,
 framework-neutral extension seams and immutable values for future runtimes.
 Installable plugin packages live in [`../plugins/`](../plugins/), not in this
 directory.
+
+## End-user lifecycle
+
+Newcomers do not create this environment or install the Supervisor separately.
+From the repository root, the unified CLI prepares a private environment on the
+first plugin command and composes validation with the host-local lifecycle:
+
+```bash
+./scripts/edgecitadel plugin install ./plugins/examples/echo
+./scripts/edgecitadel plugin list
+./scripts/edgecitadel plugin logs edgecitadel.echo
+./scripts/edgecitadel plugin stop edgecitadel.echo
+./scripts/edgecitadel plugin start edgecitadel.echo
+```
+
+Before a managed runtime starts, the Supervisor-owned NATS reconciler adds each
+declared `agents.<id>.inbox` as an exact subject in the selected JetStream
+domain. It does not choose topology and receives only the plugin client
+credential, never a Leaf credential. The lower-level setup and commands below
+are the contributor interface for package authoring and CI.
 
 ## Contributor setup
 
@@ -101,8 +124,8 @@ and return types.
 
 ## Non-goals
 
-This milestone does not provide runtime launch or process lifecycle management,
-NATS or another transport implementation, identity provisioning, persistence or
+The toolkit package does not provide process lifecycle management, broker
+lifecycle, identity provisioning, persistence or
 a learned-memory store, sandbox enforcement, permission granting, package
 signing, or publisher verification. It also does not support normal wheel
 deployment of the supervisor's schema resources; schema lookup is supported only

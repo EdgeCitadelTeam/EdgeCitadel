@@ -11,7 +11,9 @@ RUN python -m pip install --no-cache-dir --require-hashes \
         -r /tmp/requirements.lock.txt \
     && rm /tmp/requirements.lock.txt
 
-COPY adapters /app/adapters
+COPY plugin-toolkit /app/plugin-toolkit
+RUN python -m pip install --no-cache-dir --no-deps -e /app/plugin-toolkit
+
 COPY aggregator /app/aggregator
 COPY schemas /app/schemas
 COPY scripts /app/scripts

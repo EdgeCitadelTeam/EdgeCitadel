@@ -64,9 +64,8 @@ def _normal_quantile(probability: float) -> float:
     upper = 1.0 - lower
     if probability < lower:
         q = math.sqrt(-2.0 * math.log(probability))
-        return (
-            (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0
         )
     if probability > upper:
         q = math.sqrt(-2.0 * math.log(1.0 - probability))
@@ -112,8 +111,7 @@ def wilson_interval(
     margin = (
         z
         * math.sqrt(
-            proportion * (1.0 - proportion) / total
-            + z_squared / (4.0 * total * total)
+            proportion * (1.0 - proportion) / total + z_squared / (4.0 * total * total)
         )
         / denominator
     )
@@ -145,13 +143,9 @@ def newcombe_risk_difference_interval(
     return RiskDifferenceInterval(
         estimate=estimate,
         low=estimate
-        - math.sqrt(
-            (first_rate - first.low) ** 2 + (second.high - second_rate) ** 2
-        ),
+        - math.sqrt((first_rate - first.low) ** 2 + (second.high - second_rate) ** 2),
         high=estimate
-        + math.sqrt(
-            (first.high - first_rate) ** 2 + (second_rate - second.low) ** 2
-        ),
+        + math.sqrt((first.high - first_rate) ** 2 + (second_rate - second.low) ** 2),
     )
 
 
@@ -205,11 +199,7 @@ def paired_median_change(
         raise ValueError("invalid bootstrap configuration")
     _z_score(confidence)
     normalized = tuple((float(base), float(candidate)) for base, candidate in pairs)
-    if any(
-        not math.isfinite(value)
-        for pair in normalized
-        for value in pair
-    ):
+    if any(not math.isfinite(value) for pair in normalized for value in pair):
         raise ValueError("paired measurements must be finite")
     baseline_median = sample_median(base for base, _ in normalized)
     candidate_median = sample_median(candidate for _, candidate in normalized)
@@ -218,9 +208,7 @@ def paired_median_change(
     relative = (
         None
         if any(base == 0.0 for base, _ in normalized)
-        else sample_median(
-            (candidate - base) / base for base, candidate in normalized
-        )
+        else sample_median((candidate - base) / base for base, candidate in normalized)
     )
     rng = random.Random(seed)
     bootstrapped: list[float] = []

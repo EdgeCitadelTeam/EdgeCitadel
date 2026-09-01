@@ -213,9 +213,8 @@ class ResourceSampler:
         *,
         metric_coverage: tuple[str, ...] = _RESOURCE_METRICS,
     ) -> None:
-        if (
-            len(set(metric_coverage)) != len(metric_coverage)
-            or any(metric not in _RESOURCE_METRICS for metric in metric_coverage)
+        if len(set(metric_coverage)) != len(metric_coverage) or any(
+            metric not in _RESOURCE_METRICS for metric in metric_coverage
         ):
             raise ValueError("invalid resource metric coverage")
         self._reader = reader
@@ -227,9 +226,7 @@ class ResourceSampler:
             components, duration_ns=_IDLE_DURATION_NS, outcome="idle"
         )
 
-    def start_active_window(
-        self, components: tuple[str, ...]
-    ) -> _ActiveResourceWindow:
+    def start_active_window(self, components: tuple[str, ...]) -> _ActiveResourceWindow:
         if not components or len(set(components)) != len(components):
             raise ValueError("components must be nonempty and unique")
         start_ns = self._clock.monotonic_ns()

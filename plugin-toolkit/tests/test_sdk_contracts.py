@@ -675,6 +675,7 @@ def test_contributor_typing_gate_has_an_installable_dependency_extra() -> None:
     readme = (project_root / "README.md").read_text(encoding="utf-8")
 
     assert pyproject["project"]["optional-dependencies"].get("type") == [
-        "mypy>=1.13,<2"
+        "mypy>=1.13,<2",
+        "types-jsonschema>=4.23,<5",
     ]
     assert "python -m pip install -e '.[test,type]'" in readme

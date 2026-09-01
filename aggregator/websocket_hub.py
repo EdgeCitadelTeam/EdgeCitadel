@@ -21,6 +21,7 @@ Send failures (closed sockets, slow consumers) drop the offending
 client without crashing the broadcast — the next handler tick is
 unaffected.
 """
+
 from __future__ import annotations
 import asyncio
 import json
@@ -65,8 +66,9 @@ class WebSocketHub:
                 targets |= self._per_agent.get(who, set())
         await self._send_all(targets, msg)
 
-    async def broadcast_event(self, event: str, data: dict, *,
-                              agent_id: str | None = None) -> None:
+    async def broadcast_event(
+        self, event: str, data: dict, *, agent_id: str | None = None
+    ) -> None:
         """Generic typed event (agent_status_change, agent_registered,
         log). `agent_id` selects which per-agent stream gets fan-out;
         global stream always gets it."""

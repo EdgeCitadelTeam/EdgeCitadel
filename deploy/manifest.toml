@@ -7,7 +7,7 @@
 # See deploy/README.md for the schema reference and how to add a dep.
 
 [python]
-# Adapter venvs use this Python version. Matches aggregator/Dockerfile baseline.
+# Plugin runtimes use this Python version. Matches aggregator/Dockerfile baseline.
 version = "3.12"
 packages_ubuntu = ["python3.12", "python3.12-venv", "python3.12-dev"]
 packages_macos  = ["python@3.12"]
@@ -34,9 +34,11 @@ install_url_template = "https://github.com/nats-io/natscli/releases/download/v{v
 common = ["curl", "jq", "sqlite3", "tar", "gzip", "cron", "gpg"]
 
 [brew_packages]
-common = ["jq", "sqlite", "gnu-tar", "coreutils", "gnupg"]
+# nats-server is installed for nats_leaf validation and runtime; single-client
+# never starts the binary.
+common = ["jq", "sqlite", "gnu-tar", "coreutils", "gnupg", "nats-server"]
 
-[adapters]
+[plugins]
 # Each entry produces:
 #   - venv at /var/lib/edgecitadel/venvs/<name>/
 #   - systemd unit edgecitadel-<name>.service (rendered from systemd/<name>.service.in)
@@ -48,7 +50,7 @@ optional_disabled = ["shell", "homeassistant"]   # Home Assistant requires opera
 # 120s accommodates first-call cold-start on CPU-only inference (model load
 # into RAM + first token). Steady-state gemma4:e2b on N150 is ~30-90s/req.
 round_trip_timeout_sec = 120
-# Adapter heartbeat staleness threshold for `--check`.
+# Plugin heartbeat staleness threshold for `--check`.
 heartbeat_max_age_sec = 60
 # Backup recency budget — fail check if latest daily is older than this.
 backup_max_age_sec = 93600   # 26 hours

@@ -3,6 +3,7 @@
 Run from repo root: python3 -m pytest deploy/tests/test_parse_manifest.py -v
 (or: python3 deploy/tests/test_parse_manifest.py if pytest unavailable)
 """
+
 import json
 import subprocess
 import sys
@@ -19,15 +20,14 @@ class TestParseManifest(unittest.TestCase):
         if manifest_text is None:
             manifest_path = REPO_ROOT / "deploy" / "manifest.toml"
         else:
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".toml", delete=False
-            )
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False)
             tmp.write(manifest_text)
             tmp.close()
             manifest_path = Path(tmp.name)
         result = subprocess.run(
             [sys.executable, str(PARSER), "--manifest", str(manifest_path), *args],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         return result
 
@@ -50,11 +50,11 @@ class TestParseManifest(unittest.TestCase):
         self.assertIn("sqlite3", lines)
         self.assertIn("cron", lines)
 
-    def test_get_adapters_enabled(self):
-        r = self._run(["get", "adapters.enabled", "--format", "lines"])
+    def test_get_plugins_enabled(self):
+        r = self._run(["get", "plugins.enabled", "--format", "lines"])
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = [ln for ln in r.stdout.splitlines() if ln]
-        self.assertEqual(set(lines), {"gemma", "watchdog", "homeassistant"})
+        self.assertEqual(set(lines), {"gemma", "watchdog"})
 
     def test_missing_key_exits_nonzero(self):
         r = self._run(["get", "nonexistent.key"])

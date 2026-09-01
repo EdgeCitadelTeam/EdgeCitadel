@@ -7,7 +7,11 @@ from typing import Any
 
 from nats.aio.client import Client as NATS
 
-from scripts.research.benchmark_core import progress_envelope, register_envelope, result_envelope
+from scripts.research.benchmark_core import (
+    progress_envelope,
+    register_envelope,
+    result_envelope,
+)
 
 
 AGENT_ID = "bench-cancel"
@@ -26,7 +30,9 @@ async def _connect() -> NATS:
     return nc
 
 
-async def _publish_result(nc: NATS, js: Any, inbound: dict[str, Any], state: str, payload: dict[str, Any]) -> None:
+async def _publish_result(
+    nc: NATS, js: Any, inbound: dict[str, Any], state: str, payload: dict[str, Any]
+) -> None:
     env = result_envelope(
         sender_id=AGENT_ID,
         recipient_id=inbound["sender_id"],
@@ -45,7 +51,9 @@ async def _publish_result(nc: NATS, js: Any, inbound: dict[str, Any], state: str
     await nc.flush()
 
 
-async def _run_task(nc: NATS, js: Any, inbound: dict[str, Any], active: dict[str, asyncio.Task[None]]) -> None:
+async def _run_task(
+    nc: NATS, js: Any, inbound: dict[str, Any], active: dict[str, asyncio.Task[None]]
+) -> None:
     task_id = inbound["task_id"]
     try:
         for index in range(1, 41):
@@ -56,10 +64,14 @@ async def _run_task(nc: NATS, js: Any, inbound: dict[str, Any], active: dict[str
                 payload={"message": f"progress {index}", "progress": index},
                 context_id=inbound.get("context_id"),
             )
-            await nc.publish(f"agents.{AGENT_ID}.task_progress.{task_id}", json.dumps(env).encode())
+            await nc.publish(
+                f"agents.{AGENT_ID}.task_progress.{task_id}", json.dumps(env).encode()
+            )
             await nc.flush()
             await asyncio.sleep(0.25)
-        await _publish_result(nc, js, inbound, "completed", {"body": "completed without cancel"})
+        await _publish_result(
+            nc, js, inbound, "completed", {"body": "completed without cancel"}
+        )
     except asyncio.CancelledError:
         await _publish_result(nc, js, inbound, "canceled", {"body": "canceled"})
         raise
@@ -88,7 +100,9 @@ async def run() -> None:
         async def cb(msg: Any) -> None:
             env = json.loads(msg.data)
             if env.get("type") == "command":
-                active[env["task_id"]] = asyncio.create_task(_run_task(nc, js, env, active))
+                active[env["task_id"]] = asyncio.create_task(
+                    _run_task(nc, js, env, active)
+                )
             elif env.get("type") == "cancel":
                 task = active.get(env["task_id"])
                 if task:

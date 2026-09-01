@@ -1,4 +1,4 @@
-"""Shared preflight adapter for the authenticated multi-agent lab."""
+"""Shared preflight integration for the authenticated multi-agent lab."""
 
 from __future__ import annotations
 
@@ -10,7 +10,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
 
-from scripts.research.lab_config import ControllerConfig, LabConfigError, credential_token
+from scripts.research.lab_config import (
+    ControllerConfig,
+    LabConfigError,
+    credential_token,
+)
 from scripts.research.preflight import PreflightReport, PreflightRequest, run_preflight
 
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -35,7 +39,9 @@ def _request_json(
         return None
 
 
-def _check(name: str, passed: bool, observed: object, expected: object) -> dict[str, object]:
+def _check(
+    name: str, passed: bool, observed: object, expected: object
+) -> dict[str, object]:
     return {
         "name": name,
         "passed": passed,
@@ -72,9 +78,7 @@ async def run_controller_preflight(
         if token is not None
         else None
     )
-    registry = _request_json(
-        f"{controller_config.agg_url}/api/registry", opener=opener
-    )
+    registry = _request_json(f"{controller_config.agg_url}/api/registry", opener=opener)
     monitor = _request_json(
         f"{controller_config.monitor_url.removesuffix('/')}/varz", opener=opener
     )
@@ -98,19 +102,31 @@ async def run_controller_preflight(
         and isinstance(item.get("agent_state"), str)
         for item in registry
     )
-    online_agents = {
-        item.get("agent_id")
-        for item in registry
-        if (
-            isinstance(item, Mapping)
-            and item.get("agent_state") == "online"
-            and isinstance(item.get("agent_id"), str)
-            and bool(item.get("agent_id"))
-        )
-    } if isinstance(registry, list) else set()
-    registry_valid = registry_shape_valid and set(expected_agents).issubset(online_agents)
-    mqtt_absent = isinstance(monitor, Mapping) and monitor.get("mqtt") in (None, False, {})
-    fixture_immutable = _IMAGE_ID.fullmatch(controller_config.fixture_image_id) is not None
+    online_agents = (
+        {
+            item.get("agent_id")
+            for item in registry
+            if (
+                isinstance(item, Mapping)
+                and item.get("agent_state") == "online"
+                and isinstance(item.get("agent_id"), str)
+                and bool(item.get("agent_id"))
+            )
+        }
+        if isinstance(registry, list)
+        else set()
+    )
+    registry_valid = registry_shape_valid and set(expected_agents).issubset(
+        online_agents
+    )
+    mqtt_absent = isinstance(monitor, Mapping) and monitor.get("mqtt") in (
+        None,
+        False,
+        {},
+    )
+    fixture_immutable = (
+        _IMAGE_ID.fullmatch(controller_config.fixture_image_id) is not None
+    )
 
     checks = shared.checks + (
         _check(
@@ -145,7 +161,8 @@ async def run_controller_preflight(
         ),
     )
     errors = shared.errors + tuple(
-        f"{check['name']} failed" for check in checks[len(shared.checks):]
+        f"{check['name']} failed"
+        for check in checks[len(shared.checks) :]
         if check["passed"] is False
     )
     return PreflightReport(

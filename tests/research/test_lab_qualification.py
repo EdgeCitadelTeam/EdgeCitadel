@@ -68,8 +68,7 @@ def _manifest() -> dict[str, object]:
             "playwright": [],
         },
         "artifacts": {
-            path: str(index) * 64
-            for index, path in enumerate(paths.values(), start=6)
+            path: str(index) * 64 for index, path in enumerate(paths.values(), start=6)
         },
         "controller_commands": {
             "launches": [
@@ -218,8 +217,7 @@ def test_missing_successful_command_to_either_host_is_preliminary() -> None:
         evidence = manifest["controller_commands"]
         assert isinstance(evidence, dict)
         evidence["commands"] = [
-            item for item in evidence["commands"]
-            if item["agent_id"] != agent_id
+            item for item in evidence["commands"] if item["agent_id"] != agent_id
         ]
         result = _classify(manifest)
         assert result.remote_qualified is False

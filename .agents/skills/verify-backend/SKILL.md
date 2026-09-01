@@ -9,7 +9,7 @@ description: Use when verifying changes to aggregator/ — Python syntax check p
 
 1. Syntax check all Python in aggregator:
    ```bash
-   cd aggregator && python3 -m py_compile *.py
+   cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m compileall -q .
    ```
    Must complete with no errors.
 

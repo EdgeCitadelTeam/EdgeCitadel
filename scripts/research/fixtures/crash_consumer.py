@@ -45,7 +45,7 @@ async def run(mode: str, counter: Path) -> int:
     nc = await _connect()
     try:
         js = nc.jetstream()
-        await ensure_stream(js)
+        await ensure_stream(js, AGENT_ID)
         await ensure_consumer(js, AGENT_ID, ack_wait_sec=2, max_deliver=3)
         await nc.publish(
             f"agents.{AGENT_ID}.register",
@@ -80,7 +80,10 @@ async def run(mode: str, counter: Path) -> int:
             recipient_id=env["sender_id"],
             task_id=env["task_id"],
             task_state="completed",
-            payload={"body": "redelivery complete", "side_effect_count": side_effect_count},
+            payload={
+                "body": "redelivery complete",
+                "side_effect_count": side_effect_count,
+            },
             context_id=env.get("context_id"),
         )
         data = json.dumps(out).encode()

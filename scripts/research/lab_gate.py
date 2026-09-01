@@ -53,7 +53,9 @@ class _PairProbe:
         try:
             barrier.wait(timeout=180)
         except threading.BrokenBarrierError:
-            raise LabConfigError("concurrent lifecycle synchronization failed") from None
+            raise LabConfigError(
+                "concurrent lifecycle synchronization failed"
+            ) from None
 
     def controller_started(self) -> None:
         self._wait(self._started)
@@ -157,12 +159,18 @@ def _wait_online(agg_url: str, expected: frozenset[str]) -> None:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         agents = _request_json(f"{agg_url}/api/agents")
-        online = {
-            str(item["agent_id"])
-            for item in agents
-            if isinstance(agents, list) and isinstance(item, Mapping)
-            and item.get("agent_state") == "online" and isinstance(item.get("agent_id"), str)
-        } if isinstance(agents, list) else set()
+        online = (
+            {
+                str(item["agent_id"])
+                for item in agents
+                if isinstance(agents, list)
+                and isinstance(item, Mapping)
+                and item.get("agent_state") == "online"
+                and isinstance(item.get("agent_id"), str)
+            }
+            if isinstance(agents, list)
+            else set()
+        )
         if expected.issubset(online):
             return
         time.sleep(0.25)
@@ -183,13 +191,20 @@ def _command_argv(
     return _python_argv(
         repo_root,
         "scripts/research/lab_controller.py",
-        "command", "--run-id", run_id,
-        "--agent-id", agent_id,
-        "--body", body,
-        "--expected-output", expected_output,
+        "command",
+        "--run-id",
+        run_id,
+        "--agent-id",
+        agent_id,
+        "--body",
+        body,
+        "--expected-output",
+        expected_output,
         "--wait" if wait else "--no-wait",
-        "--wire-copies", wire_copies,
-        "--result-file", result_file,
+        "--wire-copies",
+        wire_copies,
+        "--result-file",
+        result_file,
     )
 
 
@@ -205,9 +220,12 @@ def _node_argv(
         repo_root,
         "scripts/research/lab_node.py",
         command,
-        "--controller-config", controller_config,
-        "--credential-file", credential,
-        "--agent-id", agent_id,
+        "--controller-config",
+        controller_config,
+        "--credential-file",
+        credential,
+        "--agent-id",
+        agent_id,
         *extra,
     )
 
@@ -224,9 +242,12 @@ def _node_start(
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     extra: list[object] = [
-        "--host-id", host_id,
-        "--behavior", "echo",
-        "--delay-ms", delay_ms,
+        "--host-id",
+        host_id,
+        "--behavior",
+        "echo",
+        "--delay-ms",
+        delay_ms,
     ]
     if state_root is not None:
         extra.extend(("--state-root", state_root))
@@ -262,8 +283,14 @@ def _doctor(
 ) -> Mapping[str, object]:
     completed = _run(
         _node_argv(
-            repo_root, "doctor", controller_config, credential, agent_id,
-            "--host-id", host_id, "--publish",
+            repo_root,
+            "doctor",
+            controller_config,
+            credential,
+            agent_id,
+            "--host-id",
+            host_id,
+            "--publish",
         ),
         cwd=repo_root,
     )
@@ -284,9 +311,14 @@ def _doctor(
 def _container_count(run_id: str, repo_root: Path) -> int:
     completed = _run(
         [
-            "docker", "ps", "--all", "--quiet",
-            "--filter", f"label=ai.edgecitadel.run-id={run_id}",
-            "--filter", "label=ai.edgecitadel.owner=research-lab-node",
+            "docker",
+            "ps",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label=ai.edgecitadel.run-id={run_id}",
+            "--filter",
+            "label=ai.edgecitadel.owner=research-lab-node",
         ],
         cwd=repo_root,
     )
@@ -304,7 +336,8 @@ def require_single_handler_started(
     except (OSError, json.JSONDecodeError) as error:
         raise LabConfigError("fixture handler log is invalid") from error
     matches = [
-        item for item in records
+        item
+        for item in records
         if isinstance(item, Mapping)
         and item.get("event") == "fixture.handler_started"
         and isinstance(item.get("data"), Mapping)
@@ -317,15 +350,21 @@ def require_single_handler_started(
 
 def _actual_terminal_output(agg_url: str, task_id: str) -> str:
     messages = _request_json(f"{agg_url}/api/messages?task_id={task_id}")
-    terminals = [
-        item for item in messages
-        if isinstance(messages, list) and isinstance(item, Mapping)
-        and item.get("type") == "result"
-        and item.get("task_state") == "completed"
-        and item.get("task_id") == task_id
-        and isinstance(item.get("payload"), Mapping)
-        and isinstance(item["payload"].get("body"), str)
-    ] if isinstance(messages, list) else []
+    terminals = (
+        [
+            item
+            for item in messages
+            if isinstance(messages, list)
+            and isinstance(item, Mapping)
+            and item.get("type") == "result"
+            and item.get("task_state") == "completed"
+            and item.get("task_id") == task_id
+            and isinstance(item.get("payload"), Mapping)
+            and isinstance(item["payload"].get("body"), str)
+        ]
+        if isinstance(messages, list)
+        else []
+    )
     logical = {str(item["payload"]["body"]) for item in terminals}
     if len(logical) != 1:
         raise LabConfigError("actual task terminal output is not unique")
@@ -334,8 +373,10 @@ def _actual_terminal_output(agg_url: str, task_id: str) -> str:
 
 def _node_state_file(run_id: str, agent_id: str) -> Path:
     return (
-        Path("/tmp/edgecitadel-lab-node") / run_id
-        / f"{run_id}--{agent_id}" / "node-state.json"
+        Path("/tmp/edgecitadel-lab-node")
+        / run_id
+        / f"{run_id}--{agent_id}"
+        / "node-state.json"
     )
 
 
@@ -345,7 +386,9 @@ def _live_task_consumers(
     snapshot = _request_json(
         f"{monitor_url.removesuffix('/')}/jsz?consumers=true&config=true"
     )
-    accounts = snapshot.get("account_details") if isinstance(snapshot, Mapping) else None
+    accounts = (
+        snapshot.get("account_details") if isinstance(snapshot, Mapping) else None
+    )
     if not isinstance(accounts, list):
         raise LabConfigError("live consumer snapshot is invalid")
     bindings: set[tuple[str, str]] = set()
@@ -362,10 +405,18 @@ def _live_task_consumers(
             if not isinstance(consumers, list):
                 raise LabConfigError("live consumer snapshot is invalid")
             for consumer in consumers:
-                config = consumer.get("config") if isinstance(consumer, Mapping) else None
+                config = (
+                    consumer.get("config") if isinstance(consumer, Mapping) else None
+                )
                 name = consumer.get("name") if isinstance(consumer, Mapping) else None
-                subject = config.get("filter_subject") if isinstance(config, Mapping) else None
-                configured_name = config.get("durable_name") if isinstance(config, Mapping) else None
+                subject = (
+                    config.get("filter_subject")
+                    if isinstance(config, Mapping)
+                    else None
+                )
+                configured_name = (
+                    config.get("durable_name") if isinstance(config, Mapping) else None
+                )
                 if (
                     not isinstance(name, str)
                     or not name
@@ -409,11 +460,20 @@ def run_two_node_lifecycle(
     contender_root: Path | None = None
     config: dict[str, object] = {}
     try:
-        _run(_python_argv(
-            repo_root, "scripts/research/lab_controller.py", "start",
-            "--run-id", run_id, "--host-id", host_id,
-            "--lab-variant", "lifecycle",
-        ), cwd=repo_root)
+        _run(
+            _python_argv(
+                repo_root,
+                "scripts/research/lab_controller.py",
+                "start",
+                "--run-id",
+                run_id,
+                "--host-id",
+                host_id,
+                "--lab-variant",
+                "lifecycle",
+            ),
+            cwd=repo_root,
+        )
         controller_started = True
         config = _load_json(controller_config)
         if _pair_probe is not None:
@@ -421,7 +481,11 @@ def run_two_node_lifecycle(
         credential = _config_path(config.get("credential_file"), "credential file")
         for agent_id in ("fixture-1", "fixture-2"):
             _node_start(
-                repo_root, controller_config, credential, host_id, agent_id,
+                repo_root,
+                controller_config,
+                credential,
+                host_id,
+                agent_id,
                 delay_ms=250,
             )
             started_nodes.add(agent_id)
@@ -436,18 +500,30 @@ def run_two_node_lifecycle(
             ("fixture-2", f"{run_id}:fixture-2", 1),
             ("fixture-2", f"{run_id}:duplicate-fixture-2", 2),
         )
-        command_root = _config_path(config.get("evidence_dir"), "evidence directory") / "raw/lab/commands"
+        command_root = (
+            _config_path(config.get("evidence_dir"), "evidence directory")
+            / "raw/lab/commands"
+        )
         for index, (agent_id, body, wire_copies) in enumerate(bodies, start=1):
             result_file = command_root / f"command-{index}.json"
-            _run(_command_argv(
-                repo_root, run_id, agent_id, body, f"edgecitadel:{body}",
-                result_file, wait=True, wire_copies=wire_copies,
-            ), cwd=repo_root)
+            _run(
+                _command_argv(
+                    repo_root,
+                    run_id,
+                    agent_id,
+                    body,
+                    f"edgecitadel:{body}",
+                    result_file,
+                    wait=True,
+                    wire_copies=wire_copies,
+                ),
+                cwd=repo_root,
+            )
             result = _load_json(result_file)
             task_ids.append(str(result["task_id"]))
-            outputs.append(_actual_terminal_output(
-                str(config["agg_url"]), str(result["task_id"])
-            ))
+            outputs.append(
+                _actual_terminal_output(str(config["agg_url"]), str(result["task_id"]))
+            )
             node_state = _load_json(_node_state_file(run_id, agent_id))
             observed_state_paths.update(
                 Path(str(node_state[name]))
@@ -461,8 +537,14 @@ def run_two_node_lifecycle(
         before = _container_count(run_id, repo_root)
         contender_root = Path(tempfile.mkdtemp(prefix=f"{run_id}-contender-"))
         contender = _node_start(
-            repo_root, controller_config, credential, "contender-lab-02", "fixture-2",
-            delay_ms=250, state_root=contender_root, check=False,
+            repo_root,
+            controller_config,
+            credential,
+            "contender-lab-02",
+            "fixture-2",
+            delay_ms=250,
+            state_root=contender_root,
+            check=False,
         )
         if (
             contender.returncode == 0
@@ -473,39 +555,66 @@ def run_two_node_lifecycle(
             raise LabConfigError("duplicate reservation created a container")
 
         retained = _node_stop(
-            repo_root, controller_config, credential, "fixture-1", retain=True,
+            repo_root,
+            controller_config,
+            credential,
+            "fixture-1",
+            retain=True,
         )
         if retained.returncode != 0:
             raise LabConfigError("fixture-1 reservation was not retained")
         started_nodes.discard("fixture-1")
         queued_body = f"{run_id}:queued-fixture-1"
         accepted_file = command_root / "command-4-accepted.json"
-        _run(_command_argv(
-            repo_root, run_id, "fixture-1", queued_body,
-            f"edgecitadel:{queued_body}", accepted_file, wait=False,
-        ), cwd=repo_root)
+        _run(
+            _command_argv(
+                repo_root,
+                run_id,
+                "fixture-1",
+                queued_body,
+                f"edgecitadel:{queued_body}",
+                accepted_file,
+                wait=False,
+            ),
+            cwd=repo_root,
+        )
         accepted = _load_json(accepted_file)
         _node_start(
-            repo_root, controller_config, credential, host_id, "fixture-1",
+            repo_root,
+            controller_config,
+            credential,
+            host_id,
+            "fixture-1",
             delay_ms=250,
         )
         started_nodes.add("fixture-1")
-        doctor_reports.append(_doctor(
-            repo_root, controller_config, credential, host_id, "fixture-1"
-        ))
+        doctor_reports.append(
+            _doctor(repo_root, controller_config, credential, host_id, "fixture-1")
+        )
         completed_file = command_root / "command-4-completed.json"
-        _run(_python_argv(
-            repo_root, "scripts/research/lab_controller.py", "await",
-            "--run-id", run_id, "--task-id", accepted["task_id"],
-            "--expected-output", f"edgecitadel:{queued_body}",
-            "--qualification-kind", "queued-reconnect",
-            "--result-file", completed_file,
-        ), cwd=repo_root)
+        _run(
+            _python_argv(
+                repo_root,
+                "scripts/research/lab_controller.py",
+                "await",
+                "--run-id",
+                run_id,
+                "--task-id",
+                accepted["task_id"],
+                "--expected-output",
+                f"edgecitadel:{queued_body}",
+                "--qualification-kind",
+                "queued-reconnect",
+                "--result-file",
+                completed_file,
+            ),
+            cwd=repo_root,
+        )
         completed = _load_json(completed_file)
         task_ids.append(str(completed["task_id"]))
-        outputs.append(_actual_terminal_output(
-            str(config["agg_url"]), str(completed["task_id"])
-        ))
+        outputs.append(
+            _actual_terminal_output(str(config["agg_url"]), str(completed["task_id"]))
+        )
         resumed_state = _load_json(_node_state_file(run_id, "fixture-1"))
         observed_state_paths.update(
             Path(str(resumed_state[name]))
@@ -547,9 +656,8 @@ def run_two_node_lifecycle(
                         receipt = _node_stop(
                             repo_root, controller_config, credential, agent_id
                         )
-                        if (
-                            receipt.returncode != 0
-                            or not receipt.stdout.startswith("node:")
+                        if receipt.returncode != 0 or not receipt.stdout.startswith(
+                            "node:"
                         ):
                             raise LabConfigError(
                                 f"{agent_id} cleanup failed: {receipt.stderr.strip()}"
@@ -563,16 +671,25 @@ def run_two_node_lifecycle(
                 cleanup_errors.append(error)
             if state_file.is_file():
                 try:
-                    stopped = _run(_python_argv(
-                        repo_root, "scripts/research/lab_controller.py", "stop",
-                        "--state-file", state_file,
-                    ), cwd=repo_root, check=False)
+                    stopped = _run(
+                        _python_argv(
+                            repo_root,
+                            "scripts/research/lab_controller.py",
+                            "stop",
+                            "--state-file",
+                            state_file,
+                        ),
+                        cwd=repo_root,
+                        check=False,
+                    )
                     if stopped.returncode != 0:
                         raise LabConfigError(
                             f"controller stop failed: {stopped.stderr.strip()}"
                         )
                     if not stopped.stdout.strip():
-                        raise LabConfigError("controller stop returned no cleanup receipt")
+                        raise LabConfigError(
+                            "controller stop returned no cleanup receipt"
+                        )
                     cleanup_value = json.loads(stopped.stdout.splitlines()[-1])
                     if not isinstance(cleanup_value, Mapping):
                         raise LabConfigError("controller cleanup receipt is invalid")
@@ -580,13 +697,17 @@ def run_two_node_lifecycle(
                 except Exception as error:
                     cleanup_errors.append(error)
             else:
-                cleanup_errors.append(LabConfigError("controller state disappeared before cleanup"))
+                cleanup_errors.append(
+                    LabConfigError("controller state disappeared before cleanup")
+                )
         if contender_root is not None:
             shutil.rmtree(contender_root, ignore_errors=True)
         if cleanup_errors:
             if isinstance(primary, Exception):
                 cleanup_errors.insert(0, primary)
-            raise ExceptionGroup("lab lifecycle and cleanup failed", cleanup_errors) from None
+            raise ExceptionGroup(
+                "lab lifecycle and cleanup failed", cleanup_errors
+            ) from None
 
     if not config:
         raise LabConfigError("controller did not produce configuration")
@@ -634,13 +755,13 @@ def run_two_node_lifecycle(
 def assert_disjoint_runs(left: LifecycleResult, right: LifecycleResult) -> None:
     """Require every run-owned namespace and observation to be disjoint."""
     for result in (left, right):
-        evidence = _load_json(
-            result.bundle / "raw/lab/controller-commands.json"
-        )
+        evidence = _load_json(result.bundle / "raw/lab/controller-commands.json")
         commands = evidence.get("commands")
-        recorded = [
-            item for item in commands if isinstance(item, Mapping)
-        ] if isinstance(commands, list) else []
+        recorded = (
+            [item for item in commands if isinstance(item, Mapping)]
+            if isinstance(commands, list)
+            else []
+        )
         if (
             len(recorded) != len(result.task_ids)
             or {item.get("task_id") for item in recorded} != set(result.task_ids)
@@ -709,9 +830,7 @@ def _owned_docker_resources(repo_root: Path, run_id: str) -> tuple[str, ...]:
             cwd=repo_root,
         )
         remaining.extend(
-            f"{kind}:{value}"
-            for value in completed.stdout.splitlines()
-            if value
+            f"{kind}:{value}" for value in completed.stdout.splitlines() if value
         )
     return tuple(remaining)
 
@@ -845,11 +964,14 @@ def _operator_pair(
     messages: object, *, metadata: Mapping[str, object] | None = None
 ) -> tuple[Mapping[str, object], Mapping[str, object]]:
     error = "operator command/terminal evidence is invalid"
-    if not isinstance(messages, list) or any(not isinstance(item, Mapping) for item in messages):
+    if not isinstance(messages, list) or any(
+        not isinstance(item, Mapping) for item in messages
+    ):
         raise LabConfigError(error)
     commands = [item for item in messages if item.get("type") == "command"]
     terminals = [
-        item for item in messages
+        item
+        for item in messages
         if item.get("type") == "result"
         and item.get("task_state") in {"completed", "failed", "canceled", "rejected"}
     ]
@@ -861,7 +983,9 @@ def _operator_pair(
     terminal_payload = terminal.get("payload")
     task_id = command.get("task_id")
     context_id = command.get("context_id")
-    nonce = command_payload.get("body") if isinstance(command_payload, Mapping) else None
+    nonce = (
+        command_payload.get("body") if isinstance(command_payload, Mapping) else None
+    )
     if (
         not isinstance(command.get("id"), str)
         or not command["id"]
@@ -940,7 +1064,11 @@ def _safe_artifact_file(bundle: Path, relative: Path) -> bool:
 
 def _validate_portable_media(bundle: Path, portable: Mapping[str, object]) -> None:
     project_values = portable.get("projects")
-    if portable.get("schema_version") != "playwright-operator-results.v1" or not isinstance(project_values, Mapping) or set(project_values) != {"desktop", "mobile"}:
+    if (
+        portable.get("schema_version") != "playwright-operator-results.v1"
+        or not isinstance(project_values, Mapping)
+        or set(project_values) != {"desktop", "mobile"}
+    ):
         raise LabConfigError("portable Playwright report is invalid")
     expected_attachments = {
         "chat": ("chat.png", "image/png"),
@@ -975,9 +1103,18 @@ def _validate_portable_media(bundle: Path, portable: Mapping[str, object]) -> No
             media_files = {item.name for item in (bundle / media_root).iterdir()}
             api_files = {item.name for item in (bundle / api_root_relative).iterdir()}
         except OSError as error:
-            raise LabConfigError(f"{project} portable attachments are invalid") from error
-        expected_media_files = {filename for filename, _ in expected_attachments.values()}
-        expected_api_files = {"system-status.json", "registry.json", "messages.json", "queue.json"}
+            raise LabConfigError(
+                f"{project} portable attachments are invalid"
+            ) from error
+        expected_media_files = {
+            filename for filename, _ in expected_attachments.values()
+        }
+        expected_api_files = {
+            "system-status.json",
+            "registry.json",
+            "messages.json",
+            "queue.json",
+        }
         if (
             media_files != expected_media_files
             or api_files != expected_api_files
@@ -1015,11 +1152,17 @@ def _validate_portable_media(bundle: Path, portable: Mapping[str, object]) -> No
             or status.get("jetstream_stream_ok") is not True
         ):
             raise LabConfigError(f"{project} system status is invalid")
-        shell = [
-            item for item in registry
-            if isinstance(registry, list) and isinstance(item, Mapping)
-            and item.get("agent_id") == "shell-1"
-        ] if isinstance(registry, list) else []
+        shell = (
+            [
+                item
+                for item in registry
+                if isinstance(registry, list)
+                and isinstance(item, Mapping)
+                and item.get("agent_id") == "shell-1"
+            ]
+            if isinstance(registry, list)
+            else []
+        )
         if (
             len(shell) != 1
             or shell[0].get("agent_state") != "online"
@@ -1050,7 +1193,9 @@ def _validate_portable_media(bundle: Path, portable: Mapping[str, object]) -> No
             raise LabConfigError(f"{project} queue is invalid")
     counts = {
         "png": len(list((bundle / "raw/playwright").glob("*/*.png"))),
-        "metadata": len(list((bundle / "raw/playwright").glob("*/operator-metadata.json"))),
+        "metadata": len(
+            list((bundle / "raw/playwright").glob("*/operator-metadata.json"))
+        ),
         "api": len(list((bundle / "raw/api").glob("*/*.json"))),
         "webm": len(list((bundle / "raw/playwright").glob("*/*.webm"))),
         "trace": len(list((bundle / "raw/playwright").glob("*/trace.zip"))),
@@ -1090,16 +1235,29 @@ def run_operator_journey(
     completed: subprocess.CompletedProcess[str] | None = None
     config: dict[str, object] = {}
     try:
-        _run(_python_argv(
-            repo_root, "scripts/research/lab_controller.py", "start",
-            "--run-id", run_id, "--host-id", host_id,
-            "--lab-variant", "operator-smoke",
-        ), cwd=repo_root)
+        _run(
+            _python_argv(
+                repo_root,
+                "scripts/research/lab_controller.py",
+                "start",
+                "--run-id",
+                run_id,
+                "--host-id",
+                host_id,
+                "--lab-variant",
+                "operator-smoke",
+            ),
+            cwd=repo_root,
+        )
         controller_started = True
         config = _load_json(controller_config)
         credential = _config_path(config.get("credential_file"), "credential file")
         _node_start(
-            repo_root, controller_config, credential, host_id, "shell-1",
+            repo_root,
+            controller_config,
+            credential,
+            host_id,
+            "shell-1",
             delay_ms=1000,
         )
         shell_state = _load_json(_node_state_file(run_id, "shell-1"))
@@ -1109,8 +1267,13 @@ def run_operator_journey(
         _wait_online(str(config["agg_url"]), frozenset({"shell-1"}))
         _doctor(repo_root, controller_config, credential, host_id, "shell-1")
         argv = [
-            "npx", "--no-install", "playwright", "test",
-            "--config", "playwright.config.js", "tests/operator-journey.spec.js",
+            "npx",
+            "--no-install",
+            "playwright",
+            "test",
+            "--config",
+            "playwright.config.js",
+            "tests/operator-journey.spec.js",
         ]
         completed = _run(
             argv,
@@ -1165,7 +1328,9 @@ def run_operator_journey(
                     receipt = _node_stop(
                         repo_root, controller_config, credential, "shell-1"
                     )
-                    if receipt.returncode != 0 or not receipt.stdout.startswith("node:"):
+                    if receipt.returncode != 0 or not receipt.stdout.startswith(
+                        "node:"
+                    ):
                         raise LabConfigError(
                             f"shell-1 cleanup failed: {receipt.stderr.strip()}"
                         )
@@ -1178,10 +1343,17 @@ def run_operator_journey(
                 cleanup_errors.append(error)
             if state_file.is_file():
                 try:
-                    stopped = _run(_python_argv(
-                        repo_root, "scripts/research/lab_controller.py", "stop",
-                        "--state-file", state_file,
-                    ), cwd=repo_root, check=False)
+                    stopped = _run(
+                        _python_argv(
+                            repo_root,
+                            "scripts/research/lab_controller.py",
+                            "stop",
+                            "--state-file",
+                            state_file,
+                        ),
+                        cwd=repo_root,
+                        check=False,
+                    )
                     if stopped.returncode != 0:
                         raise LabConfigError(
                             f"controller stop failed: {stopped.stderr.strip()}"
@@ -1189,11 +1361,15 @@ def run_operator_journey(
                 except Exception as error:
                     cleanup_errors.append(error)
             else:
-                cleanup_errors.append(LabConfigError("controller state disappeared before cleanup"))
+                cleanup_errors.append(
+                    LabConfigError("controller state disappeared before cleanup")
+                )
         if cleanup_errors:
             if isinstance(primary, Exception):
                 cleanup_errors.insert(0, primary)
-            raise ExceptionGroup("operator journey and cleanup failed", cleanup_errors) from None
+            raise ExceptionGroup(
+                "operator journey and cleanup failed", cleanup_errors
+            ) from None
     if completed is None or not config:
         raise LabConfigError("operator journey did not run")
     bundle = _config_path(config.get("evidence_dir"), "evidence directory")
@@ -1259,14 +1435,10 @@ def run_clean_checkout_gate(
     )
     source_bundles = {
         "lifecycle": lifecycle.bundle.resolve(),
-        "operator_smoke": (
-            root / "data/research/results/lab" / operator_id
-        ).resolve(),
+        "operator_smoke": (root / "data/research/results/lab" / operator_id).resolve(),
     }
     for bundle in source_bundles.values():
-        check_bundle(
-            bundle, expected_kind="lab", source_root=root
-        ).require_valid()
+        check_bundle(bundle, expected_kind="lab", source_root=root).require_valid()
 
     finalizer_counts = {
         "lifecycle": _finalizer_count(root, lifecycle_id),
@@ -1351,8 +1523,13 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "LifecycleResult", "assert_disjoint_runs", "relocate_slice2_media",
-    "require_single_handler_started", "run_clean_checkout_gate",
-    "run_concurrent_pair", "run_operator_journey", "run_sequential_pair",
+    "LifecycleResult",
+    "assert_disjoint_runs",
+    "relocate_slice2_media",
+    "require_single_handler_started",
+    "run_clean_checkout_gate",
+    "run_concurrent_pair",
+    "run_operator_journey",
+    "run_sequential_pair",
     "run_two_node_lifecycle",
 ]

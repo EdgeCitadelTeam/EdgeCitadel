@@ -49,11 +49,11 @@ test.describe('Phase 2 smoke — Gemma round trip', () => {
     expect(result.deployment).toBe('test');
   });
 
-  test('POST /command/gemma-1 with empty body is rejected by adapter', async ({ request }) => {
+  test('POST /command/gemma-1 with empty body is rejected by Plugin', async ({ request }) => {
     // Empty body fails Pydantic validation at the API layer, returning 422.
-    // We DON'T test the adapter-level "empty_prompt" rejection here (that
+    // We DON'T test the Plugin handler's "empty_prompt" rejection here (that
     // would require a malformed envelope going through NATS, which is
-    // covered by adapters/gemma/tests/test_gemma.py).
+    // is covered by plugin-toolkit/tests/gemma_runtime/).
     const post = await request.post(
       `${API}/api/command/gemma-1?sender_id=${TEST_RUNNER}`,
       { data: { body: '' } });

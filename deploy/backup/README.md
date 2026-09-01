@@ -104,7 +104,7 @@ For B2/restic specifically:
 - `/opt/edgecitadel/` source tree — reproducible from `git`
 - Docker images — rebuildable
 - `/var/lib/edgecitadel/ollama/` model store — re-pullable from `ollama pull`
-- Adapter venvs at `/var/lib/edgecitadel/venvs/` — re-installable
+- Plugin venvs at `/var/lib/edgecitadel/venvs/` — re-installable
 
 This keeps backups small and restore-fast. If `git` is unreachable AND
 docker registry is unreachable AND ollama registry is unreachable, you

@@ -161,7 +161,9 @@ def _write_campaign(
             )
     schedule = tuple(schedule_rows)
     write_jsonl(campaign / "schedule.jsonl", schedule)
-    bundle_paths = [str((campaign / "bundles" / row["run_id"]).resolve()) for row in schedule]
+    bundle_paths = [
+        str((campaign / "bundles" / row["run_id"]).resolve()) for row in schedule
+    ]
     metadata = {
         "schema_version": "research-campaign.v1",
         "campaign_id": "tiny-paper",
@@ -217,7 +219,12 @@ def _write_campaign(
             "campaign_id": "tiny-paper",
             "profile": "paper",
             "source": source,
-            "command": ["scripts/research/run_artifact.py", "run", "--profile", "paper"],
+            "command": [
+                "scripts/research/run_artifact.py",
+                "run",
+                "--profile",
+                "paper",
+            ],
             "timing": {},
             "host": {
                 "system": "Linux",
@@ -311,9 +318,7 @@ def test_campaign_rejects_schedule_mutation_after_capture(tmp_path: Path) -> Non
 
     report = check_campaign(campaign)
 
-    assert "CAMPAIGN_SCHEDULE_HASH_MISMATCH" in {
-        issue.code for issue in report.issues
-    }
+    assert "CAMPAIGN_SCHEDULE_HASH_MISMATCH" in {issue.code for issue in report.issues}
 
 
 def test_campaign_rejects_trial_schema_violation(tmp_path: Path) -> None:
@@ -321,19 +326,21 @@ def test_campaign_rejects_trial_schema_violation(tmp_path: Path) -> None:
     trial_path = campaign / "bundles" / "ec-7-00000" / "trials.jsonl"
     trial = json.loads(trial_path.read_text())
     del trial["trial_id"]
-    trial_path.write_text(json.dumps(trial, sort_keys=True, separators=(",", ":")) + "\n")
+    trial_path.write_text(
+        json.dumps(trial, sort_keys=True, separators=(",", ":")) + "\n"
+    )
 
     report = check_campaign(campaign)
 
-    assert "CAMPAIGN_TRIAL_SCHEMA_INVALID" in {
-        issue.code for issue in report.issues
-    }
+    assert "CAMPAIGN_TRIAL_SCHEMA_INVALID" in {issue.code for issue in report.issues}
 
 
 def test_publication_rejects_w5_without_raw_crash_evidence(tmp_path: Path) -> None:
     w5 = {**CELL, "workload": "W5"}
 
-    report = check_campaign(_write_campaign(tmp_path, cells=(w5,)), require_publication=True)
+    report = check_campaign(
+        _write_campaign(tmp_path, cells=(w5,)), require_publication=True
+    )
 
     assert "CAMPAIGN_WORKLOAD_EVIDENCE_INVALID" in {
         issue.code for issue in report.issues
@@ -345,7 +352,9 @@ def test_publication_rejects_ineligible_manifest_host(tmp_path: Path) -> None:
     manifest_path = campaign / "bundles" / "ec-7-00000" / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["host"] = {"system": "Darwin", "architecture": "arm64"}
-    manifest_path.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n"
+    )
 
     report = check_campaign(campaign, require_publication=True)
 
@@ -415,9 +424,17 @@ def test_publication_rejects_raw_workload_evidence_that_contradicts_trial(
 @pytest.mark.parametrize(
     ("field", "value", "expected_code"),
     (
-        ("timing", {"started_monotonic_ns": 1, "ended_monotonic_ns": 2}, "CAMPAIGN_TRIAL_TIMING_MISMATCH"),
+        (
+            "timing",
+            {"started_monotonic_ns": 1, "ended_monotonic_ns": 2},
+            "CAMPAIGN_TRIAL_TIMING_MISMATCH",
+        ),
         ("resource_artifact", "../resources.json", "CAMPAIGN_TRIAL_REFERENCE_INVALID"),
-        ("invariant_results", {"outcome_consistent": False}, "CAMPAIGN_TRIAL_INVARIANT_FAILED"),
+        (
+            "invariant_results",
+            {"outcome_consistent": False},
+            "CAMPAIGN_TRIAL_INVARIANT_FAILED",
+        ),
     ),
 )
 def test_campaign_rejects_unbound_trial_envelope_fields(
@@ -430,7 +447,9 @@ def test_campaign_rejects_unbound_trial_envelope_fields(
     trial_path = campaign / "bundles" / "ec-7-00000" / "trials.jsonl"
     trial = json.loads(trial_path.read_text())
     trial[field] = value
-    trial_path.write_text(json.dumps(trial, sort_keys=True, separators=(",", ":")) + "\n")
+    trial_path.write_text(
+        json.dumps(trial, sort_keys=True, separators=(",", ":")) + "\n"
+    )
 
     report = check_campaign(campaign)
 
@@ -457,9 +476,7 @@ def test_publication_campaign_rejects_component_membership_drift(
 
     report = check_campaign(campaign, require_publication=True)
 
-    assert "CAMPAIGN_COMPONENTS_MISMATCH" in {
-        issue.code for issue in report.issues
-    }
+    assert "CAMPAIGN_COMPONENTS_MISMATCH" in {issue.code for issue in report.issues}
 
 
 @pytest.mark.parametrize(
@@ -481,9 +498,7 @@ def test_campaign_rejects_invalid_observation_count_types(
 
     report = check_campaign(campaign, require_publication=True)
 
-    assert "CAMPAIGN_TRIAL_SCHEMA_INVALID" in {
-        issue.code for issue in report.issues
-    }
+    assert "CAMPAIGN_TRIAL_SCHEMA_INVALID" in {issue.code for issue in report.issues}
 
 
 @pytest.mark.parametrize(
@@ -507,9 +522,7 @@ def test_publication_rejects_completed_w1_invariant_failures(
 
     report = check_campaign(campaign, require_publication=True)
 
-    assert "CAMPAIGN_TRIAL_INVARIANT_FAILED" in {
-        issue.code for issue in report.issues
-    }
+    assert "CAMPAIGN_TRIAL_INVARIANT_FAILED" in {issue.code for issue in report.issues}
 
 
 def test_publication_accepts_w2_parent_and_child_execution_counts(
@@ -625,9 +638,7 @@ def test_publication_campaign_requires_exact_block_counts(tmp_path: Path) -> Non
 
     report = check_campaign(campaign, require_publication=True)
 
-    assert "CAMPAIGN_BLOCK_CONTRACT_MISMATCH" in {
-        issue.code for issue in report.issues
-    }
+    assert "CAMPAIGN_BLOCK_CONTRACT_MISMATCH" in {issue.code for issue in report.issues}
 
 
 def test_publication_campaign_reconstructs_seeded_schedule(
@@ -648,9 +659,7 @@ def test_publication_campaign_reconstructs_seeded_schedule(
 
     report = check_campaign(campaign, require_publication=True)
 
-    assert "CAMPAIGN_SCHEDULE_ORDER_MISMATCH" in {
-        issue.code for issue in report.issues
-    }
+    assert "CAMPAIGN_SCHEDULE_ORDER_MISMATCH" in {issue.code for issue in report.issues}
 
 
 @pytest.mark.parametrize(

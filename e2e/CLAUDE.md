@@ -15,7 +15,8 @@
 ## Commands
 
 - Install deps: `npm install`
-- Run all tests: `npm test`
+- Run deterministic owned-stack tests: `npm test`
+- Run external Plugin tests against a prepared stack: `APP_URL=... AGG_URL=... npm run test:external-plugins`
 - Start test stack: `docker compose -f docker-compose.test.yml up --build -d`
 - Stop test stack: `docker compose -f docker-compose.test.yml down -v`
 

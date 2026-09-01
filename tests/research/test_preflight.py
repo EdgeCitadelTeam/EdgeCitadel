@@ -167,4 +167,7 @@ async def test_poststart_preflight_accepts_structural_lab_controller_snapshot(
     report = await run_preflight(request)
 
     assert report.valid is True
-    assert next(check for check in report.checks if check["name"] == "agents")["passed"] is True
+    assert (
+        next(check for check in report.checks if check["name"] == "agents")["passed"]
+        is True
+    )

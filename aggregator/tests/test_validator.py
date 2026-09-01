@@ -9,7 +9,7 @@ from typing import Any, Protocol, cast
 
 import pytest
 
-from adapters._common import validator as adapter_validator
+from edgecitadel_plugin_runtime import validator as adapter_validator
 from aggregator import validator as validator_module
 from aggregator.validator import (
     EnvelopeValidator,
@@ -499,7 +499,7 @@ class _PullConsumerFactory(Protocol):
 
 
 def _legacy_producer_factories() -> tuple[_ContextFactory, _PullConsumerFactory]:
-    module = import_module("adapters._common.pull_consumer")
+    module = import_module("edgecitadel_plugin_runtime.pull_consumer")
     return (
         cast(_ContextFactory, module.Context),
         cast(_PullConsumerFactory, module.PullConsumer),

@@ -1,0 +1,42 @@
+apiVersion: edgecitadel.io/v1alpha1
+kind: AgentPlugin
+
+metadata:
+  name: gemma
+  displayName: Gemma Agent
+  description: Local Ollama-backed reasoning, summarization, classification, and code explanation.
+  version: 0.2.5
+  publisher: edgecitadel
+
+compatibility:
+  supervisorApi: ">=0.1.0,<0.2.0"
+  protocols: [edgecitadel.plugin.v1]
+
+runtime:
+  command: [python, -m, edgecitadel_gemma_plugin]
+  pythonRequirements: edgecitadel_gemma_plugin/requirements.txt
+  environmentVariables: [OLLAMA_HOST, OLLAMA_PORT, OLLAMA_MODEL, OLLAMA_TIMEOUT_SEC, LOG_LEVEL]
+  healthTimeoutSeconds: 30
+  restartPolicy: on-failure
+
+skills:
+  directory: skills
+
+agents:
+  - id: gemma-1
+    skillNames: [gemma-reasoner, gemma-summarizer, gemma-classifier, gemma-code-explainer]
+    listensBroadcast: false
+
+permissions:
+  knowledge: [memory-turns]
+  messaging:
+    outboundAgents: [aggregator]
+  network:
+    outbound: ["http://127.0.0.1:11434"]
+  devices: []
+
+security:
+  sandbox: restricted
+  secrets: []
+
+extensions: {}

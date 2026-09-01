@@ -36,8 +36,8 @@ from websockets.exceptions import (
 from websockets.frames import Close as WebSocketClose
 from websockets.http11 import Response as WebSocketResponse
 
-from adapters._common.task_types import PublicationReceipt
-from adapters._common.validator import (
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.validator import (
     ValidationError,
     canonical_json,
     default_validator,
@@ -51,7 +51,7 @@ from scripts.research.modes.base import (
 )
 
 if TYPE_CHECKING:
-    from adapters._common.task_executor import InboundDelivery, TaskExecutor
+    from edgecitadel_plugin_runtime.task_executor import InboundDelivery, TaskExecutor
 
 CoordinatorRestart = Callable[[], Awaitable[str | None]]
 WorkerOperation = Callable[[str], Awaitable[None]]

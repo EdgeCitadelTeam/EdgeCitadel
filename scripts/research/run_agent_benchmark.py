@@ -27,7 +27,9 @@ def parse_workloads(raw: str) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run EdgeCitadel research benchmark workloads.")
+    parser = argparse.ArgumentParser(
+        description="Run EdgeCitadel research benchmark workloads."
+    )
     parser.add_argument("--workloads", default="native")
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--api-base", default="http://localhost/api")

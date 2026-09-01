@@ -35,17 +35,21 @@ Repository policy and quality gates are in `AGENTS.md`. Claude-specific area gui
 ### 3. Verify quality
 
 ```bash
-# Python
-ruff check aggregator/ --fix
-ruff format aggregator/
-mypy aggregator/ --strict
-pytest tests/ -x --tb=short
+# Python gates are defined in .agents/skills/commit-check/SKILL.md.
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ --check
+cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m pytest -q
+cd .. && uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest -q scripts/tests
+./scripts/research/run-python -m pytest tests/ -x --tb=short
 
 # Frontend
 cd frontend && npm run lint && npm run build
 
-# E2E (requires running stack)
-cd e2e && npx playwright test
+# Deterministic E2E owns and cleans up a disposable stack.
+cd e2e && npm test
+
+# Optional upstream/model-dependent Plugin suites use a prepared external stack.
+APP_URL=http://localhost AGG_URL=http://localhost:8000 npm run test:external-plugins
 ```
 
 ### 4. Commit with Conventional Commits
@@ -94,8 +98,8 @@ nats/            NATS server config
 nginx/           Reverse proxy config
 e2e/             Playwright tests
 scripts/         Utility scripts
-plugin-toolkit/  Plugin authoring SDK, schemas, validation, and tests
-plugins/         Independently distributable plugin packages
+plugin-toolkit/  Shared Plugin runtime, SDK, schemas, validation, and tests
+plugins/         Installable Agent Plugin packages and implementations
 .agents/         Canonical shared verification skills
 .claude/         Claude-specific compatibility and area guides
 ```

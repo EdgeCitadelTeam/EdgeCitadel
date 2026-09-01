@@ -1,0 +1,51 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "f9bb2a369657af1051104fa146c529130659ffd116d232bb6f496218c6ef7e55"
+    },
+    {
+      "path": "edgecitadel_watchdog_plugin/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "edgecitadel_watchdog_plugin/__main__.py",
+      "sha256": "3aefeb5017c97f94b5da96fa516d14d686f10addea70ec5a510ccf2ff5ff91d0"
+    },
+    {
+      "path": "edgecitadel_watchdog_plugin/adapter.py",
+      "sha256": "ddaa6a5afc528dfae8b872af7b0b41fcb0e84f6dcda6cf1fcf42bb4224f193fe"
+    },
+    {
+      "path": "edgecitadel_watchdog_plugin/config.yaml",
+      "sha256": "e2f05599be26c5b394759b7729c0e068c869e57f2485e167ef1df433cc02d469"
+    },
+    {
+      "path": "edgecitadel_watchdog_plugin/requirements.txt",
+      "sha256": "98a8e4b5f5c08ad59ebf86473cb087a0efd034eb0fc7e8ea813d29bbe19f73e7"
+    },
+    {
+      "path": "edgecitadel_watchdog_plugin/state.py",
+      "sha256": "8be66033acb6d78f115bd2e98fa7e0fd866ed693db182839ec0d1962875dd3f2"
+    },
+    {
+      "path": "edgecitadel_watchdog_plugin/synth.py",
+      "sha256": "b47f0dd33df582db57eba30ac59081946d487b39e60ff65b1bc25c3a6f17f9d1"
+    },
+    {
+      "path": "plugin.yaml",
+      "sha256": "7a16bdfa71244840295e1e298eab63845fb0eccad6bd8f6c2c98c5325dc13687"
+    },
+    {
+      "path": "skills/README.md",
+      "sha256": "f5e5fd28c036a4bcd2a00653b2edd1ee8a20040dce339f4b6b3362b62c6f0556"
+    }
+  ],
+  "lockVersion": 1,
+  "package": {
+    "id": "edgecitadel.watchdog",
+    "protocol": "edgecitadel.plugin.v1",
+    "version": "0.1.0"
+  },
+  "skills": []
+}

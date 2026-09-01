@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol
 
-from adapters._common.task_publisher import EventSink
-from adapters._common.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.task_publisher import EventSink
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
 
 if TYPE_CHECKING:
-    from adapters._common.task_executor import TaskExecutor
+    from edgecitadel_plugin_runtime.task_executor import TaskExecutor
 
 
 class Mode(str, Enum):

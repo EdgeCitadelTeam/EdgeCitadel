@@ -15,19 +15,19 @@ from typing import TypeVar, cast, get_type_hints
 import pytest
 
 import scripts.research.modes.base as base_module
-from adapters._common.task_executor import (
+from edgecitadel_plugin_runtime.task_executor import (
     ExecutionResult,
     InboundDelivery,
     TaskExecutor,
 )
-from adapters._common.task_publisher import (
+from edgecitadel_plugin_runtime.task_publisher import (
     EventSink as CanonicalEventSink,
 )
-from adapters._common.task_publisher import (
+from edgecitadel_plugin_runtime.task_publisher import (
     ProgressPublisher,
     TerminalPublisher,
 )
-from adapters._common.task_types import (
+from edgecitadel_plugin_runtime.task_types import (
     PublicationReceipt as CanonicalPublicationReceipt,
 )
 from scripts.research.modes.base import (
@@ -318,7 +318,7 @@ def test_modes_package_is_inert_and_base_has_no_runtime_executor_import() -> Non
     top_level_imports = {
         node.module for node in base_tree.body if isinstance(node, ast.ImportFrom)
     }
-    assert "adapters._common.task_executor" not in top_level_imports
+    assert "edgecitadel_plugin_runtime.task_executor" not in top_level_imports
     assert not any(
         module is not None
         and module.startswith(

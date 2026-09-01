@@ -1,0 +1,1 @@
+# No Plugin-specific dependencies; the shared runtime provides NATS and schemas.

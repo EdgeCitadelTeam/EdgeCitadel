@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "body": {"type": "string"},
+    "returncode": {"type": ["integer", "null"]},
+    "error": {"type": "string"}
+  },
+  "required": ["body"],
+  "additionalProperties": false
+}

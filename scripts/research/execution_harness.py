@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
-from adapters._common.task_publisher import EventSink
+from edgecitadel_plugin_runtime.task_publisher import EventSink
 from scripts.research.fixtures.native_control import (
     NativeControlConfig,
     TransportFactory,

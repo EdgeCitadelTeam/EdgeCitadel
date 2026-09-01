@@ -17,20 +17,24 @@
 ## Repo map
 - `aggregator/` - Python FastAPI backend, NATS subscriptions, SQLite persistence
 - `frontend/` - React/Vite dashboard; the only UI source root
-- `adapters/` - Current agent runtime integrations and plugin-migration inputs
 - `openclaw-client/` - Node NATS client for agents
 - `e2e/` - Playwright end-to-end tests
-- `plugin-toolkit/` - Repository-side plugin schemas, SDK protocols, validation supervisor, and tests
-- `plugins/` - Installable EdgeCitadel plugin packages and examples
+- `plugin-toolkit/` - Shared Plugin runtime, schemas, SDK protocols, validation Supervisor, and tests
+- `plugins/` - Installable EdgeCitadel Plugin packages and examples; the only Python Agent runtime source root
 
 ## Commands
+- Newcomer setup: `./scripts/edgecitadel create`
+- Enroll a host: `./scripts/edgecitadel invite --node-id <node-id> --host <reachable-host>` then `./scripts/edgecitadel join '<invitation>'`
+- Install an agent: `./scripts/edgecitadel plugin install <plugin-path>`
+- Homebrew formula style: `brew style deploy/homebrew/Formula/edgecitadel.rb`
 - Full stack: `docker compose up --build -d`
 - Restart: `docker compose down && docker compose up --build -d`
-- Backend dev: `cd aggregator && uvicorn main:app --host 0.0.0.0 --port 8000 --reload`
+- Backend setup: `cd aggregator && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
+- Backend dev: `cd aggregator && .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload`
 - Frontend dev: `cd frontend && npm run dev`
 - Frontend build: `cd frontend && npm run build`
 - Client listener: `cd openclaw-client && npm start`
-- E2E tests: `cd e2e && npm test`
+- Deterministic E2E tests: `cd e2e && npm test`; external Plugin suites require a prepared stack and run with `APP_URL=... AGG_URL=... npm run test:external-plugins`
 - Plugin checks (smoke): `cd plugin-toolkit && python -m pytest -q && python -m edgecitadel_supervisor validate ../plugins/examples/placeholder`; see `plugin-toolkit/README.md` for the full contributor gate.
 
 ## Working rules

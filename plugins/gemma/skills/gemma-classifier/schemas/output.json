@@ -1,0 +1,1 @@
+{"type":"object","properties":{"structured":{"type":"object","properties":{"label":{"type":"string"},"confidence":{"type":"number"}},"required":["label","confidence"]}},"additionalProperties":true}

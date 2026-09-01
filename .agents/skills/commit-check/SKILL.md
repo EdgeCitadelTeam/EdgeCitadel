@@ -15,12 +15,28 @@ git diff --name-only           # unstaged changes
 
 ## 2. Python Quality (if .py files changed)
 ```bash
-ruff check aggregator/ --fix
-ruff format aggregator/ --check
-mypy aggregator/ --strict
-pytest tests/ -x --tb=short
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ --check
+cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m compileall -q .
+cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m pytest -q
+uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest -q scripts/tests
+./scripts/research/run-python -m pytest tests/ -x --tb=short
 ```
 All must pass with zero errors.
+
+The Aggregator predates strict typing and does not currently have a passing
+repository-wide mypy baseline. Do not claim that it does. Changes to the typed
+Plugin Toolkit must run its maintained strict type gate:
+
+```bash
+cd plugin-toolkit
+uv run --isolated --with-editable '.[type]' python -m mypy --strict src/edgecitadel_plugin_sdk tests/typecheck_sdk_consumer.py
+uv run --isolated --with-editable '.[type]' python -m mypy --strict src/edgecitadel_plugin_runtime/validator.py src/edgecitadel_plugin_runtime/jetstream.py ../aggregator/validator.py ../aggregator/jetstream_bootstrap.py
+```
+
+Do not add broad suppressions to make a changed module pass. If a change begins
+typing an Aggregator module, run strict mypy on that module and its typed
+dependencies and document the narrowed scope.
 
 ## 3. Frontend Quality (if .js/.jsx files changed)
 ```bash
@@ -51,7 +67,7 @@ If the change introduces new features, API endpoints, or NATS subjects:
 ## Report
 Output a pass/fail checklist:
 - [ ] Lint clean
-- [ ] Types check
+- [ ] Applicable maintained types check
 - [ ] Tests pass
 - [ ] Commit message valid
 - [ ] No secrets detected
