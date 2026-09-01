@@ -21,12 +21,14 @@
 - `e2e/` - Playwright end-to-end tests
 - `plugin-toolkit/` - Shared Plugin runtime, schemas, SDK protocols, validation Supervisor, and tests
 - `plugins/` - Installable EdgeCitadel Plugin packages and examples; the only Python Agent runtime source root
+- `edgecitadel/` - Python distribution entrypoint; packaged runtime assets are assembled at build time
 
 ## Commands
 - Newcomer setup: `./scripts/edgecitadel create`
 - Enroll a host: `./scripts/edgecitadel invite --node-id <node-id> --host <reachable-host>` then `./scripts/edgecitadel join '<invitation>'`
 - Install an agent: `./scripts/edgecitadel plugin install <plugin-path>`
 - Homebrew formula style: `brew style deploy/homebrew/Formula/edgecitadel.rb`
+- Python package: `python -m build` then install the wheel in a clean virtual environment
 - Full stack: `docker compose up --build -d`
 - Restart: `docker compose down && docker compose up --build -d`
 - Backend setup: `cd aggregator && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`

@@ -17,13 +17,12 @@ adapter for constrained devices and is disabled by default.
 
 The canonical wire contract is [`schemas/envelope.v1.json`](schemas/envelope.v1.json).
 
-## Homebrew distribution
+## Install with Homebrew or pip
 
-Homebrew is the selected installation path for both Core and Edge nodes. The
-checked-in Formula has passed a real local Cellar install, `brew test`, isolated
-Core initialization, Edge enrollment, plugin startup, and command/result proof.
-There is no public tag or tap yet, so `brew install edgecitadel` must not be
-advertised until the release is explicitly published.
+EdgeCitadel supports self-contained Homebrew and Python wheel installations for
+both Core and Edge nodes. There is no public tag, tap, or PyPI release yet, so
+the short public install commands must not be advertised until release is
+explicitly authorized and published.
 
 Once the tap exists, the user experience is:
 
@@ -41,9 +40,24 @@ edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
 edgecitadel plugin install echo
 ```
 
-Homebrew installs read-only assets in the Cellar. Secrets, node state, plugins,
-logs, SQLite, and JetStream data live under `~/.edgecitadel` and survive formula
-upgrades. See [`deploy/homebrew/README.md`](deploy/homebrew/README.md).
+The equivalent Python installation is:
+
+```bash
+python3 -m venv ~/.edgecitadel/cli-venv
+~/.edgecitadel/cli-venv/bin/python -m pip install edgecitadel
+~/.edgecitadel/cli-venv/bin/edgecitadel --version
+```
+
+Until the PyPI release exists, contributors can replace `edgecitadel` in the
+install command with an absolute path to this checkout. The wheel contains the
+Core Compose sources, schemas, Supervisor sources, and bundled plugins rather
+than depending on the checkout after installation.
+
+Homebrew installs read-only assets in the Cellar; pip installs the same assets
+inside its Python environment. Secrets, node state, plugins, logs, SQLite, and
+JetStream data live under `~/.edgecitadel` and survive either package upgrade.
+See [`deploy/homebrew/README.md`](deploy/homebrew/README.md) and
+[`deploy/pip/README.md`](deploy/pip/README.md).
 
 ## Source checkout
 

@@ -18,6 +18,26 @@ from scripts import edgecitadel_cli as cli
 REPO_ROOT = Path(__file__).parents[2]
 
 
+def test_pip_bundled_plugin_staging_excludes_installer_bytecode(tmp_path, monkeypatch):
+    install_root = tmp_path / "share" / "edgecitadel"
+    source = install_root / "plugins" / "examples" / "echo"
+    (source / "runtime" / "__pycache__").mkdir(parents=True)
+    (source / "plugin.yaml").write_text("package: {}\n")
+    (source / "runtime" / "__main__.py").write_text("pass\n")
+    (source / "runtime" / "__pycache__" / "__main__.pyc").write_bytes(b"cache")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", install_root)
+    monkeypatch.setattr(cli, "IS_PIP", True)
+
+    with cli._installable_plugin_source(source, tmp_path / "state") as staged:
+        staged_root = staged.parent
+        assert staged != source
+        assert (staged / "plugin.yaml").is_file()
+        assert (staged / "runtime" / "__main__.py").is_file()
+        assert not (staged / "runtime" / "__pycache__").exists()
+
+    assert not staged_root.exists()
+
+
 def test_ensure_env_is_idempotent_and_preserves_custom_values(tmp_path, monkeypatch):
     example = tmp_path / ".env.example"
     target = tmp_path / ".env"
@@ -371,12 +391,15 @@ def test_plugin_remove_stops_and_deletes_managed_copy(tmp_path, monkeypatch):
     assert plugin_data.read_text() == "preserved"
 
 
-def test_homebrew_create_keeps_mutable_core_files_outside_install_root(tmp_path):
+@pytest.mark.parametrize("distribution", ["homebrew", "pip"])
+def test_installed_create_keeps_mutable_core_files_outside_install_root(
+    tmp_path, distribution
+):
     core_dir = tmp_path / "core"
     state_dir = tmp_path / "state"
     environment = {
         **os.environ,
-        "EDGECITADEL_DISTRIBUTION": "homebrew",
+        "EDGECITADEL_DISTRIBUTION": distribution,
         "EDGECITADEL_INSTALL_ROOT": str(REPO_ROOT),
         "EDGECITADEL_CORE_DIR": str(core_dir),
     }
@@ -402,9 +425,13 @@ def test_homebrew_create_keeps_mutable_core_files_outside_install_root(tmp_path)
     assert stat.S_IMODE((state_dir / "node.json").stat().st_mode) == 0o600
 
 
-def test_homebrew_compose_override_redirects_all_mutable_mounts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("distribution", ["homebrew", "pip"])
+def test_installed_compose_override_redirects_all_mutable_mounts(
+    tmp_path, monkeypatch, distribution
+):
     core_dir = tmp_path / "core"
-    monkeypatch.setattr(cli, "IS_HOMEBREW", True)
+    monkeypatch.setattr(cli, "IS_HOMEBREW", distribution == "homebrew")
+    monkeypatch.setattr(cli, "IS_PIP", distribution == "pip")
     monkeypatch.setattr(cli, "CORE_RUNTIME_DIR", core_dir)
     monkeypatch.setattr(cli, "ENV_PATH", core_dir / ".env")
     monkeypatch.setattr(cli, "INSTALL_ROOT", REPO_ROOT)

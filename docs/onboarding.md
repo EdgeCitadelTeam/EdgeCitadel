@@ -1,13 +1,14 @@
 # EdgeCitadel newcomer onboarding
 
-There is one product command: `edgecitadel`. Homebrew installs it for both Core
-and Edge nodes; users choose whether this host creates a network or joins one.
-They do not install the Supervisor separately. In a source checkout, the same
-command is available as `./scripts/edgecitadel`.
+There is one product command: `edgecitadel`. Homebrew or pip installs it for both
+Core and Edge nodes; users choose whether this host creates a network or joins
+one. They do not install the Supervisor separately. In a source checkout, the
+same command is available as `./scripts/edgecitadel`.
 
-The public tap is not yet published. The repository Formula is HEAD-only until
-a verified GitHub tag/archive supplies the stable URL and checksum; see
-`deploy/homebrew/README.md`.
+The public tap and PyPI distribution are not yet published. The repository
+Formula is HEAD-only and the wheel is source-build-only until a verified release
+is explicitly published; see `deploy/homebrew/README.md` and
+`deploy/pip/README.md`.
 
 ## Node role and messaging mode
 
@@ -28,6 +29,14 @@ a conflicting `join`; topology conversion is intentionally not implicit.
 brew tap zhonghaozhan/edgecitadel
 brew install edgecitadel
 edgecitadel create
+```
+
+Alternatively, install the wheel in an isolated Python environment:
+
+```bash
+python3 -m venv ~/.edgecitadel/cli-venv
+~/.edgecitadel/cli-venv/bin/python -m pip install edgecitadel
+~/.edgecitadel/cli-venv/bin/edgecitadel create
 ```
 
 This one command creates `.env` with generated local secrets, creates data
@@ -51,6 +60,10 @@ brew tap zhonghaozhan/edgecitadel
 brew install edgecitadel
 edgecitadel join 'ecjoin://...' --messaging-mode single-client
 ```
+
+The same `pip install` flow above can be used on an Edge. A pip-installed
+`nats_leaf` Edge must install the native `nats-server` executable separately;
+`single-client` does not require it.
 
 The invitation is short-lived and can be redeemed once. The API stores only
 its SHA-256 digest. Redeeming it writes the node configuration with mode `0600`.
@@ -143,12 +156,12 @@ override it with `EDGECITADEL_STATE_DIR`.
 
 ## What is automatic and what is not
 
-The Homebrew layout removes all manual `.env`, directory, broker rendering,
-Compose, and Supervisor-install commands. The Formula does not install Docker:
-only Core creation checks for a running Docker Desktop/Engine. It installs the
-`nats-server` binary needed by `nats_leaf`, but `single-client` never starts it.
-A public install still requires the release/tap
-publishing step, which is intentionally separate from repository implementation.
+The Homebrew and pip layouts remove all manual `.env`, directory, broker
+rendering, Compose, and Supervisor-install commands. Neither installs Docker:
+only Core creation checks for a running Docker Desktop/Engine. The Formula
+installs the `nats-server` binary needed by `nats_leaf`; pip users install that
+native executable separately. `single-client` never starts it. Public installs
+still require separate, explicitly authorized release/tap/PyPI publication.
 
 The Supervisor owns package validation, permission approval, immutable install,
 process start/stop, broker credential injection, readiness confirmation, status,
@@ -180,11 +193,12 @@ Use `plugin stop` before inspecting or backing up a plugin. `plugin remove`
 removes only its immutable installed copy and preserves its log. `down` stops a
 core stack without deleting SQLite, JetStream, node state, or `.env`.
 
-Before uninstalling the Formula on a `nats_leaf` Edge, run
+Before uninstalling either package on a `nats_leaf` Edge, run
 `edgecitadel supervisor stop` and `edgecitadel messaging stop`. Homebrew removes
-the installed binaries but deliberately preserves `~/.edgecitadel`, including
-local JetStream data. A Formula upgrade also preserves this state, and
-`messaging restart` reloads launchd with the upgraded binary path.
+the installed binaries and `python -m pip uninstall edgecitadel` removes the
+wheel; both deliberately preserve `~/.edgecitadel`, including local JetStream
+data. Package upgrades also preserve this state, and `messaging restart` reloads
+launchd with the current `nats-server` binary path.
 
 There is intentionally no broad `reset` command in v0.1. A full uninstall must
 be a deliberate manual operation after backup: stop the Supervisor and core,
