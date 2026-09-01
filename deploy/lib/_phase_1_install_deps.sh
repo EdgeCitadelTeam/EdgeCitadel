@@ -29,6 +29,7 @@ phase_1_install_deps() {
   if [[ -f /etc/edgecitadel/env ]]; then
     run chmod 0640 /etc/edgecitadel/env
     run chgrp edgecitadel /etc/edgecitadel/env
+    run python3 "${LIB_DIR}/reconcile-env.py"
   fi
 
   # Sync /opt/edgecitadel from source-dir

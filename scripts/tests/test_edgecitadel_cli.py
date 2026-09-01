@@ -670,6 +670,62 @@ def test_doctor_json_classifies_leaf_disconnect_as_degraded(
     assert checks["cross_node_messaging"]["detail"] == "paused"
 
 
+def test_doctor_treats_disabled_plugin_and_agents_as_non_failing(
+    tmp_path, monkeypatch, capsys
+):
+    cli._write_json(
+        tmp_path / "node.json",
+        {
+            "version": 2,
+            "mode": "edge",
+            "messaging_mode": "single-client",
+            "core_url": "http://core.test",
+            "upstream_nats_url": "nats://core.test:4222",
+            "plugin_nats_url": "nats://core.test:4222",
+            "plugin_nats_token": "plugin-token",
+            "nats_url": "nats://core.test:4222",
+            "nats_token": "plugin-token",
+            "agent_id": "edge-one",
+        },
+    )
+    cli._write_json(
+        tmp_path / "plugins.json",
+        {
+            "version": 1,
+            "plugins": {
+                "edgecitadel.disabled": {
+                    "enabled": False,
+                    "pid": None,
+                    "inventory": {"agents": [{"id": "disabled-agent"}]},
+                }
+            },
+        },
+    )
+    requested_urls: list[str] = []
+
+    def http_json(url, **_kwargs):
+        requested_urls.append(url)
+        return {"nats_connected": True, "jetstream_stream_ok": True}
+
+    monkeypatch.setattr(cli, "_http_json", http_json)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *_args, **_kwargs: True)
+
+    assert cli.command_doctor(Namespace(state_dir=str(tmp_path), json=True)) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    checks = {item["id"]: item for item in report["checks"]}
+    assert report["status"] == "healthy"
+    assert checks["plugin_edgecitadel.disabled"] == {
+        "id": "plugin_edgecitadel.disabled",
+        "name": "plugin edgecitadel.disabled",
+        "ok": True,
+        "detail": "disabled",
+    }
+    assert checks["agent_disabled-agent"]["ok"] is True
+    assert checks["agent_disabled-agent"]["detail"] == "disabled with plugin"
+    assert requested_urls == ["http://core.test/api/system/status"]
+
+
 def test_messaging_stop_is_successful_when_local_service_is_stopped(
     tmp_path, monkeypatch
 ):

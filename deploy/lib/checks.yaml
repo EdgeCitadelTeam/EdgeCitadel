@@ -37,6 +37,9 @@ categories:
       - name: env-file-mode
         cmd: bash -c '[[ "$(stat -c %a /etc/edgecitadel/env)" == "640" ]]'
         remediation: "sudo chmod 0640 /etc/edgecitadel/env"
+      - name: deployment-secrets-reconciled
+        cmd: python3 /opt/edgecitadel/deploy/lib/reconcile-env.py --check
+        remediation: "sudo python3 /opt/edgecitadel/deploy/lib/reconcile-env.py"
       - name: opt-edgecitadel-exists
         cmd: bash -c '[[ -d /opt/edgecitadel && -d /opt/edgecitadel/plugins ]]'
         remediation: "sudo deploy-host.sh --update --source-dir /root/snap/EdgeCitadel"

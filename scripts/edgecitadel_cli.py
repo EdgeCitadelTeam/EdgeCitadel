@@ -665,6 +665,23 @@ def command_doctor(args: argparse.Namespace) -> int:
             add_check("local_nats_process", "Local NATS", True, "not used")
 
         for plugin_id, record in sorted(_load_plugins(state_dir)["plugins"].items()):
+            enabled = record.get("enabled", True) is not False
+            if not enabled:
+                add_check(
+                    f"plugin_{plugin_id}",
+                    f"plugin {plugin_id}",
+                    True,
+                    "disabled",
+                )
+                for declared_agent in record["inventory"]["agents"]:
+                    agent_id = declared_agent["id"]
+                    add_check(
+                        f"agent_{agent_id}",
+                        f"agent {agent_id}",
+                        True,
+                        "disabled with plugin",
+                    )
+                continue
             running = _pid_running(record.get("pid"))
             add_check(
                 f"plugin_{plugin_id}",

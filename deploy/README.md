@@ -10,6 +10,15 @@ Spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`.
 - `manifest.toml` — every host-level dependency lives here.
 - `lib/checks.yaml` — every `--check` check lives here.
 
+## Deployment secret upgrades
+
+Install and update operations reconcile `/etc/edgecitadel/env` before changing
+or restarting services. Existing non-placeholder values are preserved; missing,
+empty, or documented placeholder values for Core NATS, Leaf authentication, and
+the enrollment administrator are generated atomically without printing their
+values. Run `sudo python3 deploy/lib/reconcile-env.py` to repair drift manually,
+or add `--check` for a read-only validation.
+
 ## Adding a new dependency
 
 1. Add to `manifest.toml`:
