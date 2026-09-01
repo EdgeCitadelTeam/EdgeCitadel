@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
@@ -117,7 +118,7 @@ def _ensure_env(path: Path = ENV_PATH) -> tuple[dict[str, str], bool]:
     changed = not path.exists()
     seen: set[str] = set()
     output: list[str] = []
-    generated = {key: secrets.token_urlsafe(32) for key in PLACEHOLDERS}
+    generated = {key: f"ec_{secrets.token_hex(32)}" for key in PLACEHOLDERS}
     for line in lines:
         if "=" not in line or line.lstrip().startswith("#"):
             output.append(line)
@@ -384,6 +385,37 @@ def _invitation_decode(value: str) -> dict[str, Any]:
     return payload
 
 
+def _advertised_urls(host: str) -> tuple[str, str]:
+    """Return Core and NATS URLs with a valid bracketed IPv6 authority."""
+    value = host.rstrip("/")
+    if "://" not in value:
+        try:
+            address = ipaddress.ip_address(value.strip("[]"))
+        except ValueError:
+            core_url = f"http://{value}"
+        else:
+            authority = f"[{address}]" if address.version == 6 else str(address)
+            core_url = f"http://{authority}"
+    else:
+        core_url = value
+    parsed = urlparse(core_url)
+    try:
+        parsed.port
+    except ValueError as error:
+        raise UserError(
+            "advertised IPv6 hosts with a scheme must use brackets"
+        ) from error
+    if not parsed.hostname:
+        raise UserError("advertised host is invalid")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        broker_authority = parsed.hostname
+    else:
+        broker_authority = f"[{address}]" if address.version == 6 else str(address)
+    return core_url, f"nats://{broker_authority}:4222"
+
+
 def command_create(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     existing_path = state_dir / NODE_STATE_NAME
@@ -402,11 +434,7 @@ def command_create(args: argparse.Namespace) -> int:
     _render_nats_config()
     _validate_core_nats_config(env)
 
-    host = args.host.rstrip("/")
-    core_url = f"http://{host}" if "://" not in host else host
-    parsed = urlparse(core_url)
-    broker_host = parsed.hostname or host
-    nats_url = f"nats://{broker_host}:4222"
+    core_url, nats_url = _advertised_urls(args.host)
     node = {
         "version": 1,
         "mode": "core",
@@ -450,10 +478,7 @@ def command_invite(args: argparse.Namespace) -> int:
     if not admin_token:
         raise UserError("administrator credential is missing; rerun create")
 
-    host = args.host.rstrip("/")
-    core_url = f"http://{host}" if "://" not in host else host
-    parsed = urlparse(core_url)
-    broker_host = parsed.hostname or host
+    core_url, nats_url = _advertised_urls(args.host)
     response = _http_json(
         f"{node['core_url']}/api/enrollment/invitations",
         method="POST",
@@ -467,7 +492,7 @@ def command_invite(args: argparse.Namespace) -> int:
         {
             "version": 1,
             "core_url": core_url,
-            "nats_url": f"nats://{broker_host}:4222",
+            "nats_url": nats_url,
             "token": response["token"],
             "agent_id": response["agent_id"],
             "expires_at": response["expires_at"],
@@ -682,12 +707,12 @@ def command_doctor(args: argparse.Namespace) -> int:
                         "disabled with plugin",
                     )
                 continue
-            running = _pid_running(record.get("pid"))
+            running, process_detail = _plugin_process_detail(record)
             add_check(
                 f"plugin_{plugin_id}",
                 f"plugin {plugin_id}",
                 running,
-                f"pid {record.get('pid')}" if running else "stopped",
+                process_detail,
             )
             for declared_agent in record["inventory"]["agents"]:
                 agent_id = declared_agent["id"]
@@ -913,6 +938,48 @@ def _pid_running(pid: int | None) -> bool:
         return False
 
 
+def _process_identity(pid: int | None) -> str | None:
+    """Return a stable, non-sensitive identity for one live process instance."""
+    if not _pid_running(pid):
+        return None
+    assert pid is not None
+    proc_stat = Path(f"/proc/{pid}/stat")
+    try:
+        if proc_stat.is_file():
+            fields = proc_stat.read_text().rpartition(") ")[2].split()
+            if len(fields) > 19:
+                return hashlib.sha256(f"linux:{pid}:{fields[19]}".encode()).hexdigest()
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-o", "command=", "-p", str(pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except OSError:
+        return None
+    description = result.stdout.strip()
+    if result.returncode != 0 or not description:
+        return None
+    return hashlib.sha256(f"ps:{pid}:{description}".encode()).hexdigest()
+
+
+def _plugin_process_owned(record: dict[str, Any]) -> bool:
+    identity = record.get("process_identity")
+    return isinstance(identity, str) and identity == _process_identity(
+        record.get("pid")
+    )
+
+
+def _plugin_process_detail(record: dict[str, Any]) -> tuple[bool, str]:
+    pid = record.get("pid")
+    if not _pid_running(pid):
+        return False, "stopped"
+    if not _plugin_process_owned(record):
+        return False, f"unverified pid {pid}"
+    return True, f"pid {pid}"
+
+
 def _timestamp_epoch(value: object) -> float:
     if not isinstance(value, str):
         return 0
@@ -1007,8 +1074,14 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
     node = _load_node(state_dir)
     state, record = _plugin_record(state_dir, plugin_id)
     if _pid_running(record.get("pid")):
-        print(f"Plugin {plugin_id} is already running (pid {record['pid']}).")
-        return
+        if _plugin_process_owned(record):
+            print(f"Plugin {plugin_id} is already running (pid {record['pid']}).")
+            return
+        raise UserError(
+            f"plugin {plugin_id} has an unverified live PID {record.get('pid')}; "
+            "refusing to start another runtime. Verify that process manually, "
+            "terminate it if appropriate, then retry"
+        )
     command = record["inventory"]["runtime"]["command"]
     if not isinstance(command, list) or not all(
         isinstance(item, str) for item in command
@@ -1031,9 +1104,21 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
         "EDGECITADEL_SCHEMA_DIR": str(INSTALL_ROOT / "schemas"),
     }
     started_at = time.time()
+    restart_policy = record["inventory"]["runtime"].get("restartPolicy", "never")
+    runner = INSTALL_ROOT / "scripts" / "plugin_runner.py"
+    if not runner.is_file():
+        raise UserError("Plugin process runner is missing from the installation")
     with log_path.open("ab") as log_file:
         process = subprocess.Popen(
-            [executable, *command[1:]],
+            [
+                sys.executable,
+                str(runner),
+                "--restart-policy",
+                restart_policy,
+                "--",
+                executable,
+                *command[1:],
+            ],
             cwd=record["path"],
             env=environment,
             stdin=subprocess.DEVNULL,
@@ -1044,7 +1129,18 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
     time.sleep(0.25)
     if process.poll() is not None:
         raise UserError(f"plugin {plugin_id} exited during startup; inspect {log_path}")
-    record.update({"pid": process.pid, "enabled": True, "started_at": started_at})
+    process_identity = _process_identity(process.pid)
+    if process_identity is None:
+        os.killpg(process.pid, signal.SIGTERM)
+        raise UserError(f"plugin {plugin_id} process identity could not be verified")
+    record.update(
+        {
+            "pid": process.pid,
+            "process_identity": process_identity,
+            "enabled": True,
+            "started_at": started_at,
+        }
+    )
     _write_json(_plugins_path(state_dir), state)
     agent_ids = [item["id"] for item in record["inventory"]["agents"]]
     deadline = time.monotonic() + record["inventory"]["runtime"]["healthTimeoutSeconds"]
@@ -1092,21 +1188,84 @@ def _stop_plugin(state_dir: Path, plugin_id: str, *, quiet: bool = False) -> Non
     state, record = _plugin_record(state_dir, plugin_id)
     pid = record.get("pid")
     if _pid_running(pid):
-        os.kill(pid, signal.SIGTERM)
+        if not _plugin_process_owned(record):
+            raise UserError(
+                f"plugin {plugin_id} has an unverified live PID {pid}; refusing to "
+                "signal a process EdgeCitadel does not own"
+            )
+        assert isinstance(pid, int)
+        try:
+            process_group = os.getpgid(pid)
+        except OSError as error:
+            raise UserError(
+                f"plugin {plugin_id} process group is unavailable"
+            ) from error
+        if process_group != pid:
+            raise UserError(
+                f"plugin {plugin_id} PID {pid} is not its owned process-group leader"
+            )
+        if not _plugin_process_owned(record):
+            raise UserError(
+                f"plugin {plugin_id} process identity changed before signaling"
+            )
+        os.killpg(process_group, signal.SIGTERM)
         deadline = time.monotonic() + 5
         while _pid_running(pid) and time.monotonic() < deadline:
             time.sleep(0.1)
         if _pid_running(pid):
-            os.kill(pid, signal.SIGKILL)
-    record.update({"pid": None, "enabled": False})
+            os.killpg(process_group, signal.SIGKILL)
+    record.update({"pid": None, "process_identity": None, "enabled": False})
     _write_json(_plugins_path(state_dir), state)
     if not quiet:
         print(f"Plugin {plugin_id} stopped.")
 
 
+def _assert_agent_ids_available(
+    node: dict[str, Any], inventory: dict[str, Any], plugin_state: dict[str, Any]
+) -> None:
+    """Reject agent identities already owned by a different local/fleet Plugin."""
+    plugin_id = inventory["package"]["id"]
+    requested = {agent["id"] for agent in inventory["agents"]}
+    for other_plugin_id, record in plugin_state["plugins"].items():
+        if other_plugin_id == plugin_id:
+            continue
+        claimed = {agent["id"] for agent in record["inventory"]["agents"]}
+        conflicts = sorted(requested & claimed)
+        if conflicts:
+            raise UserError(
+                f"agent identity already belongs to local plugin {other_plugin_id}: "
+                f"{', '.join(conflicts)}"
+            )
+
+    fleet = _http_json(f"{node['core_url']}/api/agents", timeout=2)
+    if not isinstance(fleet, list):
+        raise UserError("Core returned an invalid agent inventory")
+    existing_same_plugin = plugin_id in plugin_state["plugins"]
+    for agent in fleet:
+        if not isinstance(agent, dict) or agent.get("agent_id") not in requested:
+            continue
+        card = agent.get("card")
+        metadata = card.get("metadata", {}) if isinstance(card, dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        same_owner = (
+            metadata.get("edgecitadel.node_id") == node["agent_id"]
+            and metadata.get("edgecitadel.plugin_id") == plugin_id
+        )
+        ownership_declared = bool(
+            metadata.get("edgecitadel.node_id") or metadata.get("edgecitadel.plugin_id")
+        )
+        if same_owner or (existing_same_plugin and not ownership_declared):
+            continue
+        raise UserError(
+            f"agent identity already exists in the Core registry: {agent['agent_id']}; "
+            "remove or rename the existing Agent before installation"
+        )
+
+
 def command_plugin_install(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
-    _load_node(state_dir)
+    node = _load_node(state_dir)
     requested_source = Path(args.source).expanduser()
     bundled_source = INSTALL_ROOT / "plugins" / args.source
     example_source = INSTALL_ROOT / "plugins" / "examples" / args.source
@@ -1119,11 +1278,12 @@ def command_plugin_install(args: argparse.Namespace) -> int:
         requested_source.resolve(),
     )
     inventory = _validate_plugin(source, state_dir)
-    _confirm_plugin(inventory, args.yes)
     package = inventory["package"]
     plugin_id = package["id"]
     target = state_dir / "plugins" / plugin_id / package["version"]
     state = _load_plugins(state_dir)
+    _assert_agent_ids_available(node, inventory, state)
+    _confirm_plugin(inventory, args.yes)
     existing = state["plugins"].get(plugin_id)
     if existing and existing.get("path") != str(target):
         raise UserError(
@@ -1131,6 +1291,11 @@ def command_plugin_install(args: argparse.Namespace) -> int:
             "remove it before changing versions"
         )
     if not target.exists():
+        executable_files = {
+            path.relative_to(source)
+            for path in source.rglob("*")
+            if path.is_file() and path.stat().st_mode & 0o111
+        }
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(target.name + ".installing")
         if temporary.exists():
@@ -1138,7 +1303,10 @@ def command_plugin_install(args: argparse.Namespace) -> int:
         shutil.copytree(source, temporary, symlinks=True)
         temporary.rename(target)
         for path in target.rglob("*"):
-            path.chmod(0o500 if path.is_dir() else 0o400)
+            mode = 0o500 if path.is_dir() else 0o400
+            if path.is_file() and path.relative_to(target) in executable_files:
+                mode = 0o500
+            path.chmod(mode)
         target.chmod(0o500)
     elif (source / "plugin.lock.json").read_bytes() != (
         target / "plugin.lock.json"
@@ -1154,6 +1322,7 @@ def command_plugin_install(args: argparse.Namespace) -> int:
         "installed_at": existing.get("installed_at") if existing else int(time.time()),
         "enabled": bool(existing and existing.get("enabled")),
         "pid": existing.get("pid") if existing else None,
+        "process_identity": existing.get("process_identity") if existing else None,
     }
     _write_json(_plugins_path(state_dir), state)
     print(f"Plugin {plugin_id} installed in the Supervisor-owned store.")
@@ -1172,7 +1341,7 @@ def command_plugin_list(args: argparse.Namespace) -> int:
         )
         return 0
     for plugin_id, record in sorted(plugins.items()):
-        running = _pid_running(record.get("pid"))
+        running, _detail = _plugin_process_detail(record)
         agents = ",".join(item["id"] for item in record["inventory"]["agents"])
         print(f"{plugin_id:24} {'running' if running else 'stopped':8} agents={agents}")
     return 0
@@ -1182,9 +1351,9 @@ def command_plugin_status(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     node = _load_node(state_dir)
     _, record = _plugin_record(state_dir, args.plugin_id)
-    running = _pid_running(record.get("pid"))
+    running, process_detail = _plugin_process_detail(record)
     print(f"plugin: {args.plugin_id}")
-    print(f"process: {'running' if running else 'stopped'}")
+    print(f"process: {process_detail}")
     result = 0 if running else 1
     for declared_agent in record["inventory"]["agents"]:
         agent_id = declared_agent["id"]

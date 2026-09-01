@@ -53,6 +53,18 @@ def test_card_metadata_vocabulary(tmp_path):
     assert "runtime.tags" in md and md["runtime.tags"] == ["dev"]
 
 
+def test_card_includes_supervisor_ownership_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("EDGECITADEL_NODE_ID", "edge-one")
+    monkeypatch.setenv("EDGECITADEL_PLUGIN_ID", "edgecitadel.shell")
+    p = tmp_path / "config.yaml"
+    p.write_text(YAML)
+
+    metadata = build_card(p)["metadata"]
+
+    assert metadata["edgecitadel.node_id"] == "edge-one"
+    assert metadata["edgecitadel.plugin_id"] == "edgecitadel.shell"
+
+
 def test_bridge_requires_upstream(tmp_path):
     bridge_yaml = YAML.replace("kind: native", "kind: bridge")
     p = tmp_path / "c.yaml"

@@ -88,11 +88,18 @@ environment and installs the repository toolkit automatically. Installation is:
    executing plugin code.
 2. Display requested knowledge, messaging, network, device, sandbox, and secret
    permissions. Require approval (`--yes` for automation).
-3. Copy the verified package to the Supervisor-owned immutable store under
-   `~/.edgecitadel/plugins/`.
-4. Reconcile exact destination inbox ownership, then start the runtime with the
+3. Reject Agent IDs already claimed by another local Plugin or Core registry
+   owner.
+4. Copy the verified package to the Supervisor-owned read-only store under
+   `~/.edgecitadel/plugins/`, preserving declared executable entrypoints.
+5. Reconcile exact destination inbox ownership, then start the runtime through
+   an owned process-group runner with the declared restart policy and the
    mode-selected NATS URL/token and JetStream domain injected.
-5. Wait until every declared Agent ID is online in the core registry.
+6. Wait until every declared Agent ID is online in the core registry.
+
+The Supervisor records a process-instance identity as well as the PID. Stop and
+remove operations signal the verified process group, including Plugin children;
+they refuse to signal a live PID whose identity no longer matches stored state.
 
 The runtime then joins the messaging plane in this exact order:
 

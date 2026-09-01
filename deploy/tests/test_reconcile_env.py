@@ -54,6 +54,7 @@ def test_reconcile_preserves_existing_values_and_generates_missing_secrets(
     }
     assert generated.issubset(values)
     assert all(values[key] and "change-me" not in values[key] for key in generated)
+    assert all(values[key].startswith("ec_") for key in generated)
     assert all(values[key] not in result.stdout for key in generated)
     assert env.stat().st_mode & 0o777 == 0o640
 

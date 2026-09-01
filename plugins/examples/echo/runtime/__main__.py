@@ -56,6 +56,10 @@ def card() -> dict:
             "runtime.conformance": "L1",
             "runtime.heartbeat_interval_sec": 10,
             "runtime.deployment": os.environ.get("EDGECITADEL_NODE_ID", "unknown"),
+            "edgecitadel.node_id": os.environ.get("EDGECITADEL_NODE_ID", "unknown"),
+            "edgecitadel.plugin_id": os.environ.get(
+                "EDGECITADEL_PLUGIN_ID", "edgecitadel.echo"
+            ),
         },
     }
 

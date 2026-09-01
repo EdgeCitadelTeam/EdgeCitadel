@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -36,7 +37,7 @@ def test_ensure_env_is_idempotent_and_preserves_custom_values(tmp_path, monkeypa
     assert changed_again is False
     assert first == second
     assert first["OPENCLAW_TOKEN"] == "custom-openclaw"
-    assert first["NATS_TOKEN"] != "change-me"
+    assert first["NATS_TOKEN"].startswith("ec_")
     assert first_source == target.read_text()
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
@@ -80,6 +81,27 @@ def test_invitation_round_trip_and_expiry():
     )
     with pytest.raises(cli.UserError, match="expiry is malformed"):
         cli._invitation_decode(malformed_expiry)
+
+
+@pytest.mark.parametrize(
+    ("host", "core_url", "nats_url"),
+    [
+        ("2001:db8::1", "http://[2001:db8::1]", "nats://[2001:db8::1]:4222"),
+        (
+            "https://[2001:db8::2]:8443/",
+            "https://[2001:db8::2]:8443",
+            "nats://[2001:db8::2]:4222",
+        ),
+        ("core.example:8080", "http://core.example:8080", "nats://core.example:4222"),
+    ],
+)
+def test_advertised_urls_normalize_ipv6(host, core_url, nats_url):
+    assert cli._advertised_urls(host) == (core_url, nats_url)
+
+
+def test_advertised_urls_reject_unbracketed_ipv6_with_scheme():
+    with pytest.raises(cli.UserError, match="must use brackets"):
+        cli._advertised_urls("http://2001:db8::1")
 
 
 def test_join_writes_restrictive_state_and_is_idempotent(tmp_path, monkeypatch, capsys):
@@ -143,7 +165,11 @@ def _inventory() -> dict:
             "version": "0.1.0",
             "protocol": "edgecitadel.plugin.v1",
         },
-        "runtime": {"command": ["python", "-m", "runtime"], "healthTimeoutSeconds": 2},
+        "runtime": {
+            "command": ["python", "-m", "runtime"],
+            "healthTimeoutSeconds": 2,
+            "restartPolicy": "on-failure",
+        },
         "agents": [{"id": "demo-agent", "skillNames": ["demo"]}],
         "permissions": {
             "knowledge": [],
@@ -179,6 +205,7 @@ def test_plugin_install_requires_explicit_noninteractive_permission_approval(
     (source / "plugin.lock.json").write_text("{}")
     _write_node(state_dir)
     monkeypatch.setattr(cli, "_validate_plugin", lambda *args: _inventory())
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
     args = Namespace(
         source=str(source), state_dir=str(state_dir), yes=False, keep_disabled=True
     )
@@ -199,6 +226,7 @@ def test_plugin_install_copies_to_managed_store_and_is_idempotent(
     (source / "plugin.lock.json").write_text("{}")
     _write_node(state_dir)
     monkeypatch.setattr(cli, "_validate_plugin", lambda *args: _inventory())
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
     args = Namespace(
         source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
     )
@@ -213,6 +241,104 @@ def test_plugin_install_copies_to_managed_store_and_is_idempotent(
     assert stat.S_IMODE(target.stat().st_mode) == 0o500
 
 
+def test_plugin_install_preserves_read_only_executable_entrypoint(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("test")
+    (source / "plugin.lock.json").write_text("{}")
+    entrypoint = source / "run"
+    entrypoint.write_text("#!/bin/sh\nexit 0\n")
+    entrypoint.chmod(0o755)
+    inventory = _inventory()
+    inventory["runtime"]["command"] = ["./run"]
+    _write_node(state_dir)
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: inventory)
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+
+    cli.command_plugin_install(
+        Namespace(
+            source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+        )
+    )
+
+    installed = state_dir / "plugins" / "local.demo" / "0.1.0" / "run"
+    assert stat.S_IMODE(installed.stat().st_mode) == 0o500
+
+
+def test_plugin_install_rejects_agent_id_claimed_by_local_plugin(monkeypatch):
+    state = {
+        "plugins": {
+            "other.plugin": {
+                "inventory": {"agents": [{"id": "demo-agent"}]},
+            }
+        }
+    }
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *_args, **_kwargs: pytest.fail("fleet must not be queried"),
+    )
+
+    with pytest.raises(cli.UserError, match="belongs to local plugin other.plugin"):
+        cli._assert_agent_ids_available(
+            {"core_url": "http://core.test", "agent_id": "edge-one"},
+            _inventory(),
+            state,
+        )
+
+
+def test_plugin_install_rejects_agent_id_owned_elsewhere_in_fleet(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *_args, **_kwargs: [
+            {
+                "agent_id": "demo-agent",
+                "card": {
+                    "metadata": {
+                        "edgecitadel.node_id": "edge-two",
+                        "edgecitadel.plugin_id": "other.plugin",
+                    }
+                },
+            }
+        ],
+    )
+
+    with pytest.raises(cli.UserError, match="already exists in the Core registry"):
+        cli._assert_agent_ids_available(
+            {"core_url": "http://core.test", "agent_id": "edge-one"},
+            _inventory(),
+            {"plugins": {}},
+        )
+
+
+def test_plugin_install_accepts_same_node_and_plugin_fleet_owner(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *_args, **_kwargs: [
+            {
+                "agent_id": "demo-agent",
+                "card": {
+                    "metadata": {
+                        "edgecitadel.node_id": "edge-one",
+                        "edgecitadel.plugin_id": "local.demo",
+                    }
+                },
+            }
+        ],
+    )
+
+    cli._assert_agent_ids_available(
+        {"core_url": "http://core.test", "agent_id": "edge-one"},
+        _inventory(),
+        {"plugins": {}},
+    )
+
+
 def test_plugin_remove_stops_and_deletes_managed_copy(tmp_path, monkeypatch):
     state_dir = tmp_path / "state"
     source = tmp_path / "source"
@@ -221,6 +347,7 @@ def test_plugin_remove_stops_and_deletes_managed_copy(tmp_path, monkeypatch):
     (source / "plugin.lock.json").write_text("{}")
     _write_node(state_dir)
     monkeypatch.setattr(cli, "_validate_plugin", lambda *args: _inventory())
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
     cli.command_plugin_install(
         Namespace(
             source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
@@ -519,6 +646,8 @@ def test_plugin_start_uses_only_declared_host_environment(tmp_path, monkeypatch)
             return None
 
     def popen(*args, **kwargs):
+        captured["command"] = args[0]
+        captured["start_new_session"] = kwargs["start_new_session"]
         captured.update(kwargs["env"])
         return Process()
 
@@ -527,6 +656,7 @@ def test_plugin_start_uses_only_declared_host_environment(tmp_path, monkeypatch)
     monkeypatch.setattr(cli, "_ensure_plugin_inboxes", lambda *_: None)
     monkeypatch.setattr(cli, "_plugin_python", lambda *_: Path(sys.executable))
     monkeypatch.setattr(cli, "_pid_running", lambda pid: pid == 123)
+    monkeypatch.setattr(cli, "_process_identity", lambda pid: "owned-123")
     monkeypatch.setattr(cli, "_write_json", lambda *_: None)
     monkeypatch.setattr(cli.subprocess, "Popen", popen)
     monkeypatch.setattr(
@@ -544,6 +674,79 @@ def test_plugin_start_uses_only_declared_host_environment(tmp_path, monkeypatch)
     assert captured["HERMES_TOKEN"] == "declared-secret"
     assert captured["NATS_TOKEN"] == "plugin-token"
     assert "UNRELATED_SECRET" not in captured
+    assert captured["command"][1].endswith("scripts/plugin_runner.py")
+    assert captured["command"][2:5] == ["--restart-policy", "on-failure", "--"]
+    assert captured["start_new_session"] is True
+    assert record["process_identity"] == "owned-123"
+
+
+def test_plugin_stop_signals_only_verified_owned_process_group(tmp_path, monkeypatch):
+    record = {"pid": 321, "process_identity": "owned", "enabled": True}
+    state = {"plugins": {"local.demo": record}}
+    running = iter((True, True, False, False))
+    signals: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(cli, "_plugin_record", lambda *_args: (state, record))
+    monkeypatch.setattr(cli, "_pid_running", lambda _pid: next(running))
+    monkeypatch.setattr(cli, "_process_identity", lambda _pid: "owned")
+    monkeypatch.setattr(cli.os, "getpgid", lambda _pid: 321)
+    monkeypatch.setattr(
+        cli.os, "killpg", lambda group, signum: signals.append((group, signum))
+    )
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(cli, "_write_json", lambda *_args: None)
+
+    cli._stop_plugin(tmp_path, "local.demo")
+
+    assert signals == [(321, signal.SIGTERM)]
+    assert record["pid"] is None
+    assert record["process_identity"] is None
+    assert record["enabled"] is False
+
+
+def test_plugin_stop_refuses_reused_unverified_pid(tmp_path, monkeypatch):
+    record = {"pid": 321, "process_identity": "original", "enabled": True}
+    state = {"plugins": {"local.demo": record}}
+    monkeypatch.setattr(cli, "_plugin_record", lambda *_args: (state, record))
+    monkeypatch.setattr(cli, "_pid_running", lambda _pid: True)
+    monkeypatch.setattr(cli, "_process_identity", lambda _pid: "reused")
+    monkeypatch.setattr(
+        cli.os,
+        "killpg",
+        lambda *_args: pytest.fail("an unowned process group must not be signaled"),
+    )
+
+    with pytest.raises(cli.UserError, match="unverified live PID"):
+        cli._stop_plugin(tmp_path, "local.demo")
+
+    assert record["pid"] == 321
+    assert record["enabled"] is True
+
+
+def test_process_identity_changes_with_process_start_description(monkeypatch):
+    class Result:
+        returncode = 0
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    descriptions = iter(
+        (
+            Result("Mon Sep  1 01:00:00 2026 plugin-runner"),
+            Result("Mon Sep  1 01:00:01 2026 plugin-runner"),
+        )
+    )
+    monkeypatch.setattr(cli, "_pid_running", lambda _pid: True)
+    monkeypatch.setattr(Path, "is_file", lambda _path: False)
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda *_args, **_kwargs: next(descriptions)
+    )
+
+    first = cli._process_identity(321)
+    second = cli._process_identity(321)
+
+    assert first is not None
+    assert second is not None
+    assert first != second
 
 
 def test_plugin_python_builds_and_reuses_requirements_scoped_runtime(

@@ -1,6 +1,7 @@
 """A2A v1.0 Agent Card factory from per-agent YAML config."""
 
 from __future__ import annotations
+import os
 from pathlib import Path
 import yaml
 
@@ -8,7 +9,7 @@ import yaml
 NATS_EXT_URI = "https://edgecitadel.local/ext/nats-binding/v1"
 
 
-def build_card(config_path: str | Path) -> dict:
+def build_card(config_path: str | Path) -> dict[str, object]:
     cfg = yaml.safe_load(Path(config_path).read_text())
     agent_id = cfg["agent_id"]
     if cfg["name"] != agent_id:
@@ -37,6 +38,10 @@ def build_card(config_path: str | Path) -> dict:
         metadata["runtime.deployment"] = runtime["deployment"]
     if runtime.get("upstream"):
         metadata["runtime.upstream"] = runtime["upstream"]
+    if node_id := os.environ.get("EDGECITADEL_NODE_ID"):
+        metadata["edgecitadel.node_id"] = node_id
+    if plugin_id := os.environ.get("EDGECITADEL_PLUGIN_ID"):
+        metadata["edgecitadel.plugin_id"] = plugin_id
 
     capabilities = cfg.get("capabilities", {}).copy()
     extensions = list(capabilities.get("extensions", []))

@@ -63,7 +63,7 @@ def reconcile(path: Path, *, group: str) -> list[str]:
         path.chmod(0o640)
         return []
 
-    replacements = {key: secrets.token_urlsafe(32) for key in generated}
+    replacements = {key: f"ec_{secrets.token_hex(32)}" for key in generated}
     rendered: list[str] = []
     replaced: set[str] = set()
     for line in original:

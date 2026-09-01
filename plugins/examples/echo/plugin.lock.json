@@ -14,7 +14,7 @@
     },
     {
       "path": "runtime/__main__.py",
-      "sha256": "9b266efc8c445b058f23c444f639218223ea60fa7f04da3d84c5cf9f9aeb88de"
+      "sha256": "b3283c4191350f9b95b8807929dd0c44e458ee5a9d29c2179b530f623d2e36fe"
     },
     {
       "path": "skills/echo/SKILL.md",
