@@ -54,11 +54,14 @@ def test_analysis_is_byte_identical_and_writes_only_declared_outputs(
         bootstrap_samples=10_000,
     )
 
-    assert tuple(
-        path.relative_to(first).as_posix()
-        for path in sorted(first.rglob("*"))
-        if path.is_file()
-    ) == EXPECTED_OUTPUTS
+    assert (
+        tuple(
+            path.relative_to(first).as_posix()
+            for path in sorted(first.rglob("*"))
+            if path.is_file()
+        )
+        == EXPECTED_OUTPUTS
+    )
     for relative in EXPECTED_OUTPUTS:
         assert (first / relative).read_bytes() == (second / relative).read_bytes()
 
@@ -98,16 +101,19 @@ def test_analysis_refuses_invalid_campaign_before_creating_output(
     missing.rmdir()
     output = tmp_path / "derived"
 
-    assert main(
-        [
-            "--campaign",
-            tiny_publication_campaign.name,
-            "--input-root",
-            str(tiny_publication_campaign.parent),
-            "--output-root",
-            str(output),
-        ]
-    ) == 2
+    assert (
+        main(
+            [
+                "--campaign",
+                tiny_publication_campaign.name,
+                "--input-root",
+                str(tiny_publication_campaign.parent),
+                "--output-root",
+                str(output),
+            ]
+        )
+        == 2
+    )
     assert not output.exists()
 
 
@@ -149,19 +155,24 @@ def test_analysis_refuses_nonpublication_profile_before_writing(
     metadata_path = tiny_publication_campaign / "campaign.json"
     metadata = json.loads(metadata_path.read_text())
     metadata["profile"] = "quick"
-    metadata_path.write_text(json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n")
+    metadata_path.write_text(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n"
+    )
     output = tmp_path / "derived"
 
-    assert main(
-        [
-            "--campaign",
-            tiny_publication_campaign.name,
-            "--input-root",
-            str(tiny_publication_campaign.parent),
-            "--output-root",
-            str(output),
-        ]
-    ) == 2
+    assert (
+        main(
+            [
+                "--campaign",
+                tiny_publication_campaign.name,
+                "--input-root",
+                str(tiny_publication_campaign.parent),
+                "--output-root",
+                str(output),
+            ]
+        )
+        == 2
+    )
     assert not output.exists()
 
 

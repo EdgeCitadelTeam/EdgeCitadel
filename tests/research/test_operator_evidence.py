@@ -85,7 +85,9 @@ def test_copy_media_builds_a_portable_two_project_report(tmp_path: Path) -> None
     json.dumps(portable)
 
 
-def test_passed_project_results_rejects_retries_and_missing_projects(tmp_path: Path) -> None:
+def test_passed_project_results_rejects_retries_and_missing_projects(
+    tmp_path: Path,
+) -> None:
     report = _report(tmp_path / "playwright-results")
     desktop = report["suites"][0]["specs"][0]["tests"][0]["results"][0]
     desktop["retry"] = 1

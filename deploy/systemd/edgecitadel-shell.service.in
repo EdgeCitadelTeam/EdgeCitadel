@@ -1,9 +1,9 @@
 [Unit]
-# SECURITY WARNING: This adapter executes arbitrary host commands on receipt
+# SECURITY WARNING: This Plugin executes arbitrary host commands on receipt
 # of an `agents.shell-1.inbox` envelope. Installed but DISABLED by default.
 # Operator opts in: sudo systemctl enable --now edgecitadel-shell.service
-Description=EdgeCitadel — shell adapter (DISABLED by default; opt-in)
-Documentation=file:///opt/edgecitadel/adapters/shell/README.md
+Description=EdgeCitadel — Shell Plugin (DISABLED by default; opt-in)
+Documentation=file:///opt/edgecitadel/plugins/shell/README.md
 After=network-online.target docker.service
 Wants=network-online.target
 
@@ -11,13 +11,13 @@ Wants=network-online.target
 Type=simple
 User=edgecitadel
 Group=edgecitadel
-WorkingDirectory=/opt/edgecitadel
+WorkingDirectory=/opt/edgecitadel/plugins/shell
 
 EnvironmentFile=/etc/edgecitadel/env
 Environment="NATS_URL=nats://localhost:4222"
 Environment="PYTHONUNBUFFERED=1"
 
-ExecStart=/var/lib/edgecitadel/venvs/shell/bin/python -m adapters.shell.adapter
+ExecStart=/var/lib/edgecitadel/venvs/shell/bin/python -m edgecitadel_shell_plugin
 
 Restart=on-failure
 RestartSec=10

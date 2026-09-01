@@ -12,7 +12,7 @@
 - Preserve environment-variable-based configuration unless the task explicitly changes the runtime contract.
 - Avoid backend or frontend changes from this directory unless the task requires coordinated updates.
 - Never connect with the fleet `NATS_TOKEN`. The browser must use the per-session `OPENCLAW_TOKEN`; see ADR-0005.
-- If message subjects, payloads, or registration behavior change, update `docs/05-messaging.md` and the envelope/Card schemas in lockstep.
+- If message subjects, payloads, or registration behavior change, update the envelope/Card schemas and contract tests in lockstep.
 
 ## Commands
 

@@ -20,12 +20,9 @@
 - [ ] New behavior has test coverage
 - [ ] E2E tests pass (if UI/API changed)
 
-## Documentation
+## Maintainer notes
 
 - [ ] `CLAUDE.md` updated if workflow changed (commands, dirs, gates), or "no spine impact"
-- [ ] `docs/` updated (if new feature or API change)
-- [ ] `docs/CHANGELOG.md` updated
-- [ ] ADR written (if architectural decision)
 - [ ] `.env.example` updated (if new config)
 
 ## Breaking Changes

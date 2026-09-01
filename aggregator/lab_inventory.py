@@ -46,7 +46,9 @@ def _timestamp() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def build_lab_router(*, run_id: str, token_sha256: str, inventory_path: Path) -> APIRouter:
+def build_lab_router(
+    *, run_id: str, token_sha256: str, inventory_path: Path
+) -> APIRouter:
     validated_run_id = validate_run_id(run_id)
     if not inventory_path.is_absolute():
         raise LabConfigError("lab inventory path must be absolute")
@@ -78,10 +80,20 @@ def build_lab_router(*, run_id: str, token_sha256: str, inventory_path: Path) ->
             raise HTTPException(422, "invalid lab reservation")
         return agent_id, expected_qualified, reservation_id, declared_host_id
 
-    def _event(agent_id: str, qualified: str, reservation: str, host: str, event: str) -> None:
+    def _event(
+        agent_id: str, qualified: str, reservation: str, host: str, event: str
+    ) -> None:
         connection.execute(
             "INSERT INTO reservation_events VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)",
-            (validated_run_id, agent_id, qualified, reservation, host, event, _timestamp()),
+            (
+                validated_run_id,
+                agent_id,
+                qualified,
+                reservation,
+                host,
+                event,
+                _timestamp(),
+            ),
         )
 
     @router.post("/reservations", dependencies=[])
@@ -90,17 +102,36 @@ def build_lab_router(*, run_id: str, token_sha256: str, inventory_path: Path) ->
         with lock:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                row = connection.execute("SELECT * FROM reservations WHERE run_id=? AND agent_id=?", (validated_run_id, agent_id)).fetchone()
+                row = connection.execute(
+                    "SELECT * FROM reservations WHERE run_id=? AND agent_id=?",
+                    (validated_run_id, agent_id),
+                ).fetchone()
                 if row is None:
-                    connection.execute("INSERT INTO reservations VALUES (?, ?, ?, ?, ?, 'active', ?)", (validated_run_id, agent_id, qualified, reservation_id, host, _timestamp()))
+                    connection.execute(
+                        "INSERT INTO reservations VALUES (?, ?, ?, ?, ?, 'active', ?)",
+                        (
+                            validated_run_id,
+                            agent_id,
+                            qualified,
+                            reservation_id,
+                            host,
+                            _timestamp(),
+                        ),
+                    )
                     _event(agent_id, qualified, reservation_id, host, "reserved")
                     connection.commit()
                     return Response(status_code=201)
                 if row["state"] == "active":
                     raise HTTPException(409, "agent_id has an active reservation")
-                if row["reservation_id"] != reservation_id or row["declared_host_id"] != host:
+                if (
+                    row["reservation_id"] != reservation_id
+                    or row["declared_host_id"] != host
+                ):
                     raise HTTPException(409, "reservation owner does not match")
-                connection.execute("UPDATE reservations SET state='active', updated_at=? WHERE run_id=? AND agent_id=?", (_timestamp(), validated_run_id, agent_id))
+                connection.execute(
+                    "UPDATE reservations SET state='active', updated_at=? WHERE run_id=? AND agent_id=?",
+                    (_timestamp(), validated_run_id, agent_id),
+                )
                 _event(agent_id, qualified, reservation_id, host, "resumed")
                 connection.commit()
                 return Response(status_code=200)
@@ -114,7 +145,10 @@ def build_lab_router(*, run_id: str, token_sha256: str, inventory_path: Path) ->
         if validate_agent_id(agent_id) != claimed_agent:
             raise HTTPException(409, "reservation owner does not match")
         with lock:
-            row = connection.execute("SELECT * FROM reservations WHERE run_id=? AND agent_id=?", (validated_run_id, agent_id)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM reservations WHERE run_id=? AND agent_id=?",
+                (validated_run_id, agent_id),
+            ).fetchone()
             if (
                 row is None
                 or row["qualified_agent_id"] != qualified
@@ -124,7 +158,10 @@ def build_lab_router(*, run_id: str, token_sha256: str, inventory_path: Path) ->
                 raise HTTPException(409, "reservation owner does not match")
             if row["state"] == "retained":
                 return Response(status_code=200)
-            connection.execute("UPDATE reservations SET state='retained', updated_at=? WHERE run_id=? AND agent_id=?", (_timestamp(), validated_run_id, agent_id))
+            connection.execute(
+                "UPDATE reservations SET state='retained', updated_at=? WHERE run_id=? AND agent_id=?",
+                (_timestamp(), validated_run_id, agent_id),
+            )
             _event(agent_id, qualified, reservation_id, host, "retained")
             connection.commit()
         return Response(status_code=200)
@@ -135,43 +172,89 @@ def build_lab_router(*, run_id: str, token_sha256: str, inventory_path: Path) ->
         if validate_agent_id(agent_id) != claimed_agent:
             raise HTTPException(409, "reservation owner does not match")
         with lock:
-            row = connection.execute("SELECT * FROM reservations WHERE run_id=? AND agent_id=?", (validated_run_id, agent_id)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM reservations WHERE run_id=? AND agent_id=?",
+                (validated_run_id, agent_id),
+            ).fetchone()
             if row is None:
-                released = connection.execute("SELECT 1 FROM reservation_events WHERE run_id=? AND agent_id=? AND reservation_id=? AND declared_host_id=? AND event='released'", (validated_run_id, agent_id, reservation_id, host)).fetchone()
+                released = connection.execute(
+                    "SELECT 1 FROM reservation_events WHERE run_id=? AND agent_id=? AND reservation_id=? AND declared_host_id=? AND event='released'",
+                    (validated_run_id, agent_id, reservation_id, host),
+                ).fetchone()
                 if released is None:
                     raise HTTPException(404, "reservation not found")
                 return Response(status_code=204)
-            if row["reservation_id"] != reservation_id or row["declared_host_id"] != host:
+            if (
+                row["reservation_id"] != reservation_id
+                or row["declared_host_id"] != host
+            ):
                 raise HTTPException(409, "reservation owner does not match")
             _event(agent_id, qualified, reservation_id, host, "released")
-            connection.execute("DELETE FROM reservations WHERE run_id=? AND agent_id=?", (validated_run_id, agent_id))
+            connection.execute(
+                "DELETE FROM reservations WHERE run_id=? AND agent_id=?",
+                (validated_run_id, agent_id),
+            )
             connection.commit()
         return Response(status_code=204)
 
     @router.post("/node-reports")
-    def node_report(body: dict[str, object], request: Request, _: None = Depends(_authorize)):
+    def node_report(
+        body: dict[str, object], request: Request, _: None = Depends(_authorize)
+    ):
         agent_id, qualified, reservation_id, host = _body(body)
         required = {
-            "machine_id_sha256", "hostname", "os_release", "architecture",
-            "launcher_source_commit", "source_snapshot_sha256", "network_path",
-            "preflight_valid", "lifecycle_state", "cleanup", "checked_at",
+            "machine_id_sha256",
+            "hostname",
+            "os_release",
+            "architecture",
+            "launcher_source_commit",
+            "source_snapshot_sha256",
+            "network_path",
+            "preflight_valid",
+            "lifecycle_state",
+            "cleanup",
+            "checked_at",
         }
-        if not required.issubset(body) or body.get("lifecycle_state") not in {"active", "retained", "released"}:
+        if not required.issubset(body) or body.get("lifecycle_state") not in {
+            "active",
+            "retained",
+            "released",
+        }:
             raise HTTPException(422, "invalid lab node report")
         network_path = body.get("network_path")
         if not isinstance(network_path, dict) or set(network_path) != {
-            "source_ip", "destination_ip", "interface", "route_output_sha256", "controller_dns_name",
+            "source_ip",
+            "destination_ip",
+            "interface",
+            "route_output_sha256",
+            "controller_dns_name",
         }:
             raise HTTPException(422, "invalid lab node report")
         with lock:
-            reservation = connection.execute("SELECT * FROM reservations WHERE run_id=? AND agent_id=?", (validated_run_id, agent_id)).fetchone()
-            if reservation is None or reservation["reservation_id"] != reservation_id or reservation["declared_host_id"] != host or reservation["qualified_agent_id"] != qualified:
+            reservation = connection.execute(
+                "SELECT * FROM reservations WHERE run_id=? AND agent_id=?",
+                (validated_run_id, agent_id),
+            ).fetchone()
+            if (
+                reservation is None
+                or reservation["reservation_id"] != reservation_id
+                or reservation["declared_host_id"] != host
+                or reservation["qualified_agent_id"] != qualified
+            ):
                 raise HTTPException(409, "node report reservation does not match")
             saved = dict(body)
-            saved["server_observed_peer_ip"] = request.client.host if request.client else "unknown"
+            saved["server_observed_peer_ip"] = (
+                request.client.host if request.client else "unknown"
+            )
             connection.execute(
                 "INSERT INTO node_reports VALUES (?, ?, ?, ?, ?) ON CONFLICT(run_id, agent_id) DO UPDATE SET reservation_id=excluded.reservation_id, declared_host_id=excluded.declared_host_id, report_json=excluded.report_json",
-                (validated_run_id, agent_id, reservation_id, host, json.dumps(saved, sort_keys=True, separators=(",", ":"))),
+                (
+                    validated_run_id,
+                    agent_id,
+                    reservation_id,
+                    host,
+                    json.dumps(saved, sort_keys=True, separators=(",", ":")),
+                ),
             )
             connection.commit()
         return saved
@@ -179,9 +262,24 @@ def build_lab_router(*, run_id: str, token_sha256: str, inventory_path: Path) ->
     @router.get("/status")
     def status(_: None = Depends(_authorize)):
         with lock:
-            reservations = [dict(row) for row in connection.execute("SELECT * FROM reservations ORDER BY agent_id")]
-            events = [dict(row) for row in connection.execute("SELECT * FROM reservation_events ORDER BY sequence")]
-            reports = [json.loads(row["report_json"]) for row in connection.execute("SELECT * FROM node_reports ORDER BY agent_id")]
+            reservations = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM reservations ORDER BY agent_id"
+                )
+            ]
+            events = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM reservation_events ORDER BY sequence"
+                )
+            ]
+            reports = [
+                json.loads(row["report_json"])
+                for row in connection.execute(
+                    "SELECT * FROM node_reports ORDER BY agent_id"
+                )
+            ]
         return {
             "run_id": validated_run_id,
             "reservations": reservations,

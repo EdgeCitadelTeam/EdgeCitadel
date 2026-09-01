@@ -101,7 +101,10 @@ def _network_path(controller: ControllerConfig) -> dict[str, str]:
     except ValueError as error:
         raise LabConfigError("controller advertised IP is invalid") from error
     completed = subprocess.run(
-        ["ip", "route", "get", destination], check=True, capture_output=True, text=True,
+        ["ip", "route", "get", destination],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     route = completed.stdout.strip()
     fields = route.split()
@@ -142,20 +145,33 @@ def load_controller_config(path: Path) -> ControllerConfig:
         config = ControllerConfig(**values)
         validate_run_id(config.run_id)
         validate_declared_host_id(config.controller_host_id)
-        if len(config.source_commit) != 40 or any(character not in "0123456789abcdef" for character in config.source_commit):
+        if len(config.source_commit) != 40 or any(
+            character not in "0123456789abcdef" for character in config.source_commit
+        ):
             raise LabConfigError("controller config source commit is invalid")
-        if len(config.source_snapshot_sha256) != 64 or any(character not in "0123456789abcdef" for character in config.source_snapshot_sha256):
+        if len(config.source_snapshot_sha256) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in config.source_snapshot_sha256
+        ):
             raise LabConfigError("controller config source snapshot is invalid")
-        if len(config.credential_sha256) != 64 or any(character not in "0123456789abcdef" for character in config.credential_sha256):
+        if len(config.credential_sha256) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in config.credential_sha256
+        ):
             raise LabConfigError("controller config credential hash is invalid")
-        if not config.fixture_image_id.startswith("sha256:") or len(config.fixture_image_id) != 71:
+        if (
+            not config.fixture_image_id.startswith("sha256:")
+            or len(config.fixture_image_id) != 71
+        ):
             raise LabConfigError("controller config fixture image is invalid")
         return config
     except (KeyError, TypeError, LabConfigError) as error:
         raise LabConfigError("controller config is invalid") from error
 
 
-def _node_state_path(controller: ControllerConfig, state_root: Path, agent_id: str) -> Path:
+def _node_state_path(
+    controller: ControllerConfig, state_root: Path, agent_id: str
+) -> Path:
     if not state_root.is_absolute():
         raise LabConfigError("node state root must be absolute")
     qualified = f"{controller.run_id}--{validate_agent_id(agent_id)}"
@@ -177,7 +193,13 @@ def write_node_state(path: Path, state: NodeState) -> None:
     temporary = path.with_suffix(".tmp")
     descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
-        os.write(descriptor, json.dumps(_state_dict(state), sort_keys=True, separators=(",", ":")).encode() + b"\n")
+        os.write(
+            descriptor,
+            json.dumps(
+                _state_dict(state), sort_keys=True, separators=(",", ":")
+            ).encode()
+            + b"\n",
+        )
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
@@ -189,7 +211,10 @@ def load_node_state(path: Path) -> NodeState:
         value = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise LabConfigError("node state is unavailable") from error
-    if not isinstance(value, dict) or value.get("schema_version") != "lab-node-state.v1":
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != "lab-node-state.v1"
+    ):
         raise LabConfigError("node state is invalid")
     try:
         values = dict(value)
@@ -214,13 +239,21 @@ def _inventory_url(controller: ControllerConfig, suffix: str) -> str:
 
 
 def _inventory_request(
-    controller: ControllerConfig, credential_file: Path, method: str, suffix: str, body: dict[str, object]
+    controller: ControllerConfig,
+    credential_file: Path,
+    method: str,
+    suffix: str,
+    body: dict[str, object],
 ) -> dict[str, object] | None:
     token = credential_token(credential_file)
     request = urllib.request.Request(
-        _inventory_url(controller, suffix), method=method,
+        _inventory_url(controller, suffix),
+        method=method,
         data=json.dumps(body, sort_keys=True, separators=(",", ":")).encode(),
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -249,7 +282,9 @@ def _inventory_request(
     return decoded
 
 
-def _reservation_body(controller: ControllerConfig, agent_id: str, reservation_id: str, host_id: str) -> dict[str, object]:
+def _reservation_body(
+    controller: ControllerConfig, agent_id: str, reservation_id: str, host_id: str
+) -> dict[str, object]:
     return {
         "agent_id": agent_id,
         "qualified_agent_id": f"{controller.run_id}--{agent_id}",
@@ -265,7 +300,10 @@ def _validate_node_target(controller: ControllerConfig, credential_file: Path) -
     parsed = urlparse(controller.nats_url)
     if parsed.scheme != "nats" or not parsed.hostname:
         raise LabConfigError("controller NATS URL is invalid")
-    if parsed.hostname in {"127.0.0.1", "::1", "localhost"} and machine_id != controller.controller_machine_id_sha256:
+    if (
+        parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+        and machine_id != controller.controller_machine_id_sha256
+    ):
         raise LabConfigError("remote node cannot use a loopback controller URL")
     return machine_id
 
@@ -308,10 +346,15 @@ def doctor_node(args: argparse.Namespace) -> dict[str, object]:
     ):
         raise LabConfigError("node state does not match publish target")
     source = capture_clean_source_provenance(_repo_root())
-    if source.commit != controller.source_commit or source.source_snapshot_sha256 != controller.source_snapshot_sha256:
+    if (
+        source.commit != controller.source_commit
+        or source.source_snapshot_sha256 != controller.source_snapshot_sha256
+    ):
         raise LabConfigError("node source does not match controller config")
     published = {
-        **_reservation_body(controller, state.agent_id, state.reservation_id, state.declared_host_id),
+        **_reservation_body(
+            controller, state.agent_id, state.reservation_id, state.declared_host_id
+        ),
         "machine_id_sha256": machine_id,
         "hostname": socket.gethostname(),
         "os_release": _os_release(),
@@ -324,8 +367,13 @@ def doctor_node(args: argparse.Namespace) -> dict[str, object]:
         "cleanup": None,
         "checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
-    response = _inventory_request(controller, credential_file, "POST", "/node-reports", published)
-    if response is None or any(response.get(name) != published[name] for name in ("agent_id", "reservation_id", "declared_host_id")):
+    response = _inventory_request(
+        controller, credential_file, "POST", "/node-reports", published
+    )
+    if response is None or any(
+        response.get(name) != published[name]
+        for name in ("agent_id", "reservation_id", "declared_host_id")
+    ):
         raise LabConfigError("lab node report binding was not accepted")
     return response
 
@@ -335,20 +383,38 @@ def build_fixture_config(
 ) -> NativeControlConfig:
     if crash_point is not None and crash_point not in _CRASH_POINTS:
         raise LabConfigError("invalid fixture crash point")
-    if not isinstance(behavior, str) or not behavior or type(delay_ms) is not int or delay_ms < 0:
+    if (
+        not isinstance(behavior, str)
+        or not behavior
+        or type(delay_ms) is not int
+        or delay_ms < 0
+    ):
         raise LabConfigError("invalid fixture behavior")
     return NativeControlConfig(
-        run_id=validate_run_id(run_id), agent_id=validate_agent_id(agent_id), mode="edgecitadel",
-        behavior=behavior, delay_ms=delay_ms, crash_point=crash_point, heartbeat_interval_ms=1000,
-        outcome_db="/run/state/outcomes.sqlite", side_effect_db="/run/state/side-effects.sqlite",
+        run_id=validate_run_id(run_id),
+        agent_id=validate_agent_id(agent_id),
+        mode="edgecitadel",
+        behavior=behavior,
+        delay_ms=delay_ms,
+        crash_point=crash_point,
+        heartbeat_interval_ms=1000,
+        outcome_db="/run/state/outcomes.sqlite",
+        side_effect_db="/run/state/side-effects.sqlite",
     )
 
 
 def build_fixture_create_argv(
-    *, controller: ControllerConfig, credential_file: Path, node_state_dir: Path,
-    config_path: Path, container_name: str,
+    *,
+    controller: ControllerConfig,
+    credential_file: Path,
+    node_state_dir: Path,
+    config_path: Path,
+    container_name: str,
 ) -> tuple[str, ...]:
-    if not controller.fixture_image_id.startswith("sha256:") or len(controller.fixture_image_id) != 71:
+    if (
+        not controller.fixture_image_id.startswith("sha256:")
+        or len(controller.fixture_image_id) != 71
+    ):
         raise LabConfigError("fixture image must be immutable")
     credential_token(credential_file)
     for path in (node_state_dir, config_path, credential_file):
@@ -360,19 +426,41 @@ def build_fixture_create_argv(
     if not container_name.removeprefix("edgecitadel-node-").startswith(qualified):
         raise LabConfigError("container name does not match controller run")
     return (
-        "docker", "create", "--name", container_name, "--network", "host",
-        "--label", "ai.edgecitadel.owner=research-lab-node",
-        "--label", f"ai.edgecitadel.run-id={controller.run_id}",
-        "--label", f"ai.edgecitadel.qualified-agent-id={container_name.removeprefix('edgecitadel-node-')}",
-        "--env", f"NATS_URL={controller.nats_url}",
-        "--env", "EC_CREDENTIAL_FILE=/run/secrets/transport-token",
-        "--env", "EC_EVENT_LOG=/run/state/fixture.log",
-        "--env", "EC_TERMINAL_RELEASE_DIR=/run/state/terminal-release",
-        "--mount", f"type=bind,src={config_path},dst=/run/config/native-control.json,readonly",
-        "--mount", f"type=bind,src={credential_file},dst=/run/secrets/transport-token,readonly",
-        "--mount", f"type=bind,src={node_state_dir},dst=/run/state",
-        "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", controller.fixture_image_id,
-        "python3", "-m", "scripts.research.fixtures.native_control", "--config", "/run/config/native-control.json",
+        "docker",
+        "create",
+        "--name",
+        container_name,
+        "--network",
+        "host",
+        "--label",
+        "ai.edgecitadel.owner=research-lab-node",
+        "--label",
+        f"ai.edgecitadel.run-id={controller.run_id}",
+        "--label",
+        f"ai.edgecitadel.qualified-agent-id={container_name.removeprefix('edgecitadel-node-')}",
+        "--env",
+        f"NATS_URL={controller.nats_url}",
+        "--env",
+        "EC_CREDENTIAL_FILE=/run/secrets/transport-token",
+        "--env",
+        "EC_EVENT_LOG=/run/state/fixture.log",
+        "--env",
+        "EC_TERMINAL_RELEASE_DIR=/run/state/terminal-release",
+        "--mount",
+        f"type=bind,src={config_path},dst=/run/config/native-control.json,readonly",
+        "--mount",
+        f"type=bind,src={credential_file},dst=/run/secrets/transport-token,readonly",
+        "--mount",
+        f"type=bind,src={node_state_dir},dst=/run/state",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=16m",
+        controller.fixture_image_id,
+        "python3",
+        "-m",
+        "scripts.research.fixtures.native_control",
+        "--config",
+        "/run/config/native-control.json",
     )
 
 
@@ -403,7 +491,9 @@ def start_node(args: argparse.Namespace) -> NodeState:
     previous = load_node_state(state_file) if state_file.exists() else None
     if previous is not None and previous.phase in {"starting", "active"}:
         raise LabConfigError("node already has an active state")
-    if previous is not None and (previous.declared_host_id != host_id or previous.machine_id_sha256 != machine_id):
+    if previous is not None and (
+        previous.declared_host_id != host_id or previous.machine_id_sha256 != machine_id
+    ):
         raise LabConfigError("retained node state owner does not match")
 
     qualified = f"{controller.run_id}--{agent_id}"
@@ -416,7 +506,9 @@ def start_node(args: argparse.Namespace) -> NodeState:
     resumed = previous is not None
     created = False
     try:
-        _inventory_request(controller, credential_file, "POST", "/reservations", reservation)
+        _inventory_request(
+            controller, credential_file, "POST", "/reservations", reservation
+        )
         node_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(node_dir, 0o700)
         terminal_release_dir = node_dir / "terminal-release"
@@ -424,40 +516,85 @@ def start_node(args: argparse.Namespace) -> NodeState:
         os.chmod(terminal_release_dir, 0o700)
         if not resumed:
             fixture = build_fixture_config(
-                run_id=controller.run_id, agent_id=agent_id, behavior=args.behavior,
-                delay_ms=args.delay_ms, crash_point=args.crash_point,
+                run_id=controller.run_id,
+                agent_id=agent_id,
+                behavior=args.behavior,
+                delay_ms=args.delay_ms,
+                crash_point=args.crash_point,
             )
             write_private_json(config_path, asdict(fixture))
         elif not config_path.is_file():
             raise LabConfigError("retained node config is unavailable")
-        subprocess.run(["docker", "image", "inspect", controller.fixture_image_id], check=True, capture_output=True, text=True)
-        argv = build_fixture_create_argv(
-            controller=controller, credential_file=credential_file, node_state_dir=node_dir,
-            config_path=config_path, container_name=container_name,
+        subprocess.run(
+            ["docker", "image", "inspect", controller.fixture_image_id],
+            check=True,
+            capture_output=True,
+            text=True,
         )
-        created_id = subprocess.run(argv, check=True, capture_output=True, text=True).stdout.strip()
+        argv = build_fixture_create_argv(
+            controller=controller,
+            credential_file=credential_file,
+            node_state_dir=node_dir,
+            config_path=config_path,
+            container_name=container_name,
+        )
+        created_id = subprocess.run(
+            argv, check=True, capture_output=True, text=True
+        ).stdout.strip()
         created = True
-        container_id = subprocess.run(["docker", "start", created_id or container_name], check=True, capture_output=True, text=True).stdout.strip()
+        container_id = subprocess.run(
+            ["docker", "start", created_id or container_name],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         if not container_id:
             raise LabConfigError("fixture container did not return an ID")
         state = NodeState(
-            schema_version="lab-node-state.v1", phase="active", run_id=controller.run_id,
-            agent_id=agent_id, qualified_agent_id=qualified, reservation_id=reservation_id,
-            declared_host_id=host_id, machine_id_sha256=machine_id, container_id=container_id,
-            container_name=container_name, fixture_image_id=controller.fixture_image_id,
-            config_path=config_path, state_dir=node_dir, log_path=log_path,
-            reservation_state="active", started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            schema_version="lab-node-state.v1",
+            phase="active",
+            run_id=controller.run_id,
+            agent_id=agent_id,
+            qualified_agent_id=qualified,
+            reservation_id=reservation_id,
+            declared_host_id=host_id,
+            machine_id_sha256=machine_id,
+            container_id=container_id,
+            container_name=container_name,
+            fixture_image_id=controller.fixture_image_id,
+            config_path=config_path,
+            state_dir=node_dir,
+            log_path=log_path,
+            reservation_state="active",
+            started_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         )
         write_node_state(state_file, state)
         return state
     except BaseException:
         if created:
-            subprocess.run(["docker", "rm", "--force", container_name], check=False, capture_output=True, text=True)
+            subprocess.run(
+                ["docker", "rm", "--force", container_name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
         try:
             if resumed:
-                _inventory_request(controller, credential_file, "PATCH", f"/reservations/{agent_id}/retain", reservation)
+                _inventory_request(
+                    controller,
+                    credential_file,
+                    "PATCH",
+                    f"/reservations/{agent_id}/retain",
+                    reservation,
+                )
             else:
-                _inventory_request(controller, credential_file, "DELETE", f"/reservations/{agent_id}", reservation)
+                _inventory_request(
+                    controller,
+                    credential_file,
+                    "DELETE",
+                    f"/reservations/{agent_id}",
+                    reservation,
+                )
         except LabConfigError:
             pass
         if not resumed:
@@ -474,16 +611,35 @@ def stop_node(args: argparse.Namespace) -> str:
     if not state_file.exists():
         return "node: already stopped"
     state = load_node_state(state_file)
-    if state.run_id != controller.run_id or state.fixture_image_id != controller.fixture_image_id:
+    if (
+        state.run_id != controller.run_id
+        or state.fixture_image_id != controller.fixture_image_id
+    ):
         raise LabConfigError("node state does not match controller config")
-    reservation = _reservation_body(controller, state.agent_id, state.reservation_id, state.declared_host_id)
+    reservation = _reservation_body(
+        controller, state.agent_id, state.reservation_id, state.declared_host_id
+    )
     _remove_fixture_container(state.container_name)
     if args.retain_reservation:
-        _inventory_request(controller, credential_file, "PATCH", f"/reservations/{state.agent_id}/retain", reservation)
-        retained = replace(state, phase="retained", container_id="", reservation_state="retained")
+        _inventory_request(
+            controller,
+            credential_file,
+            "PATCH",
+            f"/reservations/{state.agent_id}/retain",
+            reservation,
+        )
+        retained = replace(
+            state, phase="retained", container_id="", reservation_state="retained"
+        )
         write_node_state(state_file, retained)
         return "node: retained"
-    _inventory_request(controller, credential_file, "DELETE", f"/reservations/{state.agent_id}", reservation)
+    _inventory_request(
+        controller,
+        credential_file,
+        "DELETE",
+        f"/reservations/{state.agent_id}",
+        reservation,
+    )
     shutil.rmtree(state.state_dir, ignore_errors=True)
     return "node: stopped"
 
@@ -496,7 +652,9 @@ def main() -> int:
         command.add_argument("--controller-config", type=Path, required=True)
         command.add_argument("--credential-file", type=Path, required=True)
         command.add_argument("--agent-id", required=True)
-        command.add_argument("--state-root", type=Path, default=Path("/tmp/edgecitadel-lab-node"))
+        command.add_argument(
+            "--state-root", type=Path, default=Path("/tmp/edgecitadel-lab-node")
+        )
     start = commands.choices["start"]
     start.add_argument("--host-id", required=True)
     start.add_argument("--behavior", default="echo")
@@ -527,6 +685,13 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "NodeState", "build_fixture_config", "build_fixture_create_argv", "load_controller_config",
-    "doctor_node", "load_node_state", "start_node", "stop_node", "write_node_state",
+    "NodeState",
+    "build_fixture_config",
+    "build_fixture_create_argv",
+    "load_controller_config",
+    "doctor_node",
+    "load_node_state",
+    "start_node",
+    "stop_node",
+    "write_node_state",
 ]

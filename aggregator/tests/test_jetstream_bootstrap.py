@@ -48,7 +48,7 @@ async def test_ensure_stream_idempotent(js_client):
 
 
 async def test_ensure_consumer_serialization(js_client):
-    await ensure_stream(js_client)
+    await ensure_stream(js_client, "shell-test")
     ci = await ensure_consumer(js_client, "shell-test", ack_wait_sec=30)
     assert ci.config.max_ack_pending == 1
     assert ci.config.ack_wait == 30
@@ -59,7 +59,7 @@ async def test_stream_config_matches_spec(js_client):
     info = await ensure_stream(js_client)
     cfg = info.config
     assert cfg.name == "AGENT_INBOX"
-    assert cfg.subjects == ["agents.*.inbox"]
+    assert cfg.subjects == ["agents.aggregator.inbox"]
     assert str(cfg.retention).lower() in ("workqueue", "workqueuepolicy")
     assert str(cfg.discard).lower() in ("new", "discardnew")
     assert cfg.max_msg_size == 1024 * 1024

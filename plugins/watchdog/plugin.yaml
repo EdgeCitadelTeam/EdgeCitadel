@@ -1,0 +1,42 @@
+apiVersion: edgecitadel.io/v1alpha1
+kind: AgentPlugin
+
+metadata:
+  name: watchdog
+  displayName: Watchdog Agent
+  description: Observes agent heartbeats and synthesizes bounded recipient-offline failures.
+  version: 0.1.0
+  publisher: edgecitadel
+
+compatibility:
+  supervisorApi: ">=0.1.0,<0.2.0"
+  protocols: [edgecitadel.plugin.v1]
+
+runtime:
+  command: [python, -m, edgecitadel_watchdog_plugin]
+  pythonRequirements: edgecitadel_watchdog_plugin/requirements.txt
+  environmentVariables: [WATCHDOG_THRESHOLD_FLOOR_SEC, WATCHDOG_TOLERANCE_SEC, WATCHDOG_DEFAULT_INTERVAL_SEC, LOG_LEVEL]
+  healthTimeoutSeconds: 30
+  restartPolicy: on-failure
+
+skills:
+  directory: skills
+
+agents:
+  - id: watchdog-1
+    skillNames: []
+    listensBroadcast: false
+
+permissions:
+  knowledge: []
+  messaging:
+    outboundAgents: [aggregator]
+  network:
+    outbound: []
+  devices: []
+
+security:
+  sandbox: restricted
+  secrets: []
+
+extensions: {}

@@ -24,3 +24,11 @@ authorization {
     # fact that OPENCLAW_TOKEN is held only by trusted browser sessions.
     token: $NATS_TOKEN
 }
+
+leafnodes {
+    listen: 0.0.0.0:7422
+    authorization {
+        username: $NATS_LEAF_USERNAME
+        password: $NATS_LEAF_PASSWORD
+    }
+}

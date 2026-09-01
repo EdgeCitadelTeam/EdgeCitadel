@@ -1,0 +1,42 @@
+apiVersion: edgecitadel.io/v1alpha1
+kind: AgentPlugin
+
+metadata:
+  name: hermes
+  displayName: Hermes Agent
+  description: Bridges a locally installed Hermes Agent onto EdgeCitadel messaging.
+  version: 0.1.0
+  publisher: edgecitadel
+
+compatibility:
+  supervisorApi: ">=0.1.0,<0.2.0"
+  protocols: [edgecitadel.plugin.v1]
+
+runtime:
+  command: [python, -m, edgecitadel_hermes_plugin]
+  pythonRequirements: edgecitadel_hermes_plugin/requirements.txt
+  environmentVariables: [HERMES_BASE_URL, HERMES_MODEL, HERMES_TIMEOUT_SEC, LOG_LEVEL]
+  healthTimeoutSeconds: 30
+  restartPolicy: on-failure
+
+skills:
+  directory: skills
+
+agents:
+  - id: us-mac-hermes
+    skillNames: [hermes-reasoner]
+    listensBroadcast: false
+
+permissions:
+  knowledge: []
+  messaging:
+    outboundAgents: [aggregator]
+  network:
+    outbound: ["http://127.0.0.1:8642"]
+  devices: []
+
+security:
+  sandbox: restricted
+  secrets: [HERMES_TOKEN]
+
+extensions: {}

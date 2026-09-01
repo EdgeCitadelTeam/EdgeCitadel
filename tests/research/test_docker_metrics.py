@@ -7,7 +7,9 @@ from collections.abc import Mapping
 from scripts.research.docker_metrics import DockerComponentReader
 
 
-def test_reader_maps_declared_components_to_compose_services_and_engine_counters() -> None:
+def test_reader_maps_declared_components_to_compose_services_and_engine_counters() -> (
+    None
+):
     calls: list[str] = []
     service_ids = {
         "controller": "controller-id",

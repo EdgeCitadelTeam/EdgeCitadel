@@ -11,9 +11,6 @@ from scripts.research.check_artifact import CheckReport
 from scripts.research.lab_qualification import classify_lab, qualify_bundle
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
 def _manifest() -> dict[str, object]:
     controller = {
         "declared_host_id": "controller-lab-01",
@@ -71,8 +68,7 @@ def _manifest() -> dict[str, object]:
             "playwright": [],
         },
         "artifacts": {
-            path: str(index) * 64
-            for index, path in enumerate(paths.values(), start=6)
+            path: str(index) * 64 for index, path in enumerate(paths.values(), start=6)
         },
         "controller_commands": {
             "launches": [
@@ -221,8 +217,7 @@ def test_missing_successful_command_to_either_host_is_preliminary() -> None:
         evidence = manifest["controller_commands"]
         assert isinstance(evidence, dict)
         evidence["commands"] = [
-            item for item in evidence["commands"]
-            if item["agent_id"] != agent_id
+            item for item in evidence["commands"] if item["agent_id"] != agent_id
         ]
         result = _classify(manifest)
         assert result.remote_qualified is False
@@ -291,41 +286,3 @@ def test_complete_two_host_lifecycle_and_runbook_contract(
     loaded, checker_valid = qualify_bundle(bundle=bundle, source_root=tmp_path)
     assert checker_valid is True
     assert loaded.status == "remote-qualified"
-
-    runbook = (REPO_ROOT / "docs/setup-lab-node.md").read_text()
-    for heading in (
-        "Supported Baseline",
-        "Controller",
-        "Same-Host Two-Node Gate",
-        "Second Ubuntu Host Qualification",
-        "Doctor",
-        "Command And Reconnect Evidence",
-        "Teardown And Qualification",
-        "Security And Platform Limits",
-    ):
-        assert f"## {heading}" in runbook
-    for required in (
-        "uv 0.8.13",
-        "--bind-host 100.64.10.10",
-        "BatchMode=yes",
-        "StrictHostKeyChecking=yes",
-        "SOURCE_COMMIT",
-        "QUEUED_TASK_ID",
-        "--wire-copies 2",
-        "--retain-reservation",
-        "REMOTE QUALIFIED",
-        "remote-capable",
-        "remote cleanup incomplete",
-    ):
-        assert required in runbook
-    assert "--bind-host 0.0.0.0" not in runbook
-    assert runbook.count(
-        "--host-id gateway-lab-02 --agent-id shell-remote --publish"
-    ) == 2
-    assert runbook.index("lab_node.py stop") < runbook.index("docker image rm")
-    assert runbook.index("docker image rm") < runbook.index("rm -rf '$REMOTE_TMP'")
-    teardown = runbook.split("## Teardown And Qualification", 1)[1]
-    assert teardown.index("cleanup_lab") < teardown.index("check_artifact.py")
-    assert teardown.index("check_artifact.py") < teardown.index(
-        "lab_controller.py qualify"
-    )

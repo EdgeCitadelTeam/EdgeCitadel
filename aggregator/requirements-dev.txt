@@ -1,0 +1,4 @@
+-r requirements.txt
+-e ../plugin-toolkit
+pytest>=8,<9
+pytest-asyncio>=0.24,<2

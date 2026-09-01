@@ -4,9 +4,9 @@
 // 50+ tiny fragmented cards instead of one growing reply bubble.
 // Root cause was twofold:
 //   - useWebSocket.js read `payload.delta`, but the canonical Context.publish
-//     contract (adapters/_common/pull_consumer.py:Context.publish_progress)
-//     puts the chunk text at `payload.message`. The Gemma adapter happened to
-//     mirror to `delta` redundantly; non-Gemma adapters (Hermes bridge) did
+//     contract (edgecitadel_plugin_runtime.pull_consumer.Context.publish_progress)
+//     puts the chunk text at `payload.message`. The Gemma Plugin happened to
+//     mirror to `delta` redundantly; non-Gemma Plugins (Hermes bridge) did
 //     not, so the synthetic bubble grew empty for them.
 //   - ChatHistory.jsx merged historical /api/messages results 1:1 into the
 //     timeline without filtering task.progress, so every persisted streaming

@@ -21,7 +21,6 @@ git checkout -b <type>/<short-description>
 # Examples:
 #   feat/jetstream-consumers
 #   fix/mqtt-reconnection
-#   docs/adr-p2p-delegation
 ```
 
 ### 2. Make changes
@@ -36,17 +35,21 @@ Repository policy and quality gates are in `AGENTS.md`. Claude-specific area gui
 ### 3. Verify quality
 
 ```bash
-# Python
-ruff check aggregator/ --fix
-ruff format aggregator/
-mypy aggregator/ --strict
-pytest tests/ -x --tb=short
+# Python gates are defined in .agents/skills/commit-check/SKILL.md.
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ --check
+cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m pytest -q
+cd .. && uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest -q scripts/tests
+./scripts/research/run-python -m pytest tests/ -x --tb=short
 
 # Frontend
 cd frontend && npm run lint && npm run build
 
-# E2E (requires running stack)
-cd e2e && npx playwright test
+# Deterministic E2E owns and cleans up a disposable stack.
+cd e2e && npm test
+
+# Optional upstream/model-dependent Plugin suites use a prepared external stack.
+APP_URL=http://localhost AGG_URL=http://localhost:8000 npm run test:external-plugins
 ```
 
 ### 4. Commit with Conventional Commits
@@ -71,31 +74,6 @@ test(e2e): add agent offline detection tests
 PRs must include:
 - Clear description of what changed and why
 - Test coverage for new behavior
-- Documentation updates (see checklist below)
-
-## Documentation Checklist
-
-| Change Type | Required Docs |
-|------------|---------------|
-| New feature | Update the relevant maintained document and tests |
-| Bug fix | Add a regression test and update affected documentation |
-| Architecture change | ADR in `docs/adr/`, CLAUDE.md update if needed |
-| API change | `docs/08-api-reference.md`, Pydantic model update |
-| Config change | `.env.example`, `docs/02-server-setup.md` |
-| New NATS subject | `docs/05-messaging.md` |
-
-## Architecture Decision Records
-
-Significant technical decisions are documented as ADRs in `docs/adr/`.
-
-When to write an ADR:
-- Adding a new dependency or tool
-- Changing the messaging protocol or subject structure
-- Modifying the database schema
-- Changing authentication or authorization model
-- Introducing a new architectural pattern
-
-Use the template: `docs/adr/template.md`
 
 ## Code Review Standards
 
@@ -107,7 +85,6 @@ Reviewers check for:
 4. **Security** — No secrets in code? Input validated?
 5. **Tests** — New behavior covered? Existing tests pass?
 6. **Simplicity** — Is there a simpler way?
-7. **Documentation** — Docs updated per checklist above?
 
 Verdicts: **SHIP** / **FIX-THEN-SHIP** / **RETHINK**
 
@@ -121,7 +98,8 @@ nats/            NATS server config
 nginx/           Reverse proxy config
 e2e/             Playwright tests
 scripts/         Utility scripts
-docs/            Architecture docs, API reference, ADRs
+plugin-toolkit/  Shared Plugin runtime, SDK, schemas, validation, and tests
+plugins/         Installable Agent Plugin packages and implementations
 .agents/         Canonical shared verification skills
 .claude/         Claude-specific compatibility and area guides
 ```

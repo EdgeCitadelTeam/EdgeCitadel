@@ -32,14 +32,14 @@ from websockets.frames import Close as WebSocketClose
 
 import scripts.research.modes.central_relay as relay_module
 import scripts.research.modes.central_relay_server as server_module
-from adapters._common.outcome_store import OutcomeKey, SQLiteOutcomeStore
-from adapters._common.task_executor import (
+from edgecitadel_plugin_runtime.outcome_store import OutcomeKey, SQLiteOutcomeStore
+from edgecitadel_plugin_runtime.task_executor import (
     ExecutionContext,
     InjectedCrash,
     PolicyDecision,
     TaskExecutor,
 )
-from adapters._common.validator import canonical_json
+from edgecitadel_plugin_runtime.validator import canonical_json
 from scripts.research.modes.base import EventSink, Mode, TaskTransport
 from scripts.research.modes.central_relay import CentralRelayTransport
 from scripts.research.modes.central_relay_server import RelayStore

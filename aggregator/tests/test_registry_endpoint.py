@@ -1,5 +1,4 @@
 """Tests for GET /api/registry — fleet snapshot endpoint."""
-import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,15 +19,27 @@ def client(tmp_path, envelope_schema_path, card_schema_path, monkeypatch):
 
 def _seed_card(name: str, roles: list[str], deployment: str | None = None):
     from aggregator import database as db
-    md = {"runtime.kind": "native", "runtime.roles": roles,
-          "runtime.heartbeat_interval_sec": 30}
+
+    md = {
+        "runtime.kind": "native",
+        "runtime.roles": roles,
+        "runtime.heartbeat_interval_sec": 30,
+    }
     if deployment:
         md["runtime.deployment"] = deployment
-    db.upsert_agent_card({
-        "name": name, "description": "x", "version": "0",
-        "url": "u", "provider": {"organization": "x"},
-        "capabilities": {}, "securitySchemes": {}, "metadata": md},
-        timestamp="2026-04-29T10:00:00.000Z")
+    db.upsert_agent_card(
+        {
+            "name": name,
+            "description": "x",
+            "version": "0",
+            "url": "u",
+            "provider": {"organization": "x"},
+            "capabilities": {},
+            "securitySchemes": {},
+            "metadata": md,
+        },
+        timestamp="2026-04-29T10:00:00.000Z",
+    )
 
 
 def test_registry_empty(client):
@@ -57,6 +68,7 @@ def test_registry_returns_fields(client):
 def test_registry_reports_stale_heartbeat_offline(client):
     _seed_card("eu-amd-hermes", ["worker"])
     from aggregator import database as db
+
     db.update_heartbeat("eu-amd-hermes", "2000-01-01T00:00:00.000Z")
 
     body = client.get("/api/registry").json()
@@ -69,14 +81,23 @@ def test_registry_reports_stale_heartbeat_offline(client):
 def test_registry_includes_poison_count(client):
     _seed_card("shell-1", ["worker"])
     from aggregator import database as db
-    db.insert_poison_event(agent_id="shell-1", consumer="shell-1_inbox",
-                           task_id="t1", original_sender="aggregator",
-                           detected_at="2026-04-29T10:01:00.000Z",
-                           advisory={"foo": "bar"})
-    db.insert_poison_event(agent_id="shell-1", consumer="shell-1_inbox",
-                           task_id="t2", original_sender="aggregator",
-                           detected_at="2026-04-29T10:01:01.000Z",
-                           advisory={"foo": "bar"})
+
+    db.insert_poison_event(
+        agent_id="shell-1",
+        consumer="shell-1_inbox",
+        task_id="t1",
+        original_sender="aggregator",
+        detected_at="2026-04-29T10:01:00.000Z",
+        advisory={"foo": "bar"},
+    )
+    db.insert_poison_event(
+        agent_id="shell-1",
+        consumer="shell-1_inbox",
+        task_id="t2",
+        original_sender="aggregator",
+        detected_at="2026-04-29T10:01:01.000Z",
+        advisory={"foo": "bar"},
+    )
     body = client.get("/api/registry").json()
     entry = next(e for e in body if e["agent_id"] == "shell-1")
     assert entry["poison_count"] == 2
@@ -113,50 +134,44 @@ async def test_delete_agent_broadcasts_agent_deleted_event(client):
     real async WebSocket handling in the test.
     """
     from aggregator import database as db
-    from unittest.mock import AsyncMock, patch
-    import asyncio
+    from unittest.mock import patch
 
     # Seed the agent
-    db.upsert_agent_card({
-        "name": "doomed-1", "description": "x", "version": "0",
-        "url": "u", "provider": {"organization": "x"},
-        "capabilities": {}, "securitySchemes": {},
-        "metadata": {"runtime.kind": "native", "runtime.roles": ["worker"],
-                     "runtime.heartbeat_interval_sec": 30}},
-        timestamp="2026-04-29T10:00:00.000Z")
+    db.upsert_agent_card(
+        {
+            "name": "doomed-1",
+            "description": "x",
+            "version": "0",
+            "url": "u",
+            "provider": {"organization": "x"},
+            "capabilities": {},
+            "securitySchemes": {},
+            "metadata": {
+                "runtime.kind": "native",
+                "runtime.roles": ["worker"],
+                "runtime.heartbeat_interval_sec": 30,
+            },
+        },
+        timestamp="2026-04-29T10:00:00.000Z",
+    )
 
-    # Capture broadcast_event calls
     broadcasts = []
-
-    async def capture_broadcast(event, data, *, agent_id=None):
-        broadcasts.append({"event": event, "data": data, "agent_id": agent_id})
-
-    # The app should have been created with for_testing=True, so it has a hub
-    app = client.app
-
-    # We need to patch the hub in the closure. Since we can't access the local
-    # state dict directly, we'll patch the WebSocketHub class to track calls.
     from aggregator.websocket_hub import WebSocketHub
 
-    # Get any existing WebSocketHub instances from the app
-    # Actually, let's directly patch the broadcast_event on the existing hub
-    # by iterating through the app's route handlers
-
-    # Simple approach: monkeypatch the WebSocketHub.broadcast_event method
     original_broadcast_event = WebSocketHub.broadcast_event
 
     async def patched_broadcast_event(self, event, data, *, agent_id=None):
         broadcasts.append({"event": event, "data": data, "agent_id": agent_id})
-        # Call the original too, if needed
         await original_broadcast_event(self, event, data, agent_id=agent_id)
 
-    with patch.object(WebSocketHub, 'broadcast_event', patched_broadcast_event):
-        # Delete the agent
+    with patch.object(WebSocketHub, "broadcast_event", patched_broadcast_event):
         r = client.delete("/api/agents/doomed-1")
         assert r.status_code == 204
 
-    # Check that agent_deleted was broadcast
-    deletions = [b for b in broadcasts
-                 if b.get("event") == "agent_deleted"
-                 and b.get("data", {}).get("agent_id") == "doomed-1"]
+    deletions = [
+        b
+        for b in broadcasts
+        if b.get("event") == "agent_deleted"
+        and b.get("data", {}).get("agent_id") == "doomed-1"
+    ]
     assert deletions, f"no agent_deleted event broadcast; broadcasts: {broadcasts}"

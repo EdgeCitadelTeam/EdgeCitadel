@@ -7,15 +7,34 @@ from pydantic import BaseModel, Field, field_validator
 class Envelope(BaseModel):
     v: Literal[1] = 1
     id: str
-    type: Literal["register", "heartbeat", "status", "command", "result",
-                  "delegation", "cancel", "log", "broadcast", "task.progress"]
+    type: Literal[
+        "register",
+        "heartbeat",
+        "status",
+        "command",
+        "result",
+        "delegation",
+        "cancel",
+        "log",
+        "broadcast",
+        "task.progress",
+    ]
     sender_id: str
     recipient_id: Optional[str] = None
     task_id: Optional[str] = None
     context_id: Optional[str] = None
-    task_state: Optional[Literal["submitted", "working", "input-required",
-                                 "completed", "failed", "canceled", "rejected",
-                                 "auth-required"]] = None
+    task_state: Optional[
+        Literal[
+            "submitted",
+            "working",
+            "input-required",
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "auth-required",
+        ]
+    ] = None
     agent_state: Optional[Literal["online", "offline", "busy", "error"]] = None
     hop_count: Optional[int] = Field(default=None, ge=0)
     timestamp: str
@@ -60,3 +79,20 @@ class RegistryEntry(BaseModel):
     heartbeat_interval_sec: int
     queue: RegistryQueue
     poison_count: int
+
+
+class EnrollmentInvitationRequest(BaseModel):
+    agent_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    expires_in_seconds: int = Field(default=900, ge=60, le=86400)
+
+
+class EnrollmentRedeemRequest(BaseModel):
+    token: str = Field(min_length=32, max_length=256)
+    messaging_mode: Literal["single-client", "nats_leaf"] = "single-client"
+
+
+class EnrollmentRedeemResponse(BaseModel):
+    agent_id: str
+    nats_token: str | None = None
+    leaf_username: str | None = None
+    leaf_password: str | None = None

@@ -1,4 +1,5 @@
 """Tests for GET /api/conversations endpoint."""
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,12 +25,30 @@ def test_conversations_empty(client):
 
 
 def test_conversations_grouped_by_context(client):
-    db.insert_turn(context_id="ctx-A", agent_id="gemma-1", role="user",
-                   content="hi", token_count=1, skill_id="reasoning.chat")
-    db.insert_turn(context_id="ctx-A", agent_id="gemma-1", role="assistant",
-                   content="hello", token_count=2, skill_id="reasoning.chat")
-    db.insert_turn(context_id="ctx-B", agent_id="gemma-1", role="user",
-                   content="summary", token_count=2, skill_id="text.summarize")
+    db.insert_turn(
+        context_id="ctx-A",
+        agent_id="gemma-1",
+        role="user",
+        content="hi",
+        token_count=1,
+        skill_id="reasoning.chat",
+    )
+    db.insert_turn(
+        context_id="ctx-A",
+        agent_id="gemma-1",
+        role="assistant",
+        content="hello",
+        token_count=2,
+        skill_id="reasoning.chat",
+    )
+    db.insert_turn(
+        context_id="ctx-B",
+        agent_id="gemma-1",
+        role="user",
+        content="summary",
+        token_count=2,
+        skill_id="text.summarize",
+    )
     body = client.get("/api/conversations").json()
     by_ctx = {r["context_id"]: r for r in body}
     assert set(by_ctx) == {"ctx-A", "ctx-B"}
@@ -39,9 +58,21 @@ def test_conversations_grouped_by_context(client):
 
 
 def test_conversations_filter_by_agent(client):
-    db.insert_turn(context_id="ctx-1", agent_id="gemma-1", role="user",
-                   content="x", token_count=1, skill_id=None)
-    db.insert_turn(context_id="ctx-2", agent_id="ag2-1", role="user",
-                   content="y", token_count=1, skill_id=None)
+    db.insert_turn(
+        context_id="ctx-1",
+        agent_id="gemma-1",
+        role="user",
+        content="x",
+        token_count=1,
+        skill_id=None,
+    )
+    db.insert_turn(
+        context_id="ctx-2",
+        agent_id="ag2-1",
+        role="user",
+        content="y",
+        token_count=1,
+        skill_id=None,
+    )
     body = client.get("/api/conversations?agent_id=gemma-1").json()
     assert {r["context_id"] for r in body} == {"ctx-1"}

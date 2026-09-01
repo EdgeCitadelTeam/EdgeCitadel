@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 phase_5_start() {
-  log_info "── Phase 5: Start adapter services ──"
+  log_info "── Phase 5: Start Plugin services ──"
 
   log_info "starting edgecitadel-ollama (and waiting for HTTP)"
   run systemctl start edgecitadel-ollama

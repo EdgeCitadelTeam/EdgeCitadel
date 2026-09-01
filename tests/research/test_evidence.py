@@ -153,7 +153,7 @@ def test_source_provenance_is_captured_before_output_and_detects_source_changes(
     write_json(external_output / "campaign.json", {"source": source.to_dict()})
 
     assert verify_source_provenance(source_root, source)
-    generated = source_root / "docs" / "research" / "results" / "raw" / "run-1"
+    generated = source_root / "data" / "research" / "results" / "raw" / "run-1"
     generated.mkdir(parents=True)
     write_json(generated / "campaign.json", {"generated": True})
     assert verify_source_provenance(source_root, source)

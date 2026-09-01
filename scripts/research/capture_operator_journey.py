@@ -60,9 +60,7 @@ def iter_report_tests(suites: Iterable[object]) -> Iterable[Mapping[str, object]
                 continue
             tests = raw_spec.get("tests", [])
             if isinstance(tests, list):
-                yield from (
-                    test for test in tests if isinstance(test, Mapping)
-                )
+                yield from (test for test in tests if isinstance(test, Mapping))
 
 
 def passed_project_results(
@@ -222,7 +220,10 @@ def capture_operator_journey(
     output_root = output_root.resolve()
     source_root = source_root.resolve()
     before = source_provenance(source_root)
-    bundle = output_root / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{before.commit[:12]}"
+    bundle = (
+        output_root
+        / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{before.commit[:12]}"
+    )
     bundle.mkdir(parents=True, exist_ok=False)
     runtime_dir = bundle / "raw" / "runtime"
     launcher = [
@@ -245,7 +246,9 @@ def capture_operator_journey(
             text=True,
         )
         if getattr(completed, "returncode", 1) != 0:
-            raise RuntimeError(f"evidence launcher failed: {getattr(completed, 'stderr', '')}")
+            raise RuntimeError(
+                f"evidence launcher failed: {getattr(completed, 'stderr', '')}"
+            )
         report_path = bundle / "playwright-results.json"
         report = json.loads(report_path.read_text())
         if not isinstance(report, Mapping):
@@ -255,7 +258,9 @@ def capture_operator_journey(
         )
         metadata = {
             project: json.loads(
-                (bundle / "raw/playwright" / project / "operator-metadata.json").read_text()
+                (
+                    bundle / "raw/playwright" / project / "operator-metadata.json"
+                ).read_text()
             )
             for project in PROJECTS
         }
@@ -279,21 +284,36 @@ def capture_operator_journey(
             "run_id": runtime["run_id"],
             "source": before.to_dict(),
             "command": [
-                "node", "$SOURCE_ROOT/e2e/run-isolated.js", "--config",
+                "node",
+                "$SOURCE_ROOT/e2e/run-isolated.js",
+                "--config",
                 "$SOURCE_ROOT/e2e/playwright.evidence.config.js",
-                "--evidence-runtime-dir", "$EVIDENCE_DIR/raw/runtime",
+                "--evidence-runtime-dir",
+                "$EVIDENCE_DIR/raw/runtime",
             ],
-            "timing": {"started_at": runtime["started_at"], "ended_at": runtime["completed_at"]},
+            "timing": {
+                "started_at": runtime["started_at"],
+                "ended_at": runtime["completed_at"],
+            },
             "host": {"os": platform.system(), "architecture": platform.machine()},
             "dependencies": {
                 "python": f"Python {platform.python_version()}",
                 "node": tool_version(["node", "--version"]),
                 "npm": tool_version(["npm", "--version"]),
                 "git": tool_version(["git", "--version"]),
-                "docker_client": tool_version(["docker", "version", "--format", "{{.Client.Version}}"]),
-                "docker_server": tool_version(["docker", "version", "--format", "{{.Server.Version}}"]),
-                "docker_compose": tool_version(["docker", "compose", "version", "--short"]),
-                "playwright": tool_version(["npx", "--no-install", "playwright", "--version"], cwd=source_root / "e2e"),
+                "docker_client": tool_version(
+                    ["docker", "version", "--format", "{{.Client.Version}}"]
+                ),
+                "docker_server": tool_version(
+                    ["docker", "version", "--format", "{{.Server.Version}}"]
+                ),
+                "docker_compose": tool_version(
+                    ["docker", "compose", "version", "--short"]
+                ),
+                "playwright": tool_version(
+                    ["npx", "--no-install", "playwright", "--version"],
+                    cwd=source_root / "e2e",
+                ),
                 "chromium": metadata["desktop"]["browser_version"],
                 "ffmpeg": tool_version(["ffmpeg", "-version"]),
                 "ffprobe": tool_version(["ffprobe", "-version"]),
@@ -310,7 +330,9 @@ def capture_operator_journey(
         status = finalize_bundle(bundle, manifest, source_root / SCHEMA_PATH)
         if status != "PASS":
             raise RuntimeError(f"finalization returned {status}")
-        check_bundle(bundle, expected_kind="operator", source_root=source_root).require_valid()
+        check_bundle(
+            bundle, expected_kind="operator", source_root=source_root
+        ).require_valid()
     except BaseException:
         shutil.rmtree(bundle, ignore_errors=True)
         raise
@@ -324,7 +346,10 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source-root", type=Path, required=True)
     arguments = parser.parse_args()
-    if not arguments.output_root.is_absolute() or not arguments.source_root.is_absolute():
+    if (
+        not arguments.output_root.is_absolute()
+        or not arguments.source_root.is_absolute()
+    ):
         parser.error("--output-root and --source-root must be absolute")
     capture_operator_journey(arguments.output_root, arguments.source_root)
     return 0

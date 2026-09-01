@@ -122,10 +122,7 @@ def _measured_rows(
         if scheduled.get("measured") is not True:
             continue
         trial = _read_jsonl(
-            campaign
-            / "bundles"
-            / str(scheduled["run_id"])
-            / "trials.jsonl"
+            campaign / "bundles" / str(scheduled["run_id"]) / "trials.jsonl"
         )[0]
         cell = trial.get("cell")
         observation = trial.get("observation")
@@ -243,9 +240,7 @@ def _correctness_comparisons(
             confidence=confidence,
         )
         reference_by_block = {
-            block: row
-            for row in reference
-            if type(block := row["block"]) is int
+            block: row for row in reference if type(block := row["block"]) is int
         }
         latency_pairs: list[tuple[float, float]] = []
         for row in candidate:
@@ -304,13 +299,17 @@ def _cost_rows(
             for row in grouped[key]:
                 observation = row["observation"]
                 if not isinstance(observation, Mapping):
-                    raise ArtifactInvalid("checked campaign contains an invalid observation")
+                    raise ArtifactInvalid(
+                        "checked campaign contains an invalid observation"
+                    )
                 resources = observation.get("resources")
                 if not isinstance(resources, Mapping):
                     raise ArtifactInvalid("checked campaign contains invalid resources")
                 value = resources.get(metric)
                 if not isinstance(value, (int, float)) or isinstance(value, bool):
-                    raise ArtifactInvalid(f"checked campaign lacks cost metric {metric}")
+                    raise ArtifactInvalid(
+                        f"checked campaign lacks cost metric {metric}"
+                    )
                 values.append(float(value))
                 outcomes.append(str(observation["outcome"]))
             output_row: dict[str, object] = {
@@ -483,7 +482,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        if not arguments.input_root.is_absolute() or not arguments.output_root.is_absolute():
+        if (
+            not arguments.input_root.is_absolute()
+            or not arguments.output_root.is_absolute()
+        ):
             raise ValueError("analysis roots must be absolute")
         analyze_campaign(
             arguments.input_root / arguments.campaign,

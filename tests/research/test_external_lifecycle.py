@@ -12,7 +12,7 @@ from typing import cast
 
 import pytest
 
-from adapters._common.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
 from scripts.research.external_lifecycle import (
     ExternalActuatorObserver,
     ExternalCrashObserver,

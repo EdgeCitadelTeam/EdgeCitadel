@@ -22,8 +22,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, cast
 
-from adapters._common.outcome_store import DisabledOutcomeStore, SQLiteOutcomeStore
-from adapters._common.task_executor import (
+from edgecitadel_plugin_runtime.outcome_store import (
+    DisabledOutcomeStore,
+    SQLiteOutcomeStore,
+)
+from edgecitadel_plugin_runtime.task_executor import (
     Clock,
     CrashHook,
     ExecutionContext,
@@ -31,9 +34,9 @@ from adapters._common.task_executor import (
     TaskExecutor,
     UUIDFactory,
 )
-from adapters._common.task_publisher import EventSink
-from adapters._common.task_types import PublicationReceipt
-from adapters._common.validator import canonical_json, default_validator
+from edgecitadel_plugin_runtime.task_publisher import EventSink
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.validator import canonical_json, default_validator
 from scripts.research.modes.base import Mode, TaskTransport
 
 BEHAVIORS = ("echo", "delegate", "progress", "actuator")

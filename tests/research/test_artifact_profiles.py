@@ -18,6 +18,16 @@ from scripts.research.run_artifact import main
 from scripts.research.workload_matrix import MatrixCell, classify_outcome
 
 
+def test_default_output_root_uses_runtime_data_directory(tmp_path: Path) -> None:
+    arguments = run_artifact._argument_parser().parse_args(
+        ["run", "--profile", "quick", "--source-root", str(tmp_path)]
+    )
+
+    _, _, output_root, _, _ = run_artifact._parse_run_args(arguments)
+
+    assert output_root == (tmp_path / "data/research/results/raw").resolve()
+
+
 def test_preliminary_campaign_fixes_the_paper_profile_contract() -> None:
     campaign = yaml.safe_load(
         Path("scripts/research/configs/campaigns/preliminary-x86-lan.yaml").read_text()
@@ -75,19 +85,22 @@ def test_campaign_schema_rejects_a_missing_workload_timeout() -> None:
 
 
 def test_resource_application_bytes_sum_only_canonical_publication_receipts() -> None:
-    assert run_artifact._application_bytes(
-        [
-            {"event": "fixture.ready"},
-            {
-                "event": "transport.publication_accepted",
-                "data": {"receipt": {"application_bytes": 12}},
-            },
-            {
-                "event": "transport.publication_accepted",
-                "data": {"receipt": {"application_bytes": 8}},
-            },
-        ]
-    ) == 20
+    assert (
+        run_artifact._application_bytes(
+            [
+                {"event": "fixture.ready"},
+                {
+                    "event": "transport.publication_accepted",
+                    "data": {"receipt": {"application_bytes": 12}},
+                },
+                {
+                    "event": "transport.publication_accepted",
+                    "data": {"receipt": {"application_bytes": 8}},
+                },
+            ]
+        )
+        == 20
+    )
 
 
 def test_transport_resource_deltas_use_paired_monotonic_snapshots() -> None:

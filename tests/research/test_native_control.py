@@ -19,11 +19,11 @@ from typing import TypeVar, cast
 import pytest
 from jsonschema import Draft202012Validator
 
-from adapters._common.outcome_store import DisabledOutcomeStore
-from adapters._common.task_executor import InjectedCrash, TaskExecutor
-from adapters._common.task_publisher import EventSink
-from adapters._common.task_types import PublicationReceipt
-from adapters._common.validator import canonical_json
+from edgecitadel_plugin_runtime.outcome_store import DisabledOutcomeStore
+from edgecitadel_plugin_runtime.task_executor import InjectedCrash, TaskExecutor
+from edgecitadel_plugin_runtime.task_publisher import EventSink
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.validator import canonical_json
 from scripts.research.fixtures import native_control
 from scripts.research.fixtures.native_control import (
     BEHAVIORS,

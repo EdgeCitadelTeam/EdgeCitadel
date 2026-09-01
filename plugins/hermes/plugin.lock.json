@@ -1,0 +1,66 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "10559d081d079f34582165ed85ac3af028632a2cb6c27929386081c9bed21faa"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/__main__.py",
+      "sha256": "894fcd7fa8f4c6bad56b2d75b8996a186de833f1ac06355517c7d4e59f656795"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/adapter.py",
+      "sha256": "0bd71549f31f02586799854d28037a0b5a612259d20b3e6789bb69e849cf30aa"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/config.yaml",
+      "sha256": "f5db46bff8029ea6942b63090825e6d4ecb52d4fd269e4add21bea7a3864e257"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/hermes_client.py",
+      "sha256": "a9cbe5f1c401daf96b3262ccaf3004386649b255d7f5a9d9a81c04274ec63b55"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/requirements.txt",
+      "sha256": "5e001466b9dac8aea97b90a9fe6a13d696c875ceca9aae7a5722c2f9665e2404"
+    },
+    {
+      "path": "plugin.yaml",
+      "sha256": "7e471ca0f7bbfa6d142196eef2a8846c06e71d24c0a206aab0fe5be7b9402da0"
+    },
+    {
+      "path": "skills/hermes-reasoner/SKILL.md",
+      "sha256": "77d6e0053e83303e43a335ca70e770956a7bb6e5946d4378b3c5ecde2c48fa24"
+    },
+    {
+      "path": "skills/hermes-reasoner/binding.yaml",
+      "sha256": "a8bec3e901483b99ee7bffe4d9127c49a3670ffb56ce7c6c9a367d61baa3afbd"
+    },
+    {
+      "path": "skills/hermes-reasoner/schemas/input.json",
+      "sha256": "c45b5d3fb1f33f6810d0de9a93175e6085121af601d48fe453acea4bdb034785"
+    },
+    {
+      "path": "skills/hermes-reasoner/schemas/output.json",
+      "sha256": "c45b5d3fb1f33f6810d0de9a93175e6085121af601d48fe453acea4bdb034785"
+    }
+  ],
+  "lockVersion": 1,
+  "package": {
+    "id": "edgecitadel.hermes",
+    "protocol": "edgecitadel.plugin.v1",
+    "version": "0.1.0"
+  },
+  "skills": [
+    {
+      "contentSha256": "77d6e0053e83303e43a335ca70e770956a7bb6e5946d4378b3c5ecde2c48fa24",
+      "name": "hermes-reasoner",
+      "skillId": "reasoning.chat",
+      "version": "0.1.0"
+    }
+  ]
+}

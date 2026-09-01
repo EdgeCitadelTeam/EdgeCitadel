@@ -27,10 +27,10 @@ from nats.js.api import (
 from nats.js.errors import NotFoundError
 
 import nats
-from adapters._common.pull_consumer import ConsumerBinding, PullConsumer
-from adapters._common.task_executor import TaskExecutor
-from adapters._common.task_types import PublicationReceipt
-from adapters._common.validator import (
+from edgecitadel_plugin_runtime.pull_consumer import ConsumerBinding, PullConsumer
+from edgecitadel_plugin_runtime.task_executor import TaskExecutor
+from edgecitadel_plugin_runtime.task_types import PublicationReceipt
+from edgecitadel_plugin_runtime.validator import (
     ValidationError,
     canonical_json,
     default_validator,
@@ -203,7 +203,10 @@ class _JetStreamTransport:
             raise ValueError("invalid run_id")
         if type(token) is not str or _TOKEN_PATTERN.fullmatch(token) is None:
             raise ValueError("invalid token")
-        if observer_agent_id is not None and _ID_PATTERN.fullmatch(observer_agent_id) is None:
+        if (
+            observer_agent_id is not None
+            and _ID_PATTERN.fullmatch(observer_agent_id) is None
+        ):
             raise ValueError("invalid observer_agent_id")
         detached_card: dict[str, object] | None = None
         if agent_card is not None:
@@ -289,7 +292,7 @@ class _JetStreamTransport:
             if self._terminal_desired:
                 raise RuntimeError("terminal observer already started")
             agent_id = self._require_observer_agent()
-            await self._ensure_streams()
+            await self._ensure_streams(agent_id)
             binding = await self._ensure_consumer("result", agent_id)
             if binding is None:
                 raise RuntimeError("result consumer cannot bind an observer")
@@ -328,7 +331,7 @@ class _JetStreamTransport:
             if self._receiver_desired:
                 raise RuntimeError("receiver already started")
             self._validate_receiver_card(agent_id)
-            await self._ensure_streams()
+            await self._ensure_streams(agent_id)
             binding = await self._ensure_consumer("task", agent_id)
             if binding is None:
                 raise RuntimeError("task consumer cannot bind a worker")
@@ -393,12 +396,16 @@ class _JetStreamTransport:
         self._check_open()
 
     async def submit_task(self, envelope: Mapping[str, object]) -> PublicationReceipt:
-        decoded = self._validated_envelope(envelope, ("command", "delegation", "cancel"))
+        decoded = self._validated_envelope(
+            envelope, ("command", "delegation", "cancel")
+        )
         return await self._publish_js(
             f"agents.{decoded['recipient_id']}.inbox", decoded, "submit_task"
         )
 
-    async def publish_progress(self, envelope: Mapping[str, object]) -> PublicationReceipt:
+    async def publish_progress(
+        self, envelope: Mapping[str, object]
+    ) -> PublicationReceipt:
         decoded = self._validated_envelope(envelope, ("task.progress",))
         return await self._publish_transient(
             f"agents.{decoded['sender_id']}.task_progress.{decoded['task_id']}",
@@ -406,19 +413,25 @@ class _JetStreamTransport:
             "publish_progress",
         )
 
-    async def publish_terminal(self, envelope: Mapping[str, object]) -> PublicationReceipt:
+    async def publish_terminal(
+        self, envelope: Mapping[str, object]
+    ) -> PublicationReceipt:
         decoded = self._validated_envelope(envelope, ("result",))
         return await self._publish_js(
             f"agents.{decoded['recipient_id']}.inbox", decoded, "publish_terminal"
         )
 
-    async def publish_heartbeat(self, envelope: Mapping[str, object]) -> PublicationReceipt:
+    async def publish_heartbeat(
+        self, envelope: Mapping[str, object]
+    ) -> PublicationReceipt:
         decoded = self._validated_envelope(envelope, ("heartbeat",))
         return await self._publish_transient(
             f"agents.{decoded['sender_id']}.heartbeat", decoded, "publish_heartbeat"
         )
 
-    async def _publish_status(self, envelope: Mapping[str, object]) -> PublicationReceipt:
+    async def _publish_status(
+        self, envelope: Mapping[str, object]
+    ) -> PublicationReceipt:
         decoded = self._validated_envelope(envelope, ("status",))
         return await self._publish_transient(
             f"agents.{decoded['sender_id']}.status", decoded, "publish_status"
@@ -487,7 +500,10 @@ class _JetStreamTransport:
                     consumer_ack_pending = getattr(info, "num_ack_pending", None)
                     if type(consumer_pending) is not int or consumer_pending < 0:
                         raise RuntimeError("invalid JetStream consumer state")
-                    if type(consumer_ack_pending) is not int or consumer_ack_pending < 0:
+                    if (
+                        type(consumer_ack_pending) is not int
+                        or consumer_ack_pending < 0
+                    ):
                         raise RuntimeError("invalid JetStream consumer state")
                     consumer = dict(config)
                     consumer["pending"] = consumer_pending
@@ -525,7 +541,10 @@ class _JetStreamTransport:
             await self._cancel_task("_transient_task")
             if self._subscriptions:
                 await asyncio.gather(
-                    *(cast(Any, subscription).unsubscribe() for subscription in self._subscriptions),
+                    *(
+                        cast(Any, subscription).unsubscribe()
+                        for subscription in self._subscriptions
+                    ),
                     return_exceptions=True,
                 )
             self._subscriptions.clear()
@@ -560,8 +579,15 @@ class _JetStreamTransport:
         self._nc = connection
         return connection
 
-    async def _ensure_streams(self) -> None:
-        await self._ensure_stream(task_stream_config(self._run_id))
+    async def _ensure_streams(self, destination_agent_id: str | None = None) -> None:
+        owned_subjects = (
+            [f"agents.{destination_agent_id}.inbox"]
+            if destination_agent_id is not None
+            else []
+        )
+        await self._ensure_stream(
+            task_stream_config(self._run_id), owned_subjects=owned_subjects
+        )
         if self._durable_transients:
             await self._ensure_stream(transient_stream_config(self._run_id))
         else:
@@ -581,28 +607,62 @@ class _JetStreamTransport:
                 continue
             raise RuntimeError("JetStream captures transient subject")
 
-    async def _ensure_stream(self, expected: Mapping[str, object]) -> None:
+    async def _ensure_stream(
+        self,
+        expected: Mapping[str, object],
+        *,
+        owned_subjects: list[str] | None = None,
+    ) -> None:
         connection = await self._ensure_connection()
         js = connection.jetstream()
         name = cast(str, expected["name"])
+        effective_expected = dict(expected)
         try:
             info = await js.stream_info(name)
         except NotFoundError:
+            subjects = owned_subjects or cast(list[str], expected["subjects"])
             config = StreamConfig(
                 name=name,
-                subjects=cast(list[str], expected["subjects"]),
+                subjects=subjects,
                 retention=RetentionPolicy(cast(str, expected["retention"])),
                 storage=StorageType(cast(str, expected["storage"])),
                 max_age=cast(int, expected["max_age_ns"]) / 1_000_000_000,
                 max_bytes=cast(int, expected["max_bytes"]),
                 max_msg_size=cast(int, expected["max_msg_size"]),
                 discard=DiscardPolicy(cast(str, expected["discard"])),
-                duplicate_window=cast(int, expected["duplicate_window_ns"]) / 1_000_000_000,
+                duplicate_window=cast(int, expected["duplicate_window_ns"])
+                / 1_000_000_000,
             )
             await js.add_stream(config)
             info = await js.stream_info(name)
+        configured_subjects = list(info.config.subjects or [])
+        if (
+            name == "AGENT_INBOX"
+            and "agents.*.inbox" not in configured_subjects
+            and owned_subjects
+        ):
+            desired_subjects = sorted(set(configured_subjects) | set(owned_subjects))
+            if desired_subjects != sorted(configured_subjects):
+                config = StreamConfig(
+                    name=name,
+                    subjects=desired_subjects,
+                    retention=RetentionPolicy(cast(str, expected["retention"])),
+                    storage=StorageType(cast(str, expected["storage"])),
+                    max_age=cast(int, expected["max_age_ns"]) / 1_000_000_000,
+                    max_bytes=cast(int, expected["max_bytes"]),
+                    max_msg_size=cast(int, expected["max_msg_size"]),
+                    discard=DiscardPolicy(cast(str, expected["discard"])),
+                    duplicate_window=cast(int, expected["duplicate_window_ns"])
+                    / 1_000_000_000,
+                )
+                await js.update_stream(config)
+                info = await js.stream_info(name)
+                configured_subjects = list(info.config.subjects or [])
+            effective_expected["subjects"] = sorted(configured_subjects)
+        elif name == "AGENT_INBOX" and "agents.*.inbox" not in configured_subjects:
+            effective_expected["subjects"] = sorted(configured_subjects)
         normalized = self._normalize_stream(info)
-        if normalized != dict(expected):
+        if normalized != effective_expected:
             raise RuntimeError("live stream does not match configuration")
         self._created_streams[name] = normalized
 
@@ -733,18 +793,30 @@ class _JetStreamTransport:
         if self._durable_transients:
             await self._ensure_streams()
             data = canonical_json(envelope)
-            acknowledgement = await (await self._ensure_connection()).jetstream().publish(
-                subject, data, headers={"Nats-Msg-Id": cast(str, envelope["id"])}
+            acknowledgement = (
+                await (await self._ensure_connection())
+                .jetstream()
+                .publish(
+                    subject, data, headers={"Nats-Msg-Id": cast(str, envelope["id"])}
+                )
             )
             stream = getattr(acknowledgement, "stream", None)
             sequence = getattr(acknowledgement, "seq", None)
-            if stream != "TRANSIENT_EVENTS" or type(sequence) is not int or sequence < 1:
+            if (
+                stream != "TRANSIENT_EVENTS"
+                or type(sequence) is not int
+                or sequence < 1
+            ):
                 raise RuntimeError("invalid JetStream publication acknowledgement")
             receipt = PublicationReceipt(
-                envelope_id=cast(str, envelope["id"]), accepted=True,
-                transport=self._mode.value, stream=stream, stream_sequence=sequence,
+                envelope_id=cast(str, envelope["id"]),
+                accepted=True,
+                transport=self._mode.value,
+                stream=stream,
+                stream_sequence=sequence,
                 duplicate=bool(getattr(acknowledgement, "duplicate", False)),
-                accepted_ns=self._evidence_clock_ns(), application_bytes=len(data),
+                accepted_ns=self._evidence_clock_ns(),
+                application_bytes=len(data),
                 wire_bytes=None,
             )
             self._emit_publication(operation, envelope, receipt)
@@ -760,10 +832,15 @@ class _JetStreamTransport:
         await connection.publish(subject, data)
         await connection.flush()
         receipt = PublicationReceipt(
-            envelope_id=cast(str, envelope["id"]), accepted=True,
-            transport=self._mode.value, stream=None, stream_sequence=None,
-            duplicate=None, accepted_ns=self._evidence_clock_ns(),
-            application_bytes=len(data), wire_bytes=None,
+            envelope_id=cast(str, envelope["id"]),
+            accepted=True,
+            transport=self._mode.value,
+            stream=None,
+            stream_sequence=None,
+            duplicate=None,
+            accepted_ns=self._evidence_clock_ns(),
+            application_bytes=len(data),
+            wire_bytes=None,
         )
         self._emit_publication(operation, envelope, receipt)
         return receipt
@@ -790,14 +867,17 @@ class _JetStreamTransport:
         info = await connection.jetstream().stream_info("TRANSIENT_EVENTS")
         self._transient_cutoff = cast(int, getattr(info.state, "last_seq", 0))
         subscription = await connection.jetstream().pull_subscribe(
-            subject="", durable=durable_name("transient", self._run_id, agent_id),
+            subject="",
+            durable=durable_name("transient", self._run_id, agent_id),
             stream="TRANSIENT_EVENTS",
         )
         self._transient_task = asyncio.create_task(
             self._pull_loop(subscription, self._on_durable_transient)
         )
         self._transient_subscription = subscription
-        register = await connection.subscribe("agents.*.register", cb=self._on_registration)
+        register = await connection.subscribe(
+            "agents.*.register", cb=self._on_registration
+        )
         self._subscriptions.append(register)
         await connection.flush()
 
@@ -828,17 +908,27 @@ class _JetStreamTransport:
         delivery_count = cast(int, metadata.num_delivered)
         self._terminal_observation_index += 1
         observation = ObservedEnvelope(
-            envelope=MappingProxyType(dict(envelope)), observed_ns=self._evidence_clock_ns(),
-            observation_index=self._terminal_observation_index, stream_sequence=sequence,
-            delivery_count=delivery_count, replayed=False, delivery=_ObserverDelivery(message),
+            envelope=MappingProxyType(dict(envelope)),
+            observed_ns=self._evidence_clock_ns(),
+            observation_index=self._terminal_observation_index,
+            stream_sequence=sequence,
+            delivery_count=delivery_count,
+            replayed=False,
+            delivery=_ObserverDelivery(message),
         )
         self._terminal_queues.setdefault(task_id, deque()).append(observation)
         self._terminal_events.setdefault(task_id, asyncio.Event()).set()
-        self._emit("transport.terminal_observed", {
-            "task_id": task_id, "envelope_id": envelope["id"],
-            "observation_index": observation.observation_index, "stream_sequence": sequence,
-            "delivery_count": delivery_count, "replayed": False,
-        })
+        self._emit(
+            "transport.terminal_observed",
+            {
+                "task_id": task_id,
+                "envelope_id": envelope["id"],
+                "observation_index": observation.observation_index,
+                "stream_sequence": sequence,
+                "delivery_count": delivery_count,
+                "replayed": False,
+            },
+        )
 
     async def _on_durable_transient(self, message: object) -> None:
         envelope = self._decode_message(message)
@@ -849,12 +939,19 @@ class _JetStreamTransport:
         delivery_count = cast(int, metadata.num_delivered)
         self._transient_observation_index += 1
         replayed = sequence <= self._transient_cutoff
-        self._emit("transport.transient_observed", {
-            "envelope_type": envelope["type"], "envelope_id": envelope["id"],
-            "task_id": envelope.get("task_id"), "sender_id": envelope["sender_id"],
-            "observation_index": self._transient_observation_index, "stream_sequence": sequence,
-            "delivery_count": delivery_count, "replayed": replayed,
-        })
+        self._emit(
+            "transport.transient_observed",
+            {
+                "envelope_type": envelope["type"],
+                "envelope_id": envelope["id"],
+                "task_id": envelope.get("task_id"),
+                "sender_id": envelope["sender_id"],
+                "observation_index": self._transient_observation_index,
+                "stream_sequence": sequence,
+                "delivery_count": delivery_count,
+                "replayed": replayed,
+            },
+        )
         await _ObserverDelivery(message).ack()
 
     async def _on_core_transient(self, message: object) -> None:
@@ -862,12 +959,19 @@ class _JetStreamTransport:
         if envelope.get("type") not in ("task.progress", "heartbeat", "status"):
             raise RuntimeError("invalid core message")
         self._transient_observation_index += 1
-        self._emit("transport.transient_observed", {
-            "envelope_type": envelope["type"], "envelope_id": envelope["id"],
-            "task_id": envelope.get("task_id"), "sender_id": envelope["sender_id"],
-            "observation_index": self._transient_observation_index, "stream_sequence": None,
-            "delivery_count": 1, "replayed": False,
-        })
+        self._emit(
+            "transport.transient_observed",
+            {
+                "envelope_type": envelope["type"],
+                "envelope_id": envelope["id"],
+                "task_id": envelope.get("task_id"),
+                "sender_id": envelope["sender_id"],
+                "observation_index": self._transient_observation_index,
+                "stream_sequence": None,
+                "delivery_count": 1,
+                "replayed": False,
+            },
+        )
 
     async def _on_registration(self, message: object) -> None:
         envelope = self._decode_message(message)
@@ -878,11 +982,17 @@ class _JetStreamTransport:
         except (ValidationError, RecursionError):
             raise RuntimeError("invalid core message") from None
         self._registration_observation_index += 1
-        self._emit("transport.registration_observed", {
-            "envelope_id": envelope["id"], "agent_id": envelope["sender_id"],
-            "observation_index": self._registration_observation_index,
-            "stream_sequence": None, "delivery_count": 1, "replayed": False,
-        })
+        self._emit(
+            "transport.registration_observed",
+            {
+                "envelope_id": envelope["id"],
+                "agent_id": envelope["sender_id"],
+                "observation_index": self._registration_observation_index,
+                "stream_sequence": None,
+                "delivery_count": 1,
+                "replayed": False,
+            },
+        )
 
     async def _disconnect_progress_observer(self) -> None:
         async with self._operation_lock:
@@ -895,7 +1005,9 @@ class _JetStreamTransport:
             for subscription in self._subscriptions:
                 await cast(Any, subscription).unsubscribe()
             self._subscriptions.clear()
-            self._emit("transport.fault_applied", {"action": "disconnect_progress_observer"})
+            self._emit(
+                "transport.fault_applied", {"action": "disconnect_progress_observer"}
+            )
 
     async def _reconnect_progress_observer(self) -> None:
         async with self._operation_lock:
@@ -907,9 +1019,13 @@ class _JetStreamTransport:
                 await self._start_durable_progress_observer()
             else:
                 await self._start_core_progress_observer()
-            self._emit("transport.fault_applied", {"action": "reconnect_progress_observer"})
+            self._emit(
+                "transport.fault_applied", {"action": "reconnect_progress_observer"}
+            )
 
-    async def _stop_worker(self, agent_id: str, callback: WorkerOperation | None) -> None:
+    async def _stop_worker(
+        self, agent_id: str, callback: WorkerOperation | None
+    ) -> None:
         async with self._operation_lock:
             self._check_open()
             self._validate_agent_id(agent_id)
@@ -922,7 +1038,9 @@ class _JetStreamTransport:
                 raise RuntimeError("worker control is unavailable")
             self._emit("transport.fault_applied", {"action": "stop_worker"})
 
-    async def _start_worker(self, agent_id: str, callback: WorkerOperation | None) -> None:
+    async def _start_worker(
+        self, agent_id: str, callback: WorkerOperation | None
+    ) -> None:
         should_start_local = False
         executor: TaskExecutor | None = None
         async with self._operation_lock:
@@ -1074,26 +1192,42 @@ class _JetStreamTransport:
         )
 
     def _emit_publication(
-        self, operation: str, envelope: Mapping[str, object], receipt: PublicationReceipt
+        self,
+        operation: str,
+        envelope: Mapping[str, object],
+        receipt: PublicationReceipt,
     ) -> None:
-        self._emit("transport.publication_accepted", {
-            "operation": operation, "envelope_type": envelope["type"],
-            "envelope_id": envelope["id"], "task_id": envelope.get("task_id"),
-            "receipt": {
-                "envelope_id": receipt.envelope_id, "accepted": receipt.accepted,
-                "transport": receipt.transport, "stream": receipt.stream,
-                "stream_sequence": receipt.stream_sequence, "duplicate": receipt.duplicate,
-                "accepted_ns": receipt.accepted_ns, "application_bytes": receipt.application_bytes,
-                "wire_bytes": receipt.wire_bytes,
+        self._emit(
+            "transport.publication_accepted",
+            {
+                "operation": operation,
+                "envelope_type": envelope["type"],
+                "envelope_id": envelope["id"],
+                "task_id": envelope.get("task_id"),
+                "receipt": {
+                    "envelope_id": receipt.envelope_id,
+                    "accepted": receipt.accepted,
+                    "transport": receipt.transport,
+                    "stream": receipt.stream,
+                    "stream_sequence": receipt.stream_sequence,
+                    "duplicate": receipt.duplicate,
+                    "accepted_ns": receipt.accepted_ns,
+                    "application_bytes": receipt.application_bytes,
+                    "wire_bytes": receipt.wire_bytes,
+                },
             },
-        })
+        )
 
     def _emit(self, event: str, data: Mapping[str, object]) -> None:
-        self._event_sink.emit({
-            "monotonic_ns": self._evidence_clock_ns(), "epoch_time": self._epoch_now(),
-            "component": self._mode.value.replace("-", "_"), "event": event,
-            "data": dict(data),
-        })
+        self._event_sink.emit(
+            {
+                "monotonic_ns": self._evidence_clock_ns(),
+                "epoch_time": self._epoch_now(),
+                "component": self._mode.value.replace("-", "_"),
+                "event": event,
+                "data": dict(data),
+            }
+        )
 
 
 class EdgeCitadelTransport(_JetStreamTransport):
@@ -1120,15 +1254,25 @@ class EdgeCitadelTransport(_JetStreamTransport):
             raise ValueError("invalid ablation")
         settings = ABLATIONS[ablation]
         super().__init__(
-            nats_url=nats_url, run_id=run_id, token=token, event_sink=event_sink,
-            agent_card=agent_card, observer_agent_id=observer_agent_id,
-            mode=Mode.EDGECITADEL, ablation=ablation,
+            nats_url=nats_url,
+            run_id=run_id,
+            token=token,
+            event_sink=event_sink,
+            agent_card=agent_card,
+            observer_agent_id=observer_agent_id,
+            mode=Mode.EDGECITADEL,
+            ablation=ablation,
             nats_msg_id=settings["nats_msg_id"],
             outcome_ledger=settings["outcome_ledger"],
-            durable_transients=False, coordinator_restart=coordinator_restart,
-            worker_stop=worker_stop, worker_start=worker_start,
-            connection_factory=connection_factory, evidence_clock_ns=evidence_clock_ns,
-            epoch_now=epoch_now, uuid4=uuid4, sleep=sleep,
+            durable_transients=False,
+            coordinator_restart=coordinator_restart,
+            worker_stop=worker_stop,
+            worker_start=worker_start,
+            connection_factory=connection_factory,
+            evidence_clock_ns=evidence_clock_ns,
+            epoch_now=epoch_now,
+            uuid4=uuid4,
+            sleep=sleep,
         )
 
 

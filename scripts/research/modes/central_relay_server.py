@@ -27,7 +27,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
 
-from adapters._common.validator import (
+from edgecitadel_plugin_runtime.validator import (
     ValidationError,
     canonical_json,
     default_validator,

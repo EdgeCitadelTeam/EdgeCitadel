@@ -1,4 +1,5 @@
 """Memory service: NATS request-reply handlers + idle cleanup loop."""
+
 from __future__ import annotations
 import asyncio
 import json
@@ -12,8 +13,8 @@ from . import database as db
 log = logging.getLogger(__name__)
 
 DEFAULT_TOKEN_BUDGET = 2048
-RETENTION_SEC = 30 * 24 * 3600          # 30-day hard delete
-CLEANUP_INTERVAL_SEC = 300              # check every 5 min
+RETENTION_SEC = 30 * 24 * 3600  # 30-day hard delete
+CLEANUP_INTERVAL_SEC = 300  # check every 5 min
 
 
 def estimate_tokens(content: str) -> int:
@@ -24,7 +25,7 @@ def estimate_tokens(content: str) -> int:
 class MemoryService:
     """Owns conversation_turns table reads/writes via NATS request-reply.
 
-    Adapters never touch the DB; they call:
+    Agent Plugins never touch the DB; they call:
       memory.turns.get    {context_id, agent_id, token_budget?}
       memory.turns.put    {context_id, agent_id, role, content, skill_id?}
       memory.turns.delete {context_id}
@@ -35,8 +36,8 @@ class MemoryService:
         self._cleanup_task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        await self.nc.subscribe("memory.turns.get",   cb=self.on_get)
-        await self.nc.subscribe("memory.turns.put",   cb=self.on_put)
+        await self.nc.subscribe("memory.turns.get", cb=self.on_get)
+        await self.nc.subscribe("memory.turns.put", cb=self.on_put)
         await self.nc.subscribe("memory.turns.delete", cb=self.on_delete)
         self._cleanup_task = asyncio.create_task(self._idle_cleanup_loop())
         log.info("memory service started: subscribed to memory.turns.{get,put,delete}")
@@ -71,14 +72,18 @@ class MemoryService:
         for r in rows:
             if total + r["token_count"] > budget:
                 break
-            kept.append({"role": r["role"], "content": r["content"],
-                         "created_at": r["created_at"],
-                         "skill_id": r["skill_id"],
-                         "token_count": r["token_count"]})
+            kept.append(
+                {
+                    "role": r["role"],
+                    "content": r["content"],
+                    "created_at": r["created_at"],
+                    "skill_id": r["skill_id"],
+                    "token_count": r["token_count"],
+                }
+            )
             total += r["token_count"]
-        kept.reverse()           # chronological for the LLM
-        await msg.respond(json.dumps({"turns": kept,
-                                       "total_tokens": total}).encode())
+        kept.reverse()  # chronological for the LLM
+        await msg.respond(json.dumps({"turns": kept, "total_tokens": total}).encode())
 
     async def on_put(self, msg: Msg) -> None:
         req = self._parse(msg.data) or {}
@@ -93,11 +98,15 @@ class MemoryService:
             await msg.respond(b'{"error":"invalid_role"}')
             return
         tok = estimate_tokens(content)
-        row_id = db.insert_turn(context_id=ctx_id, agent_id=agent, role=role,
-                                content=content, token_count=tok,
-                                skill_id=req.get("skill_id"))
-        await msg.respond(json.dumps({"id": row_id,
-                                       "token_count": tok}).encode())
+        row_id = db.insert_turn(
+            context_id=ctx_id,
+            agent_id=agent,
+            role=role,
+            content=content,
+            token_count=tok,
+            skill_id=req.get("skill_id"),
+        )
+        await msg.respond(json.dumps({"id": row_id, "token_count": tok}).encode())
 
     async def on_delete(self, msg: Msg) -> None:
         req = self._parse(msg.data) or {}
@@ -116,8 +125,7 @@ class MemoryService:
                 if n > 0:
                     log.info("memory: purged %d idle turns", n)
             except Exception as e:  # noqa: BLE001
-                log.warning("memory: idle cleanup failed (%s): %s",
-                            type(e).__name__, e)
+                log.warning("memory: idle cleanup failed (%s): %s", type(e).__name__, e)
 
     def _parse(self, data: bytes) -> dict | None:
         try:

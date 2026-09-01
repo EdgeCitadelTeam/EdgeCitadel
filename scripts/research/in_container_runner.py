@@ -12,7 +12,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import cast
 
-from adapters._common.task_publisher import EventSink
+from edgecitadel_plugin_runtime.task_publisher import EventSink
 from scripts.research.coordinator_restart import request_restart
 from scripts.research.execution_harness import (
     CollectingEventSink,
@@ -163,7 +163,10 @@ async def run_direct_cell(
         token,
         observers,
         event_sink,
-        transport_factory=lambda configured, configured_endpoints, configured_token, sink: (
+        transport_factory=lambda configured,
+        configured_endpoints,
+        configured_token,
+        sink: (
             _build_direct_transport(
                 configured,
                 configured_endpoints,
@@ -173,7 +176,9 @@ async def run_direct_cell(
             )
         ),
         before_trial=(
-            trial_window.await_start_acknowledgement if trial_window is not None else None
+            trial_window.await_start_acknowledgement
+            if trial_window is not None
+            else None
         ),
         after_trial=(
             trial_window.await_end_acknowledgement if trial_window is not None else None

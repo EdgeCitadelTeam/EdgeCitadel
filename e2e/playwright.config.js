@@ -7,6 +7,16 @@ if (!process.env.APP_URL || !process.env.AGG_URL) {
 
 module.exports = defineConfig({
   testDir: './tests',
+  // These suites exercise Plugins and upstream services intentionally absent
+  // from the hermetic Core + shell fixture. Run them with
+  // `npm run test:external-plugins` against an explicitly prepared stack.
+  testIgnore: [
+    '**/phase2-gemma-smoke.spec.js',
+    '**/phase2.5-streaming-and-memory.spec.js',
+    '**/phase3-watchdog-fast-path.spec.js',
+    '**/phase6-hermes-bridge.spec.js',
+    '**/streaming-fragmentation-regression.spec.js',
+  ],
   fullyParallel: false,
   workers: 1,
   retries: 0,

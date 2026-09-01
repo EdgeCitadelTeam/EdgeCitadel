@@ -27,7 +27,6 @@ from scripts.research.benchmark_core import (
     post_command,
     query_poison,
     register_envelope,
-    result_envelope,
     wait_for_context_messages,
     wait_for_messages,
     write_run,
@@ -95,7 +94,9 @@ async def _publish_plain(nc: NATS, subject: str, env: dict[str, Any]) -> None:
     await nc.flush()
 
 
-async def _publish_js(js: Any, subject: str, env: dict[str, Any], *, msg_id: str | None = None) -> Any:
+async def _publish_js(
+    js: Any, subject: str, env: dict[str, Any], *, msg_id: str | None = None
+) -> Any:
     return await js.publish(
         subject,
         json.dumps(env).encode(),
@@ -257,7 +258,11 @@ async def run_e4(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 result_state=results[0].get("task_state") if results else None,
                 result_count=len(results),
                 progress_frames=len(progresses),
-                semantic_failures=0 if results and results[0].get("task_state") == "completed" and progresses else 1,
+                semantic_failures=0
+                if results
+                and results[0].get("task_state") == "completed"
+                and progresses
+                else 1,
                 notes=notes,
             )
         )
@@ -281,8 +286,14 @@ async def _register_offline_fixture(args: Any, agent_id: str) -> None:
     }
     nc = await _connect_nats(args.nats_url, token=args.nats_token)
     try:
-        await _publish_plain(nc, f"agents.{agent_id}.register", register_envelope(agent_id, metadata=metadata))
-        await _publish_plain(nc, f"agents.{agent_id}.heartbeat", heartbeat_envelope(agent_id))
+        await _publish_plain(
+            nc,
+            f"agents.{agent_id}.register",
+            register_envelope(agent_id, metadata=metadata),
+        )
+        await _publish_plain(
+            nc, f"agents.{agent_id}.heartbeat", heartbeat_envelope(agent_id)
+        )
     finally:
         await nc.close()
 
@@ -303,7 +314,9 @@ async def run_e5(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
         )
         task_id = response["task_id"]
         try:
-            rows = await wait_for_messages(args.api_base, task_id=task_id, timeout_sec=120)
+            rows = await wait_for_messages(
+                args.api_base, task_id=task_id, timeout_sec=120
+            )
         except TimeoutError as exc:
             raise TimeoutError("watchdog did not synthesize recipient_offline") from exc
         recovery_ms = _ms_since(start)
@@ -347,10 +360,16 @@ async def run_e7(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 body=f"printf edgecitadel-e7-dedupe-{trial}",
             )
             start = time.perf_counter()
-            first_ack = await _publish_js(js, f"agents.{args.target_agent}.inbox", env, msg_id=env["id"])
+            first_ack = await _publish_js(
+                js, f"agents.{args.target_agent}.inbox", env, msg_id=env["id"]
+            )
             await _publish_plain(nc, f"agents.{RUNNER_ID}.outbox", env)
-            second_ack = await _publish_js(js, f"agents.{args.target_agent}.inbox", env, msg_id=env["id"])
-            rows = await wait_for_messages(args.api_base, task_id=env["task_id"], timeout_sec=60)
+            second_ack = await _publish_js(
+                js, f"agents.{args.target_agent}.inbox", env, msg_id=env["id"]
+            )
+            rows = await wait_for_messages(
+                args.api_base, task_id=env["task_id"], timeout_sec=60
+            )
             latency_ms = _ms_since(start)
             results = _result_rows(rows)
             duplicate = bool(getattr(second_ack, "duplicate", False))
@@ -367,7 +386,11 @@ async def run_e7(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                     result_count=len(results),
                     duplicates_seen=1 if duplicate else 0,
                     semantic_failures=0 if duplicate and len(results) == 1 else 1,
-                    notes=[f"first_seq={first_seq}", f"second_seq={second_seq}", f"second_duplicate={duplicate}"],
+                    notes=[
+                        f"first_seq={first_seq}",
+                        f"second_seq={second_seq}",
+                        f"second_duplicate={duplicate}",
+                    ],
                 )
             )
     finally:
@@ -424,7 +447,9 @@ async def run_e6(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 cwd=str(_repo_root()),
                 env=_python_env(args),
             )
-            rows = await wait_for_messages(args.api_base, task_id=env["task_id"], timeout_sec=60)
+            rows = await wait_for_messages(
+                args.api_base, task_id=env["task_id"], timeout_sec=60
+            )
             with suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(complete.wait(), timeout=5)
             side_effects = int(counter.read_text().strip()) if counter.exists() else 0
@@ -436,8 +461,13 @@ async def run_e6(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                     recovery_ms=_ms_since(start),
                     result_state=results[0].get("task_state") if results else None,
                     result_count=len(results),
-                    semantic_failures=0 if side_effects == 2 and len(results) == 1 else 1,
-                    notes=[f"side_effect_counter={side_effects}", "duplicate side effect is expected"],
+                    semantic_failures=0
+                    if side_effects == 2 and len(results) == 1
+                    else 1,
+                    notes=[
+                        f"side_effect_counter={side_effects}",
+                        "duplicate side effect is expected",
+                    ],
                 )
             )
     finally:
@@ -477,7 +507,9 @@ async def _run_fixture_workload(
 async def run_e2(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
     started_at = now_iso()
     await assert_stack_ready(args.api_base)
-    fixture = _repo_root() / "scripts" / "research" / "fixtures" / "delegation_agents.py"
+    fixture = (
+        _repo_root() / "scripts" / "research" / "fixtures" / "delegation_agents.py"
+    )
     trials: list[TrialResult] = []
     async with _subprocess(
         sys.executable,
@@ -515,10 +547,19 @@ async def run_e2(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                     task_id=task_id,
                     context_id=context_id,
                     task_latency_ms=_ms_since(start),
-                    result_state="completed" if any(row.get("task_id") == task_id and row.get("task_state") == "completed" for row in results) else None,
+                    result_state="completed"
+                    if any(
+                        row.get("task_id") == task_id
+                        and row.get("task_state") == "completed"
+                        for row in results
+                    )
+                    else None,
                     result_count=len(results),
                     semantic_failures=semantic_failures,
-                    notes=[f"delegation_rows={len(delegations)}", f"context_rows={len(rows)}"],
+                    notes=[
+                        f"delegation_rows={len(delegations)}",
+                        f"context_rows={len(rows)}",
+                    ],
                 )
             )
     return await _run_fixture_workload(
@@ -536,7 +577,9 @@ async def run_e2(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
 async def run_e3(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
     started_at = now_iso()
     await assert_stack_ready(args.api_base)
-    fixture = _repo_root() / "scripts" / "research" / "fixtures" / "delegation_agents.py"
+    fixture = (
+        _repo_root() / "scripts" / "research" / "fixtures" / "delegation_agents.py"
+    )
     trials: list[TrialResult] = []
     async with _subprocess(
         sys.executable,
@@ -562,7 +605,11 @@ async def run_e3(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 expected_results=3,
                 timeout_sec=60,
             )
-            hop_counts = sorted(row.get("hop_count") for row in rows if row.get("type") == "delegation" and row.get("hop_count") is not None)
+            hop_counts = sorted(
+                row.get("hop_count")
+                for row in rows
+                if row.get("type") == "delegation" and row.get("hop_count") is not None
+            )
             limit_context = str(uuid.uuid4())
             limit_env = delegation_envelope(
                 sender_id=RUNNER_ID,
@@ -578,8 +625,14 @@ async def run_e3(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 await _publish_plain(nc, f"agents.{RUNNER_ID}.outbox", limit_env)
             finally:
                 await nc.close()
-            limit_rows = await wait_for_messages(args.api_base, task_id=limit_env["task_id"], timeout_sec=60)
-            rejected = any(row.get("task_state") == "rejected" and (row.get("payload") or {}).get("error") == "hop_count_exceeded" for row in limit_rows)
+            limit_rows = await wait_for_messages(
+                args.api_base, task_id=limit_env["task_id"], timeout_sec=60
+            )
+            rejected = any(
+                row.get("task_state") == "rejected"
+                and (row.get("payload") or {}).get("error") == "hop_count_exceeded"
+                for row in limit_rows
+            )
             semantic_failures = 0 if hop_counts and rejected else 1
             trials.append(
                 TrialResult(
@@ -641,7 +694,9 @@ async def run_e8(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 )
                 await _publish_js(js, "agents.bench-cancel.inbox", cancel)
                 await _publish_plain(nc, f"agents.{RUNNER_ID}.outbox", cancel)
-                rows = await wait_for_messages(args.api_base, task_id=cmd["task_id"], timeout_sec=30)
+                rows = await wait_for_messages(
+                    args.api_base, task_id=cmd["task_id"], timeout_sec=30
+                )
                 results = _result_rows(rows)
                 progresses = _progress_rows(rows)
                 progress_after_cancel = sum(
@@ -696,20 +751,31 @@ async def _run_mqtt_publish(args: Any, *, topic: str, payload: str) -> None:
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        raise RuntimeError(f"mqtt publish failed: {stderr.decode().strip() or stdout.decode().strip()}")
+        raise RuntimeError(
+            f"mqtt publish failed: {stderr.decode().strip() or stdout.decode().strip()}"
+        )
 
 
-async def _wait_for_gateway_log(api_base: str, topic: str, since_ts: str, timeout_sec: float = 20) -> list[dict[str, Any]]:
+async def _wait_for_gateway_log(
+    api_base: str, topic: str, since_ts: str, timeout_sec: float = 20
+) -> list[dict[str, Any]]:
     deadline = time.monotonic() + timeout_sec
     async with httpx.AsyncClient(timeout=10) as client:
         while time.monotonic() < deadline:
             response = await client.get(
                 f"{api_base}/messages",
-                params={"agent_id": "bench-mqtt-gateway", "type": "log", "since_ts": since_ts, "limit": 100},
+                params={
+                    "agent_id": "bench-mqtt-gateway",
+                    "type": "log",
+                    "since_ts": since_ts,
+                    "limit": 100,
+                },
             )
             response.raise_for_status()
             rows = response.json()
-            if any((row.get("payload") or {}).get("mqtt_topic") == topic for row in rows):
+            if any(
+                (row.get("payload") or {}).get("mqtt_topic") == topic for row in rows
+            ):
                 return rows
             await asyncio.sleep(0.25)
     raise TimeoutError(f"no gateway log observed for {topic}")
@@ -729,7 +795,11 @@ async def run_e9(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
             published_at = now_iso()
             await _run_mqtt_publish(args, topic=topic, payload='{"temperature_c":22.5}')
             rows = await _wait_for_gateway_log(args.api_base, topic, published_at)
-            matched = [row for row in rows if (row.get("payload") or {}).get("mqtt_topic") == topic]
+            matched = [
+                row
+                for row in rows
+                if (row.get("payload") or {}).get("mqtt_topic") == topic
+            ]
             trials.append(
                 TrialResult(
                     trial=trial,
@@ -763,7 +833,9 @@ async def run_e10(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
             body = f"printf mqtt-{trial}"
             start = time.perf_counter()
             published_at = now_iso()
-            await _run_mqtt_publish(args, topic=topic, payload=json.dumps({"body": body}))
+            await _run_mqtt_publish(
+                args, topic=topic, payload=json.dumps({"body": body})
+            )
             rows = await _wait_for_gateway_log(args.api_base, topic, published_at)
             task_ids = [
                 (row.get("payload") or {}).get("task_id")
@@ -773,7 +845,9 @@ async def run_e10(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
             task_id = next((item for item in task_ids if item), None)
             if not task_id:
                 raise TimeoutError(f"gateway log missing task_id for {topic}")
-            task_rows = await wait_for_messages(args.api_base, task_id=task_id, timeout_sec=60)
+            task_rows = await wait_for_messages(
+                args.api_base, task_id=task_id, timeout_sec=60
+            )
             results = _result_rows(task_rows)
             trials.append(
                 TrialResult(
@@ -783,7 +857,10 @@ async def run_e10(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                     result_state=results[0].get("task_state") if results else None,
                     result_count=len(results),
                     semantic_failures=0 if len(results) == 1 else 1,
-                    notes=[f"mqtt_topic={topic}", "mqtt command normalized to native command"],
+                    notes=[
+                        f"mqtt_topic={topic}",
+                        "mqtt command normalized to native command",
+                    ],
                 )
             )
     return _finalize(
@@ -832,17 +909,24 @@ async def run_e11(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                     sender_id=RUNNER_ID,
                     body=f"printf gateway-control-{trial}",
                 )
-                await wait_for_messages(args.api_base, task_id=direct["task_id"], timeout_sec=60)
+                await wait_for_messages(
+                    args.api_base, task_id=direct["task_id"], timeout_sec=60
+                )
                 direct_ms = _ms_since(direct_start)
 
                 gateway_start = time.perf_counter()
                 response = await client.post(
                     f"{gateway_url}/tasks/send",
-                    json={"target_agent": args.target_agent, "body": f"printf gateway-{trial}"},
+                    json={
+                        "target_agent": args.target_agent,
+                        "body": f"printf gateway-{trial}",
+                    },
                 )
                 response.raise_for_status()
                 gateway_task = response.json()["task_id"]
-                rows = await wait_for_messages(args.api_base, task_id=gateway_task, timeout_sec=60)
+                rows = await wait_for_messages(
+                    args.api_base, task_id=gateway_task, timeout_sec=60
+                )
                 gateway_ms = _ms_since(gateway_start)
                 results = _result_rows(rows)
                 trials.append(
@@ -853,7 +937,10 @@ async def run_e11(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                         result_state=results[0].get("task_state") if results else None,
                         result_count=len(results),
                         semantic_failures=0 if len(results) == 1 else 1,
-                        notes=[f"native_control_ms={direct_ms}", f"gateway_overhead_ms={round(gateway_ms - direct_ms, 3)}"],
+                        notes=[
+                            f"native_control_ms={direct_ms}",
+                            f"gateway_overhead_ms={round(gateway_ms - direct_ms, 3)}",
+                        ],
                     )
                 )
     return _finalize(
@@ -870,7 +957,9 @@ async def run_e12(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
     started_at = now_iso()
     nats_server = shutil.which("nats-server")
     if not nats_server:
-        raise RuntimeError("nats-server binary is required for E12 disposable auth probe")
+        raise RuntimeError(
+            "nats-server binary is required for E12 disposable auth probe"
+        )
     conf = _repo_root() / "scripts" / "research" / "fixtures" / "nats-auth-e12.conf"
     proc = await asyncio.create_subprocess_exec(
         nats_server,
@@ -896,7 +985,8 @@ async def run_e12(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
             denied_error_seen.set()
 
         denied = await _connect_nats(
-            url, user="bench_denied", password="bench", error_cb=denied_error_cb)
+            url, user="bench_denied", password="bench", error_cb=denied_error_cb
+        )
         try:
             allowed_seen = asyncio.Event()
 

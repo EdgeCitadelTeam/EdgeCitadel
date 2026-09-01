@@ -1,0 +1,1 @@
+{"type":"object","properties":{"operation":{"const":"get_state"},"entity_id":{"type":"string"}},"required":["operation","entity_id"],"additionalProperties":true}

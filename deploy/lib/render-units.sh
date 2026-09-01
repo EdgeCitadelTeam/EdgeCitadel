@@ -6,8 +6,8 @@
 # For each .service.in in deploy/systemd/, renders to /etc/systemd/system/
 # (envsubst — currently no $VARS but reserved for forward-compat).
 # Then `systemctl daemon-reload`.
-# Enables units listed in manifest [adapters].enabled (PLUS ollama).
-# Leaves units in [adapters].optional_disabled installed-but-disabled.
+# Enables units listed in manifest [plugins].enabled (PLUS ollama).
+# Leaves units in [plugins].optional_disabled installed-but-disabled.
 #
 # Does NOT start any units — that's a separate phase of deploy-host.sh.
 
@@ -47,16 +47,16 @@ if [[ "${DRY_RUN:-0}" != "1" ]]; then
   require_root "$@"
 fi
 
-_read_manifest adapters.enabled
+_read_manifest plugins.enabled
 enabled=("${_OUT[@]:-}")
-_read_manifest adapters.optional_disabled
+_read_manifest plugins.optional_disabled
 optional=("${_OUT[@]:-}")
-# Always render Ollama too (not in [adapters] because it's not a Python adapter).
+# Always render Ollama too (not in [plugins] because it's not a Python Plugin).
 ALL_UNITS=("ollama" "${enabled[@]}" "${optional[@]}")
 
-for adapter in "${ALL_UNITS[@]}"; do
-  SRC="${TEMPLATES_DIR}/edgecitadel-${adapter}.service.in"
-  DST="${TARGET_DIR}/edgecitadel-${adapter}.service"
+for plugin in "${ALL_UNITS[@]}"; do
+  SRC="${TEMPLATES_DIR}/edgecitadel-${plugin}.service.in"
+  DST="${TARGET_DIR}/edgecitadel-${plugin}.service"
   if [[ ! -f "$SRC" ]]; then
     log_warn "no template at $SRC — skipping"
     continue
@@ -72,16 +72,16 @@ done
 
 run systemctl daemon-reload
 
-# Enable enabled adapters (we don't START — that's a separate phase).
+# Enable enabled plugins (we don't START — that's a separate phase).
 # Always enable Ollama (it's the dependency of gemma).
-for adapter in "ollama" "${enabled[@]}"; do
-  log_info "systemctl enable edgecitadel-${adapter}.service (not starting yet)"
-  run systemctl enable "edgecitadel-${adapter}.service"
+for plugin in "ollama" "${enabled[@]}"; do
+  log_info "systemctl enable edgecitadel-${plugin}.service (not starting yet)"
+  run systemctl enable "edgecitadel-${plugin}.service"
 done
 
 # Install but do NOT enable optional_disabled units.
-for adapter in "${optional[@]}"; do
-  log_info "edgecitadel-${adapter}.service installed but NOT enabled (opt-in by operator)"
+for plugin in "${optional[@]}"; do
+  log_info "edgecitadel-${plugin}.service installed but NOT enabled (opt-in by operator)"
 done
 
 log_info "render-units.sh: complete (${#ALL_UNITS[@]} units installed)"

@@ -14,8 +14,7 @@ from typing import Literal
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{2,30}$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 LAB_NGINX_IMAGE = (
-    "nginx@sha256:"
-    "5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"
+    "nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"
 )
 
 
@@ -78,7 +77,10 @@ def credential_token(credential_file: Path) -> str:
     if len(lines) != 1:
         raise LabConfigError(f"malformed credential file at line {min(len(lines), 2)}")
     token = lines[0]
-    if token in {"changeme", "change-me", "test-token"} or TOKEN_RE.fullmatch(token) is None:
+    if (
+        token in {"changeme", "change-me", "test-token"}
+        or TOKEN_RE.fullmatch(token) is None
+    ):
         raise LabConfigError("malformed credential file at line 1")
     return token
 
@@ -100,17 +102,29 @@ def _write_private(path: Path, contents: bytes) -> None:
 
 
 def write_credential_file(credential_file: Path, token: str) -> None:
-    if TOKEN_RE.fullmatch(token) is None or token in {"changeme", "change-me", "test-token"}:
+    if TOKEN_RE.fullmatch(token) is None or token in {
+        "changeme",
+        "change-me",
+        "test-token",
+    }:
         raise LabConfigError("credential token is invalid")
     _write_private(credential_file, f"{token}\n".encode())
 
 
 def write_service_env_file(service_env_file: Path, raw_credential_file: Path) -> None:
-    _write_private(service_env_file, f"NATS_TOKEN={credential_token(raw_credential_file)}\n".encode())
+    _write_private(
+        service_env_file,
+        f"NATS_TOKEN={credential_token(raw_credential_file)}\n".encode(),
+    )
 
 
 def write_private_json(path: Path, value: object) -> None:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+    encoded = (
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+        + b"\n"
+    )
     _write_private(path, encoded)
 
 
@@ -149,8 +163,17 @@ class ControllerConfig:
 
 
 __all__ = [
-    "ControllerConfig", "LAB_NGINX_IMAGE", "LabConfigError", "credential_sha256",
-    "credential_token", "qualified_agent_id", "sha256_file", "validate_agent_id",
-    "validate_declared_host_id", "validate_run_id", "write_credential_file",
-    "write_private_json", "write_service_env_file",
+    "ControllerConfig",
+    "LAB_NGINX_IMAGE",
+    "LabConfigError",
+    "credential_sha256",
+    "credential_token",
+    "qualified_agent_id",
+    "sha256_file",
+    "validate_agent_id",
+    "validate_declared_host_id",
+    "validate_run_id",
+    "write_credential_file",
+    "write_private_json",
+    "write_service_env_file",
 ]

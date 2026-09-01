@@ -47,7 +47,9 @@ def _result(tmp_path: Path, run_id: str, offset: int) -> LifecycleResult:
         run_id=run_id,
         project=f"edgecitadel-artifact-{run_id}",
         ports=(18080 + offset, 14222 + offset, 18222 + offset),
-        subject_scope=frozenset({(f"nats://127.0.0.1:{14222 + offset}", "agents.fixture-1.inbox")}),
+        subject_scope=frozenset(
+            {(f"nats://127.0.0.1:{14222 + offset}", "agents.fixture-1.inbox")}
+        ),
         consumer_names=frozenset({f"ec_task_{run_id}_fixture_1"}),
         state_paths=frozenset({tmp_path / run_id}),
         task_ids=(f"{run_id}-task",),
@@ -63,13 +65,17 @@ def _result(tmp_path: Path, run_id: str, offset: int) -> LifecycleResult:
     )
 
 
-def test_duplicate_handler_log_requires_one_authoritative_execution(tmp_path: Path) -> None:
+def test_duplicate_handler_log_requires_one_authoritative_execution(
+    tmp_path: Path,
+) -> None:
     task_id = "10000000-0000-4000-8000-000000000001"
     log = tmp_path / "fixture.log"
     event = {"event": "fixture.handler_started", "data": {"task_id": task_id}}
-    log.write_text(f'{__import__("json").dumps(event)}\n')
+    log.write_text(f"{__import__('json').dumps(event)}\n")
     assert require_single_handler_started(log, task_id) == event
-    log.write_text(f'{__import__("json").dumps(event)}\n{__import__("json").dumps(event)}\n')
+    log.write_text(
+        f"{__import__('json').dumps(event)}\n{__import__('json').dumps(event)}\n"
+    )
     with pytest.raises(LabConfigError, match="handler"):
         require_single_handler_started(log, task_id)
 
@@ -210,7 +216,7 @@ def test_clean_checkout_receipt_is_relative_and_uses_finalized_bundles(
     life = _result(repo_root, "lab-clean-life", 1)
     life.bundle.mkdir(parents=True, exist_ok=True)
     (life.bundle / "manifest.json").write_text("{}\n")
-    operator_bundle = repo_root / "docs/research/results/lab/lab-clean-ui"
+    operator_bundle = repo_root / "data/research/results/lab/lab-clean-ui"
     operator_bundle.mkdir(parents=True)
     (operator_bundle / "manifest.json").write_text("{}\n")
     receipt = tmp_path / "receipt.json"
@@ -226,7 +232,9 @@ def test_clean_checkout_receipt_is_relative_and_uses_finalized_bundles(
         "run_operator_journey",
         lambda **_kwargs: subprocess.CompletedProcess([], 0, "1 passed", ""),
     )
-    monkeypatch.setattr(gate_module, "check_bundle", lambda *_args, **_kwargs: CheckReport(True, ()))
+    monkeypatch.setattr(
+        gate_module, "check_bundle", lambda *_args, **_kwargs: CheckReport(True, ())
+    )
     monkeypatch.setattr(gate_module, "_finalizer_count", lambda *_args: 1)
     monkeypatch.setattr(
         gate_module,
@@ -356,8 +364,11 @@ def test_repeated_cleanup_preserves_foreign_resource_and_secret_hygiene(
 
     subprocess.run(
         [
-            "docker", "volume", "create",
-            "--label", "ai.edgecitadel.owner=foreign-control",
+            "docker",
+            "volume",
+            "create",
+            "--label",
+            "ai.edgecitadel.owner=foreign-control",
             foreign,
         ],
         check=True,
@@ -377,7 +388,9 @@ def test_repeated_cleanup_preserves_foreign_resource_and_secret_hygiene(
                 [
                     str(REPO_ROOT / "scripts/research/run-python"),
                     str(REPO_ROOT / "scripts/research/lab_controller.py"),
-                    "stop", "--state-file", str(state_file),
+                    "stop",
+                    "--state-file",
+                    str(state_file),
                 ],
                 cwd=REPO_ROOT,
                 check=False,
@@ -385,16 +398,21 @@ def test_repeated_cleanup_preserves_foreign_resource_and_secret_hygiene(
                 text=True,
             )
             assert stopped.returncode == 0
-        assert subprocess.run(
-            ["docker", "volume", "inspect", foreign],
-            check=False,
-            capture_output=True,
-            text=True,
-        ).returncode == 0
+        assert (
+            subprocess.run(
+                ["docker", "volume", "inspect", foreign],
+                check=False,
+                capture_output=True,
+                text=True,
+            ).returncode
+            == 0
+        )
         assert token and token[0]
         assert active_surfaces
         assert all(token[0] not in value for value in active_surfaces)
-        existing = [path for path in (result.bundle, state_file.parent) if path.exists()]
+        existing = [
+            path for path in (result.bundle, state_file.parent) if path.exists()
+        ]
         for root in existing:
             for path in root.rglob("*"):
                 if path.is_file():

@@ -9,7 +9,7 @@ description: Use when verifying changes to aggregator/ — Python syntax check p
 
 1. Syntax check all Python in aggregator:
    ```bash
-   cd aggregator && python3 -m py_compile *.py
+   cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m compileall -q .
    ```
    Must complete with no errors.
 
@@ -20,7 +20,7 @@ description: Use when verifying changes to aggregator/ — Python syntax check p
    ```
    Both must return 2xx.
 
-3. If the change touches messaging contracts (subjects, payloads), confirm `docs/05-messaging.md` was updated in the same PR.
+3. If the change touches messaging contracts (subjects, payloads), confirm schemas, publishers, subscribers, and contract tests were updated together.
 
 ## Rules
 

@@ -67,7 +67,12 @@ def append_observation(path: Path, observation: Mapping[str, object]) -> None:
             "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             **dict(observation),
         }
-        encoded = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+        encoded = (
+            json.dumps(
+                record, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+            + b"\n"
+        )
         descriptor = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             os.write(descriptor, encoded)

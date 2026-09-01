@@ -21,7 +21,9 @@ def _topic_from_subject(subject: str) -> str:
     return subject
 
 
-def normalize_mqtt_payload(*, topic: str, payload: bytes, sender_id: str = GATEWAY_ID) -> dict[str, Any]:
+def normalize_mqtt_payload(
+    *, topic: str, payload: bytes, sender_id: str = GATEWAY_ID
+) -> dict[str, Any]:
     try:
         body = json.loads(payload.decode())
         malformed = False
@@ -51,7 +53,9 @@ def normalize_mqtt_payload(*, topic: str, payload: bytes, sender_id: str = GATEW
     }
     return {
         "v": 1,
-        "id": command_envelope(sender_id=sender_id, recipient_id=sender_id, body="log")["id"],
+        "id": command_envelope(sender_id=sender_id, recipient_id=sender_id, body="log")[
+            "id"
+        ],
         "type": "log",
         "sender_id": sender_id,
         "timestamp": now_iso(),
@@ -81,17 +85,23 @@ async def run() -> None:
             topic = _topic_from_subject(msg.subject)
             if not topic.startswith("devices/"):
                 return
-            env = normalize_mqtt_payload(topic=topic, payload=msg.data, sender_id=GATEWAY_ID)
+            env = normalize_mqtt_payload(
+                topic=topic, payload=msg.data, sender_id=GATEWAY_ID
+            )
             if env["type"] == "command":
                 await js.publish(
                     f"agents.{env['recipient_id']}.inbox",
                     json.dumps(env).encode(),
                     headers={"Nats-Msg-Id": env["id"]},
                 )
-                await nc.publish(f"agents.{GATEWAY_ID}.outbox", json.dumps(env).encode())
+                await nc.publish(
+                    f"agents.{GATEWAY_ID}.outbox", json.dumps(env).encode()
+                )
                 log_env = {
                     "v": 1,
-                    "id": command_envelope(sender_id=GATEWAY_ID, recipient_id=GATEWAY_ID, body="log")["id"],
+                    "id": command_envelope(
+                        sender_id=GATEWAY_ID, recipient_id=GATEWAY_ID, body="log"
+                    )["id"],
                     "type": "log",
                     "sender_id": GATEWAY_ID,
                     "timestamp": now_iso(),
@@ -102,7 +112,9 @@ async def run() -> None:
                         "normalized_type": "command",
                     },
                 }
-                await nc.publish(f"agents.{GATEWAY_ID}.log", json.dumps(log_env).encode())
+                await nc.publish(
+                    f"agents.{GATEWAY_ID}.log", json.dumps(log_env).encode()
+                )
             else:
                 await nc.publish(f"agents.{GATEWAY_ID}.log", json.dumps(env).encode())
             await nc.flush()

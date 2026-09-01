@@ -10,13 +10,22 @@ Spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`.
 - `manifest.toml` — every host-level dependency lives here.
 - `lib/checks.yaml` — every `--check` check lives here.
 
+## Deployment secret upgrades
+
+Install and update operations reconcile `/etc/edgecitadel/env` before changing
+or restarting services. Existing non-placeholder values are preserved; missing,
+empty, or documented placeholder values for Core NATS, Leaf authentication, and
+the enrollment administrator are generated atomically without printing their
+values. Run `sudo python3 deploy/lib/reconcile-env.py` to repair drift manually,
+or add `--check` for a read-only validation.
+
 ## Adding a new dependency
 
 1. Add to `manifest.toml`:
    - apt package?         → `[apt_packages].common`
    - brew package?        → `[brew_packages].common`
    - new ollama model?    → `[ollama].models`
-   - new adapter?         → `[adapters].enabled` AND create
+   - new bundled Plugin?  → `[plugins].enabled` AND create
                             `systemd/edgecitadel-<name>.service.in`
 2. Run `python3 deploy/lib/parse-manifest.py get <key>` to confirm parser accepts the new key.
 3. Test on a clean VM: `sudo ./deploy-host.sh --dry-run`, then real install.
@@ -43,7 +52,7 @@ Same as above for the `version =` field. `./deploy-host.sh` will upgrade idempot
 | `lib/install-deps.sh` | apt/brew dispatch |
 | `lib/install-ollama.sh` | Pinned Ollama install |
 | `lib/install-nats-cli.sh` | Pinned nats CLI install |
-| `lib/setup-venvs.sh` | Per-adapter venv creation |
+| `lib/setup-venvs.sh` | Per-Plugin runtime creation |
 | `lib/render-units.sh` | systemd template renderer |
 | `lib/_phase_0_preflight.sh` … `_phase_7_cron.sh` | Phase implementations |
 | `lib/_uninstall.sh`, `_update.sh` | Reverse + refresh |

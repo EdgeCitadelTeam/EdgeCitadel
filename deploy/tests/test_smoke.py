@@ -1,7 +1,7 @@
 """Tests for smoke.py — uses HTTP mocks via http.server in a thread."""
+
 import json
 import threading
-import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -14,6 +14,7 @@ SMOKE = REPO_ROOT / "deploy" / "lib" / "smoke.py"
 
 class _MockHandler(BaseHTTPRequestHandler):
     """Mock /api/command/{agent} and /api/messages?task_id=..."""
+
     posted_task_id = None
     poll_count = 0
 
@@ -29,7 +30,9 @@ class _MockHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"task_id": _MockHandler.posted_task_id}).encode())
+            self.wfile.write(
+                json.dumps({"task_id": _MockHandler.posted_task_id}).encode()
+            )
         else:
             self.send_response(404)
             self.end_headers()
@@ -39,11 +42,13 @@ class _MockHandler(BaseHTTPRequestHandler):
             _MockHandler.poll_count += 1
             # Return result envelope on the 2nd poll
             if _MockHandler.poll_count >= 2 and _MockHandler.posted_task_id:
-                resp = [{
-                    "type": "result",
-                    "task_id": _MockHandler.posted_task_id,
-                    "payload": {"body": "pong (mock)"},
-                }]
+                resp = [
+                    {
+                        "type": "result",
+                        "task_id": _MockHandler.posted_task_id,
+                        "payload": {"body": "pong (mock)"},
+                    }
+                ]
             else:
                 resp = []
             self.send_response(200)
@@ -70,9 +75,18 @@ class TestSmoke(unittest.TestCase):
 
     def test_round_trip_succeeds(self):
         r = subprocess.run(
-            [sys.executable, str(SMOKE), "--base-url", f"http://127.0.0.1:{self.port}",
-             "--agent", "gemma-1", "--timeout", "10"],
-            capture_output=True, text=True
+            [
+                sys.executable,
+                str(SMOKE),
+                "--base-url",
+                f"http://127.0.0.1:{self.port}",
+                "--agent",
+                "gemma-1",
+                "--timeout",
+                "10",
+            ],
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(r.returncode, 0, f"stdout={r.stdout} stderr={r.stderr}")
         self.assertIn("round-trip ✓", r.stdout)

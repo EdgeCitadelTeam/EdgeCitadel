@@ -36,37 +36,75 @@ def test_lab_routes_are_disabled_without_a_run(tmp_path, monkeypatch) -> None:
         assert client.get("/api/lab/status").status_code == 404
 
 
-def test_lab_reservation_rejects_missing_or_wrong_bearer_token(tmp_path, monkeypatch) -> None:
+def test_lab_reservation_rejects_missing_or_wrong_bearer_token(
+    tmp_path, monkeypatch
+) -> None:
     with _client(tmp_path, monkeypatch) as client:
-        assert client.post("/api/lab/reservations", headers={"Authorization": ""}, json=_reservation()).status_code == 401
-        assert client.post("/api/lab/reservations", headers={"Authorization": "Bearer wrong"}, json=_reservation()).status_code == 401
+        assert (
+            client.post(
+                "/api/lab/reservations",
+                headers={"Authorization": ""},
+                json=_reservation(),
+            ).status_code
+            == 401
+        )
+        assert (
+            client.post(
+                "/api/lab/reservations",
+                headers={"Authorization": "Bearer wrong"},
+                json=_reservation(),
+            ).status_code
+            == 401
+        )
 
 
-def test_active_reservation_conflicts_and_retained_owner_can_resume(tmp_path, monkeypatch) -> None:
+def test_active_reservation_conflicts_and_retained_owner_can_resume(
+    tmp_path, monkeypatch
+) -> None:
     with _client(tmp_path, monkeypatch) as client:
         first = client.post("/api/lab/reservations", json=_reservation())
         assert first.status_code == 201
         repeated = client.post("/api/lab/reservations", json=_reservation())
         assert repeated.status_code == 409
         assert repeated.json()["detail"] == "agent_id has an active reservation"
-        assert client.patch("/api/lab/reservations/shell-1/retain", json=_reservation()).status_code == 200
-        assert client.post("/api/lab/reservations", json=_reservation()).status_code == 200
+        assert (
+            client.patch(
+                "/api/lab/reservations/shell-1/retain", json=_reservation()
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post("/api/lab/reservations", json=_reservation()).status_code == 200
+        )
 
 
-def test_retain_retry_is_idempotent_only_for_the_exact_owner(tmp_path, monkeypatch) -> None:
+def test_retain_retry_is_idempotent_only_for_the_exact_owner(
+    tmp_path, monkeypatch
+) -> None:
     with _client(tmp_path, monkeypatch) as client:
-        assert client.post("/api/lab/reservations", json=_reservation()).status_code == 201
-        assert client.patch(
-            "/api/lab/reservations/shell-1/retain", json=_reservation()
-        ).status_code == 200
-        assert client.patch(
-            "/api/lab/reservations/shell-1/retain", json=_reservation()
-        ).status_code == 200
+        assert (
+            client.post("/api/lab/reservations", json=_reservation()).status_code == 201
+        )
+        assert (
+            client.patch(
+                "/api/lab/reservations/shell-1/retain", json=_reservation()
+            ).status_code
+            == 200
+        )
+        assert (
+            client.patch(
+                "/api/lab/reservations/shell-1/retain", json=_reservation()
+            ).status_code
+            == 200
+        )
 
         mismatched = {**_reservation(), "reservation_id": "reservation-2"}
-        assert client.patch(
-            "/api/lab/reservations/shell-1/retain", json=mismatched
-        ).status_code == 409
+        assert (
+            client.patch(
+                "/api/lab/reservations/shell-1/retain", json=mismatched
+            ).status_code
+            == 409
+        )
         status = client.get("/api/lab/status").json()
         assert [row["event"] for row in status["reservation_events"]] == [
             "reserved",
@@ -74,21 +112,37 @@ def test_retain_retry_is_idempotent_only_for_the_exact_owner(tmp_path, monkeypat
         ]
 
 
-def test_release_preserves_events_and_status_is_secret_free(tmp_path, monkeypatch) -> None:
+def test_release_preserves_events_and_status_is_secret_free(
+    tmp_path, monkeypatch
+) -> None:
     with _client(tmp_path, monkeypatch) as client:
-        assert client.post("/api/lab/reservations", json=_reservation()).status_code == 201
-        assert client.request("DELETE", "/api/lab/reservations/shell-1", json=_reservation()).status_code == 204
+        assert (
+            client.post("/api/lab/reservations", json=_reservation()).status_code == 201
+        )
+        assert (
+            client.request(
+                "DELETE", "/api/lab/reservations/shell-1", json=_reservation()
+            ).status_code
+            == 204
+        )
         status = client.get("/api/lab/status")
         assert status.status_code == 200
         assert status.json()["run_id"] == "ec-lab-01"
         assert status.json()["reservations"] == []
-        assert [row["event"] for row in status.json()["reservation_events"]] == ["reserved", "released"]
+        assert [row["event"] for row in status.json()["reservation_events"]] == [
+            "reserved",
+            "released",
+        ]
         assert "Authorization" not in status.text
 
 
-def test_node_report_requires_matching_reservation_and_records_peer_separately(tmp_path, monkeypatch) -> None:
+def test_node_report_requires_matching_reservation_and_records_peer_separately(
+    tmp_path, monkeypatch
+) -> None:
     with _client(tmp_path, monkeypatch) as client:
-        assert client.post("/api/lab/reservations", json=_reservation()).status_code == 201
+        assert (
+            client.post("/api/lab/reservations", json=_reservation()).status_code == 201
+        )
         report = {
             **_reservation(),
             "machine_id_sha256": "a" * 64,
@@ -98,8 +152,10 @@ def test_node_report_requires_matching_reservation_and_records_peer_separately(t
             "launcher_source_commit": "b" * 40,
             "source_snapshot_sha256": "c" * 64,
             "network_path": {
-                "source_ip": "127.0.0.1", "destination_ip": "127.0.0.1",
-                "interface": "lo", "route_output_sha256": "d" * 64,
+                "source_ip": "127.0.0.1",
+                "destination_ip": "127.0.0.1",
+                "interface": "lo",
+                "route_output_sha256": "d" * 64,
                 "controller_dns_name": "127.0.0.1",
             },
             "preflight_valid": True,

@@ -33,9 +33,7 @@ class DockerComponentReader:
         self._compose_service_id = compose_service_id
         self._engine_stats = engine_stats
 
-    def read(
-        self, components: tuple[str, ...]
-    ) -> Mapping[str, ComponentCounters]:
+    def read(self, components: tuple[str, ...]) -> Mapping[str, ComponentCounters]:
         result: dict[str, ComponentCounters] = {}
         for component in components:
             try:

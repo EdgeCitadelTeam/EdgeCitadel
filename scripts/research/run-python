@@ -155,5 +155,7 @@ fi
 uv pip sync --python "$VENV/bin/python" --require-hashes "$LOCK"
 
 export PYTHONDONTWRITEBYTECODE=1
-export PYTHONPATH="$ROOT"
+# Exercise the checkout's application modules and shared Plugin runtime without
+# mutating the hash-locked research environment.
+export PYTHONPATH="$ROOT:$ROOT/plugin-toolkit/src"
 exec "$VENV/bin/python" "$@"

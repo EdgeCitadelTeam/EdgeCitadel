@@ -1,0 +1,1 @@
+{"type":"object","properties":{"operation":{"const":"run_sequence"},"steps":{"type":"array","items":{"type":"object"}},"restore":{"type":"boolean"}},"required":["operation","steps"],"additionalProperties":true}
