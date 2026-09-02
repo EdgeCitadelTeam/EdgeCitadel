@@ -60,8 +60,6 @@ Install the Echo Plugin for a quick check:
 
 ```bash
 edgecitadel plugin install echo
-edgecitadel plugin list
-edgecitadel plugin status edgecitadel.echo
 ```
 
 In the Core dashboard, select `echo-agent`, send `hello`, and confirm that the
