@@ -35,48 +35,42 @@ On macOS, a pip user can install only that native dependency with
 `brew install nats-server`. On Linux, use the distribution package or an
 official NATS release.
 
-## Install
+## Install EdgeCitadel
 
-EdgeCitadel provides one `edgecitadel` command for Core and Edge hosts. Public
-Homebrew and PyPI releases are not published yet, so use the source-build pip
-flow for the current revision.
+Install EdgeCitadel on every Core and Edge host. The package supplies the
+`edgecitadel` CLI, Core Compose files, schemas, the Plugin Supervisor, and the
+bundled Plugins. After installation, use `create` or `join` to configure and
+start the services for that host.
 
-### pip from this checkout (available now)
+> **Release status:** the PyPI package and Homebrew tap are not public yet. The
+> commands below are the supported installation interface once they are
+> published. Contributors testing this revision should use the
+> [source-package instructions](#test-the-package-before-publication).
+
+### Install with pip
 
 ```bash
-git clone https://github.com/zhonghaozhan/EdgeCitadel.git
-cd EdgeCitadel
 python3 -m venv ~/.edgecitadel/cli-venv
-~/.edgecitadel/cli-venv/bin/python -m pip install .
+~/.edgecitadel/cli-venv/bin/python -m pip install edgecitadel
 source ~/.edgecitadel/cli-venv/bin/activate
 edgecitadel --version
 ```
 
-The wheel is self-contained: Core Compose sources, schemas, the Supervisor, and
-bundled Plugins are installed under the Python environment's
-`share/edgecitadel`. The checkout is not needed after installation.
+The virtual environment keeps EdgeCitadel separate from the system Python.
+Keep it activated while using the commands below, or invoke
+`~/.edgecitadel/cli-venv/bin/edgecitadel` directly.
 
-### Published package commands (after release)
+### Install with Homebrew
 
 ```bash
-# pip
-python3 -m venv ~/.edgecitadel/cli-venv
-~/.edgecitadel/cli-venv/bin/python -m pip install edgecitadel
-
-# Homebrew
 brew tap zhonghaozhan/edgecitadel
 brew install edgecitadel
+edgecitadel --version
 ```
 
-Do not use the short package names until the corresponding release is actually
-published. See [`deploy/pip/README.md`](deploy/pip/README.md) and
-[`deploy/homebrew/README.md`](deploy/homebrew/README.md) for package build and
-release verification.
-
-### Run directly from a checkout
-
-Contributors can skip package installation and replace `edgecitadel` in the
-examples below with `./scripts/edgecitadel`.
+Homebrew also installs the native `nats-server` dependency required by
+`nats_leaf` Edge nodes. A pip installation needs `nats-server` only when that
+messaging mode is selected; see [Requirements](#requirements).
 
 ## Create a Core
 
@@ -122,22 +116,52 @@ NATS/JetStream service and connects outbound to Core port 7422. During a Core
 outage, same-host messaging continues while cross-node messaging pauses. A host
 cannot silently change modes by rerunning `join`.
 
-## Install and operate Plugins
+## Install and use a Plugin
 
-Install a bundled Plugin by name or provide a package directory:
+Install the bundled Echo Plugin for a first end-to-end check:
 
 ```bash
 edgecitadel plugin install echo
-edgecitadel plugin install ./path/to/plugin
 edgecitadel plugin list
-edgecitadel plugin logs example.echo
+edgecitadel plugin status edgecitadel.echo
 ```
 
 The first Plugin command creates a private Supervisor environment. Installation
 validates the package lock and schema without executing Plugin code, displays
 requested permissions, copies an immutable package, starts the runtime, and
-waits for its Agent Card and heartbeat. Runtime-specific credentials remain the
-Plugin's responsibility.
+waits for its Agent Card and heartbeat.
+
+Open the Core dashboard at <http://localhost>, select `echo-agent`, and send
+`hello`. The task result should contain the same text. The same operation is
+available through the Core API:
+
+```bash
+curl --fail-with-body --request POST http://localhost/api/command/echo-agent \
+  --header 'Content-Type: application/json' \
+  --data '{"body":"hello"}'
+```
+
+Use a package directory to install a Plugin under development:
+
+```bash
+edgecitadel plugin install ./path/to/plugin
+```
+
+Bundled Plugins have different dependencies and permissions:
+
+| Plugin | Purpose | Setup before start |
+|---|---|---|
+| [Echo](plugins/examples/echo/README.md) | Installation and messaging smoke test | None |
+| [Gemma](plugins/gemma/README.md) | Local Ollama model | Start Ollama and select a model |
+| [Hermes](plugins/hermes/README.md) | Hermes Agent HTTP bridge | Start Hermes and provide its token |
+| [Home Assistant](plugins/homeassistant/README.md) | Allowlisted smart-home tools | Provide the URL, token file, and allowlists |
+| [Shell](plugins/shell/README.md) | Local shell execution | Review its unrestricted execution risk |
+| [Watchdog](plugins/watchdog/README.md) | Host health reporting | None; it is not command-invokable |
+
+Follow the linked Plugin guide before installation when credentials or external
+services are required. The Supervisor accepts only environment variables and
+secret files declared by that Plugin's manifest; it does not provide a generic
+`plugin config` command.
 
 Useful lifecycle checks are:
 
@@ -220,6 +244,28 @@ for delivery, outage, deduplication, and security semantics.
 | `e2e/` | Playwright operator-flow tests |
 
 ## Development
+
+### Test the package before publication
+
+Build and install the current checkout into a dedicated virtual environment:
+
+```bash
+git clone https://github.com/zhonghaozhan/EdgeCitadel.git
+cd EdgeCitadel
+python3 -m venv ~/.edgecitadel/cli-venv
+~/.edgecitadel/cli-venv/bin/python -m pip install .
+~/.edgecitadel/cli-venv/bin/edgecitadel --version
+```
+
+This tests the same self-contained wheel layout used by PyPI; the installed
+command does not depend on the checkout. Package build and release checks are
+documented in [`deploy/pip/README.md`](deploy/pip/README.md) and
+[`deploy/homebrew/README.md`](deploy/homebrew/README.md).
+
+To run without installing a package, replace `edgecitadel` in the examples with
+`./scripts/edgecitadel` from the repository root.
+
+### Contributor checks
 
 ```bash
 # Backend
