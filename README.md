@@ -56,16 +56,7 @@ edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
 
 ## Install and use a Plugin
 
-Install the Echo Plugin for a quick check:
-
-```bash
-edgecitadel plugin install echo
-```
-
-In the Core dashboard, select `echo-agent`, send `hello`, and confirm that the
-result contains the same text.
-
-Other bundled Plugins have their own setup guides:
+Choose a Plugin and follow its setup guide:
 
 - [Gemma](plugins/gemma/README.md)
 - [Hermes](plugins/hermes/README.md)
@@ -73,11 +64,15 @@ Other bundled Plugins have their own setup guides:
 - [Shell](plugins/shell/README.md)
 - [Watchdog](plugins/watchdog/README.md)
 
-You can also install a Plugin from a local directory:
+Install a bundled Plugin by name, or install a local Plugin package by path:
 
 ```bash
+edgecitadel plugin install PLUGIN_NAME
 edgecitadel plugin install ./path/to/plugin
 ```
+
+After installation, select the Plugin's agent in the Core dashboard to send it
+a task and view the result.
 
 ## Common commands
 
@@ -85,7 +80,6 @@ edgecitadel plugin install ./path/to/plugin
 edgecitadel status
 edgecitadel doctor
 edgecitadel plugin list
-edgecitadel plugin logs edgecitadel.echo
 edgecitadel supervisor status
 ```
 
