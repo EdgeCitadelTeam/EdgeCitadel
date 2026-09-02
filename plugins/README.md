@@ -1,13 +1,14 @@
-# EdgeCitadel plugin packages
+# EdgeCitadel Managed Agent packages
 
-`plugins/` contains installable, framework-neutral EdgeCitadel plugin packages.
+`plugins/` contains installable EdgeCitadel Managed Agent packages and legacy
+packages kept during migration.
 Host schemas, SDK protocols, validation logic, and tests live in
 [`../plugin-toolkit/`](../plugin-toolkit/). See
-[`examples/echo`](examples/echo/README.md) for a working lifecycle example and
+[`examples/echo`](examples/echo/README.md) for a developer fixture and
 [`examples/placeholder`](examples/placeholder/README.md) for a validation-only
 example.
 
-## Authoring layout
+## Managed Agent package layout
 
 ```text
 my-plugin/
@@ -86,20 +87,18 @@ End users install through the unified lifecycle after a host has created or
 joined a fleet:
 
 ```bash
-./scripts/edgecitadel plugin install ./plugins/examples/echo
-./scripts/edgecitadel plugin install gemma
-./scripts/edgecitadel plugin install watchdog
+./scripts/edgecitadel agent install gemma
+./scripts/edgecitadel agent install homeassistant
 ```
 
-Host enrollment and agent registration are separate. `edgecitadel join` gives
-the host broker configuration according to `single-client` or `nats_leaf`;
-starting a plugin reconciles its exact destination inbox, then publishes the
-Agent Card and heartbeat that make each declared agent visible in the registry.
-Plugins do not select the mode. In `nats_leaf`, they receive only the Edge-local
-endpoint, client token, and Edge JetStream domain—not the upstream Leaf identity.
+Host enrollment and Agent registration are separate. `edgecitadel join` gives
+agentd broker configuration according to `single-client` or `nats_leaf`.
+Starting a Managed Agent opens a private agentd session; agentd reconciles the
+exact destination inbox and publishes the Agent Card and heartbeat. Managed
+Agents never receive NATS, local-broker, or Leaf credentials.
 
 Treat package contents as untrusted input until the supervisor has validated a
-supervisor-owned immutable package root. YAML and JSON reject duplicate keys;
+agentd-owned immutable package root. YAML and JSON reject duplicate keys;
 structured files are limited to 1 MiB, `SKILL.md` to 2 MiB, frontmatter to
 64 KiB, trees to depth 64 and 100,000 traversed values, and YAML container aliases
 are rejected. Static checks also use strict schemas, local-fragment-only schema
@@ -118,9 +117,9 @@ local process control and enrolled broker injection, but v0.1 permission and
 sandbox declarations remain reviewable intent rather than an OS enforcement
 boundary. Package authors must not infer runtime guarantees from validation.
 
-Python Plugins may declare a lock-covered `runtime.pythonRequirements` file.
-The Supervisor installs it with the shared Plugin runtime into a private,
-versioned environment. Parent-process environment values are not inherited by
-default: a Plugin receives only a small runtime baseline, names listed in
-`runtime.environmentVariables`, names listed in `security.secrets`, and its
-mode-selected NATS client settings. Plugins never receive Leaf credentials.
+Python Managed Agents may declare a lock-covered `runtime.pythonRequirements`
+file. EdgeCitadel installs it with the shared Managed Agent runtime into a
+private, versioned environment. Parent-process environment values are not
+inherited by default: a Managed Agent receives only a small runtime baseline,
+names listed in `runtime.environmentVariables`, names listed in
+`security.secrets`, and its private agentd socket identity.

@@ -35,7 +35,9 @@ _PLUGIN_SCHEMA = "agent-plugin.v1alpha1.schema.json"
 _BINDING_SCHEMA = "agent-skill-binding.v1alpha1.schema.json"
 _SCHEMA_DIRECTORY = Path(__file__).resolve().parents[2] / "schemas"
 SUPERVISOR_API_VERSION = Version("0.1.0")
-SUPPORTED_PROTOCOLS = frozenset({"edgecitadel.plugin.v1"})
+SUPPORTED_PROTOCOLS = frozenset(
+    {"edgecitadel.managed-agent.v1", "edgecitadel.plugin.v1"}
+)
 
 
 @dataclass(frozen=True)

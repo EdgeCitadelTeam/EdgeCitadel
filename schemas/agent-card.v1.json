@@ -79,7 +79,7 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "enum": ["worker", "reasoner", "watchdog",
+            "enum": ["worker", "reasoner",
                      "orchestrator", "aggregator"]
           }
         },

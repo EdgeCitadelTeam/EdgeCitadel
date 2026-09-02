@@ -1,0 +1,13 @@
+{
+  "name": "edgecitadel",
+  "owner": {
+    "name": "EdgeCitadel"
+  },
+  "plugins": [
+    {
+      "name": "edgecitadel",
+      "source": "./claude-code-edgecitadel",
+      "description": "Connect an active Claude Code session to EdgeCitadel."
+    }
+  ]
+}

@@ -12,8 +12,10 @@ dropped silently with a logged reason (preserves aggregator liveness).
 
 from __future__ import annotations
 import asyncio
+import hashlib
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -168,30 +170,114 @@ class MessageRouter:
         db.insert_message(env, deployment=self._deployment_for(env))
 
     async def on_advisory(self, msg: Msg) -> None:
-        """$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.<agent>.<consumer>."""
+        """Handle ``...MAX_DELIVERIES.<stream>.<consumer>`` advisories."""
         try:
             adv = json.loads(msg.data)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return
-        # subject tail: ...MAX_DELIVERIES.AGENT_INBOX.<agent>.<consumer>
+        if not isinstance(adv, dict):
+            return
+        # NATS advisories identify the stream and consumer, not the filtered
+        # Agent. The source envelope below is the authoritative recipient.
         parts = msg.subject.split(".")
-        agent = parts[-2] if len(parts) >= 2 else "unknown"
         consumer = parts[-1] if parts else "unknown"
-        # Extract original headers if present
-        hdrs = adv.get("headers") or {}
-        orig_sender = hdrs.get("Original-Sender") or adv.get("sender_id")
-        task_id = hdrs.get("Task-Id") or adv.get("task_id")
-        db.insert_poison_event(
-            agent_id=agent,
-            consumer=consumer,
-            task_id=task_id,
-            original_sender=orig_sender,
-            detected_at=now_iso(),
-            advisory=adv,
+        subject_stream = parts[-2] if len(parts) >= 2 else None
+        diagnostic_agent = (
+            consumer.removesuffix("_inbox")
+            if consumer.endswith("_inbox")
+            else "unknown"
         )
+
+        def record_poison(
+            task_id: str | None = None,
+            original_sender: str | None = None,
+            agent_id: str | None = None,
+        ) -> None:
+            db.insert_poison_event(
+                agent_id=agent_id or diagnostic_agent,
+                consumer=consumer,
+                task_id=task_id,
+                original_sender=original_sender,
+                detected_at=now_iso(),
+                advisory=adv,
+            )
+
         log.warning(
-            "poison message on %s (consumer=%s, task_id=%s)", agent, consumer, task_id
+            "poison message for consumer %s (stream_seq=%s)",
+            consumer,
+            adv.get("stream_seq"),
         )
+        stream = adv.get("stream")
+        advisory_consumer = adv.get("consumer")
+        stream_seq = adv.get("stream_seq")
+        if (
+            stream != "AGENT_INBOX"
+            or subject_stream != stream
+            or advisory_consumer != consumer
+            or type(stream_seq) is not int
+            or stream_seq <= 0
+        ):
+            record_poison()
+            return
+        try:
+            original = await self.js.get_msg(stream, seq=stream_seq)
+            original_env = json.loads(original.data)
+        except Exception as error:  # NATS uses multiple not-found/timeout types.
+            log.warning(
+                "could not retrieve max-delivery source message: %s",
+                type(error).__name__,
+            )
+            record_poison()
+            return
+        if not isinstance(original_env, dict):
+            record_poison()
+            return
+        try:
+            self.validator.validate_envelope(original_env)
+        except ValidationError as error:
+            log.warning("max-delivery source envelope is invalid: %s", error)
+            record_poison()
+            return
+        agent = original_env.get("recipient_id")
+        if (
+            original_env.get("type") not in {"command", "delegation"}
+            or not isinstance(agent, str)
+            or consumer != f"{agent}_inbox"
+        ):
+            record_poison()
+            return
+        orig_sender = original_env["sender_id"]
+        task_id = original_env["task_id"]
+        record_poison(task_id, orig_sender, agent)
+        result = {
+            "v": 1,
+            "id": _system_result_id(task_id),
+            "type": "result",
+            "sender_id": "edgecitadel-system",
+            "recipient_id": orig_sender,
+            "task_id": task_id,
+            "task_state": "failed",
+            "timestamp": now_iso(),
+            "payload": {
+                "error": "recipient_unavailable",
+                "recipient_id": agent,
+                "trigger": "max_deliveries",
+            },
+        }
+        try:
+            self.validator.validate_envelope(result)
+        except ValidationError as error:
+            log.warning("advisory correlation is invalid; no result emitted: %s", error)
+            return
+        encoded = json.dumps(result).encode()
+        ack = await self.js.publish(
+            f"agents.{orig_sender}.inbox",
+            encoded,
+            headers={"Nats-Msg-Id": f"edgecitadel-system-undeliverable-{task_id}"},
+        )
+        if getattr(ack, "duplicate", False) is True:
+            return
+        await self.nc.publish("agents.edgecitadel-system.outbox", encoded)
 
     async def on_task_progress(self, msg: Msg) -> None:
         """agents.*.task_progress.{task_id} — Phase 2.5 streaming. Persist
@@ -364,12 +450,18 @@ class AggregatorApp:
 
 
 def _uuid4() -> str:
-    import uuid
-
     return str(uuid.uuid4())
 
 
 def _uuid4_str() -> str:
-    import uuid
-
     return str(uuid.uuid4())
+
+
+def _system_result_id(task_id: str) -> str:
+    """Return a stable schema-valid ID for one system reconciliation result."""
+    raw = bytearray(
+        hashlib.sha256(f"recipient-unavailable:{task_id}".encode()).digest()[:16]
+    )
+    raw[6] = (raw[6] & 0x0F) | 0x40
+    raw[8] = (raw[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(raw)))

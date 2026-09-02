@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
+    "@nats-io/transport-node": "3.3.1",
     "axios": "^1.7.9",
     "mqtt": "^5.0.0",
     "ws": "^8.18.0"

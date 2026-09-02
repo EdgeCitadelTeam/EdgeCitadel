@@ -8,6 +8,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import plistlib
 import secrets
 import shutil
 import signal
@@ -48,6 +49,29 @@ ENV_PATH = CORE_RUNTIME_DIR / ".env"
 ENV_EXAMPLE_PATH = INSTALL_ROOT / ".env.example"
 NODE_STATE_NAME = "node.json"
 PLUGIN_STATE_NAME = "plugins.json"
+MANAGED_AGENT_STATE_NAME = "managed-agents.json"
+AGENTD_PROCESS_STATE_NAME = "process.json"
+AGENTD_ADMIN_TOKEN_NAME = "admin.token"
+AGENTD_ADMIN_OPERATIONS = frozenset(
+    {
+        "connector.register",
+        "connector.configure",
+        "connector.list",
+        "connector.revoke",
+        "managed.reconcile",
+        "managed.list",
+        "managed.connector.reissue",
+    }
+)
+NATIVE_CONNECTOR_CAPABILITIES = (
+    "edgecitadel_agents",
+    "edgecitadel_delegate",
+    "edgecitadel_inbox",
+    "edgecitadel_task_status",
+    "edgecitadel_task_update",
+    "edgecitadel_trace",
+    "edgecitadel_diagnose",
+)
 PLACEHOLDERS = {
     "NATS_TOKEN": {"", "change-me", "changeme"},
     "NATS_LEAF_USERNAME": {"", "change-me-leaf-user", "changeme"},
@@ -605,7 +629,7 @@ def command_join(args: argparse.Namespace) -> int:
         _write_json(state_path, node)
     print(f"This host joined EdgeCitadel as {node['agent_id']}.")
     print(f"Messaging mode: {requested_mode}")
-    print(f"Next: {_command_name()} plugin install <plugin-path-or-name>")
+    print(f"Next: {_command_name()} agent install <managed-agent-path-or-name>")
     return 0
 
 
@@ -695,12 +719,35 @@ def command_doctor(args: argparse.Namespace) -> int:
         elif node["mode"] == "edge":
             add_check("local_nats_process", "Local NATS", True, "not used")
 
-        for plugin_id, record in sorted(_load_plugins(state_dir)["plugins"].items()):
+        if node["mode"] == "edge":
+            agentd_running, agentd_detail = _agentd_process_detail(state_dir)
+            add_check(
+                "edgecitadel_service",
+                "EdgeCitadel service",
+                agentd_running,
+                agentd_detail,
+            )
+            if agentd_running:
+                agentd_health = _agentd_rpc(state_dir, "health")
+                transport = agentd_health.get("transport", {})
+                transport_connected = bool(
+                    isinstance(transport, dict) and transport.get("connected")
+                )
+                add_check(
+                    "agentd_transport",
+                    "Agent task transport",
+                    transport_connected,
+                    "connected" if transport_connected else "disconnected",
+                )
+
+        for plugin_id, record in sorted(
+            _load_plugins(state_dir)["managed_agents"].items()
+        ):
             enabled = record.get("enabled", True) is not False
             if not enabled:
                 add_check(
-                    f"plugin_{plugin_id}",
-                    f"plugin {plugin_id}",
+                    f"managed_agent_{plugin_id}",
+                    f"Managed Agent {plugin_id}",
                     True,
                     "disabled",
                 )
@@ -710,13 +757,13 @@ def command_doctor(args: argparse.Namespace) -> int:
                         f"agent_{agent_id}",
                         f"agent {agent_id}",
                         True,
-                        "disabled with plugin",
+                        "disabled with Managed Agent",
                     )
                 continue
             running, process_detail = _plugin_process_detail(record)
             add_check(
-                f"plugin_{plugin_id}",
-                f"plugin {plugin_id}",
+                f"managed_agent_{plugin_id}",
+                f"Managed Agent {plugin_id}",
                 running,
                 process_detail,
             )
@@ -767,7 +814,7 @@ def command_doctor(args: argparse.Namespace) -> int:
                     if messaging_mode == "nats_leaf"
                     else node["plugin_nats_url"]
                 )
-                print(f"Plugin broker: {broker}")
+                print(f"Managed Agent broker: {broker}")
             print(f"Status: {health}")
         for item in checks:
             marker = "PASS" if item["ok"] else "FAIL"
@@ -787,13 +834,31 @@ def command_down(args: argparse.Namespace) -> int:
 
 
 def _plugins_path(state_dir: Path) -> Path:
+    return state_dir / MANAGED_AGENT_STATE_NAME
+
+
+def _legacy_plugins_path(state_dir: Path) -> Path:
     return state_dir / PLUGIN_STATE_NAME
 
 
 def _load_plugins(state_dir: Path) -> dict[str, Any]:
-    state = _read_json(_plugins_path(state_dir), {"version": 1, "plugins": {}})
-    if state.get("version") != 1 or not isinstance(state.get("plugins"), dict):
-        raise UserError(f"plugin state is unsupported: {_plugins_path(state_dir)}")
+    path = _plugins_path(state_dir)
+    if not path.exists() and _legacy_plugins_path(state_dir).exists():
+        legacy = _read_json(_legacy_plugins_path(state_dir), {})
+        if legacy.get("version") != 1 or not isinstance(legacy.get("plugins"), dict):
+            raise UserError(
+                f"legacy plugin state is unsupported: {_legacy_plugins_path(state_dir)}"
+            )
+        _write_json(
+            path,
+            {"version": 2, "managed_agents": legacy["plugins"]},
+        )
+    state = _read_json(path, {"version": 2, "managed_agents": {}})
+    if state.get("version") != 2 or not isinstance(state.get("managed_agents"), dict):
+        raise UserError(f"Managed Agent state is unsupported: {path}")
+    if "edgecitadel.watchdog" in state["managed_agents"]:
+        state["managed_agents"].pop("edgecitadel.watchdog")
+        _write_json(path, state)
     return state
 
 
@@ -802,7 +867,7 @@ def _toolkit_python(state_dir: Path) -> Path:
     if managed:
         python = Path(managed)
         if not python.exists():
-            raise UserError(f"Homebrew Supervisor runtime is missing: {python}")
+            raise UserError(f"Homebrew Agent service runtime is missing: {python}")
         return python
     venv = state_dir / "supervisor"
     python = venv / "bin" / "python"
@@ -814,7 +879,7 @@ def _toolkit_python(state_dir: Path) -> Path:
     if python.exists() and marker.exists() and marker.read_text() == expected:
         return python
 
-    print("Preparing the local Supervisor (first plugin command only)...")
+    print("Preparing the local Agent service...", file=sys.stderr)
     _run([sys.executable, "-m", "venv", str(venv)])
     _run(
         [
@@ -832,19 +897,669 @@ def _toolkit_python(state_dir: Path) -> Path:
     return python
 
 
+def _agentd_state_dir(state_dir: Path) -> Path:
+    return state_dir / "agentd"
+
+
+def _agentd_process_path(state_dir: Path) -> Path:
+    return _agentd_state_dir(state_dir) / AGENTD_PROCESS_STATE_NAME
+
+
+def _agentd_admin_token(state_dir: Path) -> str:
+    path = _agentd_state_dir(state_dir) / AGENTD_ADMIN_TOKEN_NAME
+    if path.is_symlink() or not path.is_file():
+        raise UserError("EdgeCitadel service management credential is unavailable")
+    token = path.read_text().strip()
+    if len(token) < 32 or len(token) > 1024:
+        raise UserError("EdgeCitadel service management credential is invalid")
+    return token
+
+
+def _agentd_launchd_label(state_dir: Path) -> str:
+    digest = hashlib.sha256(str(state_dir.resolve()).encode()).hexdigest()[:12]
+    return f"com.edgecitadel.agentd.{digest}"
+
+
+def _agentd_launchd_target(state_dir: Path) -> str:
+    return f"gui/{os.getuid()}/{_agentd_launchd_label(state_dir)}"
+
+
+def _agentd_uses_launchd() -> bool:
+    return (
+        sys.platform == "darwin"
+        and (IS_HOMEBREW or IS_PIP)
+        and shutil.which("launchctl") is not None
+    )
+
+
+def _agentd_launchd_path(state_dir: Path) -> Path:
+    return _agentd_state_dir(state_dir) / "agentd.plist"
+
+
+def _agentd_systemd_unit_name(state_dir: Path) -> str:
+    digest = hashlib.sha256(str(state_dir.resolve()).encode()).hexdigest()[:12]
+    return f"edgecitadel-agentd-{digest}.service"
+
+
+def _agentd_uses_systemd() -> bool:
+    return (
+        sys.platform.startswith("linux")
+        and (IS_HOMEBREW or IS_PIP)
+        and shutil.which("systemctl") is not None
+    )
+
+
+def _agentd_systemd_path(state_dir: Path) -> Path:
+    return _agentd_state_dir(state_dir) / _agentd_systemd_unit_name(state_dir)
+
+
+def _systemd_quote(value: str | Path) -> str:
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _render_agentd_systemd(state_dir: Path, python: Path) -> None:
+    service_dir = _agentd_state_dir(state_dir)
+    payload = "\n".join(
+        (
+            "[Unit]",
+            "Description=EdgeCitadel host-local Agent service",
+            "After=network-online.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            "ExecStart="
+            f"{_systemd_quote(python)} -m edgecitadel_agentd --state-dir "
+            f"{_systemd_quote(service_dir)}",
+            f"WorkingDirectory={_systemd_quote(INSTALL_ROOT)}",
+            "Restart=on-failure",
+            "RestartSec=2",
+            f"StandardOutput={_systemd_quote(f'append:{service_dir / "agentd.log"}')}",
+            f"StandardError={_systemd_quote(f'append:{service_dir / "agentd.log"}')}",
+            "UMask=0077",
+            "",
+            "[Install]",
+            "WantedBy=default.target",
+            "",
+        )
+    )
+    _secure_write(_agentd_systemd_path(state_dir), payload)
+
+
+def _render_agentd_launchd(state_dir: Path, python: Path) -> None:
+    service_dir = _agentd_state_dir(state_dir)
+    payload = plistlib.dumps(
+        {
+            "Label": _agentd_launchd_label(state_dir),
+            "ProgramArguments": [
+                str(python),
+                "-m",
+                "edgecitadel_agentd",
+                "--state-dir",
+                str(service_dir),
+            ],
+            "RunAtLoad": True,
+            "KeepAlive": {"SuccessfulExit": False},
+            "ProcessType": "Interactive",
+            "StandardOutPath": str(service_dir / "agentd.log"),
+            "StandardErrorPath": str(service_dir / "agentd.log"),
+        },
+        fmt=plistlib.FMT_XML,
+        sort_keys=True,
+    ).decode()
+    _secure_write(_agentd_launchd_path(state_dir), payload)
+
+
+def _launchd_loaded(state_dir: Path) -> bool:
+    result = subprocess.run(
+        ["launchctl", "print", _agentd_launchd_target(state_dir)],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def _systemd_loaded(state_dir: Path) -> bool:
+    result = subprocess.run(
+        [
+            "systemctl",
+            "--user",
+            "is-active",
+            "--quiet",
+            _agentd_systemd_unit_name(state_dir),
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def _agentd_rpc(
+    state_dir: Path,
+    operation: str,
+    *,
+    auth_connector_id: str | None = None,
+    auth_token: str | None = None,
+    **params: object,
+) -> Any:
+    request: dict[str, object] = {"operation": operation, **params}
+    if operation in AGENTD_ADMIN_OPERATIONS:
+        request["admin_token"] = _agentd_admin_token(state_dir)
+    if auth_connector_id is not None:
+        request["connector_id"] = auth_connector_id
+    if auth_token is not None:
+        request["token"] = auth_token
+    python = _toolkit_python(state_dir)
+    result = subprocess.run(
+        [
+            str(python),
+            "-m",
+            "edgecitadel_agentd.rpc",
+            "--state-dir",
+            str(_agentd_state_dir(state_dir)),
+        ],
+        cwd=INSTALL_ROOT,
+        input=json.dumps(request),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise UserError("EdgeCitadel service returned an invalid response") from error
+    if result.returncode != 0 or not response.get("ok"):
+        raise UserError(
+            str(response.get("error", "EdgeCitadel service operation failed"))
+        )
+    return response["result"]
+
+
+def _agentd_process_detail(state_dir: Path) -> tuple[bool, str]:
+    record = _read_json(_agentd_process_path(state_dir), {})
+    pid = record.get("pid")
+    identity = record.get("process_identity")
+    if not isinstance(pid, int) or not _pid_running(pid):
+        return False, "stopped"
+    if not isinstance(identity, str) or identity != _process_identity(pid):
+        return False, f"unverified pid {pid}"
+    try:
+        health = _agentd_rpc(state_dir, "health")
+    except UserError:
+        return False, f"pid {pid}, not ready"
+    return health.get("status") == "ready", f"pid {pid}, {health.get('status')}"
+
+
+def _start_agentd(state_dir: Path) -> dict[str, Any]:
+    running, detail = _agentd_process_detail(state_dir)
+    if running:
+        return {
+            "running": True,
+            "detail": detail,
+            "health": _agentd_rpc(state_dir, "health"),
+        }
+    record = _read_json(_agentd_process_path(state_dir), {})
+    stale_pid = record.get("pid")
+    if isinstance(stale_pid, int) and _pid_running(stale_pid):
+        raise UserError(
+            f"EdgeCitadel service has an unverified live PID {stale_pid}; "
+            "verify that process manually before restarting"
+        )
+    service_dir = _agentd_state_dir(state_dir)
+    _private_directory(service_dir)
+    log_path = service_dir / "agentd.log"
+    log_path.touch(mode=0o600, exist_ok=True)
+    log_path.chmod(0o600)
+    python = _toolkit_python(state_dir)
+    process: subprocess.Popen[bytes] | None = None
+    if _agentd_uses_launchd():
+        _render_agentd_launchd(state_dir, python)
+        if _launchd_loaded(state_dir):
+            subprocess.run(
+                ["launchctl", "bootout", _agentd_launchd_target(state_dir)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        result = subprocess.run(
+            [
+                "launchctl",
+                "bootstrap",
+                f"gui/{os.getuid()}",
+                str(_agentd_launchd_path(state_dir)),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise UserError(
+                "EdgeCitadel user service could not be loaded; "
+                f"inspect {log_path} and retry '{_command_name()} service start'"
+            )
+    elif _agentd_uses_systemd():
+        _render_agentd_systemd(state_dir, python)
+        unit_name = _agentd_systemd_unit_name(state_dir)
+        for command in (
+            [
+                "systemctl",
+                "--user",
+                "link",
+                "--force",
+                str(_agentd_systemd_path(state_dir)),
+            ],
+            ["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "--user", "enable", "--now", unit_name],
+        ):
+            result = subprocess.run(
+                command, check=False, capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise UserError(
+                    "EdgeCitadel systemd user service could not be loaded; "
+                    f"inspect {log_path} and retry '{_command_name()} service start'"
+                )
+    else:
+        log_handle = log_path.open("ab")
+        try:
+            process = subprocess.Popen(
+                [
+                    str(python),
+                    "-m",
+                    "edgecitadel_agentd",
+                    "--state-dir",
+                    str(service_dir),
+                ],
+                cwd=INSTALL_ROOT,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        finally:
+            log_handle.close()
+    deadline = time.monotonic() + 10
+    last_error = "not ready"
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            last_error = f"process exited with status {process.returncode}"
+            break
+        try:
+            health = _agentd_rpc(state_dir, "health")
+            if process is not None:
+                identity = _process_identity(process.pid)
+                if not identity:
+                    raise UserError(
+                        "could not verify EdgeCitadel service process identity"
+                    )
+                _write_json(
+                    _agentd_process_path(state_dir),
+                    {
+                        "version": 1,
+                        "pid": process.pid,
+                        "process_identity": identity,
+                    },
+                )
+            running, observed = _agentd_process_detail(state_dir)
+            if not running:
+                raise UserError(observed)
+            return {"running": True, "detail": observed, "health": health}
+        except UserError as error:
+            last_error = str(error)
+            time.sleep(0.1)
+    if _agentd_uses_launchd() and _launchd_loaded(state_dir):
+        subprocess.run(
+            ["launchctl", "bootout", _agentd_launchd_target(state_dir)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    elif _agentd_uses_systemd() and _agentd_systemd_path(state_dir).exists():
+        subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "disable",
+                "--now",
+                _agentd_systemd_unit_name(state_dir),
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    elif process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    raise UserError(
+        "EdgeCitadel service did not become ready; "
+        f"inspect {log_path} and retry 'edgecitadel service start' ({last_error})"
+    )
+
+
+def _stop_agentd(state_dir: Path) -> None:
+    record = _read_json(_agentd_process_path(state_dir), {})
+    pid = record.get("pid")
+    identity = record.get("process_identity")
+    if not isinstance(pid, int) or not _pid_running(pid):
+        if _agentd_uses_launchd() and _launchd_loaded(state_dir):
+            subprocess.run(
+                ["launchctl", "bootout", _agentd_launchd_target(state_dir)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        elif _agentd_uses_systemd() and _agentd_systemd_path(state_dir).exists():
+            subprocess.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "disable",
+                    "--now",
+                    _agentd_systemd_unit_name(state_dir),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        _write_json(_agentd_process_path(state_dir), {"version": 1, "pid": None})
+        return
+    if not isinstance(identity, str) or identity != _process_identity(pid):
+        raise UserError(f"refusing to stop unverified EdgeCitadel service PID {pid}")
+    if _agentd_uses_launchd() and _launchd_loaded(state_dir):
+        result = subprocess.run(
+            ["launchctl", "bootout", _agentd_launchd_target(state_dir)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise UserError("EdgeCitadel user service could not be unloaded")
+    elif _agentd_uses_systemd() and _systemd_loaded(state_dir):
+        result = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "disable",
+                "--now",
+                _agentd_systemd_unit_name(state_dir),
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise UserError("EdgeCitadel systemd user service could not be stopped")
+    else:
+        os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while _pid_running(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if _pid_running(pid):
+        raise UserError("EdgeCitadel service did not stop within 5 seconds")
+    _write_json(_agentd_process_path(state_dir), {"version": 1, "pid": None})
+
+
+def command_service(args: argparse.Namespace) -> int:
+    state_dir = _state_dir(args.state_dir)
+    if args.action == "start":
+        observation = _start_agentd(state_dir)
+        _sync_managed_agent_state(state_dir, _load_plugins(state_dir))
+    elif args.action == "stop":
+        _stop_agentd(state_dir)
+        observation = {"running": False, "detail": "stopped"}
+    elif args.action == "restart":
+        _stop_agentd(state_dir)
+        observation = _start_agentd(state_dir)
+        _sync_managed_agent_state(state_dir, _load_plugins(state_dir))
+    else:
+        running, detail = _agentd_process_detail(state_dir)
+        observation = {"running": running, "detail": detail}
+        if running:
+            observation["health"] = _agentd_rpc(state_dir, "health")
+    if args.json:
+        print(json.dumps(observation, indent=2))
+    else:
+        print(f"EdgeCitadel service: {observation['detail']}")
+    return 0 if observation["running"] or args.action == "stop" else 1
+
+
+def _connector_token_path(state_dir: Path, connector_id: str) -> Path:
+    if not connector_id or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789-_"
+        for character in connector_id
+    ):
+        raise UserError(
+            "connector id must contain only lowercase letters, numbers, '-' or '_'"
+        )
+    return state_dir / "connectors" / f"{connector_id}.token"
+
+
+def _connector_token(state_dir: Path, connector_id: str) -> str:
+    path = _connector_token_path(state_dir, connector_id)
+    try:
+        token = path.read_text().strip()
+    except OSError as error:
+        raise UserError(
+            f"Native connector {connector_id} is not registered; run "
+            f"'{_command_name()} connector register {connector_id} --host-type <host>'"
+        ) from error
+    if not token:
+        raise UserError(f"Native connector credential is empty: {path}")
+    return token
+
+
+def command_connector(args: argparse.Namespace) -> int:
+    if args.connector_action == "path":
+        root = INSTALL_ROOT / "native-plugins"
+        path = root / "pi-edgecitadel" if args.host_type == "pi" else root
+        if not path.is_dir():
+            raise UserError(
+                "Native Agent Plugin assets are missing; reinstall EdgeCitadel"
+            )
+        print(path)
+        return 0
+    state_dir = _state_dir(args.state_dir)
+    _start_agentd(state_dir)
+    if args.connector_action == "register":
+        node = _load_node(state_dir)
+        agent_id = args.agent_id or f"{node['agent_id']}-{args.host_type}"
+        capabilities = list(NATIVE_CONNECTOR_CAPABILITIES)
+        token_path = _connector_token_path(state_dir, args.connector_id)
+        if token_path.is_file():
+            _agentd_rpc(
+                state_dir,
+                "connector.configure",
+                connector_id=args.connector_id,
+                host_type=args.host_type,
+                agent_id=agent_id,
+                capabilities=capabilities,
+            )
+            action = "updated"
+        else:
+            response = _agentd_rpc(
+                state_dir,
+                "connector.register",
+                connector_id=args.connector_id,
+                host_type=args.host_type,
+                agent_id=agent_id,
+                capabilities=capabilities,
+            )
+            _secure_write(token_path, str(response["token"]) + "\n")
+            action = "registered"
+        print(f"Native connector {args.connector_id} {action} for {agent_id}.")
+        return 0
+    if args.connector_action == "list":
+        connectors = _agentd_rpc(state_dir, "connector.list")
+        if args.json:
+            print(json.dumps(connectors, indent=2))
+        elif not connectors:
+            print("No Native Agent Plugins registered.")
+        else:
+            for connector in connectors:
+                state = "revoked" if connector["revoked"] else "registered"
+                print(
+                    f"{connector['connector_id']:24} {connector['host_type']:12} "
+                    f"{state:10} session={'active' if connector['session_active'] else 'closed':6} "
+                    f"agent={connector['agent_id']}"
+                )
+        return 0
+    if args.connector_action == "status":
+        connectors = _agentd_rpc(state_dir, "connector.list")
+        connector = next(
+            (
+                item
+                for item in connectors
+                if item.get("connector_id") == args.connector_id
+            ),
+            None,
+        )
+        if connector is None:
+            raise UserError(f"Native connector was not found: {args.connector_id}")
+        if args.json:
+            print(json.dumps(connector, indent=2))
+        else:
+            print(f"Native connector: {connector['connector_id']}")
+            print(f"Host: {connector['host_type']}")
+            print(f"Agent: {connector['agent_id']}")
+            print(f"Credential: {'revoked' if connector['revoked'] else 'active'}")
+            print(f"Session: {'active' if connector['session_active'] else 'closed'}")
+        return 0 if not connector["revoked"] else 1
+    _agentd_rpc(
+        state_dir,
+        "connector.revoke",
+        connector_id=args.connector_id,
+    )
+    _connector_token_path(state_dir, args.connector_id).unlink(missing_ok=True)
+    print(f"Native connector {args.connector_id} revoked.")
+    return 0
+
+
+def command_task(args: argparse.Namespace) -> int:
+    state_dir = _state_dir(args.state_dir)
+    _start_agentd(state_dir)
+    if args.task_action == "list":
+        result = _agentd_rpc(
+            state_dir,
+            "task.list",
+            auth_connector_id=args.connector_id,
+            auth_token=_connector_token(state_dir, args.connector_id),
+            include_terminal=not args.pending,
+        )
+    elif args.task_action == "show":
+        result = _agentd_rpc(
+            state_dir,
+            "task.get",
+            auth_connector_id=args.connector_id,
+            auth_token=_connector_token(state_dir, args.connector_id),
+            task_id=args.task_id,
+        )
+    else:
+        result = _agentd_rpc(
+            state_dir,
+            "task.transition",
+            auth_connector_id=args.connector_id,
+            auth_token=_connector_token(state_dir, args.connector_id),
+            task_id=args.task_id,
+            state="cancelled",
+            reason=args.reason,
+        )
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def command_trace(args: argparse.Namespace) -> int:
+    state_dir = _state_dir(args.state_dir)
+    _start_agentd(state_dir)
+    token = _connector_token(state_dir, args.connector_id)
+    if args.trace_action == "list":
+        result = _agentd_rpc(
+            state_dir,
+            "trace.list",
+            auth_connector_id=args.connector_id,
+            auth_token=token,
+            limit=args.limit,
+        )
+    elif args.trace_action == "show":
+        result = _agentd_rpc(
+            state_dir,
+            "trace.get",
+            auth_connector_id=args.connector_id,
+            auth_token=token,
+            trace_id=args.trace_id,
+        )
+    else:
+        result = _agentd_rpc(
+            state_dir,
+            "trace.purge",
+            auth_connector_id=args.connector_id,
+            auth_token=token,
+            before_ms=args.before_ms,
+        )
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def command_native_mcp(args: argparse.Namespace) -> int:
+    state_dir = _state_dir(args.state_dir)
+    _start_agentd(state_dir)
+    node = _load_node(state_dir)
+    connector_id = args.connector_id or f"{args.host_type}-local"
+    suffix = f"-{args.host_type}"
+    agent_id = args.agent_id or (
+        f"{str(node['agent_id'])[: 64 - len(suffix)].rstrip('_-')}{suffix}"
+    )
+    token_path = _connector_token_path(state_dir, connector_id)
+    if token_path.is_file():
+        _agentd_rpc(
+            state_dir,
+            "connector.configure",
+            connector_id=connector_id,
+            host_type=args.host_type,
+            agent_id=agent_id,
+            capabilities=list(NATIVE_CONNECTOR_CAPABILITIES),
+        )
+    else:
+        registration = _agentd_rpc(
+            state_dir,
+            "connector.register",
+            connector_id=connector_id,
+            host_type=args.host_type,
+            agent_id=agent_id,
+            capabilities=list(NATIVE_CONNECTOR_CAPABILITIES),
+        )
+        _secure_write(token_path, str(registration["token"]) + "\n")
+    python = _toolkit_python(state_dir)
+    command = [
+        str(python),
+        "-m",
+        "edgecitadel_agentd.mcp",
+        "--state-dir",
+        str(state_dir),
+        "--host-type",
+        args.host_type,
+    ]
+    command.extend(["--connector-id", connector_id, "--agent-id", agent_id])
+    return subprocess.run(command, cwd=INSTALL_ROOT, check=False).returncode
+
+
 def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> Path:
-    """Return an isolated runtime when a plugin declares Python dependencies."""
+    """Return an isolated runtime when a Managed Agent declares dependencies."""
     runtime = record["inventory"]["runtime"]
     requirements = runtime.get("pythonRequirements")
     if requirements is None:
         return _toolkit_python(state_dir)
     if not isinstance(requirements, str):
-        raise UserError(f"plugin {plugin_id} has invalid Python requirements")
+        raise UserError(f"Managed Agent {plugin_id} has invalid Python requirements")
 
     plugin_root = Path(record["path"])
     requirements_path = plugin_root / requirements
     if not requirements_path.is_file():
-        raise UserError(f"plugin {plugin_id} is missing its Python requirements")
+        raise UserError(f"Managed Agent {plugin_id} is missing its Python requirements")
     version = record["inventory"]["package"]["version"]
     runtime_root = state_dir / "plugin-runtimes" / plugin_id / version
     python = runtime_root / "bin" / "python"
@@ -860,7 +1575,7 @@ def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> P
 
     if runtime_root.exists():
         shutil.rmtree(runtime_root)
-    print(f"Preparing isolated Python runtime for plugin {plugin_id}...")
+    print(f"Preparing isolated Python runtime for Managed Agent {plugin_id}...")
     try:
         _run([sys.executable, "-m", "venv", str(runtime_root)])
         _run(
@@ -887,7 +1602,7 @@ def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> P
 
 def _validate_plugin(source: Path, state_dir: Path) -> dict[str, Any]:
     if not source.is_dir():
-        raise UserError(f"plugin directory does not exist: {source}")
+        raise UserError(f"Managed Agent package directory does not exist: {source}")
     python = _toolkit_python(state_dir)
     command = [str(python), "-m", "edgecitadel_supervisor", "validate", str(source)]
     try:
@@ -899,7 +1614,9 @@ def _validate_plugin(source: Path, state_dir: Path) -> dict[str, Any]:
         detail = error.stderr.strip() or "package validation failed"
         raise UserError(detail.removeprefix("error: ").strip()) from error
     except json.JSONDecodeError as error:
-        raise UserError("Supervisor returned invalid plugin inventory") from error
+        raise UserError(
+            "Agent service returned invalid Managed Agent inventory"
+        ) from error
     return value
 
 
@@ -917,7 +1634,7 @@ def _permission_lines(inventory: dict[str, Any]) -> list[str]:
 
 def _confirm_plugin(inventory: dict[str, Any], assume_yes: bool) -> None:
     package = inventory["package"]
-    print(f"Plugin: {package['id']} {package['version']}")
+    print(f"Managed Agent: {package['id']} {package['version']}")
     print("Requested permissions:")
     for line in _permission_lines(inventory):
         print(f"  {line}")
@@ -931,7 +1648,7 @@ def _confirm_plugin(inventory: dict[str, Any], assume_yes: bool) -> None:
         "y",
         "yes",
     }:
-        raise UserError("installation cancelled; no plugin files were installed")
+        raise UserError("installation cancelled; no Managed Agent files were installed")
 
 
 def _pid_running(pid: int | None) -> bool:
@@ -999,10 +1716,87 @@ def _plugin_record(
     state_dir: Path, plugin_id: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     state = _load_plugins(state_dir)
-    record = state["plugins"].get(plugin_id)
+    record = state["managed_agents"].get(plugin_id)
     if not isinstance(record, dict):
-        raise UserError(f"plugin is not installed: {plugin_id}")
+        raise UserError(f"Managed Agent is not installed: {plugin_id}")
     return state, record
+
+
+def _warn_legacy_plugin_alias(args: argparse.Namespace) -> None:
+    if getattr(args, "command", None) == "plugin":
+        print(
+            "warning: 'edgecitadel plugin' is deprecated for Managed Agents; "
+            "use 'edgecitadel agent'",
+            file=sys.stderr,
+        )
+
+
+def _managed_agent_summary(plugin_id: str, record: dict[str, Any]) -> dict[str, object]:
+    inventory = record["inventory"]
+    package = inventory["package"]
+    runtime = inventory["runtime"]
+    summary: dict[str, object] = {
+        "package_id": plugin_id,
+        "version": package["version"],
+        "kind": package.get("kind", "AgentPlugin"),
+        "runtime_kind": runtime.get("kind", "legacy"),
+        "desired_state": "running" if record.get("enabled") else "stopped",
+        "agent_ids": [agent["id"] for agent in inventory["agents"]],
+        "install_path": record["path"],
+        "installed_at": record["installed_at"],
+    }
+    launch_path = record.get("launch_path")
+    if package.get("kind") == "ManagedAgent" and isinstance(launch_path, str):
+        summary["launch_path"] = launch_path
+    return summary
+
+
+def _managed_launch_path(state_dir: Path, plugin_id: str) -> Path:
+    safe_id = plugin_id.replace(".", "-")
+    return state_dir / "managed-launch" / f"{safe_id}.json"
+
+
+def _write_managed_launch(
+    state_dir: Path,
+    plugin_id: str,
+    *,
+    argv: list[str],
+    cwd: Path,
+    environment: dict[str, str],
+    log_path: Path,
+    restart_policy: str,
+) -> Path:
+    path = _managed_launch_path(state_dir, plugin_id)
+    _write_json(
+        path,
+        {
+            "version": 1,
+            "package_id": plugin_id,
+            "argv": argv,
+            "cwd": str(cwd),
+            "environment": environment,
+            "log_path": str(log_path),
+            "restart_policy": restart_policy,
+        },
+    )
+    return path
+
+
+def _sync_managed_agent_state(state_dir: Path, state: dict[str, Any]) -> None:
+    running, _detail = _agentd_process_detail(state_dir)
+    if not running:
+        return
+    records = [
+        _managed_agent_summary(plugin_id, record)
+        for plugin_id, record in sorted(state["managed_agents"].items())
+    ]
+    _agentd_rpc(state_dir, "managed.reconcile", records=records)
+
+
+def _prepare_managed_agent_service(args: argparse.Namespace, state_dir: Path) -> None:
+    if getattr(args, "command", None) in {"agent", "plugin"}:
+        _start_agentd(state_dir)
+        _sync_managed_agent_state(state_dir, _load_plugins(state_dir))
 
 
 def _plugin_nats_environment(node: dict[str, Any]) -> dict[str, str]:
@@ -1081,10 +1875,12 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
     state, record = _plugin_record(state_dir, plugin_id)
     if _pid_running(record.get("pid")):
         if _plugin_process_owned(record):
-            print(f"Plugin {plugin_id} is already running (pid {record['pid']}).")
+            print(
+                f"Managed Agent {plugin_id} is already running (pid {record['pid']})."
+            )
             return
         raise UserError(
-            f"plugin {plugin_id} has an unverified live PID {record.get('pid')}; "
+            f"Managed Agent {plugin_id} has an unverified live PID {record.get('pid')}; "
             "refusing to start another runtime. Verify that process manually, "
             "terminate it if appropriate, then retry"
         )
@@ -1092,8 +1888,10 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
     if not isinstance(command, list) or not all(
         isinstance(item, str) for item in command
     ):
-        raise UserError(f"plugin {plugin_id} has an invalid runtime command")
-    _ensure_plugin_inboxes(state_dir, node, record)
+        raise UserError(f"Managed Agent {plugin_id} has an invalid runtime command")
+    managed_protocol = record["inventory"]["package"].get("kind") == "ManagedAgent"
+    if not managed_protocol:
+        _ensure_plugin_inboxes(state_dir, node, record)
     python = _plugin_python(state_dir, plugin_id, record)
     executable = str(python) if command[0] in {"python", "python3"} else command[0]
     logs_dir = state_dir / "logs"
@@ -1103,28 +1901,164 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
     _private_directory(plugin_state_dir)
     environment = {
         **_declared_plugin_environment(record),
-        **_plugin_nats_environment(node),
         "EDGECITADEL_NODE_ID": node["agent_id"],
         "EDGECITADEL_PLUGIN_ID": plugin_id,
         "EDGECITADEL_PLUGIN_STATE_DIR": str(plugin_state_dir),
         "EDGECITADEL_SCHEMA_DIR": str(INSTALL_ROOT / "schemas"),
     }
+    if managed_protocol:
+        agent_id = record["inventory"]["agents"][0]["id"]
+        environment.update(
+            {
+                "EDGECITADEL_STATE_DIR": str(state_dir),
+                "EDGECITADEL_CONNECTOR_ID": f"managed-{agent_id}",
+            }
+        )
+    else:
+        environment.update(_plugin_nats_environment(node))
     started_at = time.time()
     restart_policy = record["inventory"]["runtime"].get("restartPolicy", "never")
+    if managed_protocol:
+        _start_agentd(state_dir)
+        agent_id = record["inventory"]["agents"][0]["id"]
+        connector_id = f"managed-{agent_id}"
+        connectors = _agentd_rpc(state_dir, "connector.list")
+        existing_connector = next(
+            (item for item in connectors if item.get("connector_id") == connector_id),
+            None,
+        )
+        inventory_skills = record["inventory"].get("skills", [])
+        capabilities = [
+            str(skill["skillId"])
+            for skill in inventory_skills
+            if isinstance(skill, dict) and skill.get("skillId")
+        ] or [
+            str(skill_name)
+            for skill_name in record["inventory"]["agents"][0]["skillNames"]
+        ]
+        process_status = next(
+            (
+                item
+                for item in _agentd_rpc(state_dir, "managed.list")
+                if item.get("package_id") == plugin_id
+            ),
+            None,
+        )
+        if (
+            process_status is not None
+            and process_status.get("runtime_state") == "running"
+            and existing_connector is not None
+            and existing_connector.get("session_active")
+        ):
+            print(
+                f"Managed Agent {plugin_id} is already running "
+                f"({process_status.get('detail', 'ready')})."
+            )
+            return
+        token_path = _connector_token_path(state_dir, connector_id)
+        if existing_connector is None:
+            registration = _agentd_rpc(
+                state_dir,
+                "connector.register",
+                connector_id=connector_id,
+                host_type="managed-agent",
+                agent_id=agent_id,
+                capabilities=capabilities,
+            )
+            _secure_write(token_path, str(registration["token"]) + "\n")
+        elif existing_connector.get("revoked") or not token_path.is_file():
+            replacement = _agentd_rpc(
+                state_dir,
+                "managed.connector.reissue",
+                connector_id=connector_id,
+                agent_id=agent_id,
+            )
+            _secure_write(token_path, str(replacement["token"]) + "\n")
+        _agentd_rpc(
+            state_dir,
+            "connector.configure",
+            connector_id=connector_id,
+            host_type="managed-agent",
+            agent_id=agent_id,
+            capabilities=capabilities,
+        )
+        launch_path = _write_managed_launch(
+            state_dir,
+            plugin_id,
+            argv=[executable, *command[1:]],
+            cwd=Path(record["path"]),
+            environment=environment,
+            log_path=log_path,
+            restart_policy=str(restart_policy),
+        )
+        record.update(
+            {
+                "pid": None,
+                "process_identity": None,
+                "enabled": True,
+                "started_at": started_at,
+                "launch_path": str(launch_path),
+            }
+        )
+        _write_json(_plugins_path(state_dir), state)
+        _sync_managed_agent_state(state_dir, state)
+        deadline = (
+            time.monotonic() + record["inventory"]["runtime"]["healthTimeoutSeconds"]
+        )
+        last_detail = "starting"
+        while time.monotonic() < deadline:
+            processes = _agentd_rpc(state_dir, "managed.list")
+            process_status = next(
+                (item for item in processes if item.get("package_id") == plugin_id),
+                None,
+            )
+            if process_status is not None:
+                last_detail = str(process_status.get("detail", "starting"))
+                if process_status.get("runtime_state") == "failed":
+                    break
+            connectors = _agentd_rpc(state_dir, "connector.list")
+            connector = next(
+                (
+                    item
+                    for item in connectors
+                    if item.get("connector_id") == connector_id
+                ),
+                None,
+            )
+            if (
+                process_status is not None
+                and process_status.get("runtime_state") == "running"
+                and connector is not None
+                and connector.get("session_active")
+            ):
+                print(
+                    f"Managed Agent {plugin_id} started ({last_detail}); "
+                    f"local session ready for {agent_id}"
+                )
+                return
+            time.sleep(0.25)
+        record["enabled"] = False
+        _write_json(_plugins_path(state_dir), state)
+        _sync_managed_agent_state(state_dir, state)
+        raise UserError(
+            f"Managed Agent {plugin_id} did not become ready ({last_detail}); "
+            f"inspect {log_path} and run '{_command_name()} service status'"
+        )
     runner = INSTALL_ROOT / "scripts" / "plugin_runner.py"
     if not runner.is_file():
-        raise UserError("Plugin process runner is missing from the installation")
+        raise UserError("AgentPlugin process runner is missing from the installation")
+    runner_argv = [
+        sys.executable,
+        str(runner),
+        "--restart-policy",
+        restart_policy,
+        "--",
+        executable,
+        *command[1:],
+    ]
     with log_path.open("ab") as log_file:
         process = subprocess.Popen(
-            [
-                sys.executable,
-                str(runner),
-                "--restart-policy",
-                restart_policy,
-                "--",
-                executable,
-                *command[1:],
-            ],
+            runner_argv,
             cwd=record["path"],
             env=environment,
             stdin=subprocess.DEVNULL,
@@ -1134,11 +2068,15 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
         )
     time.sleep(0.25)
     if process.poll() is not None:
-        raise UserError(f"plugin {plugin_id} exited during startup; inspect {log_path}")
+        raise UserError(
+            f"Managed Agent {plugin_id} exited during startup; inspect {log_path}"
+        )
     process_identity = _process_identity(process.pid)
     if process_identity is None:
         os.killpg(process.pid, signal.SIGTERM)
-        raise UserError(f"plugin {plugin_id} process identity could not be verified")
+        raise UserError(
+            f"Managed Agent {plugin_id} process identity could not be verified"
+        )
     record.update(
         {
             "pid": process.pid,
@@ -1148,6 +2086,7 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
         }
     )
     _write_json(_plugins_path(state_dir), state)
+    _sync_managed_agent_state(state_dir, state)
     agent_ids = [item["id"] for item in record["inventory"]["agents"]]
     deadline = time.monotonic() + record["inventory"]["runtime"]["healthTimeoutSeconds"]
     pending = set(agent_ids)
@@ -1155,7 +2094,7 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
         if not _pid_running(process.pid):
             _stop_plugin(state_dir, plugin_id, quiet=True)
             raise UserError(
-                f"plugin {plugin_id} exited during registration; inspect {log_path}"
+                f"Managed Agent {plugin_id} exited during registration; inspect {log_path}"
             )
         for agent_id in list(pending):
             try:
@@ -1181,22 +2120,49 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
     if pending:
         _stop_plugin(state_dir, plugin_id, quiet=True)
         raise UserError(
-            f"plugin {plugin_id} started but agents did not become visible: "
+            f"Managed Agent {plugin_id} started but Agents did not become visible: "
             f"{', '.join(sorted(pending))}; inspect {log_path}"
         )
     print(
-        f"Plugin {plugin_id} started (pid {process.pid}); visible agents: "
+        f"Managed Agent {plugin_id} started (pid {process.pid}); visible agents: "
         f"{', '.join(agent_ids)}"
     )
 
 
 def _stop_plugin(state_dir: Path, plugin_id: str, *, quiet: bool = False) -> None:
     state, record = _plugin_record(state_dir, plugin_id)
+    inventory = record.get("inventory", {})
+    package = inventory.get("package", {}) if isinstance(inventory, dict) else {}
+    if isinstance(package, dict) and package.get("kind") == "ManagedAgent":
+        record.update({"pid": None, "process_identity": None, "enabled": False})
+        _write_json(_plugins_path(state_dir), state)
+        _sync_managed_agent_state(state_dir, state)
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            processes = _agentd_rpc(state_dir, "managed.list")
+            observed = next(
+                (item for item in processes if item.get("package_id") == plugin_id),
+                None,
+            )
+            if observed is None or observed.get("runtime_state") == "stopped":
+                if not quiet:
+                    print(f"Managed Agent {plugin_id} stopped.")
+                return
+            if observed.get("runtime_state") == "failed":
+                raise UserError(
+                    f"Managed Agent {plugin_id} could not be stopped: "
+                    f"{observed.get('detail', 'unknown failure')}"
+                )
+            time.sleep(0.1)
+        raise UserError(
+            f"Managed Agent {plugin_id} did not stop; run "
+            f"'{_command_name()} service restart' and inspect its status"
+        )
     pid = record.get("pid")
     if _pid_running(pid):
         if not _plugin_process_owned(record):
             raise UserError(
-                f"plugin {plugin_id} has an unverified live PID {pid}; refusing to "
+                f"Managed Agent {plugin_id} has an unverified live PID {pid}; refusing to "
                 "signal a process EdgeCitadel does not own"
             )
         assert isinstance(pid, int)
@@ -1204,15 +2170,15 @@ def _stop_plugin(state_dir: Path, plugin_id: str, *, quiet: bool = False) -> Non
             process_group = os.getpgid(pid)
         except OSError as error:
             raise UserError(
-                f"plugin {plugin_id} process group is unavailable"
+                f"Managed Agent {plugin_id} process group is unavailable"
             ) from error
         if process_group != pid:
             raise UserError(
-                f"plugin {plugin_id} PID {pid} is not its owned process-group leader"
+                f"Managed Agent {plugin_id} PID {pid} is not its owned process-group leader"
             )
         if not _plugin_process_owned(record):
             raise UserError(
-                f"plugin {plugin_id} process identity changed before signaling"
+                f"Managed Agent {plugin_id} process identity changed before signaling"
             )
         os.killpg(process_group, signal.SIGTERM)
         deadline = time.monotonic() + 5
@@ -1222,31 +2188,32 @@ def _stop_plugin(state_dir: Path, plugin_id: str, *, quiet: bool = False) -> Non
             os.killpg(process_group, signal.SIGKILL)
     record.update({"pid": None, "process_identity": None, "enabled": False})
     _write_json(_plugins_path(state_dir), state)
+    _sync_managed_agent_state(state_dir, state)
     if not quiet:
-        print(f"Plugin {plugin_id} stopped.")
+        print(f"Managed Agent {plugin_id} stopped.")
 
 
 def _assert_agent_ids_available(
     node: dict[str, Any], inventory: dict[str, Any], plugin_state: dict[str, Any]
 ) -> None:
-    """Reject agent identities already owned by a different local/fleet Plugin."""
+    """Reject identities already owned by a different local/fleet Managed Agent."""
     plugin_id = inventory["package"]["id"]
     requested = {agent["id"] for agent in inventory["agents"]}
-    for other_plugin_id, record in plugin_state["plugins"].items():
+    for other_plugin_id, record in plugin_state["managed_agents"].items():
         if other_plugin_id == plugin_id:
             continue
         claimed = {agent["id"] for agent in record["inventory"]["agents"]}
         conflicts = sorted(requested & claimed)
         if conflicts:
             raise UserError(
-                f"agent identity already belongs to local plugin {other_plugin_id}: "
+                f"Agent identity already belongs to local Managed Agent {other_plugin_id}: "
                 f"{', '.join(conflicts)}"
             )
 
     fleet = _http_json(f"{node['core_url']}/api/agents", timeout=2)
     if not isinstance(fleet, list):
         raise UserError("Core returned an invalid agent inventory")
-    existing_same_plugin = plugin_id in plugin_state["plugins"]
+    existing_same_plugin = plugin_id in plugin_state["managed_agents"]
     for agent in fleet:
         if not isinstance(agent, dict) or agent.get("agent_id") not in requested:
             continue
@@ -1271,7 +2238,7 @@ def _assert_agent_ids_available(
 
 @contextmanager
 def _installable_plugin_source(source: Path, state_dir: Path) -> Iterator[Path]:
-    """Stage pip-bundled Plugins without installer-generated bytecode files."""
+    """Stage pip-bundled Managed Agents without installer-generated bytecode."""
     bundled_root = (INSTALL_ROOT / "plugins").resolve()
     if not IS_PIP or not source.is_relative_to(bundled_root):
         yield source
@@ -1299,12 +2266,11 @@ def _install_plugin_source(
     state = _load_plugins(state_dir)
     _assert_agent_ids_available(node, inventory, state)
     _confirm_plugin(inventory, args.yes)
-    existing = state["plugins"].get(plugin_id)
-    if existing and existing.get("path") != str(target):
-        raise UserError(
-            f"plugin {plugin_id} is already installed; "
-            "remove it before changing versions"
-        )
+    existing = state["managed_agents"].get(plugin_id)
+    previous = json.loads(json.dumps(existing)) if existing else None
+    previous_enabled = bool(existing and existing.get("enabled"))
+    upgrading = bool(existing and existing.get("path") != str(target))
+    created_target = False
     if not target.exists():
         executable_files = {
             path.relative_to(source)
@@ -1317,6 +2283,7 @@ def _install_plugin_source(
             shutil.rmtree(temporary)
         shutil.copytree(source, temporary, symlinks=True)
         temporary.rename(target)
+        created_target = True
         for path in target.rglob("*"):
             mode = 0o500 if path.is_dir() else 0o400
             if path.is_file() and path.relative_to(target) in executable_files:
@@ -1327,28 +2294,118 @@ def _install_plugin_source(
         target / "plugin.lock.json"
     ).read_bytes():
         raise UserError(
-            f"plugin {plugin_id} {package['version']} is already installed with different content; "
+            f"Managed Agent {plugin_id} {package['version']} is already installed with different content; "
             "publish a new version or remove the installed copy first"
         )
     installed_inventory = _validate_plugin(target, state_dir)
-    state["plugins"][plugin_id] = {
+    if existing is not None and not upgrading:
+        print(f"Managed Agent {plugin_id} is already installed.")
+        if not args.keep_disabled and not existing.get("enabled"):
+            _start_plugin(state_dir, plugin_id)
+        return 0
+    if upgrading and previous_enabled:
+        try:
+            _stop_plugin(state_dir, plugin_id, quiet=True)
+        except UserError:
+            if created_target:
+                _remove_managed_package_tree(target)
+            raise
+        state = _load_plugins(state_dir)
+    state["managed_agents"][plugin_id] = {
         "path": str(target),
         "inventory": installed_inventory,
         "installed_at": existing.get("installed_at") if existing else int(time.time()),
-        "enabled": bool(existing and existing.get("enabled")),
-        "pid": existing.get("pid") if existing else None,
-        "process_identity": existing.get("process_identity") if existing else None,
+        "enabled": False,
+        "pid": None,
+        "process_identity": None,
+        "launch_path": None,
     }
     _write_json(_plugins_path(state_dir), state)
-    print(f"Plugin {plugin_id} installed in the Supervisor-owned store.")
+    _sync_managed_agent_state(state_dir, state)
+    action = "upgraded" if upgrading else "installed"
+    print(f"Managed Agent {plugin_id} {action} in the Agent service store.")
     if not args.keep_disabled:
-        _start_plugin(state_dir, plugin_id)
+        try:
+            _start_plugin(state_dir, plugin_id)
+        except UserError as error:
+            rollback = _load_plugins(state_dir)
+            if previous is None:
+                rollback["managed_agents"].pop(plugin_id, None)
+            else:
+                previous.update(
+                    enabled=False,
+                    pid=None,
+                    process_identity=None,
+                )
+                rollback["managed_agents"][plugin_id] = previous
+            _write_json(_plugins_path(state_dir), rollback)
+            _sync_managed_agent_state(state_dir, rollback)
+            previous_package = (
+                previous.get("inventory", {}).get("package", {})
+                if isinstance(previous, dict)
+                else {}
+            )
+            if (
+                installed_inventory["package"].get("kind") == "ManagedAgent"
+                and previous_package.get("kind") != "ManagedAgent"
+            ):
+                connector_id = f"managed-{installed_inventory['agents'][0]['id']}"
+                connectors = _agentd_rpc(state_dir, "connector.list")
+                connector = next(
+                    (
+                        item
+                        for item in connectors
+                        if item.get("connector_id") == connector_id
+                    ),
+                    None,
+                )
+                if connector is not None and not connector.get("revoked"):
+                    _agentd_rpc(
+                        state_dir, "connector.revoke", connector_id=connector_id
+                    )
+                _connector_token_path(state_dir, connector_id).unlink(missing_ok=True)
+            _managed_launch_path(state_dir, plugin_id).unlink(missing_ok=True)
+            runtime_root = (
+                state_dir
+                / "plugin-runtimes"
+                / plugin_id
+                / str(installed_inventory["package"]["version"])
+            )
+            if runtime_root.exists():
+                shutil.rmtree(runtime_root)
+            recovery = "previous state restored"
+            if previous_enabled:
+                try:
+                    _start_plugin(state_dir, plugin_id)
+                    recovery = "previous version restarted"
+                except UserError:
+                    recovery = (
+                        "previous version restored but could not restart; run "
+                        f"'{_command_name()} agent start {plugin_id}'"
+                    )
+            if created_target:
+                _remove_managed_package_tree(target)
+            raise UserError(
+                f"Managed Agent {plugin_id} failed readiness; {recovery}. "
+                f"Original failure: {error}"
+            ) from error
     return 0
 
 
+def _remove_managed_package_tree(target: Path) -> None:
+    if not target.exists():
+        return
+    for path in sorted(target.rglob("*"), reverse=True):
+        path.chmod(0o700 if path.is_dir() else 0o600)
+    target.chmod(0o700)
+    shutil.rmtree(target)
+
+
 def command_plugin_install(args: argparse.Namespace) -> int:
+    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     node = _load_node(state_dir)
+    _prepare_managed_agent_service(args, state_dir)
     requested_source = Path(args.source).expanduser()
     bundled_source = INSTALL_ROOT / "plugins" / args.source
     example_source = INSTALL_ROOT / "plugins" / "examples" / args.source
@@ -1365,36 +2422,79 @@ def command_plugin_install(args: argparse.Namespace) -> int:
 
 
 def command_plugin_list(args: argparse.Namespace) -> int:
+    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     _load_node(state_dir)
-    plugins = _load_plugins(state_dir)["plugins"]
+    _prepare_managed_agent_service(args, state_dir)
+    plugins = _load_plugins(state_dir)["managed_agents"]
     if not plugins:
         print(
-            f"No plugins installed. Use: {_command_name()} plugin install <path-or-name>"
+            f"No Managed Agents installed. Use: {_command_name()} agent install <path-or-name>"
         )
         return 0
+    managed_status = {
+        item["package_id"]: item for item in _agentd_rpc(state_dir, "managed.list")
+    }
     for plugin_id, record in sorted(plugins.items()):
-        running, _detail = _plugin_process_detail(record)
+        package = record["inventory"]["package"]
+        if package.get("kind") == "ManagedAgent":
+            observation = managed_status.get(plugin_id, {})
+            running = observation.get("runtime_state") == "running"
+        else:
+            running, _detail = _plugin_process_detail(record)
         agents = ",".join(item["id"] for item in record["inventory"]["agents"])
         print(f"{plugin_id:24} {'running' if running else 'stopped':8} agents={agents}")
     return 0
 
 
 def command_plugin_status(args: argparse.Namespace) -> int:
+    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
-    node = _load_node(state_dir)
+    _load_node(state_dir)
+    _prepare_managed_agent_service(args, state_dir)
     _, record = _plugin_record(state_dir, args.plugin_id)
-    running, process_detail = _plugin_process_detail(record)
-    print(f"plugin: {args.plugin_id}")
+    package = record["inventory"]["package"]
+    managed_protocol = package.get("kind") == "ManagedAgent"
+    if managed_protocol:
+        statuses = _agentd_rpc(state_dir, "managed.list")
+        observation = next(
+            (item for item in statuses if item.get("package_id") == args.plugin_id),
+            {},
+        )
+        running = observation.get("runtime_state") == "running"
+        process_detail = str(observation.get("detail", "stopped"))
+        connectors = _agentd_rpc(state_dir, "connector.list")
+    else:
+        running, process_detail = _plugin_process_detail(record)
+        connectors = []
+    print(f"Managed Agent: {args.plugin_id}")
     print(f"process: {process_detail}")
     result = 0 if running else 1
     for declared_agent in record["inventory"]["agents"]:
         agent_id = declared_agent["id"]
-        try:
-            agent = _http_json(f"{node['core_url']}/api/agents/{agent_id}", timeout=1)
-            state = agent.get("agent_state", "unknown")
-        except UserError:
-            state = "not registered"
+        if managed_protocol:
+            connector = next(
+                (
+                    item
+                    for item in connectors
+                    if item.get("agent_id") == agent_id and not item.get("revoked")
+                ),
+                None,
+            )
+            state = (
+                "online"
+                if connector is not None and connector.get("session_active")
+                else "unavailable"
+            )
+        else:
+            node = _load_node(state_dir)
+            try:
+                agent = _http_json(
+                    f"{node['core_url']}/api/agents/{agent_id}", timeout=1
+                )
+                state = agent.get("agent_state", "unknown")
+            except UserError:
+                state = "not registered"
         print(f"agent {agent_id}: {state}")
         if state != "online":
             result = 1
@@ -1402,17 +2502,28 @@ def command_plugin_status(args: argparse.Namespace) -> int:
 
 
 def command_plugin_start(args: argparse.Namespace) -> int:
-    _start_plugin(_state_dir(args.state_dir), args.plugin_id)
+    _warn_legacy_plugin_alias(args)
+    state_dir = _state_dir(args.state_dir)
+    _load_node(state_dir)
+    _prepare_managed_agent_service(args, state_dir)
+    _start_plugin(state_dir, args.plugin_id)
     return 0
 
 
 def command_plugin_stop(args: argparse.Namespace) -> int:
-    _stop_plugin(_state_dir(args.state_dir), args.plugin_id)
+    _warn_legacy_plugin_alias(args)
+    state_dir = _state_dir(args.state_dir)
+    _load_node(state_dir)
+    _prepare_managed_agent_service(args, state_dir)
+    _stop_plugin(state_dir, args.plugin_id)
     return 0
 
 
 def command_plugin_logs(args: argparse.Namespace) -> int:
+    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
+    _load_node(state_dir)
+    _prepare_managed_agent_service(args, state_dir)
     _plugin_record(state_dir, args.plugin_id)
     path = state_dir / "logs" / f"{args.plugin_id}.log"
     if not path.exists():
@@ -1424,32 +2535,53 @@ def command_plugin_logs(args: argparse.Namespace) -> int:
 
 
 def command_plugin_remove(args: argparse.Namespace) -> int:
+    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
+    _load_node(state_dir)
+    _prepare_managed_agent_service(args, state_dir)
     state, record = _plugin_record(state_dir, args.plugin_id)
     _stop_plugin(state_dir, args.plugin_id, quiet=True)
     state = _load_plugins(state_dir)
-    record = state["plugins"].pop(args.plugin_id)
+    record = state["managed_agents"].pop(args.plugin_id)
+    package = record["inventory"]["package"]
+    if package.get("kind") == "ManagedAgent":
+        agent_id = record["inventory"]["agents"][0]["id"]
+        connector_id = f"managed-{agent_id}"
+        connector = next(
+            (
+                item
+                for item in _agentd_rpc(state_dir, "connector.list")
+                if item.get("connector_id") == connector_id
+            ),
+            None,
+        )
+        if connector is not None and not connector.get("revoked"):
+            _agentd_rpc(state_dir, "connector.revoke", connector_id=connector_id)
+        _connector_token_path(state_dir, connector_id).unlink(missing_ok=True)
+        _managed_launch_path(state_dir, args.plugin_id).unlink(missing_ok=True)
     target = Path(record["path"])
-    if target.exists():
-        for path in sorted(target.rglob("*"), reverse=True):
-            path.chmod(0o700 if path.is_dir() else 0o600)
-        target.chmod(0o700)
-        shutil.rmtree(target)
+    _remove_managed_package_tree(target)
     runtime_root = state_dir / "plugin-runtimes" / args.plugin_id
     if runtime_root.exists():
         shutil.rmtree(runtime_root)
     _write_json(_plugins_path(state_dir), state)
+    _sync_managed_agent_state(state_dir, state)
     print(
-        f"Plugin {args.plugin_id} and its dependency runtime were removed; "
-        "logs and Plugin data were preserved."
+        f"Managed Agent {args.plugin_id} and its dependency runtime were removed; "
+        "logs and Agent data were preserved."
     )
     return 0
 
 
 def command_supervisor(args: argparse.Namespace) -> int:
+    print(
+        "warning: 'edgecitadel supervisor' is deprecated; use "
+        "'edgecitadel service' and 'edgecitadel agent'",
+        file=sys.stderr,
+    )
     state_dir = _state_dir(args.state_dir)
     node = _load_node(state_dir)
-    plugins = _load_plugins(state_dir)["plugins"]
+    plugins = _load_plugins(state_dir)["managed_agents"]
     if args.action == "status":
         return command_plugin_list(args)
     if args.action == "start":
@@ -1464,7 +2596,7 @@ def command_supervisor(args: argparse.Namespace) -> int:
         for plugin_id in sorted(plugins):
             _stop_plugin(state_dir, plugin_id)
     if not plugins:
-        print("No plugins installed.")
+        print("No Managed Agents installed.")
     return 0
 
 
@@ -1561,7 +2693,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--messaging-mode",
         choices=("single-client", "nats_leaf"),
         default="single-client",
-        help="Plugin messaging topology (default: single-client)",
+        help="Managed Agent messaging topology (default: single-client)",
     )
     join.add_argument("--state-dir", help=argparse.SUPPRESS)
     join.set_defaults(func=command_join)
@@ -1580,7 +2712,66 @@ def _build_parser() -> argparse.ArgumentParser:
     down.add_argument("--state-dir", help=argparse.SUPPRESS)
     down.set_defaults(func=command_down)
 
-    plugin = subparsers.add_parser("plugin", help="Install and operate agent plugins")
+    service = subparsers.add_parser(
+        "service", help="Operate the host-local EdgeCitadel service"
+    )
+    service.add_argument("action", choices=("start", "stop", "restart", "status"))
+    service.add_argument("--json", action="store_true")
+    service.add_argument("--state-dir", help=argparse.SUPPRESS)
+    service.set_defaults(func=command_service)
+
+    agent = subparsers.add_parser(
+        "agent", help="Install and operate EdgeCitadel-managed Agents"
+    )
+    agent_commands = agent.add_subparsers(dest="agent_command", required=True)
+    agent_install = agent_commands.add_parser(
+        "install", help="Validate, approve, install, and start a Managed Agent"
+    )
+    agent_install.add_argument("source")
+    agent_install.add_argument(
+        "--yes", action="store_true", help="Approve the displayed permissions"
+    )
+    agent_install.add_argument(
+        "--keep-disabled", action="store_true", help="Install without starting"
+    )
+    agent_install.add_argument("--state-dir", help=argparse.SUPPRESS)
+    agent_install.set_defaults(func=command_plugin_install)
+    agent_list = agent_commands.add_parser("list", help="List Managed Agents")
+    agent_list.add_argument("--state-dir", help=argparse.SUPPRESS)
+    agent_list.set_defaults(func=command_plugin_list)
+    agent_status = agent_commands.add_parser(
+        "status", help="Show one Managed Agent runtime"
+    )
+    agent_status.add_argument("plugin_id")
+    agent_status.add_argument("--state-dir", help=argparse.SUPPRESS)
+    agent_status.set_defaults(func=command_plugin_status)
+    for action, func in (
+        ("start", command_plugin_start),
+        ("stop", command_plugin_stop),
+    ):
+        action_parser = agent_commands.add_parser(
+            action, help=f"{action.title()} one Managed Agent"
+        )
+        action_parser.add_argument("plugin_id")
+        action_parser.add_argument("--state-dir", help=argparse.SUPPRESS)
+        action_parser.set_defaults(func=func)
+    agent_logs = agent_commands.add_parser(
+        "logs", help="Show recent Managed Agent output"
+    )
+    agent_logs.add_argument("plugin_id")
+    agent_logs.add_argument("--lines", type=int, default=80)
+    agent_logs.add_argument("--state-dir", help=argparse.SUPPRESS)
+    agent_logs.set_defaults(func=command_plugin_logs)
+    agent_remove = agent_commands.add_parser(
+        "remove", help="Stop and remove a Managed Agent"
+    )
+    agent_remove.add_argument("plugin_id")
+    agent_remove.add_argument("--state-dir", help=argparse.SUPPRESS)
+    agent_remove.set_defaults(func=command_plugin_remove)
+
+    plugin = subparsers.add_parser(
+        "plugin", help="Deprecated alias for Managed Agent operations"
+    )
     plugin_commands = plugin.add_subparsers(dest="plugin_command", required=True)
     install = plugin_commands.add_parser(
         "install", help="Validate, approve, install, and start a plugin"
@@ -1625,10 +2816,103 @@ def _build_parser() -> argparse.ArgumentParser:
     remove.add_argument("--state-dir", help=argparse.SUPPRESS)
     remove.set_defaults(func=command_plugin_remove)
 
-    supervisor = subparsers.add_parser("supervisor", help="Operate all local plugins")
+    supervisor = subparsers.add_parser(
+        "supervisor", help="Deprecated compatibility alias"
+    )
     supervisor.add_argument("action", choices=("start", "stop", "status"))
     supervisor.add_argument("--state-dir", help=argparse.SUPPRESS)
     supervisor.set_defaults(func=command_supervisor)
+
+    connector = subparsers.add_parser(
+        "connector", help="Register and inspect Native Agent Plugins"
+    )
+    connector_commands = connector.add_subparsers(
+        dest="connector_action", required=True
+    )
+    connector_path = connector_commands.add_parser(
+        "path", help="Print the packaged native-plugin path for a host"
+    )
+    connector_path.add_argument("host_type", choices=("pi", "claude-code", "codex"))
+    connector_path.set_defaults(func=command_connector)
+    connector_register = connector_commands.add_parser(
+        "register", help="Register a Native Agent Plugin"
+    )
+    connector_register.add_argument("connector_id")
+    connector_register.add_argument(
+        "--host-type", choices=("pi", "claude-code", "codex"), required=True
+    )
+    connector_register.add_argument("--agent-id")
+    connector_register.add_argument("--state-dir", help=argparse.SUPPRESS)
+    connector_register.set_defaults(func=command_connector)
+    connector_list = connector_commands.add_parser(
+        "list", help="List Native Agent Plugins"
+    )
+    connector_list.add_argument("--json", action="store_true")
+    connector_list.add_argument("--state-dir", help=argparse.SUPPRESS)
+    connector_list.set_defaults(func=command_connector)
+    connector_status = connector_commands.add_parser(
+        "status", help="Show one Native Agent Plugin registration and session"
+    )
+    connector_status.add_argument("connector_id")
+    connector_status.add_argument("--json", action="store_true")
+    connector_status.add_argument("--state-dir", help=argparse.SUPPRESS)
+    connector_status.set_defaults(func=command_connector)
+    connector_revoke = connector_commands.add_parser(
+        "revoke", help="Revoke a Native Agent Plugin"
+    )
+    connector_revoke.add_argument("connector_id")
+    connector_revoke.add_argument("--state-dir", help=argparse.SUPPRESS)
+    connector_revoke.set_defaults(func=command_connector)
+
+    task = subparsers.add_parser("task", help="Inspect local Agent task state")
+    task_commands = task.add_subparsers(dest="task_action", required=True)
+    task_list = task_commands.add_parser("list", help="List local tasks")
+    task_list.add_argument("--connector-id", required=True)
+    task_list.add_argument("--pending", action="store_true")
+    task_list.add_argument("--state-dir", help=argparse.SUPPRESS)
+    task_list.set_defaults(func=command_task)
+    task_show = task_commands.add_parser("show", help="Show one local task")
+    task_show.add_argument("task_id")
+    task_show.add_argument("--connector-id", required=True)
+    task_show.add_argument("--state-dir", help=argparse.SUPPRESS)
+    task_show.set_defaults(func=command_task)
+    task_cancel = task_commands.add_parser("cancel", help="Cancel one local task")
+    task_cancel.add_argument("task_id")
+    task_cancel.add_argument("--connector-id", required=True)
+    task_cancel.add_argument("--reason")
+    task_cancel.add_argument("--state-dir", help=argparse.SUPPRESS)
+    task_cancel.set_defaults(func=command_task)
+
+    trace = subparsers.add_parser("trace", help="Inspect local metadata-only traces")
+    trace_commands = trace.add_subparsers(dest="trace_action", required=True)
+    trace_list = trace_commands.add_parser("list", help="List local traces")
+    trace_list.add_argument("--connector-id", required=True)
+    trace_list.add_argument("--limit", type=int, default=100)
+    trace_list.add_argument("--state-dir", help=argparse.SUPPRESS)
+    trace_list.set_defaults(func=command_trace)
+    trace_show = trace_commands.add_parser("show", help="Show one local trace")
+    trace_show.add_argument("trace_id")
+    trace_show.add_argument("--connector-id", required=True)
+    trace_show.add_argument("--state-dir", help=argparse.SUPPRESS)
+    trace_show.set_defaults(func=command_trace)
+    trace_purge = trace_commands.add_parser(
+        "purge", help="Delete local telemetry without deleting identity or tasks"
+    )
+    trace_purge.add_argument("--connector-id", required=True)
+    trace_purge.add_argument("--before-ms", type=int)
+    trace_purge.add_argument("--state-dir", help=argparse.SUPPRESS)
+    trace_purge.set_defaults(func=command_trace)
+
+    native_mcp = subparsers.add_parser(
+        "native-mcp", help="Run the MCP bridge for a Native Agent Plugin"
+    )
+    native_mcp.add_argument(
+        "--host-type", choices=("pi", "claude-code", "codex"), required=True
+    )
+    native_mcp.add_argument("--connector-id")
+    native_mcp.add_argument("--agent-id")
+    native_mcp.add_argument("--state-dir", help=argparse.SUPPRESS)
+    native_mcp.set_defaults(func=command_native_mcp)
 
     messaging = subparsers.add_parser(
         "messaging", help="Operate the Edge-local NATS service"

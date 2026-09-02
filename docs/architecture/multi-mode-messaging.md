@@ -1,16 +1,16 @@
 # Multi-mode messaging technical design
 
-Status: Implemented and verified for the maintained multi-mode path
+Status: Implemented and re-verified with agentd
 Owner: EdgeCitadel maintainers
 Date: 2026-08-31
 
 ## 1. Executive mental model
 
 EdgeCitadel separates node role (`core` or `edge`) from messaging mode
-(`single-client` or `nats_leaf`). `single-client` preserves the current path in
-which plugins connect directly to Core NATS. `nats_leaf` runs one loopback-only
-NATS server on the Edge and connects it outbound to Core's authenticated Leaf
-listener. Durable inboxes are owned by the destination node, so exactly one
+(`single-client` or `nats_leaf`). In `single-client`, the host-local agentd
+service connects directly to Core NATS. `nats_leaf` runs one loopback-only NATS
+server on the Edge and agentd connects to it while the Leaf connects outbound
+to Core. Durable inboxes are owned by the destination node, so exactly one
 JetStream stores a given agent inbox subject. A disconnected Leaf preserves
 same-host messaging but rejects cross-node durable publication rather than
 claiming acceptance that cannot be recovered.
@@ -61,6 +61,9 @@ integration test now proves:
 3. A disconnected Edge still accepts its local destination subjects.
 4. A disconnected Edge cannot durably publish a remote destination subject.
 5. Reconnection does not copy or replay already acknowledged messages.
+6. Restarting the local NATS process preserves its destination-owned messages.
+7. Wrong, rotated, or revoked Leaf credentials block remote transport while the
+   local destination remains usable.
 
 This matches current NATS behavior: a Leaf is an outbound interest bridge, not
 automatic storage replication; separate local JetStream requires a domain.
@@ -76,7 +79,7 @@ documentation.
 - Preserve all current `single-client` commands and behavior.
 - Make `join --messaging-mode nats_leaf` install a usable local messaging path.
 - Keep same-host agent messaging available during Core or Leaf outages.
-- Separate plugin, local-client, and Leaf credentials.
+- Separate agentd client, local-client, connector, and Leaf credentials.
 - Make process, local client, JetStream, Leaf, and Core health independently
   observable.
 - Make state writes atomic and rollback local partial configuration on failure.
@@ -86,7 +89,7 @@ documentation.
 - Offline communication between different Edge hosts.
 - Automatic mode conversion or hardware-based selection.
 - JetStream mirrors or sources in this increment.
-- Full per-plugin accounts/JWTs, gateways, superclusters, Kubernetes, or a
+- Full per-node accounts/JWTs, gateways, superclusters, Kubernetes, or a
   brokerless transport.
 - Publishing a Homebrew tap, release, PR, or Git commit.
 
@@ -120,7 +123,8 @@ duplicate window until measured workloads justify a change.
 
 ```mermaid
 flowchart LR
-    P[Plugin process] -->|NATS client + fleet token| C[Core NATS :4222]
+    P[Managed / Native integrations] -->|private local API| D[agentd]
+    D -->|NATS client + fleet token| C[Core NATS :4222]
     C --> JS[(Core JetStream)]
     A[Aggregator] -->|NATS client| C
 ```
@@ -130,12 +134,14 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph EdgeHost[Edge host]
-        P1[Plugin A]
-        P2[Plugin B]
+        P1[Managed Agent]
+        P2[Native Agent Plugin]
+        D[agentd]
         L[Local NATS :4223]
         EJS[(Edge JetStream domain)]
-        P1 -->|loopback + local token| L
-        P2 -->|loopback + local token| L
+        P1 -->|private local API| D
+        P2 -->|private local API| D
+        D -->|loopback + local token| L
         L --> EJS
     end
     L -->|outbound authenticated Leaf| CL[Core Leaf listener :7422]
@@ -162,12 +168,13 @@ active streams may claim the same subject.
 
 | Unit | Owns | Requests/reports | Forbidden |
 |---|---|---|---|
-| EdgeCitadel CLI | mode selection, state, config, lifecycle, stream subject reconciliation | Core enrollment; local readiness | Giving Leaf credentials to plugins |
+| EdgeCitadel CLI | mode selection, state, config, and user intent | Core enrollment; agentd/local readiness | Acting as a hidden process supervisor |
+| agentd | NATS client, exact inbox consumers, durable outbox, task state, connector sessions | selected broker endpoint and Core subjects | Giving broker credentials to Agent processes |
 | Local NATS | local client ingress, local JetStream, outbound Leaf | `/healthz`, `/jsz`, `/leafz` on loopback | Listening publicly for clients/monitoring |
 | Core NATS | Core/single-client inboxes and Leaf listener | Leaf authentication and routing | Dialing an Edge |
 | Aggregator | enrollment, registry, observability, Core stream bootstrap | Core NATS | Relaying ordinary A2A payloads at application level |
-| Supervisor | plugin validation and process lifecycle | Broker endpoint selected from node state | Choosing/changing messaging mode |
-| Plugin | canonical subjects and envelope processing | Only supplied local or Core client endpoint | Reading Leaf credentials or editing NATS config |
+| agentd Managed Agent supervisor | process lifecycle and local session recovery | durable desired state | Choosing/changing messaging mode |
+| Managed/Native Agent integration | domain work and host-native tools | scoped agentd socket API | Reading NATS/Leaf credentials or editing broker config |
 
 ## 8. State and interfaces
 
@@ -203,29 +210,18 @@ the separately scoped Leaf username/password only after the invitation is
 redeemed. The visible `ecjoin://` payload remains v1 and never contains a
 long-lived Leaf credential.
 
-### Plugin environment
+### agentd broker environment
 
 | Mode | `NATS_URL` | `NATS_TOKEN` | `NATS_DOMAIN` |
 |---|---|---|---|
 | `single-client` | Core client URL | fleet client credential | unset |
 | `nats_leaf` | `nats://127.0.0.1:4223` | Edge-local client credential | Edge-specific domain |
 
-The maintained Python Agent implementations now live only as lock-validated
-packages under `plugins/`; the former `adapters/` runtime tree has been removed.
-Gemma, Watchdog, Shell, Home Assistant, and Hermes each declare their runtime,
-skills, permissions, Plugin-specific requirements, configuration variables,
-and secret names in `plugin.yaml`. Shared Agent Card, heartbeat, durable inbox,
-result, and JetStream code lives in `edgecitadel_plugin_runtime` inside the
-Plugin Toolkit.
-
-The Supervisor creates one versioned Python environment per Plugin, installs
-the shared runtime plus the Plugin's declared requirements, and launches the
-package from its immutable installed root. It does not pass through the CLI's
-whole environment: only a small process baseline, explicitly declared
-`runtime.environmentVariables`, explicitly declared `security.secrets`, and
-the mode-selected NATS client settings are present. The browser-scoped
-`openclaw-client` remains separate because its short-lived operator credential
-and relay topology are a different trust boundary, not a host Agent Plugin.
+Only agentd receives these mode-selected broker values. Managed Agents receive
+the private agentd socket location plus their declared configuration; Native
+Agent Plugins receive a scoped connector token. Neither integration type gets
+NATS or Leaf credentials. Legacy `AgentPlugin` packages retain the table above
+only during the compatibility window.
 
 ## 9. Runtime scenarios
 
@@ -300,7 +296,7 @@ local client, JetStream, and Leaf evidence overrides a stale lifecycle label.
 - Publication retries reuse envelope `id` as `Nats-Msg-Id`; the five-minute
   stream duplicate window handles ambiguous publisher ACKs.
 - A stream subject ownership conflict is a configuration failure and blocks
-  plugin start.
+  Agent readiness.
 - Mirrors and sources are deliberately absent. Their direction is therefore
   neither Core-to-Edge nor Edge-to-Core in this increment.
 - Backpressure remains `discard=new`, so a full stream rejects new durable
@@ -319,15 +315,15 @@ local client, JetStream, and Leaf evidence overrides a stale lifecycle label.
   increment, so revocation is fleet-wide and a compromised Edge can authenticate
   as another Leaf. Per-node NKey/JWT credentials plus accounts and subject ACLs
   are the required follow-up.
-- **Known residual risk:** plugins on one Edge still share a local client token;
-  broker-enforced per-plugin ACLs are deferred, so Supervisor permission review
-  is not yet a complete security boundary.
+- **Mitigated in new integrations:** agentd alone holds the node client token;
+  Native Agent Plugins use separate local connector credentials. Legacy direct
+  NATS packages remain a compatibility risk until converted or removed.
 
 ## 13. Failure analysis
 
 | Failure | Durable effect | User-visible classification | Recovery |
 |---|---|---|---|
-| Plugin healthy, Local NATS down | no new local durable accepts | failed | `messaging restart`, then plugin restart |
+| Agent healthy, Local NATS down | local SQLite tasks remain explicit; no remote durable accepts | degraded | `messaging restart`; agentd reconnects |
 | Local NATS healthy, Leaf down | local accepts continue; remote fails | degraded | automatic Leaf reconnect |
 | Leaf restored, no subject interest | remote publish still fails | degraded/config error | reconcile agent stream subject |
 | Duplicate publish ID | one destination store within window | healthy | return existing ACK semantics |
@@ -361,8 +357,8 @@ details.
 2. New joins write v2 state atomically.
 3. Core stream reconciliation replaces wildcard ownership with the exact
    filters of existing durable consumers plus the Aggregator subject.
-4. Updated managed plugins add their exact subject before starting.
-5. Mixed-version plugins that rely on the old wildcard but do not reconcile a
+4. agentd adds each active connector's exact subject before publishing presence.
+5. Mixed-version packages that rely on the old wildcard but do not reconcile a
    subject are unsupported for `nats_leaf` and fail readiness visibly.
 6. Mode conversion is not part of `join`; conflicting reruns fail without
    mutation.
@@ -380,22 +376,12 @@ details.
 - Implemented config coverage: Core and Edge `nats-server -t`, listener addresses, credential
   separation, domain/path, no placeholders.
 - Implemented isolated NATS integration: Core plus two Leaf Edges, local and
-  remote destinations, disconnect/reconnect, duplicate IDs, and wrong Leaf
-  credentials. Full product-stack verification covers the remaining plugin and
-  lifecycle journey.
-- Passed repository gates: backend syntax/focused tests, complete Plugin Toolkit
-  tests/type gate, Formula style, full Docker restart and health checks, focused
-  Playwright operator journey, source and simulated-Cellar lifecycle.
-- Real product proof: nats_leaf join, layered health, Echo command/result, Core
-  outage with one local durable accept, reconnect with exactly one result, local
-  NATS restart, owned-resource cleanup, and normal stack restoration.
-- The deterministic Playwright gate uses an owned Core plus Shell fixture.
-  Gemma, Watchdog, Hermes, and streaming suites now have an explicit external
-  Plugin profile because they require separately installed Plugins, models, or
-  credentials. The stale dark-mode spec was removed because the UI intentionally
-  supports only its dark theme. Repository Ruff and the maintained strict SDK /
-  shared-runtime type scopes pass; Aggregator-wide strict mypy remains documented
-  pre-existing type debt rather than a claimed gate.
+  remote destinations, disconnect/reconnect, duplicate IDs, local NATS restart,
+  and wrong/rotated/revoked Leaf credentials.
+- The agentd migration adds real-NATS round-trip, local task, restart, session
+  loss, invalid-envelope, revocation, and duplicate logical-task proofs. The
+  final repository run also passes configuration validation, packaging,
+  full-stack restart, and all 13 isolated Playwright workflows.
 
 ## 17. Alternatives
 
@@ -413,10 +399,12 @@ details.
 
 1. Implemented state/CLI/enrollment compatibility and tests.
 2. Implemented Core Leaf listener, credential reconciliation, and config validation.
-3. Implemented Edge config/lifecycle/status plus Formula dependency.
-4. Implemented exact-subject stream reconciliation and plugin environment selection.
+3. Implemented Edge config/lifecycle/status plus explicit local `nats-server`
+   preflight and platform package-manager guidance for `nats_leaf` only.
+4. Implemented exact-subject stream reconciliation and agentd endpoint selection.
 5. Implemented isolated fault integration tests and operator UX.
-6. Completed full-stack verification, evidence capture, and Obsidian sync.
+6. Completed full-stack verification and evidence capture; synchronized this
+   final design to the Obsidian Vault.
 
 Implementation is complete only after each requirement in the goal has direct
 test or runtime evidence; a curl-only check cannot prove the workflow.

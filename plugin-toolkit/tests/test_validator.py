@@ -151,7 +151,9 @@ def test_package_record_declares_exact_public_fields() -> None:
 
 def test_package_compatibility_constants_are_exact() -> None:
     assert str(SUPERVISOR_API_VERSION) == "0.1.0"
-    assert SUPPORTED_PROTOCOLS == frozenset({"edgecitadel.plugin.v1"})
+    assert SUPPORTED_PROTOCOLS == frozenset(
+        {"edgecitadel.plugin.v1", "edgecitadel.managed-agent.v1"}
+    )
 
 
 def test_verify_integrity_defaults_true_and_requires_lock(

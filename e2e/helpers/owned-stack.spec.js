@@ -160,6 +160,25 @@ test('redacts generated tokens from reports and normalized runtime text', () => 
   assert.equal(normalizeRuntimeText(`at ${value.runDir} in ${value.repoRoot}`, value), 'at <run-owned-path> in $SOURCE_ROOT')
 })
 
+test('passes the per-run NATS token to Playwright without putting it in argv', async () => {
+  const value = config()
+  const calls = []
+  const stack = new OwnedStack({
+    config: value,
+    runCommand: runner(calls, value),
+    fetchImpl: readyFetch(),
+    exit: () => {},
+  })
+  stack.ports = { app: 41001, api: 41002, nats: 41003, monitor: 41004 }
+
+  await stack.runPlaywright('/repo/e2e/playwright.config.js', [])
+
+  const call = calls[0]
+  assert.equal(call.options.env.NATS_TOKEN, 'secret-token')
+  assert.equal(call.args.includes('secret-token'), false)
+  assert.deepEqual(call.options.redactions, ['secret-token'])
+})
+
 test('signal handlers clean up before reporting the signal exit code', async () => {
   const value = config()
   const handlers = new Map()

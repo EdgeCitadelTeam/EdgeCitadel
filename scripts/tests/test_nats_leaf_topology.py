@@ -95,19 +95,17 @@ class _Server:
         return f"nats://127.0.0.1:{self.port}"
 
 
-def _core_config() -> str:
-    return """
+def _core_config(password: str = "leaf-password") -> str:
+    return f"""
 server_name: core
 listen: 0.0.0.0:4222
-jetstream { store_dir: "/data" }
-authorization { token: "core-token" }
-leafnodes {
-  listen: 0.0.0.0:7422
-  authorization {
-    username: "leaf-user"
-    password: "leaf-password"
-  }
-}
+jetstream {{store_dir: "/data" }}
+authorization {{token: "core-token" }}
+leafnodes {{listen: 0.0.0.0:7422
+  authorization {{username: "leaf-user"
+    password: {json.dumps(password)}
+  }}
+}}
 """
 
 
@@ -285,6 +283,20 @@ async def test_destination_owned_streams_survive_disconnect_without_duplicates()
         )
         assert await _count(edge_b_js) == 2
         assert await _count(replacement_core_js) == 1
+
+        edge_a.stop()
+        edge_a.restart()
+        replacement_edge_a = await _connect(edge_a.url, "edge-a-token")
+        clients.append(replacement_edge_a)
+        replacement_edge_a_js = replacement_edge_a.jetstream(domain="EDGE_A")
+        assert await _count(replacement_edge_a_js) == 3
+        await replacement_edge_a_js.publish(
+            "agents.edge-a-one.inbox",
+            b"local-after-restart",
+            timeout=1,
+            headers={"Nats-Msg-Id": "local-after-restart"},
+        )
+        assert await _count(replacement_edge_a_js) == 4
     finally:
         for client in clients:
             try:
@@ -330,6 +342,78 @@ async def test_wrong_leaf_credential_cannot_reach_core_destination():
         with pytest.raises(Exception):
             await edge_js.publish("agents.aggregator.inbox", b"denied", timeout=1)
         assert await _count(core_js) == 0
+        assert await _count(edge_js) == 1
+    finally:
+        for client in clients:
+            try:
+                await client.close()
+            except Exception:
+                pass
+        edge.remove()
+        core.remove()
+        _run("docker", "network", "rm", network, check=False)
+        temporary.cleanup()
+
+
+async def test_revoked_leaf_credential_stops_remote_delivery_but_keeps_local():
+    suffix = uuid.uuid4().hex[:10]
+    network = f"edgecitadel-leaf-revoke-{suffix}"
+    core_name = f"edgecitadel-leaf-revoke-core-{suffix}"
+    edge_name = f"edgecitadel-leaf-revoke-edge-{suffix}"
+    temporary = tempfile.TemporaryDirectory(prefix="edgecitadel-leaf-revoke-")
+    directory = Path(temporary.name)
+    core_path = directory / "core.conf"
+    edge_path = directory / "edge.conf"
+    core_path.write_text(_core_config())
+    edge_path.write_text(_edge_config("edge-revoked", "EDGE_REVOKED", core_name))
+    core = _Server(core_name, core_path, network)
+    edge = _Server(edge_name, edge_path, network)
+    clients = []
+    try:
+        _run("docker", "network", "create", "--label", OWNER_LABEL, network)
+        core.start()
+        edge.start()
+        core_nc = await _connect(core.url, "core-token")
+        edge_nc = await _connect(edge.url, "edge-revoked-token")
+        clients.extend((core_nc, edge_nc))
+        core_js = core_nc.jetstream()
+        edge_js = edge_nc.jetstream(domain="EDGE_REVOKED")
+        await core_js.add_stream(
+            name="AGENT_INBOX", subjects=["agents.aggregator.inbox"]
+        )
+        await edge_js.add_stream(
+            name="AGENT_INBOX", subjects=["agents.edge-revoked.inbox"]
+        )
+        await _publish_until_ack(
+            edge_js,
+            "agents.aggregator.inbox",
+            b"before-revocation",
+            "before-revocation",
+        )
+        assert await _count(core_js) == 1
+
+        core.stop()
+        core_path.write_text(_core_config(password="rotated-leaf-password"))
+        core.restart()
+        replacement_core = await _connect(core.url, "core-token")
+        clients.append(replacement_core)
+        replacement_core_js = replacement_core.jetstream()
+        await asyncio.sleep(1)
+
+        with pytest.raises(Exception):
+            await edge_js.publish(
+                "agents.aggregator.inbox",
+                b"after-revocation",
+                timeout=1,
+                headers={"Nats-Msg-Id": "after-revocation"},
+            )
+        await edge_js.publish(
+            "agents.edge-revoked.inbox",
+            b"local-after-revocation",
+            timeout=1,
+            headers={"Nats-Msg-Id": "local-after-revocation"},
+        )
+        assert await _count(replacement_core_js) == 1
         assert await _count(edge_js) == 1
     finally:
         for client in clients:

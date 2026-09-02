@@ -1,4 +1,4 @@
-"""Plugin-side wrappers around the Aggregator's memory.turns.* NATS API.
+"""Managed Agent wrappers around agentd's memory service proxy.
 
 Best-effort by design: a memory service timeout or failure logs WARN and
 returns/yields empty data — the caller proceeds statelessly, never raising.

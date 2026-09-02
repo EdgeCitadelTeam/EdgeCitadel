@@ -59,14 +59,8 @@ categories:
         cmd: bash -c 'model=$(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.models --format lines | head -1); ollama list | awk "{print \$1}" | grep -qx "$model"'
         remediation: "sudo -u edgecitadel ollama pull $(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.models --format lines | head -1)"
 
-  - name: Plugin runtimes
+  - name: Legacy AgentPlugin runtimes
     checks:
-      - name: gemma-venv-current
-        cmd: bash -c '[[ "$(sha256sum /opt/edgecitadel/plugins/gemma/edgecitadel_gemma_plugin/requirements.txt /opt/edgecitadel/plugins/gemma/plugin.lock.json | sha256sum | cut -d" " -f1)" == "$(cat /var/lib/edgecitadel/venvs/gemma/.requirements.sha 2>/dev/null)" ]]'
-        remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
-      - name: watchdog-venv-current
-        cmd: bash -c '[[ "$(sha256sum /opt/edgecitadel/plugins/watchdog/edgecitadel_watchdog_plugin/requirements.txt /opt/edgecitadel/plugins/watchdog/plugin.lock.json | sha256sum | cut -d" " -f1)" == "$(cat /var/lib/edgecitadel/venvs/watchdog/.requirements.sha 2>/dev/null)" ]]'
-        remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
       - name: shell-venv-installed
         cmd: bash -c '[[ -x /var/lib/edgecitadel/venvs/shell/bin/python ]]'
         remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
@@ -76,24 +70,9 @@ categories:
       - name: ollama-unit-enabled
         cmd: systemctl is-enabled --quiet edgecitadel-ollama
         remediation: "sudo systemctl enable edgecitadel-ollama (deploy-host.sh does this)"
-      - name: gemma-unit-active
-        cmd: systemctl is-active --quiet edgecitadel-gemma
-        remediation: "sudo systemctl start edgecitadel-gemma; check journalctl -u edgecitadel-gemma"
-      - name: watchdog-unit-active
-        cmd: systemctl is-active --quiet edgecitadel-watchdog
-        remediation: "sudo systemctl start edgecitadel-watchdog"
       - name: shell-unit-installed-not-enabled
         cmd: bash -c 'systemctl cat edgecitadel-shell >/dev/null 2>&1 && ! systemctl is-enabled --quiet edgecitadel-shell'
         remediation: "Shell Plugin is opt-in; if intentionally enabled, ignore this check"
-
-  - name: Hardening
-    checks:
-      - name: gemma-hardening-score
-        cmd: bash -c 'score=$(systemd-analyze security edgecitadel-gemma 2>/dev/null | tail -1 | grep -oE "[0-9]+\\.[0-9]+"); awk -v s="$score" "BEGIN{exit !(s<2.0)}"'
-        remediation: "expected score < 2.0; see ADR-0012 for hardening directives"
-      - name: watchdog-hardening-score
-        cmd: bash -c 'score=$(systemd-analyze security edgecitadel-watchdog 2>/dev/null | tail -1 | grep -oE "[0-9]+\\.[0-9]+"); awk -v s="$score" "BEGIN{exit !(s<2.0)}"'
-        remediation: "expected score < 2.0"
 
   - name: Docker stack
     checks:
@@ -140,12 +119,6 @@ categories:
     checks:
       # API field names: agent_id (not id), agent_state (not status). Schema
       # confirmed in aggregator/main.py /api/agents response.
-      - name: gemma-1-heartbeat-fresh
-        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x.get('agent_id')=='gemma-1'),None); assert a and a.get('agent_state')=='online', 'gemma-1 not online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<60, 'heartbeat too old'"
-        remediation: "sudo journalctl -u edgecitadel-gemma --since '2 min ago'"
-      - name: watchdog-1-heartbeat-fresh
-        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x.get('agent_id')=='watchdog-1'),None); assert a and a.get('agent_state')=='online', 'watchdog-1 not online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<60"
-        remediation: "sudo journalctl -u edgecitadel-watchdog --since '2 min ago'"
       - name: us-openclaw-heartbeat-fresh
         level: warn   # not our agent, just observe
         cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x.get('agent_id')=='us-openclaw'),None); assert a is not None, 'us-openclaw not registered (cutover may have lost it)'; assert a.get('agent_state')=='online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<300"

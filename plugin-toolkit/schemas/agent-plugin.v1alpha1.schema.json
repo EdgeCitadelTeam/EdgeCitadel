@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://edgecitadel.io/schemas/agent-plugin.v1alpha1.schema.json",
-  "title": "EdgeCitadel Agent Plugin",
+  "title": "EdgeCitadel Managed Agent or legacy Agent Plugin",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,10 +18,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "edgecitadel.io/v1alpha1"
+      "enum": ["edgecitadel.io/v1alpha1", "edgecitadel.io/v1alpha2"]
     },
     "kind": {
-      "const": "AgentPlugin"
+      "enum": ["AgentPlugin", "ManagedAgent"]
     },
     "metadata": {
       "type": "object",
@@ -72,6 +72,9 @@
       "additionalProperties": false,
       "required": ["command", "healthTimeoutSeconds", "restartPolicy"],
       "properties": {
+        "kind": {
+          "enum": ["model_agent", "service_adapter", "agent_runtime"]
+        },
         "command": {
           "type": "array",
           "minItems": 1,
@@ -207,6 +210,31 @@
       "$ref": "#/$defs/extensionMap"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"kind": {"const": "ManagedAgent"}},
+        "required": ["kind"]
+      },
+      "then": {
+        "properties": {
+          "apiVersion": {"const": "edgecitadel.io/v1alpha2"},
+          "runtime": {"required": ["kind"]}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"kind": {"const": "AgentPlugin"}},
+        "required": ["kind"]
+      },
+      "then": {
+        "properties": {
+          "apiVersion": {"const": "edgecitadel.io/v1alpha1"}
+        }
+      }
+    }
+  ],
   "$defs": {
     "normalizedName": {
       "type": "string",

@@ -1,7 +1,7 @@
 agent_id: gemma-1
 name: gemma-1
 description: Gemma reasoner with multi-skill dispatch, memory, and streaming.
-version: 0.2.5
+version: 0.3.0
 runtime:
   kind: native
   roles: [reasoner]

@@ -3,7 +3,9 @@ do_uninstall() {
   require_root
   log_warn "── Uninstall ──"
 
-  for u in edgecitadel-shell edgecitadel-watchdog edgecitadel-gemma edgecitadel-ollama; do
+  # Include retired direct Agent units so uninstall also handles upgrades from
+  # an older deployment. Managed Agent data remains outside these units.
+  for u in edgecitadel-shell edgecitadel-gemma edgecitadel-homeassistant edgecitadel-watchdog edgecitadel-ollama; do
     if systemctl is-enabled --quiet "$u" 2>/dev/null; then
       log_info "stopping + disabling $u"
       run systemctl stop "$u" 2>/dev/null || true
@@ -15,7 +17,7 @@ do_uninstall() {
   run rm -f /etc/systemd/system/edgecitadel-*.service
   run systemctl daemon-reload
 
-  log_info "removing Plugin runtime environments"
+  log_info "removing legacy AgentPlugin runtime environments"
   run rm -rf /var/lib/edgecitadel/venvs
 
   log_info "removing cron files"

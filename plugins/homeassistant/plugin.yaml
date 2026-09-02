@@ -1,18 +1,19 @@
-apiVersion: edgecitadel.io/v1alpha1
-kind: AgentPlugin
+apiVersion: edgecitadel.io/v1alpha2
+kind: ManagedAgent
 
 metadata:
   name: homeassistant
   displayName: Home Assistant Agent
   description: Executes bounded allowlisted Home Assistant observations and actions.
-  version: 0.1.0
+  version: 0.2.0
   publisher: edgecitadel
 
 compatibility:
   supervisorApi: ">=0.1.0,<0.2.0"
-  protocols: [edgecitadel.plugin.v1]
+  protocols: [edgecitadel.managed-agent.v1]
 
 runtime:
+  kind: service_adapter
   command: [python, -m, edgecitadel_homeassistant_plugin]
   pythonRequirements: edgecitadel_homeassistant_plugin/requirements.txt
   environmentVariables: [HA_BASE_URL, HA_ALLOWED_LIGHTS, HA_ALLOWED_ENTITIES, HA_ALLOWED_CAMERAS, HA_CAMERA_ROIS, HA_MAX_SEQUENCE_STEPS, LOG_LEVEL]

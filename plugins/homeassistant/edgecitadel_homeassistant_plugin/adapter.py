@@ -1,4 +1,4 @@
-"""Native EdgeCitadel worker for bounded Home Assistant experiments."""
+"""EdgeCitadel Managed Adapter for bounded Home Assistant operations."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from edgecitadel_plugin_runtime.pull_consumer import Context
-from edgecitadel_plugin_runtime.template import main as run_adapter
+from edgecitadel_agentd.managed_runtime import ManagedContext, run as run_managed_agent
 
 from .client import HomeAssistantClient
 
@@ -235,7 +234,7 @@ def _load_worker() -> HomeAssistantWorker:
     )
 
 
-async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
+async def handle(env: dict, ctx: ManagedContext) -> tuple[dict, str]:
     if env["type"] != "command":
         return ({"error": "unsupported_type"}, "rejected")
     args = env["payload"].get("args") or {}
@@ -265,10 +264,7 @@ async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
 
 
 async def main() -> None:
-    from edgecitadel_plugin_runtime import template
-
-    template.handle = handle
-    await run_adapter(Path(__file__).resolve().parent / "config.yaml")
+    await run_managed_agent(Path(__file__).resolve().parent / "config.yaml", handle)
 
 
 if __name__ == "__main__":

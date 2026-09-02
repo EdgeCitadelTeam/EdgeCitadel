@@ -318,7 +318,9 @@ async def run_e5(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 args.api_base, task_id=task_id, timeout_sec=120
             )
         except TimeoutError as exc:
-            raise TimeoutError("watchdog did not synthesize recipient_offline") from exc
+            raise TimeoutError(
+                "system reconciliation did not emit recipient_unavailable"
+            ) from exc
         recovery_ms = _ms_since(start)
         results = _result_rows(rows)
         result = results[0] if results else {}
@@ -332,7 +334,7 @@ async def run_e5(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
                 result_state=result.get("task_state"),
                 result_count=len(results),
                 poison_events=len(poison),
-                semantic_failures=0 if error == "recipient_offline" else 1,
+                semantic_failures=0 if error == "recipient_unavailable" else 1,
                 notes=[f"offline_agent={offline_agent}", f"error={error}"],
             )
         )

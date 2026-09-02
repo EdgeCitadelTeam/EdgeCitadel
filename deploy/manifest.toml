@@ -7,7 +7,7 @@
 # See deploy/README.md for the schema reference and how to add a dep.
 
 [python]
-# Plugin runtimes use this Python version. Matches aggregator/Dockerfile baseline.
+# Retained AgentPlugin runtimes use this Python version. Matches the backend baseline.
 version = "3.12"
 packages_ubuntu = ["python3.12", "python3.12-venv", "python3.12-dev"]
 packages_macos  = ["python@3.12"]
@@ -39,18 +39,18 @@ common = ["curl", "jq", "sqlite3", "tar", "gzip", "cron", "gpg"]
 common = ["jq", "sqlite", "gnu-tar", "coreutils", "gnupg", "nats-server"]
 
 [plugins]
-# Each entry produces:
-#   - venv at /var/lib/edgecitadel/venvs/<name>/
-#   - systemd unit edgecitadel-<name>.service (rendered from systemd/<name>.service.in)
-enabled           = ["gemma", "watchdog"]
-optional_disabled = ["shell", "homeassistant"]   # Home Assistant requires operator-provided credentials and allowlists
+# Legacy AgentPlugin runtimes only. Managed Agents such as Gemma and Home
+# Assistant are installed with `edgecitadel agent install` and supervised by
+# agentd; this host-deploy path must not create a second lifecycle owner.
+enabled           = []
+optional_disabled = ["shell"]
 
 [verification]
 # Time budget for the round-trip smoke test (Phase 6 of deploy-host.sh).
 # 120s accommodates first-call cold-start on CPU-only inference (model load
 # into RAM + first token). Steady-state gemma4:e2b on N150 is ~30-90s/req.
 round_trip_timeout_sec = 120
-# Plugin heartbeat staleness threshold for `--check`.
+# Managed Agent heartbeat staleness threshold for `--check`.
 heartbeat_max_age_sec = 60
 # Backup recency budget — fail check if latest daily is older than this.
 backup_max_age_sec = 93600   # 26 hours

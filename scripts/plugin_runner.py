@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Persistent process runner that enforces a Plugin restart policy."""
+"""Compatibility process runner for legacy AgentPlugin restart policies."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def run(command: Sequence[str], policy: str) -> int:
         try:
             child = subprocess.Popen(list(command))
         except OSError as error:
-            print(f"plugin runner could not start child: {error}", file=sys.stderr)
+            print(f"AgentPlugin runner could not start child: {error}", file=sys.stderr)
             return 126
         while child.poll() is None:
             time.sleep(0.1)
@@ -58,7 +58,7 @@ def main() -> int:
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
-        parser.error("a Plugin command is required after --")
+        parser.error("a Managed Agent command is required after --")
     return run(command, args.restart_policy)
 
 

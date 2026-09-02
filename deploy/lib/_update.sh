@@ -10,16 +10,22 @@ do_update() {
       "${SOURCE_DIR}/" /opt/edgecitadel/
   run chown -R edgecitadel:edgecitadel /opt/edgecitadel
 
-  # Re-run venv setup (will skip unchanged plugins via sha)
+  # Re-run venv setup for retained legacy AgentPlugins.
   run "${LIB_DIR}/setup-venvs.sh" --source-dir /opt/edgecitadel
 
-  # Restart Plugin services to pick up new code.
-  for u in edgecitadel-gemma edgecitadel-watchdog; do
-    if systemctl is-active --quiet "$u"; then
-      log_info "restarting $u"
-      run systemctl restart "$u"
+  # Managed Agents are now owned by agentd. Retire superseded direct units
+  # without deleting their state, logs, or dependency environments.
+  for u in edgecitadel-gemma edgecitadel-homeassistant edgecitadel-watchdog; do
+    if systemctl is-active --quiet "$u" 2>/dev/null; then
+      log_info "stopping superseded direct runtime $u"
+      run systemctl stop "$u"
     fi
+    if systemctl is-enabled --quiet "$u" 2>/dev/null; then
+      run systemctl disable "$u"
+    fi
+    run rm -f "/etc/systemd/system/${u}.service"
   done
+  run systemctl daemon-reload
 
   log_info "update complete"
 }

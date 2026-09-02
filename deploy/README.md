@@ -10,6 +10,13 @@ Spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md`.
 - `manifest.toml` — every host-level dependency lives here.
 - `lib/checks.yaml` — every `--check` check lives here.
 
+This production-host installer owns the Core stack, Ollama, and retained legacy
+AgentPlugin fixtures only. It does not start Gemma or Home Assistant directly.
+Install those through `edgecitadel agent install` on an enrolled Edge so agentd
+is their sole lifecycle owner. During update, obsolete direct Gemma, Home
+Assistant, and Watchdog units are stopped and disabled without deleting their
+state, logs, or dependency environments.
+
 ## Deployment secret upgrades
 
 Install and update operations reconcile `/etc/edgecitadel/env` before changing
@@ -25,7 +32,7 @@ or add `--check` for a read-only validation.
    - apt package?         → `[apt_packages].common`
    - brew package?        → `[brew_packages].common`
    - new ollama model?    → `[ollama].models`
-   - new bundled Plugin?  → `[plugins].enabled` AND create
+   - retained AgentPlugin? → `[plugins].enabled` AND create
                             `systemd/edgecitadel-<name>.service.in`
 2. Run `python3 deploy/lib/parse-manifest.py get <key>` to confirm parser accepts the new key.
 3. Test on a clean VM: `sudo ./deploy-host.sh --dry-run`, then real install.
@@ -52,7 +59,7 @@ Same as above for the `version =` field. `./deploy-host.sh` will upgrade idempot
 | `lib/install-deps.sh` | apt/brew dispatch |
 | `lib/install-ollama.sh` | Pinned Ollama install |
 | `lib/install-nats-cli.sh` | Pinned nats CLI install |
-| `lib/setup-venvs.sh` | Per-Plugin runtime creation |
+| `lib/setup-venvs.sh` | Retained AgentPlugin runtime creation |
 | `lib/render-units.sh` | systemd template renderer |
 | `lib/_phase_0_preflight.sh` … `_phase_7_cron.sh` | Phase implementations |
 | `lib/_uninstall.sh`, `_update.sh` | Reverse + refresh |

@@ -590,6 +590,7 @@ def test_build_inventory_is_deterministic_json_compatible_and_path_free(
         "id": "local.example",
         "version": "0.1.0",
         "protocol": "edgecitadel.plugin.v1",
+        "kind": "AgentPlugin",
     }
     assert first["compatibility"] == package.manifest["compatibility"]
     assert first["runtime"] == package.manifest["runtime"]
