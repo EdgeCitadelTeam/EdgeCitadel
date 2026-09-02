@@ -17,106 +17,163 @@ adapter for constrained devices and is disabled by default.
 
 The canonical wire contract is [`schemas/envelope.v1.json`](schemas/envelope.v1.json).
 
-## Install with Homebrew or pip
+## Requirements
 
-EdgeCitadel supports self-contained Homebrew and Python wheel installations for
-both Core and Edge nodes. There is no public tag, tap, or PyPI release yet, so
-the short public install commands must not be advertised until release is
-explicitly authorized and published.
+| Host capability | Core | `single-client` Edge | `nats_leaf` Edge |
+|---|---:|---:|---:|
+| macOS or Linux | Yes | Yes | Yes |
+| Python 3.12+ for pip install | Yes | Yes | Yes |
+| Docker Desktop/Engine with Compose | Required | No | No |
+| `nats-server` executable | Optional | No | Required |
 
-Once the tap exists, the user experience is:
+Homebrew installs `nats-server` automatically. pip and source installations
+leave this native service to the operating-system package manager; verify it
+with `nats-server --version` before selecting `nats_leaf`. Core hosts expose
+ports 80, 4222, 7422, and 8222 to the networks that need them.
 
-```bash
-brew tap zhonghaozhan/edgecitadel
-brew install edgecitadel
+On macOS, a pip user can install only that native dependency with
+`brew install nats-server`. On Linux, use the distribution package or an
+official NATS release.
 
-# Core only: requires Docker Desktop/Engine
-edgecitadel create
+## Install
 
-# Edge: does not require Docker
-edgecitadel join 'ecjoin://...'
-# Or keep same-host agent messaging available during a Core outage
-edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
-edgecitadel plugin install echo
-```
+EdgeCitadel provides one `edgecitadel` command for Core and Edge hosts. Public
+Homebrew and PyPI releases are not published yet, so use the source-build pip
+flow for the current revision.
 
-The equivalent Python installation is:
-
-```bash
-python3 -m venv ~/.edgecitadel/cli-venv
-~/.edgecitadel/cli-venv/bin/python -m pip install edgecitadel
-~/.edgecitadel/cli-venv/bin/edgecitadel --version
-```
-
-Until the PyPI release exists, contributors can replace `edgecitadel` in the
-install command with an absolute path to this checkout. The wheel contains the
-Core Compose sources, schemas, Supervisor sources, and bundled plugins rather
-than depending on the checkout after installation.
-
-Homebrew installs read-only assets in the Cellar; pip installs the same assets
-inside its Python environment. Secrets, node state, plugins, logs, SQLite, and
-JetStream data live under `~/.edgecitadel` and survive either package upgrade.
-See [`deploy/homebrew/README.md`](deploy/homebrew/README.md) and
-[`deploy/pip/README.md`](deploy/pip/README.md).
-
-## Source checkout
-
-Until the first Homebrew release is published, contributors can run the same CLI
-from a checkout. A Core needs Docker Engine with Compose and available ports 80,
-4222, and 8222.
+### pip from this checkout (available now)
 
 ```bash
 git clone https://github.com/zhonghaozhan/EdgeCitadel.git
 cd EdgeCitadel
-./scripts/edgecitadel create
+python3 -m venv ~/.edgecitadel/cli-venv
+~/.edgecitadel/cli-venv/bin/python -m pip install .
+source ~/.edgecitadel/cli-venv/bin/activate
+edgecitadel --version
 ```
 
-Open <http://localhost>, or inspect readiness with:
+The wheel is self-contained: Core Compose sources, schemas, the Supervisor, and
+bundled Plugins are installed under the Python environment's
+`share/edgecitadel`. The checkout is not needed after installation.
+
+### Published package commands (after release)
 
 ```bash
-./scripts/edgecitadel doctor
+# pip
+python3 -m venv ~/.edgecitadel/cli-venv
+~/.edgecitadel/cli-venv/bin/python -m pip install edgecitadel
+
+# Homebrew
+brew tap zhonghaozhan/edgecitadel
+brew install edgecitadel
 ```
 
-Runtime data is written below `data/` and `nats/data/`; neither directory should
-be committed. Stop it without deleting data with `./scripts/edgecitadel down`.
+Do not use the short package names until the corresponding release is actually
+published. See [`deploy/pip/README.md`](deploy/pip/README.md) and
+[`deploy/homebrew/README.md`](deploy/homebrew/README.md) for package build and
+release verification.
 
-## Join another Mac or Linux host
+### Run directly from a checkout
 
-On the core, create a one-time invitation using a hostname or IP that the other
-host can reach:
+Contributors can skip package installation and replace `edgecitadel` in the
+examples below with `./scripts/edgecitadel`.
+
+## Create a Core
+
+A Core requires Docker and available ports 80, 4222, 7422, and 8222.
 
 ```bash
-./scripts/edgecitadel invite --node-id studio-macmini --host 100.64.0.10
+edgecitadel create --host core.example.internal
+edgecitadel doctor
 ```
 
-On the other host, clone the source checkout for this milestone and redeem the
-printed invitation. Then install an Agent Plugin:
+`create` generates local credentials, renders NATS configuration, starts the
+Compose stack, and waits for NATS, JetStream, and the API. It is idempotent and
+preserves existing secrets. Open <http://localhost> for the dashboard and stop
+the Core without deleting data with:
 
 ```bash
-# Backward-compatible default: plugins connect directly to Core NATS
-./scripts/edgecitadel join 'ecjoin://...' --messaging-mode single-client
-
-# Local-broker topology: plugins connect to a loopback NATS Leaf
-./scripts/edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
-./scripts/edgecitadel plugin install ./plugins/examples/echo
+edgecitadel down
 ```
 
-`join` enrolls the host and stores its broker configuration; it does not claim
-that an AI agent is running. `plugin install` validates and displays permissions,
-prepares the Supervisor automatically, starts the Plugin process, and succeeds only
-after `echo-agent` has registered, heartbeated, and become visible through the
-core registry. Codex, Claude, OpenClaw, and other runtimes need their matching
-Plugin package on the host where that runtime is installed.
+## Join an Edge
 
-Messaging mode is independent from the Core/Edge node role. `single-client` is
-the default and starts no local broker. `nats_leaf` runs a loopback-only local
-NATS/JetStream service and makes an authenticated outbound Leaf connection to
-Core; agents on that one Edge can continue communicating when Core is absent,
-while cross-node messaging is visibly paused. An already joined host cannot be
-silently converted by rerunning `join` with a different mode.
+On the Core, create a short-lived, single-use invitation. `--host` must be a
+hostname or IP reachable from the Edge:
 
-See [`docs/onboarding.md`](docs/onboarding.md) for all modes, lifecycle commands,
-security boundaries, troubleshooting, and the exact message-join sequence.
+```bash
+edgecitadel invite --node-id studio-macmini --host core.example.internal
+```
+
+On the Edge, install EdgeCitadel using either method above, then choose exactly
+one messaging mode during the first join:
+
+```bash
+# Default: Plugins connect directly to Core NATS; no local NATS process.
+edgecitadel join 'ecjoin://...' --messaging-mode single-client
+
+# Local broker: same-host agents keep communicating while Core is unavailable.
+edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
+```
+
+`single-client` is the backward-compatible default, so omitting
+`--messaging-mode` selects it. `nats_leaf` starts a loopback-only local
+NATS/JetStream service and connects outbound to Core port 7422. During a Core
+outage, same-host messaging continues while cross-node messaging pauses. A host
+cannot silently change modes by rerunning `join`.
+
+## Install and operate Plugins
+
+Install a bundled Plugin by name or provide a package directory:
+
+```bash
+edgecitadel plugin install echo
+edgecitadel plugin install ./path/to/plugin
+edgecitadel plugin list
+edgecitadel plugin logs example.echo
+```
+
+The first Plugin command creates a private Supervisor environment. Installation
+validates the package lock and schema without executing Plugin code, displays
+requested permissions, copies an immutable package, starts the runtime, and
+waits for its Agent Card and heartbeat. Runtime-specific credentials remain the
+Plugin's responsibility.
+
+Useful lifecycle checks are:
+
+```bash
+edgecitadel status
+edgecitadel doctor
+edgecitadel supervisor status
+edgecitadel messaging status  # nats_leaf Edge only
+```
+
+## Upgrade and uninstall
+
+Package upgrades preserve credentials, plugins, logs, SQLite, and JetStream
+under `~/.edgecitadel`:
+
+```bash
+# Current checkout build
+~/.edgecitadel/cli-venv/bin/python -m pip install --upgrade /absolute/path/to/EdgeCitadel
+
+# Published package, after release
+~/.edgecitadel/cli-venv/bin/python -m pip install --upgrade edgecitadel
+```
+
+Before uninstalling a `nats_leaf` Edge, stop its managed processes:
+
+```bash
+edgecitadel supervisor stop
+edgecitadel messaging stop
+~/.edgecitadel/cli-venv/bin/python -m pip uninstall edgecitadel
+# Or: brew uninstall edgecitadel
+```
+
+Uninstalling the package intentionally preserves `~/.edgecitadel`; remove that
+state only after backing it up and verifying the exact path. See
+[`docs/onboarding.md`](docs/onboarding.md) for delivery semantics, security
+boundaries, troubleshooting, and recovery details.
 
 ## Architecture
 
@@ -145,6 +202,7 @@ Each inbox subject has exactly one JetStream owner: Core for Core and
 `single-client` agents, or the destination Edge domain for `nats_leaf` agents.
 See [`docs/architecture/multi-mode-messaging.md`](docs/architecture/multi-mode-messaging.md)
 for delivery, outage, deduplication, and security semantics.
+
 ## Repository map
 
 | Path | Responsibility |
@@ -156,8 +214,6 @@ for delivery, outage, deduplication, and security semantics.
 | `nats/`, `nginx/` | Local stack configuration |
 | `deploy/` | Host installation and service management |
 | `e2e/` | Playwright operator-flow tests |
-| `plugin-toolkit/` | Plugin SDK, schemas, validation, and the auto-managed Supervisor environment |
-| `plugins/` | Independently distributable plugin packages and examples |
 
 ## Development
 
