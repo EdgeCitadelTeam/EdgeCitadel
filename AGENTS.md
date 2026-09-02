@@ -29,6 +29,7 @@
 - Install an agent: `./scripts/edgecitadel plugin install <plugin-path>`
 - Homebrew formula style: `brew style deploy/homebrew/Formula/edgecitadel.rb`
 - Python package: `python -m build` then install the wheel in a clean virtual environment
+- PyPI release: follow `deploy/pip/README.md`; publishing is driven by a GitHub release
 - Full stack: `docker compose up --build -d`
 - Restart: `docker compose down && docker compose up --build -d`
 - Backend setup: `cd aggregator && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`

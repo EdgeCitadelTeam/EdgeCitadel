@@ -7,6 +7,10 @@ the dashboard to install, observe, and send tasks to your agents.
 
 Choose one installation method:
 
+> **Release status:** EdgeCitadel is not published to PyPI or Homebrew yet.
+> Until the first public release, install from a checkout using the
+> [package test instructions](deploy/pip/README.md#test-before-publication).
+
 ```bash
 # pip
 pip install edgecitadel
