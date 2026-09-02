@@ -164,11 +164,15 @@ under `~/.edgecitadel`:
 Before uninstalling a `nats_leaf` Edge, stop its managed processes:
 
 ```bash
-edgecitadel supervisor stop
-edgecitadel messaging stop
+~/.edgecitadel/cli-venv/bin/edgecitadel supervisor stop
+~/.edgecitadel/cli-venv/bin/edgecitadel messaging stop
 ~/.edgecitadel/cli-venv/bin/python -m pip uninstall edgecitadel
-# Or: brew uninstall edgecitadel
 ```
+
+If EdgeCitadel was installed with `pipx`, run the same stop commands through
+the `edgecitadel` executable exposed by `pipx`, then run
+`pipx uninstall edgecitadel`. For Homebrew, run the stop commands through its
+`edgecitadel` executable, then run `brew uninstall edgecitadel`.
 
 Uninstalling the package intentionally preserves `~/.edgecitadel`; remove that
 state only after backing it up and verifying the exact path. See

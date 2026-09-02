@@ -27,9 +27,18 @@ replace package assets but preserve `~/.edgecitadel`. Before uninstalling a
 `nats_leaf` Edge, stop managed processes:
 
 ```bash
+~/.edgecitadel/cli-venv/bin/edgecitadel supervisor stop
+~/.edgecitadel/cli-venv/bin/edgecitadel messaging stop
+~/.edgecitadel/cli-venv/bin/python -m pip uninstall edgecitadel
+```
+
+For an installation managed by `pipx`, use the command exposed by `pipx` to
+stop the same processes, then let `pipx` remove its environment:
+
+```bash
 edgecitadel supervisor stop
 edgecitadel messaging stop
-python -m pip uninstall edgecitadel
+pipx uninstall edgecitadel
 ```
 
 The `nats-server` executable is intentionally not a Python dependency. It is a
