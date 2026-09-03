@@ -35,7 +35,9 @@ _PLUGIN_SCHEMA = "agent-plugin.v1alpha1.schema.json"
 _BINDING_SCHEMA = "agent-skill-binding.v1alpha1.schema.json"
 _SCHEMA_DIRECTORY = Path(__file__).resolve().parents[2] / "schemas"
 SUPERVISOR_API_VERSION = Version("0.1.0")
-SUPPORTED_PROTOCOLS = frozenset({"edgecitadel.plugin.v1"})
+SUPPORTED_PROTOCOLS = frozenset(
+    {"edgecitadel.managed-agent.v1", "edgecitadel.plugin.v1"}
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,7 @@ def validate_package(
 
     compatibility = cast(dict[str, object], manifest["compatibility"])
     protocol = _select_compatible_protocol(compatibility)
+    _validate_package_protocol(manifest, protocol)
 
     skills_config = cast(dict[str, object], manifest["skills"])
     skills = discover_skills(plugin_root, cast(str, skills_config["directory"]))
@@ -105,6 +108,23 @@ def validate_package(
 
         verify_lock(package)
     return package
+
+
+def _validate_package_protocol(manifest: dict[str, object], protocol: str) -> None:
+    kind = cast(str, manifest["kind"])
+    required_protocol = {
+        "AgentPlugin": "edgecitadel.plugin.v1",
+        "ManagedAgent": "edgecitadel.managed-agent.v1",
+    }[kind]
+    if protocol != required_protocol:
+        raise CompatibilityError(
+            f"{kind} packages must use the {required_protocol} process protocol"
+        )
+    agents = cast(list[dict[str, object]], manifest["agents"])
+    if kind == "ManagedAgent" and len(agents) != 1:
+        raise ManifestValidationError(
+            "ManagedAgent packages must declare exactly one Agent identity"
+        )
 
 
 def _select_compatible_protocol(compatibility: dict[str, object]) -> str:

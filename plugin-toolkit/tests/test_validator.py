@@ -151,7 +151,9 @@ def test_package_record_declares_exact_public_fields() -> None:
 
 def test_package_compatibility_constants_are_exact() -> None:
     assert str(SUPERVISOR_API_VERSION) == "0.1.0"
-    assert SUPPORTED_PROTOCOLS == frozenset({"edgecitadel.plugin.v1"})
+    assert SUPPORTED_PROTOCOLS == frozenset(
+        {"edgecitadel.plugin.v1", "edgecitadel.managed-agent.v1"}
+    )
 
 
 def test_verify_integrity_defaults_true_and_requires_lock(
@@ -261,6 +263,54 @@ def test_selects_only_supported_declared_protocol(valid_package: Path) -> None:
     package = validate_package(valid_package, verify_integrity=False)
 
     assert package.protocol == "edgecitadel.plugin.v1"
+
+
+@pytest.mark.parametrize(
+    ("kind", "protocol"),
+    [
+        ("AgentPlugin", "edgecitadel.managed-agent.v1"),
+        ("ManagedAgent", "edgecitadel.plugin.v1"),
+    ],
+)
+def test_package_kind_requires_its_matching_protocol(
+    valid_package: Path, kind: str, protocol: str
+) -> None:
+    document = _load_manifest(valid_package)
+    document["kind"] = kind
+    if kind == "ManagedAgent":
+        document["apiVersion"] = "edgecitadel.io/v1alpha2"
+        runtime = document["runtime"]
+        assert isinstance(runtime, dict)
+        runtime["kind"] = "agent_runtime"
+    compatibility = document["compatibility"]
+    assert isinstance(compatibility, dict)
+    compatibility["protocols"] = [protocol]
+    _write_manifest(valid_package, document)
+
+    with pytest.raises(CompatibilityError, match="must use"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+def test_managed_agent_rejects_multiple_agent_identities(valid_package: Path) -> None:
+    document = _load_manifest(valid_package)
+    document["kind"] = "ManagedAgent"
+    document["apiVersion"] = "edgecitadel.io/v1alpha2"
+    runtime = document["runtime"]
+    assert isinstance(runtime, dict)
+    runtime["kind"] = "agent_runtime"
+    compatibility = document["compatibility"]
+    assert isinstance(compatibility, dict)
+    compatibility["protocols"] = ["edgecitadel.managed-agent.v1"]
+    agents = document["agents"]
+    assert isinstance(agents, list)
+    second = copy.deepcopy(agents[0])
+    assert isinstance(second, dict)
+    second["id"] = "second-agent"
+    agents.append(second)
+    _write_manifest(valid_package, document)
+
+    with pytest.raises(ManifestValidationError, match="exactly one Agent identity"):
+        validate_package(valid_package, verify_integrity=False)
 
 
 def test_rejects_ambiguous_supported_protocols(

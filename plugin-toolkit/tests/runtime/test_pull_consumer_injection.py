@@ -390,7 +390,7 @@ def test_constructor_rejects_ambiguous_or_misbound_modes() -> None:
             construct()
 
 
-def test_current_template_and_watchdog_legacy_shapes_remain_valid() -> None:
+def test_current_template_legacy_shape_remains_valid() -> None:
     nc = cast(NATS, FakeNC())
     template = PullConsumer(
         agent_id="shell-1",
@@ -398,16 +398,7 @@ def test_current_template_and_watchdog_legacy_shapes_remain_valid() -> None:
         handler=legacy_handler,
         ack_wait_sec=300,
     )
-    watchdog = PullConsumer(
-        agent_id="watchdog-1",
-        nc=nc,
-        handler=legacy_handler,
-        ack_wait_sec=30,
-        max_ack_pending=1,
-        max_deliver=3,
-    )
     assert template.handler is legacy_handler
-    assert watchdog.handler is legacy_handler
 
 
 @async_test

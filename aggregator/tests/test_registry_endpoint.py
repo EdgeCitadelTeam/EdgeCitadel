@@ -116,14 +116,13 @@ def test_registry_deployment_filter(client):
     assert {e["agent_id"] for e in only_default} == {"prod-1"}
 
 
-def test_registry_includes_aggregator_and_watchdog_when_seeded(client):
+def test_registry_includes_system_and_managed_agents_when_seeded(client):
     _seed_card("aggregator", ["aggregator"])
-    _seed_card("watchdog-1", ["watchdog"])
     _seed_card("gemma-1", ["reasoner"])
     body = client.get("/api/registry").json()
     ids = {e["agent_id"] for e in body}
     # Registry shows ALL fleet members; client filters by role for sidebar.
-    assert ids == {"aggregator", "watchdog-1", "gemma-1"}
+    assert ids == {"aggregator", "gemma-1"}
 
 
 @pytest.mark.asyncio

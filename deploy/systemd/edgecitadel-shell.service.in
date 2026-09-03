@@ -23,7 +23,7 @@ Restart=on-failure
 RestartSec=10
 TimeoutStopSec=15
 
-# Hardening — looser than watchdog because shell needs to read /etc, /usr.
+# Hardening is intentionally looser because shell needs to read /etc and /usr.
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true

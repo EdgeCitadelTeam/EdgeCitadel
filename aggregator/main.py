@@ -391,7 +391,7 @@ def make_app(for_testing: bool = False) -> FastAPI:
             "Return one row per registered agent with card metadata, "
             "JetStream queue depth, and poison event count. Used by the "
             "dashboard's Registry tab. Frontend filters infrastructure "
-            "agents (watchdog, aggregator) from the chat sidebar by "
+            "system agents (aggregator) from the chat sidebar by "
             "inspecting card.metadata.runtime.roles."
         ),
     )

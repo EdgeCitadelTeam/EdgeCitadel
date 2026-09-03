@@ -158,6 +158,7 @@ def build_inventory(package: PackageRecord) -> dict[str, object]:
             "id": package.package_id,
             "version": package.package_version,
             "protocol": package.protocol,
+            "kind": manifest["kind"],
         },
         "compatibility": copy.deepcopy(manifest["compatibility"]),
         "runtime": copy.deepcopy(manifest["runtime"]),

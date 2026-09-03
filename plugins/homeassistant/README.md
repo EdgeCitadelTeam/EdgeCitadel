@@ -1,16 +1,16 @@
-# Home Assistant Plugin
+# Home Assistant Managed Adapter
 
-This Plugin performs bounded, allowlisted Home Assistant reads, light actions,
+This Managed Agent performs bounded, allowlisted Home Assistant reads, light actions,
 camera luminance reduction, and experiment sequences.
 
 Install without starting until credentials and allowlists are available:
 
 ```bash
-edgecitadel plugin install homeassistant --keep-disabled
+edgecitadel agent install homeassistant --keep-disabled
 ```
 
-Before `edgecitadel plugin start edgecitadel.homeassistant`, provide
+Before `edgecitadel agent start edgecitadel.homeassistant`, provide
 `HA_TOKEN_FILE`, `HA_BASE_URL`, and the applicable `HA_ALLOWED_*` environment
-settings. The token remains in its private file and is never part of the Plugin
+settings. The token remains in its private file and is never part of the Agent
 package or lockfile. Runtime tests live in
 `plugin-toolkit/tests/homeassistant_runtime/`.

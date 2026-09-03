@@ -1,7 +1,7 @@
 ---
 name: gemma-code-explainer
 description: Explain supplied source code with the local Gemma model.
-compatibility: EdgeCitadel plugin runtime v1.
+compatibility: EdgeCitadel Managed Agent protocol v1.
 metadata:
   version: "0.2.5"
 ---

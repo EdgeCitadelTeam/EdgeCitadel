@@ -1,7 +1,7 @@
 agent_id: homeassistant-1
 name: homeassistant-1
 description: Executes bounded, allowlisted Home Assistant operations and smart-home experiment sequences.
-version: 0.1.0
+version: 0.2.0
 runtime:
   kind: native
   roles: [worker]

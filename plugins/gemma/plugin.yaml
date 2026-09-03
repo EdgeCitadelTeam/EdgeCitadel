@@ -1,18 +1,19 @@
-apiVersion: edgecitadel.io/v1alpha1
-kind: AgentPlugin
+apiVersion: edgecitadel.io/v1alpha2
+kind: ManagedAgent
 
 metadata:
   name: gemma
   displayName: Gemma Agent
   description: Local Ollama-backed reasoning, summarization, classification, and code explanation.
-  version: 0.2.5
+  version: 0.3.0
   publisher: edgecitadel
 
 compatibility:
   supervisorApi: ">=0.1.0,<0.2.0"
-  protocols: [edgecitadel.plugin.v1]
+  protocols: [edgecitadel.managed-agent.v1]
 
 runtime:
+  kind: model_agent
   command: [python, -m, edgecitadel_gemma_plugin]
   pythonRequirements: edgecitadel_gemma_plugin/requirements.txt
   environmentVariables: [OLLAMA_HOST, OLLAMA_PORT, OLLAMA_MODEL, OLLAMA_TIMEOUT_SEC, LOG_LEVEL]

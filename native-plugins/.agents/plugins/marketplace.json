@@ -1,0 +1,20 @@
+{
+  "name": "edgecitadel",
+  "interface": {
+    "displayName": "EdgeCitadel"
+  },
+  "plugins": [
+    {
+      "name": "edgecitadel",
+      "source": {
+        "source": "local",
+        "path": "./plugins/edgecitadel"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

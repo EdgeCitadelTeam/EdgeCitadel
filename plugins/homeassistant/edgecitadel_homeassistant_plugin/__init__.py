@@ -1,1 +1,1 @@
-"""Home Assistant environment Plugin runtime."""
+"""Home Assistant Managed Adapter runtime."""

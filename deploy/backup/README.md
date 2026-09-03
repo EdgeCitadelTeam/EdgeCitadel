@@ -47,7 +47,7 @@ ls -1 /var/lib/edgecitadel/backups/{daily,weekly,cutover}/
 
 # 1. Stop everything that writes to the data stores
 docker compose -f /root/snap/EdgeCitadel/docker-compose.yml down
-sudo systemctl stop edgecitadel-{ollama,gemma,watchdog}
+sudo systemctl stop edgecitadel-{ollama,gemma}
 
 # 2. Pick the backup
 BACKUP=/var/lib/edgecitadel/backups/daily/20260504T062500Z   # adjust
@@ -71,7 +71,7 @@ nats --server="nats://${NATS_TOKEN}@localhost:4222" \
 
 # 6. Bring everything else back
 docker compose -f /root/snap/EdgeCitadel/docker-compose.yml up -d
-sudo systemctl start edgecitadel-{ollama,gemma,watchdog}
+sudo systemctl start edgecitadel-{ollama,gemma}
 
 # 7. Verify
 sudo /opt/edgecitadel/deploy/deploy-host.sh --check
@@ -104,7 +104,7 @@ For B2/restic specifically:
 - `/opt/edgecitadel/` source tree — reproducible from `git`
 - Docker images — rebuildable
 - `/var/lib/edgecitadel/ollama/` model store — re-pullable from `ollama pull`
-- Plugin venvs at `/var/lib/edgecitadel/venvs/` — re-installable
+- Managed Agent environments at `/var/lib/edgecitadel/venvs/` — re-installable
 
 This keeps backups small and restore-fast. If `git` is unreachable AND
 docker registry is unreachable AND ollama registry is unreachable, you

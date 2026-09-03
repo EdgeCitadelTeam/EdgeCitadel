@@ -1,0 +1,19 @@
+{
+  "name": "edgecitadel",
+  "version": "0.1.0",
+  "description": "Connect an active Codex session to the local EdgeCitadel Agent network.",
+  "author": {
+    "name": "EdgeCitadel"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "EdgeCitadel",
+    "shortDescription": "Connect this Codex session to local EdgeCitadel.",
+    "longDescription": "Adds EdgeCitadel discovery, delegation, inbox, task, trace, and diagnostic tools through the private host-local service.",
+    "developerName": "EdgeCitadel",
+    "category": "Productivity",
+    "capabilities": ["Agent discovery", "Task delegation", "Local tracing"],
+    "defaultPrompt": "Use EdgeCitadel tools when I ask to discover agents, delegate work, inspect tasks, or diagnose local messaging."
+  },
+  "mcpServers": "./.mcp.json"
+}

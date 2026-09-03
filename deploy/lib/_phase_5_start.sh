@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 phase_5_start() {
-  log_info "── Phase 5: Start Plugin services ──"
+  log_info "── Phase 5: Start host model service ──"
 
   log_info "starting edgecitadel-ollama (and waiting for HTTP)"
   run systemctl start edgecitadel-ollama
@@ -27,14 +27,8 @@ phase_5_start() {
     fi
   fi
 
-  log_info "starting edgecitadel-gemma"
-  run systemctl start edgecitadel-gemma
-  log_info "starting edgecitadel-watchdog"
-  run systemctl start edgecitadel-watchdog
-
   if [[ "${DRY_RUN:-0}" != "1" ]]; then
-    sleep 10
-    for u in edgecitadel-ollama edgecitadel-gemma edgecitadel-watchdog; do
+    for u in edgecitadel-ollama; do
       if ! systemctl is-active --quiet "$u"; then
         log_err "$u failed to start; tail of journal:"
         journalctl -u "$u" --no-pager --lines=20 || true
@@ -43,6 +37,8 @@ phase_5_start() {
       log_info "$u: active"
     done
   fi
+
+  log_info "Managed Agents are installed separately with edgecitadel agent install"
 
   log_info "Phase 5: OK"
 }

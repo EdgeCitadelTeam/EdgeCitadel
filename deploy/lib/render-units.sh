@@ -6,7 +6,7 @@
 # For each .service.in in deploy/systemd/, renders to /etc/systemd/system/
 # (envsubst — currently no $VARS but reserved for forward-compat).
 # Then `systemctl daemon-reload`.
-# Enables units listed in manifest [plugins].enabled (PLUS ollama).
+# Enables legacy AgentPlugin units listed in manifest [plugins].enabled (PLUS ollama).
 # Leaves units in [plugins].optional_disabled installed-but-disabled.
 #
 # Does NOT start any units — that's a separate phase of deploy-host.sh.
@@ -72,7 +72,7 @@ done
 
 run systemctl daemon-reload
 
-# Enable enabled plugins (we don't START — that's a separate phase).
+# Enable retained legacy AgentPlugins (we don't START — that's a separate phase).
 # Always enable Ollama (it's the dependency of gemma).
 for plugin in "ollama" "${enabled[@]}"; do
   log_info "systemctl enable edgecitadel-${plugin}.service (not starting yet)"

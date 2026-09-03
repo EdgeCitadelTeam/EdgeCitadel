@@ -18,7 +18,7 @@ export default function AgentSidebar() {
       try {
         const isOperatorAgent = (a) => {
           const roles = a.card?.metadata?.['runtime.roles'] || []
-          return !roles.some((r) => r === 'aggregator' || r === 'watchdog')
+          return !roles.some((r) => r === 'aggregator')
         }
         const items = await api.listAgents()
         const operators = (items || []).filter(isOperatorAgent)

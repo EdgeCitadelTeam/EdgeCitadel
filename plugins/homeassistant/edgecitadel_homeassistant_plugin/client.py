@@ -1,4 +1,4 @@
-"""Small, synchronous Home Assistant REST client used by the worker Plugin runtime."""
+"""Small synchronous Home Assistant client used by the Managed Adapter."""
 
 from __future__ import annotations
 

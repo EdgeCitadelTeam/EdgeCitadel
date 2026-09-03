@@ -1,4 +1,4 @@
-"""EdgeCitadel Gemma Plugin runtime — multi-skill dispatch + memory + streaming.
+"""EdgeCitadel Gemma Managed Agent — multi-skill dispatch + memory + streaming.
 
 Phase 2.5 enhancements over Phase 2:
 - Multi-skill dispatch via payload.skill_id (config.yaml-driven).
@@ -17,8 +17,7 @@ from pathlib import Path
 
 import httpx
 
-from edgecitadel_plugin_runtime.pull_consumer import Context
-from edgecitadel_plugin_runtime.template import main as run_adapter
+from edgecitadel_agentd.managed_runtime import ManagedContext, run as run_managed_agent
 
 from edgecitadel_gemma_plugin.skills import (
     load_skills,
@@ -68,7 +67,7 @@ async def preflight() -> None:
         )
 
 
-async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
+async def handle(env: dict, ctx: ManagedContext) -> tuple[dict, str]:
     """Multi-skill dispatcher with memory + streaming."""
     if env["type"] != "command":
         return ({"error": "unsupported_type"}, "rejected")
@@ -166,10 +165,7 @@ async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
 
 async def main():
     await preflight()
-    from edgecitadel_plugin_runtime import template
-
-    template.handle = handle
-    await run_adapter(CONFIG_PATH)
+    await run_managed_agent(CONFIG_PATH, handle)
 
 
 if __name__ == "__main__":

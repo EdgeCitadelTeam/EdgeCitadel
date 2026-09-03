@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# deploy/lib/setup-venvs.sh — create per-Plugin Python venvs.
+# deploy/lib/setup-venvs.sh — create per-AgentPlugin Python venvs.
 #
 # Usage: ./setup-venvs.sh [--dry-run] [--source-dir PATH]
 #
-# Creates /var/lib/edgecitadel/venvs/<name>/ for each Plugin in
+# Creates /var/lib/edgecitadel/venvs/<name>/ for each legacy AgentPlugin in
 # manifest.toml's [plugins].enabled and .optional_disabled.
 # Records sha256 of the Plugin requirements and lockfile at
 # <venv>/.requirements.sha so subsequent runs skip pip when unchanged.
@@ -86,7 +86,7 @@ for plugin in "${ALL_PLUGINS[@]}"; do
     run sudo -u edgecitadel "$PYTHON_BIN" -m venv "$VENV"
   fi
 
-  log_info "$plugin: installing shared runtime and declared dependencies"
+  log_info "$plugin: installing legacy runtime and declared dependencies"
   run sudo -u edgecitadel "${VENV}/bin/pip" install --upgrade --quiet pip
   run sudo -u edgecitadel "${VENV}/bin/pip" install --quiet -e "${SOURCE_DIR}/plugin-toolkit" -r "$REQ"
 

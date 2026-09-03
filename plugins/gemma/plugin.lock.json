@@ -2,7 +2,7 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "19280f8e685f64a0c4ea00ddc1717e344a1ebf65ab19fb0d5fedf3f61c16622e"
+      "sha256": "ece289901382ab81dc2d1b814375ad0c433e4397bc81286966c853e15bb78b2a"
     },
     {
       "path": "edgecitadel_gemma_plugin/__init__.py",
@@ -14,15 +14,15 @@
     },
     {
       "path": "edgecitadel_gemma_plugin/adapter.py",
-      "sha256": "37a9bfedd95af8cd6b484548d610f1ed3835ca6d148e365bde40d3d6154dfc0b"
+      "sha256": "de53a9bc59e3bf64a9f46d71960a47a9e7535492d5bdac7e2b7e5274c7f0d13b"
     },
     {
       "path": "edgecitadel_gemma_plugin/config.yaml",
-      "sha256": "4d033f6eda1064566e1e9a0cb0594317844dd7c6159f5f7ed745c329a0ee1a52"
+      "sha256": "c8be5557466fda09ab15afb58ab1a0cdc48d46ec4b32834fbae9798e93d17f7b"
     },
     {
       "path": "edgecitadel_gemma_plugin/memory_client.py",
-      "sha256": "b965e78b162a3a18bf8741975a4ea1cc3984d527ce669f998c3ed3190c651911"
+      "sha256": "ccb4a7309372a7d4a3e07926ccef54ae0d4e8d4fee067bc129346c9295d6e717"
     },
     {
       "path": "edgecitadel_gemma_plugin/ollama_client.py",
@@ -42,11 +42,11 @@
     },
     {
       "path": "plugin.yaml",
-      "sha256": "fcae1f258c5718002d1961fa07a673f5db675e1e1e44841b5ec1f6e130301b77"
+      "sha256": "12e76463f67cbe8246613015cecb9e3f8b0838269c12d1e7d75f0e68ae3649da"
     },
     {
       "path": "skills/gemma-classifier/SKILL.md",
-      "sha256": "55660a72109b42bfe8844f10da7f425ab5a91652cbbdc1f1ec68d04fc47451ca"
+      "sha256": "b3e2ca9f49a6477f93e961d9a34aeef8f54405a2f250dd3cc8e742302c7491a2"
     },
     {
       "path": "skills/gemma-classifier/binding.yaml",
@@ -62,7 +62,7 @@
     },
     {
       "path": "skills/gemma-code-explainer/SKILL.md",
-      "sha256": "7927aa6b9f692acebc1507970cefa7ac2bc5af49c488d67c6986b6c510450a53"
+      "sha256": "8ff8b9e52f28261dcea05cc6f9f2468cac3b24343a5353af085aaba242caab21"
     },
     {
       "path": "skills/gemma-code-explainer/binding.yaml",
@@ -78,7 +78,7 @@
     },
     {
       "path": "skills/gemma-reasoner/SKILL.md",
-      "sha256": "a138213df697e57da626a0f4834f1fb5a8135ab1ef5355ade480ef3114cd36d6"
+      "sha256": "af6a3725f91fb5cb8348f967ff59bd5177db7adaa8b396452bb7a10a17527de1"
     },
     {
       "path": "skills/gemma-reasoner/binding.yaml",
@@ -94,7 +94,7 @@
     },
     {
       "path": "skills/gemma-summarizer/SKILL.md",
-      "sha256": "d2ddf734e5c8983119e34da1308c55498e59ebdd34081e32e79d2b8cc560651e"
+      "sha256": "eec76cf989ffe52f0d480b219579393e8633692edf298bc076070c84cadf598a"
     },
     {
       "path": "skills/gemma-summarizer/binding.yaml",
@@ -112,30 +112,30 @@
   "lockVersion": 1,
   "package": {
     "id": "edgecitadel.gemma",
-    "protocol": "edgecitadel.plugin.v1",
-    "version": "0.2.5"
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.3.0"
   },
   "skills": [
     {
-      "contentSha256": "55660a72109b42bfe8844f10da7f425ab5a91652cbbdc1f1ec68d04fc47451ca",
+      "contentSha256": "b3e2ca9f49a6477f93e961d9a34aeef8f54405a2f250dd3cc8e742302c7491a2",
       "name": "gemma-classifier",
       "skillId": "text.classify",
       "version": "0.2.5"
     },
     {
-      "contentSha256": "7927aa6b9f692acebc1507970cefa7ac2bc5af49c488d67c6986b6c510450a53",
+      "contentSha256": "8ff8b9e52f28261dcea05cc6f9f2468cac3b24343a5353af085aaba242caab21",
       "name": "gemma-code-explainer",
       "skillId": "code.explain",
       "version": "0.2.5"
     },
     {
-      "contentSha256": "a138213df697e57da626a0f4834f1fb5a8135ab1ef5355ade480ef3114cd36d6",
+      "contentSha256": "af6a3725f91fb5cb8348f967ff59bd5177db7adaa8b396452bb7a10a17527de1",
       "name": "gemma-reasoner",
       "skillId": "reasoning.chat",
       "version": "0.2.5"
     },
     {
-      "contentSha256": "d2ddf734e5c8983119e34da1308c55498e59ebdd34081e32e79d2b8cc560651e",
+      "contentSha256": "eec76cf989ffe52f0d480b219579393e8633692edf298bc076070c84cadf598a",
       "name": "gemma-summarizer",
       "skillId": "text.summarize",
       "version": "0.2.5"

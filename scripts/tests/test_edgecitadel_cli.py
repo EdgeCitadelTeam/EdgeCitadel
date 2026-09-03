@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import signal
 import stat
 import subprocess
@@ -16,6 +17,55 @@ from scripts import edgecitadel_cli as cli
 
 
 REPO_ROOT = Path(__file__).parents[2]
+
+
+def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "IS_PIP", True)
+    monkeypatch.setattr(cli, "IS_HOMEBREW", False)
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.shutil, "which", lambda command: f"/usr/bin/{command}")
+    python = tmp_path / "toolkit" / "bin" / "python"
+
+    assert cli._agentd_uses_launchd() is True
+    cli._render_agentd_launchd(tmp_path, python)
+
+    path = cli._agentd_launchd_path(tmp_path)
+    document = plistlib.loads(path.read_bytes())
+    assert document["ProgramArguments"] == [
+        str(python),
+        "-m",
+        "edgecitadel_agentd",
+        "--state-dir",
+        str(tmp_path / "agentd"),
+    ]
+    assert document["RunAtLoad"] is True
+    assert document["KeepAlive"] == {"SuccessfulExit": False}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "IS_PIP", True)
+    monkeypatch.setattr(cli, "IS_HOMEBREW", False)
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", tmp_path / "installed root")
+    python = tmp_path / "toolkit runtime" / "bin" / "python"
+
+    assert cli._agentd_uses_systemd() is True
+    cli._render_agentd_systemd(tmp_path, python)
+
+    path = cli._agentd_systemd_path(tmp_path)
+    document = path.read_text()
+    assert (
+        f'ExecStart="{python}" -m edgecitadel_agentd --state-dir '
+        f'"{tmp_path / "agentd"}"' in document
+    )
+    assert f'WorkingDirectory="{tmp_path / "installed root"}"' in document
+    assert f'StandardOutput="append:{tmp_path / "agentd" / "agentd.log"}"' in document
+    assert f'StandardError="append:{tmp_path / "agentd" / "agentd.log"}"' in document
+    assert "WantedBy=default.target" in document
+    assert "UMask=0077" in document
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_pip_bundled_plugin_staging_excludes_installer_bytecode(tmp_path, monkeypatch):
@@ -255,10 +305,143 @@ def test_plugin_install_copies_to_managed_store_and_is_idempotent(
     assert cli.command_plugin_install(args) == 0
 
     target = state_dir / "plugins" / "local.demo" / "0.1.0"
-    plugin_state = json.loads((state_dir / "plugins.json").read_text())
+    plugin_state = json.loads((state_dir / "managed-agents.json").read_text())
     assert target.joinpath("plugin.yaml").read_text() == "test"
-    assert plugin_state["plugins"]["local.demo"]["path"] == str(target)
+    assert plugin_state["managed_agents"]["local.demo"]["path"] == str(target)
     assert stat.S_IMODE(target.stat().st_mode) == 0o500
+
+
+def test_managed_agent_upgrade_rolls_back_state_and_package_on_failed_readiness(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("version one")
+    (source / "plugin.lock.json").write_text('{"version": 1}')
+    _write_node(state_dir)
+    inventory = _inventory()
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: inventory)
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    disabled = Namespace(
+        source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+    )
+    assert cli.command_plugin_install(disabled) == 0
+    original_path = state_dir / "plugins/local.demo/0.1.0"
+
+    inventory = _inventory()
+    inventory["package"]["version"] = "0.2.0"
+    (source / "plugin.yaml").write_text("version two")
+    (source / "plugin.lock.json").write_text('{"version": 2}')
+    monkeypatch.setattr(
+        cli,
+        "_start_plugin",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            cli.UserError("readiness failed")
+        ),
+    )
+
+    with pytest.raises(cli.UserError, match="previous state restored"):
+        cli.command_plugin_install(
+            Namespace(
+                source=str(source),
+                state_dir=str(state_dir),
+                yes=True,
+                keep_disabled=False,
+            )
+        )
+
+    state = json.loads((state_dir / "managed-agents.json").read_text())
+    record = state["managed_agents"]["local.demo"]
+    assert record["path"] == str(original_path)
+    assert record["inventory"]["package"]["version"] == "0.1.0"
+    assert original_path.is_dir()
+    assert not (state_dir / "plugins/local.demo/0.2.0").exists()
+
+
+def test_managed_agent_upgrade_retires_replaced_connector(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("version one")
+    (source / "plugin.lock.json").write_text('{"version": 1}')
+    _write_node(state_dir)
+    inventory = _inventory()
+    inventory["package"]["kind"] = "ManagedAgent"
+    inventory["agents"][0]["id"] = "old-agent"
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: inventory)
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    args = Namespace(
+        source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+    )
+    assert cli.command_plugin_install(args) == 0
+    cli._secure_write(
+        state_dir / "connectors" / "managed-old-agent.token", "old-token\n"
+    )
+
+    upgraded = _inventory()
+    upgraded["package"].update({"kind": "ManagedAgent", "version": "0.2.0"})
+    upgraded["agents"][0]["id"] = "new-agent"
+    (source / "plugin.yaml").write_text("version two")
+    (source / "plugin.lock.json").write_text('{"version": 2}')
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: upgraded)
+    calls = []
+
+    def agentd_rpc(_state_dir, operation, **params):
+        calls.append((operation, params))
+        if operation == "connector.list":
+            return [{"connector_id": "managed-old-agent", "revoked": False}]
+        if operation == "connector.revoke":
+            return {"revoked": True}
+        raise AssertionError(operation)
+
+    monkeypatch.setattr(cli, "_agentd_rpc", agentd_rpc)
+
+    assert cli.command_plugin_install(args) == 0
+
+    assert ("connector.revoke", {"connector_id": "managed-old-agent"}) in calls
+    assert not (state_dir / "connectors" / "managed-old-agent.token").exists()
+
+
+def test_legacy_plugin_state_migrates_atomically_and_keeps_backup(tmp_path):
+    legacy = {
+        "version": 1,
+        "plugins": {"edgecitadel.gemma": {"enabled": False, "installed_at": 1}},
+    }
+    cli._write_json(tmp_path / "plugins.json", legacy)
+
+    migrated = cli._load_plugins(tmp_path)
+
+    assert migrated == {
+        "version": 2,
+        "managed_agents": {"edgecitadel.gemma": {"enabled": False, "installed_at": 1}},
+    }
+    assert json.loads((tmp_path / "plugins.json").read_text()) == legacy
+    assert stat.S_IMODE((tmp_path / "managed-agents.json").stat().st_mode) == 0o600
+    assert cli._load_plugins(tmp_path) == migrated
+
+
+def test_legacy_plugin_state_rejects_unsupported_shape(tmp_path):
+    cli._write_json(tmp_path / "plugins.json", {"version": 1, "plugins": []})
+
+    with pytest.raises(cli.UserError, match="legacy plugin state is unsupported"):
+        cli._load_plugins(tmp_path)
+
+
+def test_legacy_watchdog_record_is_not_migrated_as_managed_agent(tmp_path):
+    legacy = {
+        "version": 1,
+        "plugins": {
+            "edgecitadel.watchdog": {"enabled": True},
+            "edgecitadel.gemma": {"enabled": False},
+        },
+    }
+    cli._write_json(tmp_path / "plugins.json", legacy)
+
+    migrated = cli._load_plugins(tmp_path)
+
+    assert set(migrated["managed_agents"]) == {"edgecitadel.gemma"}
+    assert json.loads((tmp_path / "plugins.json").read_text()) == legacy
 
 
 def test_plugin_install_preserves_read_only_executable_entrypoint(
@@ -290,7 +473,7 @@ def test_plugin_install_preserves_read_only_executable_entrypoint(
 
 def test_plugin_install_rejects_agent_id_claimed_by_local_plugin(monkeypatch):
     state = {
-        "plugins": {
+        "managed_agents": {
             "other.plugin": {
                 "inventory": {"agents": [{"id": "demo-agent"}]},
             }
@@ -302,7 +485,9 @@ def test_plugin_install_rejects_agent_id_claimed_by_local_plugin(monkeypatch):
         lambda *_args, **_kwargs: pytest.fail("fleet must not be queried"),
     )
 
-    with pytest.raises(cli.UserError, match="belongs to local plugin other.plugin"):
+    with pytest.raises(
+        cli.UserError, match="belongs to local Managed Agent other.plugin"
+    ):
         cli._assert_agent_ids_available(
             {"core_url": "http://core.test", "agent_id": "edge-one"},
             _inventory(),
@@ -331,7 +516,7 @@ def test_plugin_install_rejects_agent_id_owned_elsewhere_in_fleet(monkeypatch):
         cli._assert_agent_ids_available(
             {"core_url": "http://core.test", "agent_id": "edge-one"},
             _inventory(),
-            {"plugins": {}},
+            {"managed_agents": {}},
         )
 
 
@@ -355,7 +540,7 @@ def test_plugin_install_accepts_same_node_and_plugin_fleet_owner(monkeypatch):
     cli._assert_agent_ids_available(
         {"core_url": "http://core.test", "agent_id": "edge-one"},
         _inventory(),
-        {"plugins": {}},
+        {"managed_agents": {}},
     )
 
 
@@ -656,7 +841,7 @@ def test_plugin_start_uses_only_declared_host_environment(tmp_path, monkeypatch)
         "inventory": inventory,
         "pid": None,
     }
-    state = {"plugins": {"local.demo": record}}
+    state = {"managed_agents": {"local.demo": record}}
     node = {
         "agent_id": "edge-one",
         "core_url": "http://core.test",
@@ -707,9 +892,115 @@ def test_plugin_start_uses_only_declared_host_environment(tmp_path, monkeypatch)
     assert record["process_identity"] == "owned-123"
 
 
+@pytest.mark.parametrize("connector_exists", [False, True])
+def test_managed_agent_start_delegates_lifecycle_without_nats_credentials(
+    tmp_path, monkeypatch, connector_exists
+):
+    inventory = _inventory()
+    inventory["package"]["kind"] = "ManagedAgent"
+    inventory["runtime"]["kind"] = "model_agent"
+    inventory["security"]["secrets"] = []
+    record = {
+        "path": str(tmp_path / "plugins" / "local.demo" / "1.0.0"),
+        "inventory": inventory,
+        "installed_at": 1,
+        "enabled": False,
+        "pid": None,
+    }
+    Path(record["path"]).mkdir(parents=True)
+    state = {"managed_agents": {"local.demo": record}}
+    node = {
+        "agent_id": "edge-one",
+        "core_url": "http://core.test",
+        "plugin_nats_url": "nats://core.test:4222",
+        "plugin_nats_token": "must-not-leak",
+    }
+    captured = {}
+
+    monkeypatch.setattr(cli, "_load_node", lambda *_: node)
+    monkeypatch.setattr(cli, "_plugin_record", lambda *_: (state, record))
+    monkeypatch.setattr(cli, "_plugin_python", lambda *_: Path(sys.executable))
+    monkeypatch.setattr(cli, "_start_agentd", lambda *_: {})
+    monkeypatch.setattr(cli, "_write_json", lambda *_: None)
+    monkeypatch.setattr(cli, "_sync_managed_agent_state", lambda *_: None)
+
+    def write_launch(_state_dir, _plugin_id, **kwargs):
+        captured.update(kwargs)
+        return tmp_path / "managed-launch" / "local-demo.json"
+
+    monkeypatch.setattr(cli, "_write_managed_launch", write_launch)
+    if connector_exists:
+        cli._secure_write(
+            tmp_path / "connectors" / "managed-demo-agent.token", "managed-token\n"
+        )
+
+    calls = {
+        "managed.list": 0,
+        "connector.list": 0,
+        "connector.register": 0,
+        "connector.configure": 0,
+    }
+
+    def rpc(_state_dir, operation, **_params):
+        calls[operation] += 1
+        if operation == "managed.list":
+            if calls[operation] == 1:
+                return []
+            return [
+                {
+                    "package_id": "local.demo",
+                    "runtime_state": "running",
+                    "detail": "pid 123",
+                }
+            ]
+        if operation == "connector.list":
+            if calls[operation] == 1:
+                return (
+                    [
+                        {
+                            "connector_id": "managed-demo-agent",
+                            "session_active": False,
+                            "revoked": False,
+                        }
+                    ]
+                    if connector_exists
+                    else []
+                )
+            return [
+                {
+                    "connector_id": "managed-demo-agent",
+                    "session_active": True,
+                }
+            ]
+        if operation == "connector.register":
+            return {"token": "managed-token"}
+        if operation == "connector.configure":
+            return {"configured": True}
+        raise AssertionError(operation)
+
+    monkeypatch.setattr(cli, "_agentd_rpc", rpc)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("CLI must not supervise Managed Agents"),
+    )
+
+    cli._start_plugin(tmp_path, "local.demo")
+
+    assert record["enabled"] is True
+    assert captured["environment"]["EDGECITADEL_STATE_DIR"] == str(tmp_path)
+    assert "NATS_URL" not in captured["environment"]
+    assert "NATS_TOKEN" not in captured["environment"]
+    assert (tmp_path / "connectors/managed-demo-agent.token").read_text().strip() == (
+        "managed-token"
+    )
+    assert calls["connector.register"] == (0 if connector_exists else 1)
+    assert calls["connector.configure"] == 1
+
+
 def test_plugin_stop_signals_only_verified_owned_process_group(tmp_path, monkeypatch):
     record = {"pid": 321, "process_identity": "owned", "enabled": True}
-    state = {"plugins": {"local.demo": record}}
+    state = {"managed_agents": {"local.demo": record}}
     running = iter((True, True, False, False))
     signals: list[tuple[int, signal.Signals]] = []
     monkeypatch.setattr(cli, "_plugin_record", lambda *_args: (state, record))
@@ -732,7 +1023,7 @@ def test_plugin_stop_signals_only_verified_owned_process_group(tmp_path, monkeyp
 
 def test_plugin_stop_refuses_reused_unverified_pid(tmp_path, monkeypatch):
     record = {"pid": 321, "process_identity": "original", "enabled": True}
-    state = {"plugins": {"local.demo": record}}
+    state = {"managed_agents": {"local.demo": record}}
     monkeypatch.setattr(cli, "_plugin_record", lambda *_args: (state, record))
     monkeypatch.setattr(cli, "_pid_running", lambda _pid: True)
     monkeypatch.setattr(cli, "_process_identity", lambda _pid: "reused")
@@ -939,20 +1230,28 @@ def test_doctor_treats_disabled_plugin_and_agents_as_non_failing(
 
     monkeypatch.setattr(cli, "_http_json", http_json)
     monkeypatch.setattr(cli, "_tcp_ready", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli, "_agentd_process_detail", lambda _state_dir: (True, "pid 123, ready")
+    )
+    monkeypatch.setattr(
+        cli,
+        "_agentd_rpc",
+        lambda *_args, **_kwargs: {"transport": {"connected": True}},
+    )
 
     assert cli.command_doctor(Namespace(state_dir=str(tmp_path), json=True)) == 0
 
     report = json.loads(capsys.readouterr().out)
     checks = {item["id"]: item for item in report["checks"]}
     assert report["status"] == "healthy"
-    assert checks["plugin_edgecitadel.disabled"] == {
-        "id": "plugin_edgecitadel.disabled",
-        "name": "plugin edgecitadel.disabled",
+    assert checks["managed_agent_edgecitadel.disabled"] == {
+        "id": "managed_agent_edgecitadel.disabled",
+        "name": "Managed Agent edgecitadel.disabled",
         "ok": True,
         "detail": "disabled",
     }
     assert checks["agent_disabled-agent"]["ok"] is True
-    assert checks["agent_disabled-agent"]["detail"] == "disabled with plugin"
+    assert checks["agent_disabled-agent"]["detail"] == "disabled with Managed Agent"
     assert requested_urls == ["http://core.test/api/system/status"]
 
 
@@ -995,3 +1294,35 @@ def test_messaging_stop_is_successful_when_local_service_is_stopped(
 
     assert result == 0
     assert stopped == [tmp_path]
+
+
+def test_task_show_calls_agentd_with_connector_authority(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli, "_start_agentd", lambda _state_dir: {})
+    monkeypatch.setattr(cli, "_connector_token", lambda *_args: "connector-token")
+
+    def rpc(state_dir, operation, **params):
+        calls.append((state_dir, operation, params))
+        return {"task_id": params["task_id"], "state": "queued"}
+
+    monkeypatch.setattr(cli, "_agentd_rpc", rpc)
+    args = Namespace(
+        state_dir=str(tmp_path),
+        task_action="show",
+        connector_id="codex-local",
+        task_id="10000000-0000-4000-8000-000000000001",
+    )
+
+    assert cli.command_task(args) == 0
+    assert calls == [
+        (
+            tmp_path,
+            "task.get",
+            {
+                "auth_connector_id": "codex-local",
+                "auth_token": "connector-token",
+                "task_id": "10000000-0000-4000-8000-000000000001",
+            },
+        )
+    ]
+    assert json.loads(capsys.readouterr().out)["state"] == "queued"

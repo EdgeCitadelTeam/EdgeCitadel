@@ -1,207 +1,210 @@
-# EdgeCitadel newcomer onboarding
+# EdgeCitadel onboarding and troubleshooting
 
-There is one product command: `edgecitadel`. Homebrew or pip installs it for both
-Core and Edge nodes; users choose whether this host creates a network or joins
-one. They do not install the Supervisor separately. In a source checkout, the
-same command is available as `./scripts/edgecitadel`.
+The `edgecitadel` command installs on both Core and Edge hosts. A Core provides
+enrollment, shared NATS/JetStream, the API, and dashboard. An Edge runs the
+host-local EdgeCitadel service and any Managed Agents or Native Agent Plugins.
 
-The public tap and PyPI distribution are not yet published. The repository
-Formula is HEAD-only and the wheel is source-build-only until a verified release
-is explicitly published; see `deploy/homebrew/README.md` and
-`deploy/pip/README.md`.
-
-## Node role and messaging mode
-
-`core` and `edge` are node roles. Every Edge independently selects one of two
-messaging modes during its first `join`:
-
-| Mode | Plugin broker | Core disconnected | Local NATS |
-|---|---|---|---|
-| `single-client` (default) | Core NATS | Agent messaging pauses | Not started |
-| `nats_leaf` | `127.0.0.1:4223` | Same-host messaging continues; cross-node pauses | User-level service |
-
-The names are exact public API values. A host already joined in one mode rejects
-a conflicting `join`; topology conversion is intentionally not implicit.
-
-### Create the first node
+## Install
 
 ```bash
-brew tap zhonghaozhan/edgecitadel
+pip install edgecitadel
+# or
 brew install edgecitadel
-edgecitadel create
+
+edgecitadel --version
 ```
 
-Alternatively, install the wheel in an isolated Python environment:
+Use the same package manager for upgrades and uninstall.
+
+## Create a Core
+
+Start Docker, then provide a hostname or address that Edge hosts can reach:
 
 ```bash
-python3 -m venv ~/.edgecitadel/cli-venv
-~/.edgecitadel/cli-venv/bin/python -m pip install edgecitadel
-~/.edgecitadel/cli-venv/bin/edgecitadel create
+edgecitadel create --host core.example.internal
+edgecitadel doctor
 ```
 
-This one command creates `.env` with generated local secrets, creates data
-directories, renders NATS configuration, starts Docker Compose, records the
-node as `core`, and waits for NATS, JetStream, and the API. Rerunning it is safe
-and preserves existing secrets. Use `--host <reachable-name-or-ip>` when other
-machines will connect.
+`create` generates private local credentials, renders configuration, starts the
+Core services, and waits for NATS, JetStream, and the API. It is safe to rerun
+and preserves existing credentials and data.
 
-### Join an additional host
+## Join an Edge
 
-On the core:
+On the Core:
 
 ```bash
-edgecitadel invite --node-id studio-macmini --host 100.64.0.10
+edgecitadel invite --node-id studio-macmini --host core.example.internal
 ```
 
-On the Mac mini or Linux edge host:
+Run the returned command on the Edge. The invitation is expiring, single-use,
+and stored as a digest on the Core.
 
 ```bash
-brew tap zhonghaozhan/edgecitadel
-brew install edgecitadel
-edgecitadel join 'ecjoin://...' --messaging-mode single-client
-```
+# Default: the EdgeCitadel service connects directly to Core NATS.
+edgecitadel join 'ecjoin://...'
 
-The same `pip install` flow above can be used on an Edge. A pip-installed
-`nats_leaf` Edge must install the native `nats-server` executable separately;
-`single-client` does not require it.
-
-The invitation is short-lived and can be redeemed once. The API stores only
-its SHA-256 digest. Redeeming it writes the node configuration with mode `0600`.
-Omitting `--messaging-mode` is equivalent to `single-client`, preserving old
-commands and version-1 Edge state.
-
-For an Edge that must retain local Agent-to-Agent messaging when Core is down:
-
-```bash
+# Same-host Agent messaging remains available if the Core link is down.
 edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
 ```
 
-This mode validates `nats-server` and loopback ports before redeeming the
-invitation, creates a private Edge JetStream domain under
-`~/.edgecitadel/nats_leaf`, and starts an authenticated outbound Leaf link to
-Core port 7422. Plugins receive only the loopback client endpoint and local
-token; they never receive Leaf credentials. The current implementation uses a
-separately scoped fleet Leaf credential, so per-node NKey/JWT identities and
-NATS accounts/subject ACLs remain required before internet exposure.
+`single-client` does not use a local NATS process. `nats_leaf` runs one local
+NATS server and connects it outbound to the Core through an authenticated Leaf
+Node. Users who select `nats_leaf` install `nats-server` with their operating-
+system package manager (`brew install nats-server` on macOS). It is needed
+because a Leaf Node is a NATS server topology, not a client feature.
 
-## Make an agent visible
+The selected mode is durable. Repeating `join` with the same mode is safe;
+requesting a different mode is rejected rather than silently changing message
+ownership.
 
-A joined host is a place where agents may run; it is not itself an agent. To
-connect Codex, Claude, OpenClaw, or another runtime, install that runtime's
-Plugin on the same host:
+## Managed Agents
+
+A Managed Agent is a complete long-running runtime operated by EdgeCitadel.
+Gemma owns its model-backed Agent harness. The Home Assistant package is a
+Managed Adapter: EdgeCitadel owns the adapter process, while the user's Home
+Assistant installation and data remain external.
 
 ```bash
-edgecitadel plugin install ./path/to/plugin
+edgecitadel agent install gemma
+edgecitadel agent list
+edgecitadel agent status edgecitadel.gemma
+edgecitadel agent logs edgecitadel.gemma
+edgecitadel agent stop edgecitadel.gemma
+edgecitadel agent start edgecitadel.gemma
+edgecitadel agent remove edgecitadel.gemma
 ```
 
-On the first plugin command, the CLI creates its private Supervisor Python
-environment and installs the repository toolkit automatically. Installation is:
+Installation validates the package and lock before execution, shows requested
+permissions, creates a private dependency runtime, records immutable package
+state, and waits for a fresh Agent registration. Managed Agents call the local
+agentd socket and do not receive NATS or Leaf credentials.
 
-1. Validate manifest, schemas, compatibility, paths, and package lock without
-   executing plugin code.
-2. Display requested knowledge, messaging, network, device, sandbox, and secret
-   permissions. Require approval (`--yes` for automation).
-3. Reject Agent IDs already claimed by another local Plugin or Core registry
-   owner.
-4. Copy the verified package to the Supervisor-owned read-only store under
-   `~/.edgecitadel/plugins/`, preserving declared executable entrypoints.
-5. Reconcile exact destination inbox ownership, then start the runtime through
-   an owned process-group runner with the declared restart policy and the
-   mode-selected NATS URL/token and JetStream domain injected.
-6. Wait until every declared Agent ID is online in the core registry.
+The old `edgecitadel plugin` spelling remains a deprecation alias for migrated
+installations. New documentation and automation should use `edgecitadel agent`.
 
-The Supervisor records a process-instance identity as well as the PID. Stop and
-remove operations signal the verified process group, including Plugin children;
-they refuse to signal a live PID whose identity no longer matches stored state.
+## Native Agent Plugins
 
-The runtime then joins the messaging plane in this exact order:
+Pi, Claude Code, and Codex keep ownership of their model, tools, permissions,
+session, and execution loop. Their EdgeCitadel plugins add host-native skills
+and MCP tools backed by agentd:
 
-```text
-plugin runtime -> NATS connect
-plugin runtime -> agents.<id>.register  (Agent Card)
-aggregator     -> SQLite registry       (agent becomes visible)
-plugin runtime -> agents.<id>.heartbeat (agent remains online)
-JetStream      -> agents.<id>.inbox     (durable commands/delegations)
-plugin runtime -> agents.<sender>.inbox (correlated result)
+```bash
+pi install "$(edgecitadel connector path pi)"
+
+claude plugin marketplace add "$(edgecitadel connector path claude-code)"
+claude plugin install edgecitadel@edgecitadel
+
+codex plugin marketplace add "$(edgecitadel connector path codex)"
+codex plugin add edgecitadel@edgecitadel
 ```
 
-The working `plugins/examples/echo` package proves this path without requiring
-an external model account. Host enrollment and Agent Card registration are
-deliberately separate: one host can run zero, one, or several agent plugins.
+The connector is available only while its host session is active. Closing the
+session closes its renewable lease and agentd publishes an unavailable state.
+An inbox entry is not automatic consent to execute: the host plugin records an
+explicit acceptance, running state, and one terminal result.
 
-## Operations
+Agent discovery combines local connectors with the most recent validated NATS
+presence observed by agentd. During a transport outage, remote entries are a
+cached observation rather than proof that the remote Agent is currently online.
+
+```bash
+edgecitadel connector list
+edgecitadel connector status codex-local
+edgecitadel connector revoke codex-local
+```
+
+## Local state and diagnostics
 
 ```bash
 edgecitadel status
 edgecitadel doctor
-edgecitadel plugin list
-edgecitadel plugin start edgecitadel.echo
-edgecitadel plugin stop edgecitadel.echo
-edgecitadel plugin logs edgecitadel.echo
-edgecitadel plugin remove edgecitadel.echo
-edgecitadel supervisor start
-edgecitadel supervisor stop
-edgecitadel supervisor status
-edgecitadel messaging status       # nats_leaf Edge only
-edgecitadel messaging restart      # nats_leaf Edge only
-edgecitadel down
+edgecitadel service status
+edgecitadel task list --connector-id codex-local
+edgecitadel task show <task-id> --connector-id codex-local
+edgecitadel task cancel <task-id> --connector-id codex-local
+edgecitadel trace list --connector-id codex-local
+edgecitadel trace show <trace-id> --connector-id codex-local
+edgecitadel trace purge --connector-id codex-local
 ```
 
-`doctor --json` exposes stable checks for the process, local client, JetStream,
-Leaf connection, Core, and cross-node path. A healthy local broker with a
-disconnected Leaf is `degraded`: local messages remain available and cross-node
-messages are paused. `down` preserves core data. Plugin removal preserves the plugin log. Local node
-and plugin state defaults to `~/.edgecitadel`; tests and advanced operators may
-override it with `EDGECITADEL_STATE_DIR`.
+agentd is the only writer of its private SQLite database. It records task
+orchestration, attempts, bounded diagnostic events, metadata-only traces, and
+presence history. Native plugins use the scoped local API rather than opening
+the database or connecting to NATS. Private file modes isolate other OS users,
+not arbitrary code running as the same user; install native plugins only into
+trusted Agent hosts. The Managed Agent effect/outcome ledger remains separate
+so external side effects keep their idempotency boundary.
 
-## What is automatic and what is not
+Trace metadata is retained for at most 30 days, with record caps enforced in
+bounded cleanup batches. `edgecitadel service status --json` reports database
+bytes and telemetry counts; `edgecitadel trace purge` removes trace metadata
+without deleting identity or pending tasks.
 
-The Homebrew and pip layouts remove all manual `.env`, directory, broker
-rendering, Compose, and Supervisor-install commands. Neither installs Docker:
-only Core creation checks for a running Docker Desktop/Engine. The Formula
-installs the `nats-server` binary needed by `nats_leaf`; pip users install that
-native executable separately. `single-client` never starts it. Public installs
-still require separate, explicitly authorized release/tap/PyPI publication.
+`doctor` distinguishes the service process, database, task transport, Core API,
+Core NATS, local NATS, JetStream, and Leaf connection. A healthy local broker
+with a disconnected Leaf is degraded: same-host work is available and
+cross-node work is paused.
 
-The Supervisor owns package validation, permission approval, immutable install,
-process start/stop, broker credential injection, readiness confirmation, status,
-and logs. In v0.1 the declared sandbox and permission set is reviewed but is not
-yet an operating-system enforcement boundary. The plugin owns runtime-specific
-authentication, its Agent Card, heartbeats, durable inbox handling, and
-correlated results. The core owns enrollment, messaging infrastructure,
-registry persistence, API, and dashboard.
+Back up and restore the complete `~/.edgecitadel/agentd` directory as one unit.
+Its SQLite database, `payload.key`, and `admin.token` are private, related state;
+restoring only the database makes encrypted task content unrecoverable. Keep the
+directory and files restricted to the account that runs EdgeCitadel.
 
 ## Troubleshooting
 
-- `create` says Docker is missing: install Docker Desktop or Docker Engine and
+- Docker unavailable during `create`: start Docker Desktop or Docker Engine and
   rerun the same command.
-- An invitation is expired or used: create a new invitation on the core.
-- `join` cannot reach the core: use a reachable LAN/Tailscale hostname and make
-  ports 80 and 4222 reachable; `nats_leaf` also needs outbound access to Core
-  port 7422.
-- `doctor` reports `degraded`: local agents can still communicate; restore Core
-  reachability or the Leaf credential, then run `edgecitadel messaging restart`.
-- A cross-node command fails while disconnected: it was not reported as durably
-  accepted. Retry with the same logical message/task ID after the Leaf returns.
-- A plugin starts but never becomes visible: inspect `plugin logs <package-id>`,
-  then run `doctor` on the edge host.
-- To inspect technical errors, place `--verbose` before the command.
+- Invitation expired or already used: create a new invitation on the Core.
+- `nats_leaf` setup fails: install `nats-server`, then use a new invitation; a
+  redeemed invitation is never silently reused after partial setup.
+- `doctor` reports the EdgeCitadel service stopped: run `edgecitadel service
+  start`.
+- `doctor` reports disconnected task transport: restore Core connectivity; in
+  `nats_leaf`, confirm local messaging first with `edgecitadel messaging status`.
+- Managed Agent does not register: inspect `edgecitadel agent logs <package-id>`
+  and then run `edgecitadel doctor`.
+- Native tools are absent: start a new host session and check `edgecitadel
+  connector status <connector-id>`.
+- On Linux without a systemd user manager, `agentd` uses a current-login
+  background process; run `edgecitadel service start` after a host reboot.
+- Add global `--verbose` before a command only when technical detail is needed.
 
-## Recovery and uninstall
+## Upgrade, rollback, and uninstall
 
-Use `plugin stop` before inspecting or backing up a plugin. `plugin remove`
-removes only its immutable installed copy and preserves its log. `down` stops a
-core stack without deleting SQLite, JetStream, node state, or `.env`.
+```bash
+pip install --upgrade edgecitadel
+# or
+brew upgrade edgecitadel
+```
 
-Before uninstalling either package on a `nats_leaf` Edge, run
-`edgecitadel supervisor stop` and `edgecitadel messaging stop`. Homebrew removes
-the installed binaries and `python -m pip uninstall edgecitadel` removes the
-wheel; both deliberately preserve `~/.edgecitadel`, including local JetStream
-data. Package upgrades also preserve this state, and `messaging restart` reloads
-launchd with the current `nats-server` binary path.
+Package upgrades preserve `~/.edgecitadel`, including node identity, connector
+credentials, SQLite state, Managed Agent data, logs, and local JetStream data.
+Legacy `plugins.json` is retained as a rollback record after its atomic migration
+to `managed-agents.json`. Stale Watchdog records are ignored because task and
+presence reconciliation are now system-owned.
 
-There is intentionally no broad `reset` command in v0.1. A full uninstall must
-be a deliberate manual operation after backup: stop the Supervisor and core,
-then remove only this checkout's `data/`, `nats/data/`, and `.env`, plus the
-specific node state directory (normally `~/.edgecitadel`). Never point a
-recursive deletion at a home directory or an unverified path.
+Installing a newer Managed Agent package is transactional. If its fresh process
+does not become ready, EdgeCitadel restores the prior install record and restarts
+the prior version when it was previously running. After a successful upgrade,
+the prior immutable package remains available for an explicit rollback:
+
+```bash
+edgecitadel agent install /path/to/the/prior/package
+```
+
+Back up `~/.edgecitadel` before manual rollback. A code downgrade must not be
+used with a newer SQLite schema unless that older release documents support for
+the schema.
+
+Before uninstalling an Edge:
+
+```bash
+edgecitadel service stop
+edgecitadel messaging stop  # nats_leaf only
+```
+
+Then run `pip uninstall edgecitadel` or `brew uninstall edgecitadel`. Both
+preserve `~/.edgecitadel`; deleting that state is a separate, explicit operator
+decision after backup. Removing the Home Assistant adapter never removes or
+changes Home Assistant itself.

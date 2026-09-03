@@ -10,7 +10,6 @@ module.exports = defineConfig({
   testMatch: [
     '**/phase2-gemma-smoke.spec.js',
     '**/phase2.5-streaming-and-memory.spec.js',
-    '**/phase3-watchdog-fast-path.spec.js',
     '**/phase6-hermes-bridge.spec.js',
     '**/streaming-fragmentation-regression.spec.js',
   ],

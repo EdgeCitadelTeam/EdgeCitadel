@@ -11,15 +11,16 @@ brew install edgecitadel
 ```
 
 The formula installs read-only application assets in its Cellar `libexec` and
-uses `~/.edgecitadel` for node state, secrets, Supervisor files, plugins, logs,
+uses `~/.edgecitadel` for node state, secrets, agentd files, Managed Agents, logs,
 SQLite, and JetStream data. Homebrew upgrades therefore do not replace runtime
-state. The first plugin command automatically prepares the private Supervisor
-Python environment; users do not install it separately. That first plugin
-command needs internet access to download the Supervisor's Python dependencies.
+state. The first Agent or connector command automatically prepares the private
+agentd Python environment and loads a per-user LaunchAgent; users do not install
+or run a root service. That first command needs internet access to download
+agentd's declared Python dependencies.
 
-The Formula depends on `nats-server` so `nats_leaf` can validate its generated
-configuration before invitation redemption. `single-client` does not start that
-binary. In `nats_leaf`, configuration, Leaf credentials, logs, PID/service
+`nats-server` is deliberately separate because only `nats_leaf` needs it. Install
+it with `brew install nats-server` before choosing that mode; `single-client`
+does not install or start it. In `nats_leaf`, configuration, Leaf credentials, logs, PID/service
 metadata, and JetStream data remain under `~/.edgecitadel/nats_leaf`, never the
 Cellar. Uninstall and upgrade leave that state intact unless the operator
 explicitly removes it.
@@ -43,10 +44,11 @@ After testing, `brew uninstall edgecitadel` and `brew untap local/edgecitadel`
 remove the temporary package and tap; runtime state under `~/.edgecitadel` is
 deliberately retained.
 
-Before uninstalling a `nats_leaf` Edge, run `edgecitadel supervisor stop` and
-`edgecitadel messaging stop`. Formula upgrades retain all state; the next
-`messaging restart` unloads and reloads the user job so its program path moves
-from the old Cellar version to the current `nats-server` dependency.
+Before uninstalling an Edge, run `edgecitadel service stop`; for `nats_leaf`,
+also run `edgecitadel messaging stop`. Formula upgrades retain all state. Run
+`edgecitadel service restart` after an upgrade so the LaunchAgent uses the new
+agentd environment; `edgecitadel messaging restart` is needed only when the
+local NATS configuration or binary changed.
 
 Do not advertise `brew install edgecitadel` until a release archive and tap have
 been published. Publishing is a separate, explicitly authorized operation.
@@ -61,7 +63,7 @@ been published. Publishing is a separate, explicitly authorized operation.
 4. Put the formula in `zhonghaozhan/homebrew-edgecitadel` as
    `Formula/edgecitadel.rb`.
 5. Verify a clean install, upgrade with preserved `~/.edgecitadel`, Core create,
-   edge join, plugin installation, and uninstall.
+   Edge join, Managed Agent and Native Agent Plugin installation, and uninstall.
 
 After the tap exists, the intended public commands are:
 
