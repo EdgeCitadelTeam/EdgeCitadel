@@ -184,7 +184,7 @@ def test_build_lock_is_deterministic_canonical_and_uses_typed_identity(
     assert first["package"] == {
         "id": "local.example",
         "version": "0.1.0",
-        "protocol": "edgecitadel.plugin.v1",
+        "protocol": "edgecitadel.managed-agent.v1",
     }
     files = first["files"]
     assert isinstance(files, list)
@@ -589,8 +589,8 @@ def test_build_inventory_is_deterministic_json_compatible_and_path_free(
     assert first["package"] == {
         "id": "local.example",
         "version": "0.1.0",
-        "protocol": "edgecitadel.plugin.v1",
-        "kind": "AgentPlugin",
+        "protocol": "edgecitadel.managed-agent.v1",
+        "kind": "ManagedAgent",
     }
     assert first["compatibility"] == package.manifest["compatibility"]
     assert first["runtime"] == package.manifest["runtime"]

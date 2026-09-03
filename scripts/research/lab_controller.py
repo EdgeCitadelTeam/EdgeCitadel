@@ -453,22 +453,6 @@ def _controller_machine_id_sha256() -> str:
     return hashlib.sha256(machine_id.read_bytes()).hexdigest()
 
 
-def _require_system_health(url: str) -> None:
-    last_error: Exception | None = None
-    for _ in range(30):
-        try:
-            with urllib.request.urlopen(
-                f"{url}/api/system/status", timeout=2
-            ) as response:
-                if response.status == 200:
-                    return
-                last_error = LabConfigError("lab system health endpoint was not ready")
-        except (OSError, urllib.error.URLError) as error:
-            last_error = error
-        time.sleep(1)
-    raise LabConfigError("lab system health endpoint was not ready") from last_error
-
-
 def _completed_cleanup_step(
     state_file: Path,
     state: ControllerOwnershipState,

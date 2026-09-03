@@ -17,10 +17,9 @@ def test_repository_echo_package_is_locked_and_executable() -> None:
     assert inventory["permissions"]["messaging"]["outboundAgents"] == ["aggregator"]
 
 
-def test_echo_runtime_contains_the_join_lifecycle() -> None:
+def test_echo_runtime_uses_managed_agent_lifecycle() -> None:
     source = (PACKAGE_ROOT / "runtime" / "__main__.py").read_text()
 
-    assert "agents.{AGENT_ID}.register" in source
-    assert "agents.{AGENT_ID}.heartbeat" in source
-    assert "agents.{AGENT_ID}.inbox" in source
-    assert '"result"' in source
+    assert "ManagedContext" in source
+    assert "await run(" in source
+    assert "nats" not in source.lower()

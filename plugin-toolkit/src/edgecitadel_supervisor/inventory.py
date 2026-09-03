@@ -23,7 +23,7 @@ from .validator import PackageRecord, SkillRecord, validate_schema
 
 LOCK_FILENAME = "plugin.lock.json"
 _LOCK_SCHEMA = "plugin-lock.v1.schema.json"
-_PLUGIN_SCHEMA = "agent-plugin.v1alpha1.schema.json"
+_PLUGIN_SCHEMA = "managed-agent.v1alpha2.schema.json"
 _HASH_CHUNK_SIZE = 1024 * 1024
 _PORTABLE_SKILL_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 

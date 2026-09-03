@@ -2,11 +2,11 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "d6a42f7275c7dd9499beb93171059990f4d2a488d7e18d9c499a480e85fc6b79"
+      "sha256": "1e9f4cda52fdaa44dfb8a801e3b480fdeeb02affa65abe92ebb25a91f8dec478"
     },
     {
       "path": "plugin.yaml",
-      "sha256": "993f319841920adc900b0bee93358ce6e8845708e707ea8263ee945e67fb9f5f"
+      "sha256": "4a5d333815e04d316ce56ebf2708a8c5fd23812b07c0c77d450cc26736f39218"
     },
     {
       "path": "runtime/__init__.py",
@@ -18,7 +18,7 @@
     },
     {
       "path": "skills/placeholder/SKILL.md",
-      "sha256": "115256d561ee27c53965ba001e4f6dfaa8349046e9d959c72543ec7ecb213e5b"
+      "sha256": "eab50871df8832619d6800faefc120543125479baf6dfca133f4fb635e2b2cfb"
     },
     {
       "path": "skills/placeholder/assets/README.md",
@@ -48,12 +48,12 @@
   "lockVersion": 1,
   "package": {
     "id": "local.placeholder",
-    "protocol": "edgecitadel.plugin.v1",
-    "version": "0.1.0"
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.2.0"
   },
   "skills": [
     {
-      "contentSha256": "115256d561ee27c53965ba001e4f6dfaa8349046e9d959c72543ec7ecb213e5b",
+      "contentSha256": "eab50871df8832619d6800faefc120543125479baf6dfca133f4fb635e2b2cfb",
       "name": "placeholder",
       "skillId": "example.placeholder",
       "version": "0.1.0"

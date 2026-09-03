@@ -17,7 +17,7 @@ do_uninstall() {
   run rm -f /etc/systemd/system/edgecitadel-*.service
   run systemctl daemon-reload
 
-  log_info "removing legacy AgentPlugin runtime environments"
+  log_info "removing obsolete package runtime environments"
   run rm -rf /var/lib/edgecitadel/venvs
 
   log_info "removing cron files"

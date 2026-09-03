@@ -1,6 +1,6 @@
-# Placeholder plugin
+# Placeholder Managed Agent package
 
-This installable example is validation-only. It demonstrates the EdgeCitadel plugin package contract and is not a working agent runtime.
+This installable example is validation-only. It demonstrates the EdgeCitadel Managed Agent package contract and is not a working agent runtime.
 
 ## Structure
 

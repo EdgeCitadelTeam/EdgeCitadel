@@ -1,7 +1,7 @@
 # EdgeCitadel plugin toolkit
 
-`plugin-toolkit/` contains the shared Python Plugin runtime and repository-side
-infrastructure for validating installable EdgeCitadel Plugin packages. The
+`plugin-toolkit/` contains agentd, the Managed Agent runtime, and repository-side
+infrastructure for validating installable EdgeCitadel packages. The
 `edgecitadel_supervisor` package owns safe
 loading, strict schemas, compatibility checks, canonical locks, and deterministic
 inventory. The `edgecitadel_plugin_runtime` package owns Agent Card, heartbeat,
@@ -15,21 +15,20 @@ directory.
 
 Newcomers do not create this environment or install the Supervisor separately.
 From the repository root, the unified CLI prepares a private environment on the
-first plugin command and composes validation with the host-local lifecycle:
+first Agent command and composes validation with the host-local lifecycle:
 
 ```bash
-./scripts/edgecitadel plugin install ./plugins/examples/echo
-./scripts/edgecitadel plugin list
-./scripts/edgecitadel plugin logs edgecitadel.echo
-./scripts/edgecitadel plugin stop edgecitadel.echo
-./scripts/edgecitadel plugin start edgecitadel.echo
+./scripts/edgecitadel agent install ./plugins/examples/echo
+./scripts/edgecitadel agent list
+./scripts/edgecitadel agent logs edgecitadel.echo
+./scripts/edgecitadel agent stop edgecitadel.echo
+./scripts/edgecitadel agent start edgecitadel.echo
 ```
 
-Before a managed runtime starts, the Supervisor-owned NATS reconciler adds each
-declared `agents.<id>.inbox` as an exact subject in the selected JetStream
-domain. It does not choose topology and receives only the plugin client
-credential, never a Leaf credential. The lower-level setup and commands below
-are the contributor interface for package authoring and CI.
+Before a managed runtime starts, agentd owns its connector, durable inbox, task
+state, and process lifecycle. Managed processes receive a private local API
+credential, never NATS or Leaf credentials. The lower-level commands below are
+the contributor interface for package authoring and CI.
 
 ## Contributor setup
 
@@ -124,9 +123,9 @@ and return types.
 
 ## Non-goals
 
-The toolkit package does not provide process lifecycle management, broker
-lifecycle, identity provisioning, persistence or
-a learned-memory store, sandbox enforcement, permission granting, package
-signing, or publisher verification. It also does not support normal wheel
-deployment of the supervisor's schema resources; schema lookup is supported only
-from the source/editable layout for now.
+agentd owns Managed Agent process lifecycle, broker connectivity, local identity,
+and task/trace persistence. The toolkit does not provide a learned-memory store,
+sandbox enforcement, permission granting, package signing, or publisher
+verification. It also does not support normal wheel deployment of the
+validator's schema resources; schema lookup is supported only from the
+source/editable layout for now.

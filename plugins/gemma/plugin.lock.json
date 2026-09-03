@@ -14,7 +14,7 @@
     },
     {
       "path": "edgecitadel_gemma_plugin/adapter.py",
-      "sha256": "de53a9bc59e3bf64a9f46d71960a47a9e7535492d5bdac7e2b7e5274c7f0d13b"
+      "sha256": "81f67934a68bf2a6b0ac2a91ee2fdb86a167f5f059ebaa4e4a6b9d8c0bf3f271"
     },
     {
       "path": "edgecitadel_gemma_plugin/config.yaml",

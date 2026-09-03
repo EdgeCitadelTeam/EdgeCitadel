@@ -18,10 +18,7 @@ jetstream {
 # MQTT_END
 
 authorization {
-    # v0.1: token-only auth. Per ADR-0005, broker-level openclaw user scoping
-    # is deferred to v0.2 (proper per-session NATS JWTs). In v0.1, browser
-    # security relies on the aggregator-mediated translator (Task 14) and the
-    # fact that OPENCLAW_TOKEN is held only by trusted browser sessions.
+    # Core and enrolled runtimes authenticate with the generated fleet token.
     token: $NATS_TOKEN
 }
 

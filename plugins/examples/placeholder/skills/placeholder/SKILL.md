@@ -1,7 +1,7 @@
 ---
 name: placeholder
-description: Validate the EdgeCitadel plugin package path without performing external work. Use when testing plugin discovery and procedural packaging.
-compatibility: Requires the EdgeCitadel plugin runtime v1 protocol.
+description: Validate the EdgeCitadel Managed Agent package path without performing external work. Use when testing package discovery and procedural packaging.
+compatibility: Requires the EdgeCitadel Managed Agent v1 protocol.
 metadata:
   version: "0.1.0"
 ---

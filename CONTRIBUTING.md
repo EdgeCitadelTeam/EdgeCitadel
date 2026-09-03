@@ -4,7 +4,7 @@
 
 ```bash
 git clone <repo-url> && cd EdgeCitadel
-cp .env.example .env          # configure NATS_TOKEN, OPENCLAW_TOKEN
+cp .env.example .env          # configure generated credentials before startup
 docker compose up --build     # start full stack
 ```
 
@@ -25,12 +25,9 @@ git checkout -b <type>/<short-description>
 
 ### 2. Make changes
 
-Repository policy and quality gates are in `AGENTS.md`. Claude-specific area guides are in `.claude/rules/`:
-- `python-backend.md` — aggregator Python code
-- `react-frontend.md` — dashboard React components
-- `nats-messaging.md` — NATS subjects and message schemas
-- `e2e-testing.md` — Playwright end-to-end tests
-- `docker-infra.md` — Docker, nginx, NATS config
+Repository policy and quality gates are in `AGENTS.md`; repeatable verification
+procedures live in `.agents/skills/`. Tool-specific configuration must defer to
+those shared sources.
 
 ### 3. Verify quality
 
@@ -43,12 +40,12 @@ cd .. && uv run --isolated --with-requirements scripts/requirements-test.txt pyt
 ./scripts/research/run-python -m pytest tests/ -x --tb=short
 
 # Frontend
-cd frontend && npm run lint && npm run build
+cd frontend && npm run lint && npm test && npm run build
 
 # Deterministic E2E owns and cleans up a disposable stack.
 cd e2e && npm test
 
-# Optional upstream/model-dependent Plugin suites use a prepared external stack.
+# Optional upstream/model-dependent Managed Agent suites use a prepared external stack.
 APP_URL=http://localhost AGG_URL=http://localhost:8000 npm run test:external-plugins
 ```
 
@@ -93,13 +90,12 @@ Verdicts: **SHIP** / **FIX-THEN-SHIP** / **RETHINK**
 ```
 aggregator/      Python FastAPI aggregator
 frontend/        React 18 dashboard
-openclaw-client/ Node.js NATS agent client
 nats/            NATS server config
 nginx/           Reverse proxy config
 e2e/             Playwright tests
 scripts/         Utility scripts
-plugin-toolkit/  Shared Plugin runtime, SDK, schemas, validation, and tests
-plugins/         Installable Agent Plugin packages and implementations
+plugin-toolkit/  agentd, Managed Agent runtime, SDK, validation, and tests
+plugins/         Installable Managed Agent packages and examples
 .agents/         Canonical shared verification skills
-.claude/         Claude-specific compatibility and area guides
+.claude/         Claude-specific settings, commands, and shared-skill links
 ```

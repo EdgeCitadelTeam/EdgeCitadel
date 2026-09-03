@@ -1,7 +1,7 @@
 ---
 name: echo
 description: Return the message body unchanged. Use to verify that a newly joined EdgeCitadel node can receive and answer a command.
-compatibility: EdgeCitadel plugin runtime v1.
+compatibility: EdgeCitadel Managed Agent v1.
 metadata:
   version: "0.1.0"
 ---

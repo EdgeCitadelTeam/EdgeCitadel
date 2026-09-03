@@ -1,18 +1,19 @@
-apiVersion: edgecitadel.io/v1alpha1
-kind: AgentPlugin
+apiVersion: edgecitadel.io/v1alpha2
+kind: ManagedAgent
 
 metadata:
   name: hermes
   displayName: Hermes Agent
   description: Bridges a locally installed Hermes Agent onto EdgeCitadel messaging.
-  version: 0.1.0
+  version: 0.2.0
   publisher: edgecitadel
 
 compatibility:
   supervisorApi: ">=0.1.0,<0.2.0"
-  protocols: [edgecitadel.plugin.v1]
+  protocols: [edgecitadel.managed-agent.v1]
 
 runtime:
+  kind: service_adapter
   command: [python, -m, edgecitadel_hermes_plugin]
   pythonRequirements: edgecitadel_hermes_plugin/requirements.txt
   environmentVariables: [HERMES_BASE_URL, HERMES_MODEL, HERMES_TIMEOUT_SEC, LOG_LEVEL]
@@ -37,6 +38,6 @@ permissions:
 
 security:
   sandbox: restricted
-  secrets: [HERMES_TOKEN]
+  secrets: [HERMES_TOKEN_FILE]
 
 extensions: {}

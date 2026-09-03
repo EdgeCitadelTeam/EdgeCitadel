@@ -44,7 +44,7 @@ def make_command(
 
 
 class FakeContext:
-    """Stand-in for edgecitadel_plugin_runtime.pull_consumer.Context."""
+    """Stand-in for the Managed Agent handler context."""
 
     def __init__(self, agent_id: str = "us-mac-hermes"):
         self.agent_id = agent_id

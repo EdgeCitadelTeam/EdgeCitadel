@@ -1,18 +1,19 @@
-apiVersion: edgecitadel.io/v1alpha1
-kind: AgentPlugin
+apiVersion: edgecitadel.io/v1alpha2
+kind: ManagedAgent
 
 metadata:
   name: echo
   displayName: Echo Agent
   description: A minimal working agent that proves registration, heartbeat, inbox, and result delivery.
-  version: 0.1.1
+  version: 0.2.0
   publisher: edgecitadel
 
 compatibility:
   supervisorApi: ">=0.1.0,<0.2.0"
-  protocols: [edgecitadel.plugin.v1]
+  protocols: [edgecitadel.managed-agent.v1]
 
 runtime:
+  kind: agent_runtime
   command: [python, -m, runtime]
   healthTimeoutSeconds: 15
   restartPolicy: on-failure

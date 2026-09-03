@@ -1,6 +1,6 @@
 agent_id: us-mac-hermes
 name: us-mac-hermes
-description: Hermes Agent (Nous Research) bridged onto the EdgeCitadel NATS fabric.
+description: Hermes Agent (Nous Research) bridged through agentd to the node's configured NATS transport.
 version: 0.1.0
 runtime:
   kind: bridge

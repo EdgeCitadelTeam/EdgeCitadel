@@ -58,7 +58,6 @@ include = [
   "/scripts/__init__.py",
   "/scripts/edgecitadel_cli.py",
   "/scripts/nats_leaf.py",
-  "/scripts/plugin_runner.py",
   "/scripts/research/__init__.py",
   "/scripts/research/lab_config.py",
 ]
@@ -97,6 +96,5 @@ only-include = [
 "scripts/__init__.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/__init__.py"
 "scripts/edgecitadel_cli.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/edgecitadel_cli.py"
 "scripts/nats_leaf.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/nats_leaf.py"
-"scripts/plugin_runner.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/plugin_runner.py"
 "scripts/research/__init__.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/research/__init__.py"
 "scripts/research/lab_config.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/research/lab_config.py"

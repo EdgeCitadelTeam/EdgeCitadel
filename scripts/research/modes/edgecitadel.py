@@ -429,14 +429,6 @@ class _JetStreamTransport:
             f"agents.{decoded['sender_id']}.heartbeat", decoded, "publish_heartbeat"
         )
 
-    async def _publish_status(
-        self, envelope: Mapping[str, object]
-    ) -> PublicationReceipt:
-        decoded = self._validated_envelope(envelope, ("status",))
-        return await self._publish_transient(
-            f"agents.{decoded['sender_id']}.status", decoded, "publish_status"
-        )
-
     async def observe_terminal(
         self, task_id: str, timeout_s: float
     ) -> ObservedEnvelope | None:

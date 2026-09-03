@@ -1750,21 +1750,6 @@ def _mock_json_response(
     )
 
 
-def _receipt_body(envelope: Mapping[str, object]) -> dict[str, object]:
-    encoded = canonical_json(envelope)
-    return {
-        "accepted": True,
-        "accepted_ns": 50_000,
-        "application_bytes": len(encoded),
-        "duplicate": None,
-        "envelope_id": envelope["id"],
-        "stream": None,
-        "stream_sequence": None,
-        "transport": "central-relay",
-        "wire_bytes": None,
-    }
-
-
 @_typed_test_decorator(pytest.mark.asyncio)
 async def test_central_transport_binds_lease_prepares_commits_and_emits_evidence(
     tmp_path: Path,

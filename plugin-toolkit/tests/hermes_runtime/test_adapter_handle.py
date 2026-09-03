@@ -7,9 +7,11 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _hermes_env(monkeypatch):
+def _hermes_env(monkeypatch, tmp_path):
+    token_file = tmp_path / "hermes-token"
+    token_file.write_text("test-token\n")
     monkeypatch.setenv("HERMES_BASE_URL", "http://localhost:8642")
-    monkeypatch.setenv("HERMES_TOKEN", "test-token")
+    monkeypatch.setenv("HERMES_TOKEN_FILE", str(token_file))
     monkeypatch.setenv("HERMES_MODEL", "hermes-test")
     monkeypatch.setenv("HERMES_TIMEOUT_SEC", "10")
 
@@ -163,31 +165,21 @@ async def test_handle_publishes_progress_with_upstream_tag(fake_ctx, cmd):
 
 
 @pytest.mark.asyncio
-async def test_run_wires_handle_into_template():
-    """Without this wiring, PullConsumer would invoke template.py's stub
-    handler instead of the Hermes Plugin's. Regression guard for a real
-    bug found in code review on 2026-05-06."""
-    from edgecitadel_plugin_runtime import template
+async def test_main_runs_through_managed_agent_runtime():
     from edgecitadel_hermes_plugin import adapter
 
-    # Save and restore template.handle so this test doesn't pollute others
-    original = template.handle
-    try:
-        # Stub out preflight + run_adapter to isolate the wiring step
-        with (
-            patch(
-                "edgecitadel_hermes_plugin.adapter.preflight",
-                new=AsyncMock(return_value=None),
-            ),
-            patch(
-                "edgecitadel_hermes_plugin.adapter.run_adapter",
-                new=AsyncMock(return_value=None),
-            ),
-        ):
-            await adapter._run()
-        assert template.handle is adapter.handle
-    finally:
-        template.handle = original
+    with (
+        patch(
+            "edgecitadel_hermes_plugin.adapter.preflight",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "edgecitadel_hermes_plugin.adapter.run_managed_agent",
+            new=AsyncMock(return_value=None),
+        ) as managed,
+    ):
+        await adapter.main()
+    managed.assert_awaited_once_with(adapter.CONFIG_PATH, adapter.handle)
 
 
 @pytest.mark.asyncio

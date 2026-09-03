@@ -1,14 +1,14 @@
-"""EdgeCitadel Hermes bridge Plugin runtime.
+"""EdgeCitadel Hermes Managed Agent adapter.
 
 Forwards `command` envelopes to a locally-installed Hermes Agent
 (`hermes serve --port 8642`) and streams the response back as
 `task.progress` envelopes.
 
 Memory is owned upstream — Hermes' own session store under ~/.hermes/
-is the source of truth. This Plugin runtime does NOT use the aggregator's
-`memory.turns.*` service. See ADR-0009.
+is the source of truth. This Managed Adapter does not use the aggregator's
+`memory.turns.*` service.
 
-Spec: docs/superpowers/specs/2026-05-05-hermes-bridge-design.md
+Architecture: docs/architecture/managed-agents-and-native-plugins.md
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ from pathlib import Path
 
 import httpx
 
-from edgecitadel_plugin_runtime.pull_consumer import Context
-from edgecitadel_plugin_runtime.template import main as run_adapter
+from edgecitadel_agentd.managed_runtime import ManagedContext, run as run_managed_agent
 from edgecitadel_hermes_plugin.hermes_client import (
     HERMES_BASE_URL,
     HermesError,
     call_hermes_streaming,
+    load_token,
 )
 
 log = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ async def preflight() -> None:
     """Check Hermes Agent is reachable on HERMES_BASE_URL with a valid token.
     Calls GET /v1/models — same OpenAI-compat surface, cheap, returns the
     configured model list. Raises PreflightError with a tagged reason."""
-    headers = {"Authorization": f"Bearer {os.environ['HERMES_TOKEN']}"}
+    headers = {"Authorization": f"Bearer {load_token()}"}
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(f"{HERMES_BASE_URL}/v1/models", headers=headers)
@@ -56,7 +56,7 @@ async def preflight() -> None:
         raise PreflightError(f"hermes_unhealthy: /v1/models status {resp.status_code}")
 
 
-async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
+async def handle(env: dict, ctx: ManagedContext) -> tuple[dict, str]:
     """Translate a `command` envelope into a Hermes Chat Completions call.
     Stream SSE deltas as `task.progress` envelopes; return the joined text
     in a `result`-shaped payload."""
@@ -90,17 +90,14 @@ async def handle(env: dict, ctx: Context) -> tuple[dict, str]:
     return ({"body": full_text, "upstream": "hermes-agent"}, "completed")
 
 
-async def _run() -> None:
+async def main() -> None:
     await preflight()
-    from edgecitadel_plugin_runtime import template
-
-    template.handle = handle
-    await run_adapter(CONFIG_PATH)
+    await run_managed_agent(CONFIG_PATH, handle)
 
 
 def _entrypoint() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
-    asyncio.run(_run())
+    asyncio.run(main())
 
 
 if __name__ == "__main__":

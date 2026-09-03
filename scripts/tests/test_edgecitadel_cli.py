@@ -93,7 +93,6 @@ def test_ensure_env_is_idempotent_and_preserves_custom_values(tmp_path, monkeypa
     target = tmp_path / ".env"
     example.write_text(
         "NATS_TOKEN=change-me\n"
-        "OPENCLAW_TOKEN=custom-openclaw\n"
         "EDGECITADEL_ADMIN_TOKEN=change-me-admin\n"
         "EC_ENABLE_MQTT=0\n"
     )
@@ -106,7 +105,6 @@ def test_ensure_env_is_idempotent_and_preserves_custom_values(tmp_path, monkeypa
     assert changed is True
     assert changed_again is False
     assert first == second
-    assert first["OPENCLAW_TOKEN"] == "custom-openclaw"
     assert first["NATS_TOKEN"].startswith("ec_")
     assert first_source == target.read_text()
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
@@ -233,9 +231,11 @@ def _inventory() -> dict:
         "package": {
             "id": "local.demo",
             "version": "0.1.0",
-            "protocol": "edgecitadel.plugin.v1",
+            "protocol": "edgecitadel.managed-agent.v1",
+            "kind": "ManagedAgent",
         },
         "runtime": {
+            "kind": "agent_runtime",
             "command": ["python", "-m", "runtime"],
             "healthTimeoutSeconds": 2,
             "restartPolicy": "on-failure",
@@ -553,6 +553,7 @@ def test_plugin_remove_stops_and_deletes_managed_copy(tmp_path, monkeypatch):
     _write_node(state_dir)
     monkeypatch.setattr(cli, "_validate_plugin", lambda *args: _inventory())
     monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "_agentd_rpc", lambda *_args, **_kwargs: [])
     cli.command_plugin_install(
         Namespace(
             source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
@@ -791,105 +792,24 @@ def test_nats_leaf_join_rolls_back_when_local_start_fails(tmp_path, monkeypatch)
     assert not (tmp_path / "node.json").exists()
 
 
-def test_plugin_nats_environment_never_includes_leaf_credentials():
-    environment = cli._plugin_nats_environment(
-        {
-            "plugin_nats_url": "nats://127.0.0.1:4223",
-            "plugin_nats_token": "local-token",
-            "jetstream_domain": "edge_domain",
-            "leaf_username": "must-not-leak",
-            "leaf_password": "must-not-leak",
-        }
-    )
-
-    assert environment == {
-        "NATS_URL": "nats://127.0.0.1:4223",
-        "NATS_TOKEN": "local-token",
-        "NATS_DOMAIN": "edge_domain",
-    }
-
-
 def test_declared_plugin_environment_excludes_unrelated_secrets(monkeypatch):
     monkeypatch.setenv("PATH", "/safe/bin")
-    monkeypatch.setenv("HERMES_TOKEN", "hermes-secret")
+    monkeypatch.setenv("HERMES_TOKEN_FILE", "/private/hermes-token")
     monkeypatch.setenv("HA_TOKEN", "unrelated-secret")
     monkeypatch.setenv("HERMES_MODEL", "local-model")
     record = {
         "inventory": {
             "runtime": {"environmentVariables": ["HERMES_MODEL"]},
-            "security": {"secrets": ["HERMES_TOKEN"]},
+            "security": {"secrets": ["HERMES_TOKEN_FILE"]},
         }
     }
 
     environment = cli._declared_plugin_environment(record)
 
     assert environment["PATH"] == "/safe/bin"
-    assert environment["HERMES_TOKEN"] == "hermes-secret"
+    assert environment["HERMES_TOKEN_FILE"] == "/private/hermes-token"
     assert environment["HERMES_MODEL"] == "local-model"
     assert "HA_TOKEN" not in environment
-
-
-def test_plugin_start_uses_only_declared_host_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv("PATH", "/safe/bin")
-    monkeypatch.setenv("HERMES_TOKEN", "declared-secret")
-    monkeypatch.setenv("UNRELATED_SECRET", "must-not-leak")
-    inventory = _inventory()
-    inventory["runtime"]["environmentVariables"] = ["HERMES_MODEL"]
-    inventory["security"]["secrets"] = ["HERMES_TOKEN"]
-    record = {
-        "path": str(tmp_path),
-        "inventory": inventory,
-        "pid": None,
-    }
-    state = {"managed_agents": {"local.demo": record}}
-    node = {
-        "agent_id": "edge-one",
-        "core_url": "http://core.test",
-        "plugin_nats_url": "nats://core.test:4222",
-        "plugin_nats_token": "plugin-token",
-    }
-    captured = {}
-
-    class Process:
-        pid = 123
-
-        @staticmethod
-        def poll():
-            return None
-
-    def popen(*args, **kwargs):
-        captured["command"] = args[0]
-        captured["start_new_session"] = kwargs["start_new_session"]
-        captured.update(kwargs["env"])
-        return Process()
-
-    monkeypatch.setattr(cli, "_load_node", lambda *_: node)
-    monkeypatch.setattr(cli, "_plugin_record", lambda *_: (state, record))
-    monkeypatch.setattr(cli, "_ensure_plugin_inboxes", lambda *_: None)
-    monkeypatch.setattr(cli, "_plugin_python", lambda *_: Path(sys.executable))
-    monkeypatch.setattr(cli, "_pid_running", lambda pid: pid == 123)
-    monkeypatch.setattr(cli, "_process_identity", lambda pid: "owned-123")
-    monkeypatch.setattr(cli, "_write_json", lambda *_: None)
-    monkeypatch.setattr(cli.subprocess, "Popen", popen)
-    monkeypatch.setattr(
-        cli,
-        "_http_json",
-        lambda *_args, **_kwargs: {
-            "agent_state": "online",
-            "last_register": "9999-01-01T00:00:00Z",
-            "last_heartbeat": "9999-01-01T00:00:00Z",
-        },
-    )
-
-    cli._start_plugin(tmp_path, "local.demo")
-
-    assert captured["HERMES_TOKEN"] == "declared-secret"
-    assert captured["NATS_TOKEN"] == "plugin-token"
-    assert "UNRELATED_SECRET" not in captured
-    assert captured["command"][1].endswith("scripts/plugin_runner.py")
-    assert captured["command"][2:5] == ["--restart-policy", "on-failure", "--"]
-    assert captured["start_new_session"] is True
-    assert record["process_identity"] == "owned-123"
 
 
 @pytest.mark.parametrize("connector_exists", [False, True])

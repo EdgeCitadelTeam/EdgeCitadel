@@ -8,9 +8,11 @@ import respx
 
 
 @pytest.fixture(autouse=True)
-def _hermes_env(monkeypatch):
+def _hermes_env(monkeypatch, tmp_path):
+    token_file = tmp_path / "hermes-token"
+    token_file.write_text("test-token\n")
     monkeypatch.setenv("HERMES_BASE_URL", "http://localhost:8642")
-    monkeypatch.setenv("HERMES_TOKEN", "test-token")
+    monkeypatch.setenv("HERMES_TOKEN_FILE", str(token_file))
     monkeypatch.setenv("HERMES_MODEL", "hermes-test")
     monkeypatch.setenv("HERMES_TIMEOUT_SEC", "10")
 
@@ -81,4 +83,15 @@ async def test_preflight_fails_on_timeout():
         side_effect=httpx.ReadTimeout("slow")
     )
     with pytest.raises(PreflightError, match="hermes_unreachable"):
+        await preflight()
+
+
+@pytest.mark.asyncio
+async def test_preflight_rejects_empty_token_file(monkeypatch, tmp_path):
+    from edgecitadel_hermes_plugin.adapter import preflight
+
+    token_file = tmp_path / "empty-token"
+    token_file.write_text("\n")
+    monkeypatch.setenv("HERMES_TOKEN_FILE", str(token_file))
+    with pytest.raises(ValueError, match="HERMES_TOKEN_FILE is empty"):
         await preflight()

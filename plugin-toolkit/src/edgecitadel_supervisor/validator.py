@@ -31,13 +31,11 @@ from .loader import (
 )
 
 _PORTABLE_SKILL_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-_PLUGIN_SCHEMA = "agent-plugin.v1alpha1.schema.json"
+_PLUGIN_SCHEMA = "managed-agent.v1alpha2.schema.json"
 _BINDING_SCHEMA = "agent-skill-binding.v1alpha1.schema.json"
 _SCHEMA_DIRECTORY = Path(__file__).resolve().parents[2] / "schemas"
 SUPERVISOR_API_VERSION = Version("0.1.0")
-SUPPORTED_PROTOCOLS = frozenset(
-    {"edgecitadel.managed-agent.v1", "edgecitadel.plugin.v1"}
-)
+SUPPORTED_PROTOCOLS = frozenset({"edgecitadel.managed-agent.v1"})
 
 
 @dataclass(frozen=True)
@@ -112,16 +110,13 @@ def validate_package(
 
 def _validate_package_protocol(manifest: dict[str, object], protocol: str) -> None:
     kind = cast(str, manifest["kind"])
-    required_protocol = {
-        "AgentPlugin": "edgecitadel.plugin.v1",
-        "ManagedAgent": "edgecitadel.managed-agent.v1",
-    }[kind]
+    required_protocol = "edgecitadel.managed-agent.v1"
     if protocol != required_protocol:
         raise CompatibilityError(
             f"{kind} packages must use the {required_protocol} process protocol"
         )
     agents = cast(list[dict[str, object]], manifest["agents"])
-    if kind == "ManagedAgent" and len(agents) != 1:
+    if len(agents) != 1:
         raise ManifestValidationError(
             "ManagedAgent packages must declare exactly one Agent identity"
         )

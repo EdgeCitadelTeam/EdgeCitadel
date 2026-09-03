@@ -2,7 +2,7 @@
 const { defineConfig } = require('@playwright/test');
 
 if (!process.env.APP_URL || !process.env.AGG_URL) {
-  throw new Error('APP_URL and AGG_URL are required for external Plugin E2E');
+  throw new Error('APP_URL and AGG_URL are required for external Managed Agent E2E');
 }
 
 module.exports = defineConfig({

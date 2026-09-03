@@ -1503,7 +1503,3 @@ async def test_execution_context_progress_is_deterministic_bound_and_injected() 
     ]
     with pytest.raises(ValueError, match="bound task"):
         await context.publish_progress(PARENT_1)
-
-
-def raises_control_flow() -> NoReturn:
-    raise ControlFlow("control")

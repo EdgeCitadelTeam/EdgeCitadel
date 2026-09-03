@@ -488,7 +488,6 @@ async def _run_fixture_workload(
     args: Any,
     *,
     fixture_name: str,
-    fixture_args: list[str],
     workload: str,
     mode: str,
     trials: list[TrialResult],
@@ -567,7 +566,6 @@ async def run_e2(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
     return await _run_fixture_workload(
         args,
         fixture_name="delegation_agents.py",
-        fixture_args=["--scenario", "e2"],
         workload="E2",
         mode="A",
         trials=trials,
@@ -650,7 +648,6 @@ async def run_e3(args: Any, out_dir: Path) -> tuple[BenchmarkRun, Path]:
     return await _run_fixture_workload(
         args,
         fixture_name="delegation_agents.py",
-        fixture_args=["--scenario", "e3"],
         workload="E3",
         mode="A",
         trials=trials,

@@ -9,9 +9,11 @@ import respx
 
 
 @pytest.fixture(autouse=True)
-def _hermes_env(monkeypatch):
+def _hermes_env(monkeypatch, tmp_path):
+    token_file = tmp_path / "hermes-token"
+    token_file.write_text("test-token\n")
     monkeypatch.setenv("HERMES_BASE_URL", "http://localhost:8642")
-    monkeypatch.setenv("HERMES_TOKEN", "test-token")
+    monkeypatch.setenv("HERMES_TOKEN_FILE", str(token_file))
     monkeypatch.setenv("HERMES_MODEL", "hermes-test")
     monkeypatch.setenv("HERMES_TIMEOUT_SEC", "10")
 

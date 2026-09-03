@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # deploy/deploy-host.sh — Phase 5 host deploy orchestrator.
 #
-# See docs/superpowers/specs/2026-05-04-host-deploy-design.md § 5
-# and docs/02-server-setup-linux.md § 2 for usage.
+# See docs/onboarding.md and deploy/README.md for usage.
 #
 # Modes (mutually exclusive):
 #   (default)         install everything; full preflight → install → cutover → verify
@@ -68,10 +67,9 @@ log_info "EdgeCitadel Phase 5 Host Deploy — starting"
 log_info "Mode: install   Source: $SOURCE_DIR   Log: $LOG_FILE"
 [[ "${DRY_RUN:-0}" == "1" ]] && log_warn "DRY-RUN mode — no state will change"
 
-# Phase functions (each defined in deploy/lib/_phase_N_*.sh)
+# Phase functions retain historical numbering so upgrade logs remain comparable.
 source "${LIB_DIR}/_phase_0_preflight.sh"
 source "${LIB_DIR}/_phase_1_install_deps.sh"
-source "${LIB_DIR}/_phase_2_venvs.sh"
 source "${LIB_DIR}/_phase_3_units.sh"
 source "${LIB_DIR}/_phase_4_cutover.sh"
 source "${LIB_DIR}/_phase_5_start.sh"
@@ -80,7 +78,6 @@ source "${LIB_DIR}/_phase_7_cron.sh"
 
 phase_0_preflight
 phase_1_install_deps
-phase_2_venvs
 phase_3_units
 
 if [[ "$SKIP_CUTOVER" == "1" ]]; then

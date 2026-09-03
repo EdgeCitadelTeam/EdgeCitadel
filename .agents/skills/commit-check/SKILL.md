@@ -41,9 +41,10 @@ dependencies and document the narrowed scope.
 ## 3. Frontend Quality (if .js/.jsx files changed)
 ```bash
 cd frontend && npm run lint
+cd frontend && npm test
 cd frontend && npm run build
 ```
-Lint and build must succeed with zero errors.
+Lint, unit tests, and build must succeed with zero errors.
 
 ## 4. Commit Message Validation
 Verify the commit message follows Conventional Commits:

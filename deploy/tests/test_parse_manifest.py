@@ -50,12 +50,6 @@ class TestParseManifest(unittest.TestCase):
         self.assertIn("sqlite3", lines)
         self.assertIn("cron", lines)
 
-    def test_get_plugins_enabled(self):
-        r = self._run(["get", "plugins.enabled", "--format", "lines"])
-        self.assertEqual(r.returncode, 0, r.stderr)
-        lines = [ln for ln in r.stdout.splitlines() if ln]
-        self.assertEqual(lines, [])
-
     def test_missing_key_exits_nonzero(self):
         r = self._run(["get", "nonexistent.key"])
         self.assertNotEqual(r.returncode, 0)

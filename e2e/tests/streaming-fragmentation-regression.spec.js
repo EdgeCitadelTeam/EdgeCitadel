@@ -5,8 +5,8 @@
 // Root cause was twofold:
 //   - useWebSocket.js read `payload.delta`, but the canonical Context.publish
 //     contract (edgecitadel_plugin_runtime.pull_consumer.Context.publish_progress)
-//     puts the chunk text at `payload.message`. The Gemma Plugin happened to
-//     mirror to `delta` redundantly; non-Gemma Plugins (Hermes bridge) did
+//     puts the chunk text at `payload.message`. The Gemma runtime happened to
+//     mirror to `delta` redundantly; other Managed Adapters (Hermes) did
 //     not, so the synthetic bubble grew empty for them.
 //   - ChatHistory.jsx merged historical /api/messages results 1:1 into the
 //     timeline without filtering task.progress, so every persisted streaming

@@ -28,7 +28,7 @@ phase_0_preflight() {
 
   # /etc/edgecitadel/env exists with NATS_TOKEN
   if [[ ! -f /etc/edgecitadel/env ]]; then
-    log_err "/etc/edgecitadel/env missing — see setup-linux guide § 2"; fail=1
+    log_err "/etc/edgecitadel/env missing — see docs/onboarding.md"; fail=1
   elif ! grep -q "^NATS_TOKEN=" /etc/edgecitadel/env; then
     log_err "/etc/edgecitadel/env exists but NATS_TOKEN= not set"; fail=1
   fi

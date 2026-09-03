@@ -22,8 +22,8 @@ def valid_package(tmp_path: Path) -> Path:
     (root / "plugin.yaml").write_text(
         yaml.safe_dump(
             {
-                "apiVersion": "edgecitadel.io/v1alpha1",
-                "kind": "AgentPlugin",
+                "apiVersion": "edgecitadel.io/v1alpha2",
+                "kind": "ManagedAgent",
                 "metadata": {
                     "name": "example",
                     "displayName": "Example",
@@ -33,9 +33,10 @@ def valid_package(tmp_path: Path) -> Path:
                 },
                 "compatibility": {
                     "supervisorApi": ">=0.1.0,<0.2.0",
-                    "protocols": ["edgecitadel.plugin.v1"],
+                    "protocols": ["edgecitadel.managed-agent.v1"],
                 },
                 "runtime": {
+                    "kind": "agent_runtime",
                     "command": ["python", "-m", "runtime"],
                     "healthTimeoutSeconds": 10,
                     "restartPolicy": "on-failure",

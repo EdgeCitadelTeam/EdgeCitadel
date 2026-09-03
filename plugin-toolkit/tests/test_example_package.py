@@ -28,20 +28,21 @@ def test_repository_placeholder_package_is_valid() -> None:
         "placeholder",
     )
     assert package.manifest == {
-        "apiVersion": "edgecitadel.io/v1alpha1",
-        "kind": "AgentPlugin",
+        "apiVersion": "edgecitadel.io/v1alpha2",
+        "kind": "ManagedAgent",
         "metadata": {
             "name": "placeholder",
-            "displayName": "Placeholder Plugin",
-            "description": "Demonstrates the EdgeCitadel plugin package contract.",
-            "version": "0.1.0",
+            "displayName": "Placeholder Managed Agent",
+            "description": "Demonstrates the EdgeCitadel Managed Agent package contract.",
+            "version": "0.2.0",
             "publisher": "local",
         },
         "compatibility": {
             "supervisorApi": ">=0.1.0,<0.2.0",
-            "protocols": ["edgecitadel.plugin.v1"],
+            "protocols": ["edgecitadel.managed-agent.v1"],
         },
         "runtime": {
+            "kind": "agent_runtime",
             "command": ["python", "-m", "runtime"],
             "healthTimeoutSeconds": 10,
             "restartPolicy": "on-failure",
@@ -87,10 +88,10 @@ def test_placeholder_skill_contains_the_bounded_portable_procedure() -> None:
     assert (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8") == (
         "---\n"
         "name: placeholder\n"
-        "description: Validate the EdgeCitadel plugin package path without "
-        "performing external work. Use when testing plugin discovery and procedural "
+        "description: Validate the EdgeCitadel Managed Agent package path without "
+        "performing external work. Use when testing package discovery and procedural "
         "packaging.\n"
-        "compatibility: Requires the EdgeCitadel plugin runtime v1 protocol.\n"
+        "compatibility: Requires the EdgeCitadel Managed Agent v1 protocol.\n"
         "metadata:\n"
         '  version: "0.1.0"\n'
         "---\n\n"

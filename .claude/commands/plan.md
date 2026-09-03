@@ -1,30 +1,13 @@
-We are beginning work on a new feature or change. Before writing any code:
+Create an implementation-ready plan for: $ARGUMENTS
 
-**Topic:** $ARGUMENTS
+1. Read `AGENTS.md`, applicable nested instructions, relevant source, tests,
+   packaging, deployment, and maintained architecture docs.
+2. State the goal, assumptions, verified evidence, risks, non-goals, and the
+   smallest viable design.
+3. Write the plan directly under `docs/` with a descriptive kebab-case name.
+4. Include ordered phases, exact file ownership, dependency gates, tests,
+   rollout/rollback, compatibility treatment, and open decisions.
+5. Mark proposed behavior as proposed and current behavior as implemented.
+6. Sync the plan to the project knowledge vault as required by `AGENTS.md`.
 
-## Phase 1: Research
-- Read ALL files relevant to this change. Understand the current implementation deeply.
-- Use subagents for broad codebase exploration if needed.
-- Output findings to `thoughts/research/$(date +%Y%m%d)-research.md`.
-
-## Phase 2: Design Options
-Propose 2-3 implementation approaches. For each:
-- What changes to which files (be specific — file paths and line ranges)
-- Tradeoffs: complexity, performance, breaking changes, test impact
-- Impact on NATS subject structure and message schemas (if any)
-- Estimated number of files touched
-
-## Phase 3: Recommended Plan
-Write a detailed plan to `thoughts/plans/$(date +%Y%m%d)-plan.md` with:
-- One-sentence goal statement
-- Step-by-step implementation phases (each phase should be independently testable)
-- Files to modify with specific changes described
-- New files to create (if any — prefer editing existing files)
-- Test strategy: what to test, how to verify
-- Rollback approach: what to revert if something breaks
-- Risks and open questions
-
-## Phase 4: Present for Review
-- Summarize the recommended approach in 3-5 bullet points
-- Call out any assumptions that need human verification
-- **DO NOT IMPLEMENT YET.** Wait for explicit approval before writing any code.
+Do not implement until the user approves execution.
