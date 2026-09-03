@@ -20,7 +20,6 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 from urllib.parse import urlparse
@@ -76,7 +75,6 @@ PLACEHOLDERS = {
     "NATS_TOKEN": {"", "change-me", "changeme"},
     "NATS_LEAF_USERNAME": {"", "change-me-leaf-user", "changeme"},
     "NATS_LEAF_PASSWORD": {"", "change-me-leaf-password", "changeme"},
-    "OPENCLAW_TOKEN": {"", "change-me-scoped", "changeme"},
     "EDGECITADEL_ADMIN_TOKEN": {"", "change-me-admin", "changeme"},
 }
 
@@ -1703,15 +1701,6 @@ def _plugin_process_detail(record: dict[str, Any]) -> tuple[bool, str]:
     return True, f"pid {pid}"
 
 
-def _timestamp_epoch(value: object) -> float:
-    if not isinstance(value, str):
-        return 0
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return 0
-
-
 def _plugin_record(
     state_dir: Path, plugin_id: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1722,15 +1711,6 @@ def _plugin_record(
     return state, record
 
 
-def _warn_legacy_plugin_alias(args: argparse.Namespace) -> None:
-    if getattr(args, "command", None) == "plugin":
-        print(
-            "warning: 'edgecitadel plugin' is deprecated for Managed Agents; "
-            "use 'edgecitadel agent'",
-            file=sys.stderr,
-        )
-
-
 def _managed_agent_summary(plugin_id: str, record: dict[str, Any]) -> dict[str, object]:
     inventory = record["inventory"]
     package = inventory["package"]
@@ -1738,7 +1718,7 @@ def _managed_agent_summary(plugin_id: str, record: dict[str, Any]) -> dict[str, 
     summary: dict[str, object] = {
         "package_id": plugin_id,
         "version": package["version"],
-        "kind": package.get("kind", "AgentPlugin"),
+        "kind": package.get("kind", "LegacyPackage"),
         "runtime_kind": runtime.get("kind", "legacy"),
         "desired_state": "running" if record.get("enabled") else "stopped",
         "agent_ids": [agent["id"] for agent in inventory["agents"]],
@@ -1789,25 +1769,15 @@ def _sync_managed_agent_state(state_dir: Path, state: dict[str, Any]) -> None:
     records = [
         _managed_agent_summary(plugin_id, record)
         for plugin_id, record in sorted(state["managed_agents"].items())
+        if record.get("inventory", {}).get("package", {}).get("kind") == "ManagedAgent"
     ]
     _agentd_rpc(state_dir, "managed.reconcile", records=records)
 
 
 def _prepare_managed_agent_service(args: argparse.Namespace, state_dir: Path) -> None:
-    if getattr(args, "command", None) in {"agent", "plugin"}:
+    if getattr(args, "command", None) == "agent":
         _start_agentd(state_dir)
         _sync_managed_agent_state(state_dir, _load_plugins(state_dir))
-
-
-def _plugin_nats_environment(node: dict[str, Any]) -> dict[str, str]:
-    environment = {
-        "NATS_URL": node["plugin_nats_url"],
-        "NATS_TOKEN": node["plugin_nats_token"],
-    }
-    domain = node.get("jetstream_domain")
-    if isinstance(domain, str) and domain:
-        environment["NATS_DOMAIN"] = domain
-    return environment
 
 
 _PLUGIN_BASE_ENVIRONMENT = frozenset(
@@ -1836,43 +1806,13 @@ def _declared_plugin_environment(record: dict[str, Any]) -> dict[str, str]:
     return {name: os.environ[name] for name in allowed if name in os.environ}
 
 
-def _ensure_plugin_inboxes(
-    state_dir: Path, node: dict[str, Any], record: dict[str, Any]
-) -> None:
-    if node.get("messaging_mode") == "nats_leaf":
-        try:
-            observation = nats_leaf.observe(state_dir)
-            if not observation["local_ready"]:
-                nats_leaf.start(state_dir)
-        except nats_leaf.NatsLeafError as error:
-            raise UserError(
-                f"Local NATS is unavailable; run '{_command_name()} messaging restart'"
-            ) from error
-    python = _toolkit_python(state_dir)
-    agent_ids = [item["id"] for item in record["inventory"]["agents"]]
-    environment = {
-        **_declared_plugin_environment(record),
-        **_plugin_nats_environment(node),
-        "EDGECITADEL_AGENT_IDS": ",".join(agent_ids),
-    }
-    result = subprocess.run(
-        [str(python), "-m", "edgecitadel_supervisor.nats_admin"],
-        cwd=INSTALL_ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise UserError(
-            "destination inbox stream could not be reconciled; "
-            f"run '{_command_name()} doctor' and retry"
-        )
-
-
 def _start_plugin(state_dir: Path, plugin_id: str) -> None:
     node = _load_node(state_dir)
     state, record = _plugin_record(state_dir, plugin_id)
+    if record["inventory"]["package"].get("kind") != "ManagedAgent":
+        raise UserError(
+            f"Legacy package {plugin_id} cannot be started; reinstall it as a Managed Agent"
+        )
     if _pid_running(record.get("pid")):
         if _plugin_process_owned(record):
             print(
@@ -1889,9 +1829,7 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
         isinstance(item, str) for item in command
     ):
         raise UserError(f"Managed Agent {plugin_id} has an invalid runtime command")
-    managed_protocol = record["inventory"]["package"].get("kind") == "ManagedAgent"
-    if not managed_protocol:
-        _ensure_plugin_inboxes(state_dir, node, record)
+    managed_protocol = True
     python = _plugin_python(state_dir, plugin_id, record)
     executable = str(python) if command[0] in {"python", "python3"} else command[0]
     logs_dir = state_dir / "logs"
@@ -1906,16 +1844,13 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
         "EDGECITADEL_PLUGIN_STATE_DIR": str(plugin_state_dir),
         "EDGECITADEL_SCHEMA_DIR": str(INSTALL_ROOT / "schemas"),
     }
-    if managed_protocol:
-        agent_id = record["inventory"]["agents"][0]["id"]
-        environment.update(
-            {
-                "EDGECITADEL_STATE_DIR": str(state_dir),
-                "EDGECITADEL_CONNECTOR_ID": f"managed-{agent_id}",
-            }
-        )
-    else:
-        environment.update(_plugin_nats_environment(node))
+    agent_id = record["inventory"]["agents"][0]["id"]
+    environment.update(
+        {
+            "EDGECITADEL_STATE_DIR": str(state_dir),
+            "EDGECITADEL_CONNECTOR_ID": f"managed-{agent_id}",
+        }
+    )
     started_at = time.time()
     restart_policy = record["inventory"]["runtime"].get("restartPolicy", "never")
     if managed_protocol:
@@ -2044,89 +1979,6 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
             f"Managed Agent {plugin_id} did not become ready ({last_detail}); "
             f"inspect {log_path} and run '{_command_name()} service status'"
         )
-    runner = INSTALL_ROOT / "scripts" / "plugin_runner.py"
-    if not runner.is_file():
-        raise UserError("AgentPlugin process runner is missing from the installation")
-    runner_argv = [
-        sys.executable,
-        str(runner),
-        "--restart-policy",
-        restart_policy,
-        "--",
-        executable,
-        *command[1:],
-    ]
-    with log_path.open("ab") as log_file:
-        process = subprocess.Popen(
-            runner_argv,
-            cwd=record["path"],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    time.sleep(0.25)
-    if process.poll() is not None:
-        raise UserError(
-            f"Managed Agent {plugin_id} exited during startup; inspect {log_path}"
-        )
-    process_identity = _process_identity(process.pid)
-    if process_identity is None:
-        os.killpg(process.pid, signal.SIGTERM)
-        raise UserError(
-            f"Managed Agent {plugin_id} process identity could not be verified"
-        )
-    record.update(
-        {
-            "pid": process.pid,
-            "process_identity": process_identity,
-            "enabled": True,
-            "started_at": started_at,
-        }
-    )
-    _write_json(_plugins_path(state_dir), state)
-    _sync_managed_agent_state(state_dir, state)
-    agent_ids = [item["id"] for item in record["inventory"]["agents"]]
-    deadline = time.monotonic() + record["inventory"]["runtime"]["healthTimeoutSeconds"]
-    pending = set(agent_ids)
-    while pending and time.monotonic() < deadline:
-        if not _pid_running(process.pid):
-            _stop_plugin(state_dir, plugin_id, quiet=True)
-            raise UserError(
-                f"Managed Agent {plugin_id} exited during registration; inspect {log_path}"
-            )
-        for agent_id in list(pending):
-            try:
-                agent = _http_json(
-                    f"{node['core_url']}/api/agents/{agent_id}", timeout=1
-                )
-                registered_now = (
-                    _timestamp_epoch(agent.get("last_register")) >= started_at
-                )
-                heartbeat_now = (
-                    _timestamp_epoch(agent.get("last_heartbeat")) >= started_at
-                )
-                if (
-                    agent.get("agent_state") == "online"
-                    and registered_now
-                    and heartbeat_now
-                ):
-                    pending.remove(agent_id)
-            except UserError:
-                pass
-        if pending:
-            time.sleep(0.25)
-    if pending:
-        _stop_plugin(state_dir, plugin_id, quiet=True)
-        raise UserError(
-            f"Managed Agent {plugin_id} started but Agents did not become visible: "
-            f"{', '.join(sorted(pending))}; inspect {log_path}"
-        )
-    print(
-        f"Managed Agent {plugin_id} started (pid {process.pid}); visible agents: "
-        f"{', '.join(agent_ids)}"
-    )
 
 
 def _stop_plugin(state_dir: Path, plugin_id: str, *, quiet: bool = False) -> None:
@@ -2420,7 +2272,6 @@ def _remove_managed_package_tree(target: Path) -> None:
 
 
 def command_plugin_install(args: argparse.Namespace) -> int:
-    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     node = _load_node(state_dir)
     _prepare_managed_agent_service(args, state_dir)
@@ -2440,7 +2291,6 @@ def command_plugin_install(args: argparse.Namespace) -> int:
 
 
 def command_plugin_list(args: argparse.Namespace) -> int:
-    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     _load_node(state_dir)
     _prepare_managed_agent_service(args, state_dir)
@@ -2466,7 +2316,6 @@ def command_plugin_list(args: argparse.Namespace) -> int:
 
 
 def command_plugin_status(args: argparse.Namespace) -> int:
-    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     _load_node(state_dir)
     _prepare_managed_agent_service(args, state_dir)
@@ -2520,7 +2369,6 @@ def command_plugin_status(args: argparse.Namespace) -> int:
 
 
 def command_plugin_start(args: argparse.Namespace) -> int:
-    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     _load_node(state_dir)
     _prepare_managed_agent_service(args, state_dir)
@@ -2529,7 +2377,6 @@ def command_plugin_start(args: argparse.Namespace) -> int:
 
 
 def command_plugin_stop(args: argparse.Namespace) -> int:
-    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     _load_node(state_dir)
     _prepare_managed_agent_service(args, state_dir)
@@ -2538,7 +2385,6 @@ def command_plugin_stop(args: argparse.Namespace) -> int:
 
 
 def command_plugin_logs(args: argparse.Namespace) -> int:
-    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     _load_node(state_dir)
     _prepare_managed_agent_service(args, state_dir)
@@ -2553,7 +2399,6 @@ def command_plugin_logs(args: argparse.Namespace) -> int:
 
 
 def command_plugin_remove(args: argparse.Namespace) -> int:
-    _warn_legacy_plugin_alias(args)
     state_dir = _state_dir(args.state_dir)
     _load_node(state_dir)
     _prepare_managed_agent_service(args, state_dir)
@@ -2588,33 +2433,6 @@ def command_plugin_remove(args: argparse.Namespace) -> int:
         f"Managed Agent {args.plugin_id} and its dependency runtime were removed; "
         "logs and Agent data were preserved."
     )
-    return 0
-
-
-def command_supervisor(args: argparse.Namespace) -> int:
-    print(
-        "warning: 'edgecitadel supervisor' is deprecated; use "
-        "'edgecitadel service' and 'edgecitadel agent'",
-        file=sys.stderr,
-    )
-    state_dir = _state_dir(args.state_dir)
-    node = _load_node(state_dir)
-    plugins = _load_plugins(state_dir)["managed_agents"]
-    if args.action == "status":
-        return command_plugin_list(args)
-    if args.action == "start":
-        if node.get("messaging_mode") == "nats_leaf":
-            try:
-                nats_leaf.start(state_dir)
-            except nats_leaf.NatsLeafError as error:
-                raise UserError(str(error)) from error
-        for plugin_id in sorted(plugins):
-            _start_plugin(state_dir, plugin_id)
-    else:
-        for plugin_id in sorted(plugins):
-            _stop_plugin(state_dir, plugin_id)
-    if not plugins:
-        print("No Managed Agents installed.")
     return 0
 
 
@@ -2786,60 +2604,6 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_remove.add_argument("plugin_id")
     agent_remove.add_argument("--state-dir", help=argparse.SUPPRESS)
     agent_remove.set_defaults(func=command_plugin_remove)
-
-    plugin = subparsers.add_parser(
-        "plugin", help="Deprecated alias for Managed Agent operations"
-    )
-    plugin_commands = plugin.add_subparsers(dest="plugin_command", required=True)
-    install = plugin_commands.add_parser(
-        "install", help="Validate, approve, install, and start a plugin"
-    )
-    install.add_argument("source")
-    install.add_argument(
-        "--yes", action="store_true", help="Approve the displayed permissions"
-    )
-    install.add_argument(
-        "--keep-disabled", action="store_true", help="Install without starting"
-    )
-    install.add_argument("--state-dir", help=argparse.SUPPRESS)
-    install.set_defaults(func=command_plugin_install)
-    listing = plugin_commands.add_parser(
-        "list", help="List installed plugins and agents"
-    )
-    listing.add_argument("--state-dir", help=argparse.SUPPRESS)
-    listing.set_defaults(func=command_plugin_list)
-    plugin_status = plugin_commands.add_parser(
-        "status", help="Show one plugin and its agents"
-    )
-    plugin_status.add_argument("plugin_id")
-    plugin_status.add_argument("--state-dir", help=argparse.SUPPRESS)
-    plugin_status.set_defaults(func=command_plugin_status)
-    for action, func in (
-        ("start", command_plugin_start),
-        ("stop", command_plugin_stop),
-    ):
-        action_parser = plugin_commands.add_parser(
-            action, help=f"{action.title()} one plugin"
-        )
-        action_parser.add_argument("plugin_id")
-        action_parser.add_argument("--state-dir", help=argparse.SUPPRESS)
-        action_parser.set_defaults(func=func)
-    logs = plugin_commands.add_parser("logs", help="Show recent plugin output")
-    logs.add_argument("plugin_id")
-    logs.add_argument("--lines", type=int, default=80)
-    logs.add_argument("--state-dir", help=argparse.SUPPRESS)
-    logs.set_defaults(func=command_plugin_logs)
-    remove = plugin_commands.add_parser("remove", help="Stop and remove a plugin")
-    remove.add_argument("plugin_id")
-    remove.add_argument("--state-dir", help=argparse.SUPPRESS)
-    remove.set_defaults(func=command_plugin_remove)
-
-    supervisor = subparsers.add_parser(
-        "supervisor", help="Deprecated compatibility alias"
-    )
-    supervisor.add_argument("action", choices=("start", "stop", "status"))
-    supervisor.add_argument("--state-dir", help=argparse.SUPPRESS)
-    supervisor.set_defaults(func=command_supervisor)
 
     connector = subparsers.add_parser(
         "connector", help="Register and inspect Native Agent Plugins"

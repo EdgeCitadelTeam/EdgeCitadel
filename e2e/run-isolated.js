@@ -1,7 +1,7 @@
 const crypto = require('node:crypto')
 const fs = require('node:fs/promises')
 const path = require('node:path')
-const { makeStackConfig, scrubRunFiles, writeRunFiles } = require('./helpers/stack-config')
+const { NATS_IMAGE, makeStackConfig, scrubRunFiles, writeRunFiles } = require('./helpers/stack-config')
 const { OwnedStack, runCommand } = require('./helpers/owned-stack')
 
 function parseLauncherArgs(argv) {
@@ -69,9 +69,8 @@ async function main(argv, dependencies = {}) {
   const options = parseLauncherArgs(argv)
   const runId = ['run', Date.now().toString(36), randomBytes(6).toString('hex')].join('-')
   const repoRoot = path.resolve(__dirname, '..')
-  const toolchain = JSON.parse(await fs.readFile(path.join(repoRoot, 'scripts/research/toolchain.json'), 'utf8'))
   const config = makeStackConfig({
-    runId, repoRoot, scratchRoot: path.join(repoRoot, 'tmp/e2e'), natsImage: toolchain.nats_image,
+    runId, repoRoot, scratchRoot: path.join(repoRoot, 'tmp/e2e'), natsImage: NATS_IMAGE,
   })
   let runFiles = null
   let stack = null

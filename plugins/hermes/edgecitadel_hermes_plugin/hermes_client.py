@@ -1,6 +1,6 @@
 """HTTP/SSE client for Hermes Agent's OpenAI-compatible Chat Completions API.
 
-Pure transport: no NATS awareness, no envelope construction. The Plugin
+Pure transport: no NATS awareness, no envelope construction. The Managed Agent
 runtime calls `call_hermes_streaming(...)` and supplies a `publish_progress`
 async callback that turns deltas into `task.progress` envelopes.
 
@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Awaitable, Callable
 
 import httpx
@@ -24,9 +25,19 @@ HERMES_MODEL = os.environ.get("HERMES_MODEL", "hermes")
 HERMES_TIMEOUT_SEC = int(os.environ.get("HERMES_TIMEOUT_SEC", "300"))
 
 
-# Bearer token; required at call time (not import time so tests can monkeypatch)
-def _token() -> str:
-    return os.environ["HERMES_TOKEN"]
+DEFAULT_TOKEN_FILE = "/etc/edgecitadel/hermes/token"
+
+
+def load_token() -> str:
+    """Read the Hermes bearer token without placing it in process arguments."""
+    token = (
+        Path(os.environ.get("HERMES_TOKEN_FILE", DEFAULT_TOKEN_FILE))
+        .read_text()
+        .strip()
+    )
+    if not token:
+        raise ValueError("HERMES_TOKEN_FILE is empty")
+    return token
 
 
 FLUSH_TOKENS = 8
@@ -48,7 +59,7 @@ async def call_hermes_streaming(
     full joined text on completion. Raises HermesError on transport/HTTP
     failure."""
     headers = {
-        "Authorization": f"Bearer {_token()}",
+        "Authorization": f"Bearer {load_token()}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }

@@ -239,20 +239,6 @@ async def test_queue_uses_the_agent_inbox_subject_not_a_legacy_durable_name():
     js.consumers_info.assert_awaited_once_with("AGENT_INBOX")
 
 
-def test_openclaw_login_returns_token(client):
-    r = client.post("/api/openclaw/login", json={"session_id": "sess-abc123"})
-    assert r.status_code == 200
-    body = r.json()
-    assert "token" in body
-    assert "expires_at" in body
-    assert body["agent_id"] == "openclaw-sess-abc123"
-
-
-def test_openclaw_login_rejects_bad_session(client):
-    r = client.post("/api/openclaw/login", json={"session_id": "bad/slash"})
-    assert r.status_code == 422
-
-
 def test_messages_exposes_replay_and_observation_metadata(client):
     from aggregator import database as db
 

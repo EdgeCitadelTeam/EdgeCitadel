@@ -17,10 +17,9 @@
 ## Repo map
 - `aggregator/` - Python FastAPI backend, NATS subscriptions, SQLite persistence
 - `frontend/` - React/Vite dashboard; the only UI source root
-- `openclaw-client/` - Node NATS client for agents
 - `e2e/` - Playwright end-to-end tests
 - `plugin-toolkit/` - agentd, Managed Agent runtime, schemas, SDK protocols, package validation, and tests
-- `plugins/` - Installable Managed Agent packages, legacy runtimes, and developer examples
+- `plugins/` - Installable Managed Agent packages and developer examples
 - `native-plugins/` - Native Agent Plugins for Pi, Claude Code, and Codex
 - `edgecitadel/` - Python distribution entrypoint; packaged runtime assets are assembled at build time
 
@@ -36,11 +35,11 @@
 - Full stack: `docker compose up --build -d`
 - Restart: `docker compose down && docker compose up --build -d`
 - Backend setup: `cd aggregator && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
-- Backend dev: `cd aggregator && .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --reload`
+- Backend dev: `aggregator/.venv/bin/uvicorn aggregator.main:app --host 0.0.0.0 --port 8000 --reload`
 - Frontend dev: `cd frontend && npm run dev`
 - Frontend build: `cd frontend && npm run build`
-- Client listener: `cd openclaw-client && npm start`
-- Deterministic E2E tests: `cd e2e && npm test`; external Plugin suites require a prepared stack and run with `APP_URL=... AGG_URL=... npm run test:external-plugins`
+- Frontend tests: `cd frontend && npm test`
+- Deterministic E2E tests: `cd e2e && npm test`; external Managed Agent suites require a prepared stack and run with `APP_URL=... AGG_URL=... npm run test:external-plugins`
 - Plugin checks (smoke): `cd plugin-toolkit && python -m pytest -q && python -m edgecitadel_supervisor validate ../plugins/examples/placeholder`; see `plugin-toolkit/README.md` for the full contributor gate.
 
 ## Working rules

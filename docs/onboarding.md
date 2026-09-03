@@ -80,8 +80,8 @@ permissions, creates a private dependency runtime, records immutable package
 state, and waits for a fresh Agent registration. Managed Agents call the local
 agentd socket and do not receive NATS or Leaf credentials.
 
-The old `edgecitadel plugin` spelling remains a deprecation alias for migrated
-installations. New documentation and automation should use `edgecitadel agent`.
+Legacy package records remain inspectable and stoppable during local-state
+migration, but the removed `plugin` command cannot install or launch them.
 
 ## Native Agent Plugins
 

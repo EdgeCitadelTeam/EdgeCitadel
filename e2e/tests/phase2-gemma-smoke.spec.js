@@ -49,9 +49,9 @@ test.describe('Phase 2 smoke — Gemma round trip', () => {
     expect(result.deployment).toBe('test');
   });
 
-  test('POST /command/gemma-1 with empty body is rejected by Plugin', async ({ request }) => {
+  test('POST /command/gemma-1 with empty body is rejected by the Managed Agent', async ({ request }) => {
     // Empty body fails Pydantic validation at the API layer, returning 422.
-    // We DON'T test the Plugin handler's "empty_prompt" rejection here (that
+    // We DON'T test the Managed Agent handler's "empty_prompt" rejection here (that
     // would require a malformed envelope going through NATS, which is
     // is covered by plugin-toolkit/tests/gemma_runtime/).
     const post = await request.post(

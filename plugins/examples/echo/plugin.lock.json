@@ -2,11 +2,11 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "6945a653cc4f428946d1cd8d6e1e39da48b2666f1057fbc869793a73f0548290"
+      "sha256": "d412bc3bb9841bfafbc20d913f914a034b9a215973742271bc8d0fe453d0d2db"
     },
     {
       "path": "plugin.yaml",
-      "sha256": "bcab648312a2e5248d7b9bbdf7d9e77a745bfd583e3fbdb6db448d51e2151114"
+      "sha256": "72563ce543fa183a428d34ea54bcc12e9106211f9f139db86c3c76737440029b"
     },
     {
       "path": "runtime/__init__.py",
@@ -14,11 +14,15 @@
     },
     {
       "path": "runtime/__main__.py",
-      "sha256": "b3283c4191350f9b95b8807929dd0c44e458ee5a9d29c2179b530f623d2e36fe"
+      "sha256": "97c2de1fb2c48b238b42ac43ccffda3337da30e25bd78aa6929b0b9cccf0b2b5"
+    },
+    {
+      "path": "runtime/config.yaml",
+      "sha256": "1ffa046577675f8e16d49b16c3cfbdb9f231102a0c945d2636ba6e3bc15c73a1"
     },
     {
       "path": "skills/echo/SKILL.md",
-      "sha256": "5047fe9b68289f7d9995cca2c528d6eba9f8ee38330fb5645de98534df19712b"
+      "sha256": "d3f8099f0104e3987982acca03c47a8361602ef4e1687044864cd0447c406ffb"
     },
     {
       "path": "skills/echo/binding.yaml",
@@ -36,12 +40,12 @@
   "lockVersion": 1,
   "package": {
     "id": "edgecitadel.echo",
-    "protocol": "edgecitadel.plugin.v1",
-    "version": "0.1.1"
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.2.0"
   },
   "skills": [
     {
-      "contentSha256": "5047fe9b68289f7d9995cca2c528d6eba9f8ee38330fb5645de98534df19712b",
+      "contentSha256": "d3f8099f0104e3987982acca03c47a8361602ef4e1687044864cd0447c406ffb",
       "name": "echo",
       "skillId": "edgecitadel.echo",
       "version": "0.1.0"

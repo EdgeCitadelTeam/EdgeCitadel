@@ -58,11 +58,11 @@ services:
   fixture-agent:
     build:
       context: ..
-      dockerfile: scripts/research/Dockerfile
+      dockerfile: e2e/fixture-agent.Dockerfile
     command:
       - python3
       - -m
-      - scripts.research.fixtures.native_control
+      - e2e.fixture_agent.native_control
       - --config
       - /run/config/native-control.json
     environment:

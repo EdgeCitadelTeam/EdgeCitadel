@@ -19,7 +19,6 @@ frontend/dist/
 # Data
 data/*.db
 data/*.sqlite
-data/research/
 !data/.gitkeep
 nats/data/
 
@@ -33,11 +32,6 @@ CLAUDE.local.md
 .env
 .env.local
 .env.production
-
-# OpenClaw client config (contains secrets)
-openclaw-client/openclaw.conf
-openclaw-client/agent.env
-openclaw-client/node_modules/
 
 # IDE
 .vscode/
@@ -65,11 +59,6 @@ docs/demo-raw.webm
 # Git worktrees
 .worktrees/
 
-# Superpowers — keep all brainstorm/spec/plan artifacts local-only.
-# Visual companion mockups:
-.superpowers/
-# Design specs and implementation plans (per-developer working artifacts):
-docs/superpowers/
 adapters/*/agent.env
 
 # Phase 5: deploy script's runtime log files (the deploy script writes timestamped logs)

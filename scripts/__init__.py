@@ -1,1 +1,1 @@
-"""Runtime-support modules shared by controlled research environments."""
+"""EdgeCitadel command-line and deployment support modules."""

@@ -36,7 +36,7 @@ function buildCanonicalEnvelope({ type, sender_id, recipient_id, task_id, body, 
  *
  * MQTT helpers were removed in v0.1: agents publish to NATS via JetStream,
  * not to MQTT topics. Tests that need to inject envelopes should drive the
- * pipeline through the HTTP API or run a real Agent Plugin as part of the stack.
+ * pipeline through the HTTP API or run a real Managed Agent as part of the stack.
  */
 const test = base.test.extend({
   apiClient: async ({}, use) => {

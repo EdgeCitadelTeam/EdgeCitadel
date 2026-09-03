@@ -33,16 +33,8 @@ PLUGINS = Path(__file__).parents[2] / "plugins"
             "edgecitadel.hermes",
             "edgecitadel_hermes_plugin",
             1,
-            "AgentPlugin",
-            None,
-        ),
-        (
-            "shell",
-            "edgecitadel.shell",
-            "edgecitadel_shell_plugin",
-            1,
-            "AgentPlugin",
-            None,
+            "ManagedAgent",
+            "service_adapter",
         ),
     ],
 )
@@ -65,7 +57,6 @@ def test_builtin_plugin_is_locked_and_has_an_executable_runtime(
     assert (PLUGINS / name / module / "__main__.py").is_file()
     requirements = inventory["runtime"]["pythonRequirements"]
     assert (PLUGINS / name / requirements).is_file()
-    if kind == "ManagedAgent":
-        adapter = (PLUGINS / name / module / "adapter.py").read_text()
-        assert "edgecitadel_agentd.managed_runtime" in adapter
-        assert "edgecitadel_plugin_runtime.template" not in adapter
+    adapter = (PLUGINS / name / module / "adapter.py").read_text()
+    assert "edgecitadel_agentd.managed_runtime" in adapter
+    assert "edgecitadel_plugin_runtime.template" not in adapter

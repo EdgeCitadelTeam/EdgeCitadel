@@ -110,7 +110,7 @@ def test_validate_package_returns_package_and_skill_records(
     assert package.manifest == original_manifest
     assert package.package_id == "local.example"
     assert package.package_version == "0.1.0"
-    assert package.protocol == "edgecitadel.plugin.v1"
+    assert package.protocol == "edgecitadel.managed-agent.v1"
     assert [skill.name for skill in package.skills] == ["placeholder"]
     assert package.agent_skill_names == {"example-agent": ("placeholder",)}
     assert _load_manifest(valid_package) == original_manifest
@@ -151,9 +151,7 @@ def test_package_record_declares_exact_public_fields() -> None:
 
 def test_package_compatibility_constants_are_exact() -> None:
     assert str(SUPERVISOR_API_VERSION) == "0.1.0"
-    assert SUPPORTED_PROTOCOLS == frozenset(
-        {"edgecitadel.plugin.v1", "edgecitadel.managed-agent.v1"}
-    )
+    assert SUPPORTED_PROTOCOLS == frozenset({"edgecitadel.managed-agent.v1"})
 
 
 def test_verify_integrity_defaults_true_and_requires_lock(
@@ -257,50 +255,37 @@ def test_rejects_unsupported_process_protocol(valid_package: Path) -> None:
 def test_selects_only_supported_declared_protocol(valid_package: Path) -> None:
     _replace_protocols(
         valid_package,
-        ["vendor.plugin.v2", "edgecitadel.plugin.v1", "vendor.plugin.v1"],
+        ["vendor.plugin.v2", "edgecitadel.managed-agent.v1", "vendor.plugin.v1"],
     )
 
     package = validate_package(valid_package, verify_integrity=False)
 
-    assert package.protocol == "edgecitadel.plugin.v1"
+    assert package.protocol == "edgecitadel.managed-agent.v1"
 
 
-@pytest.mark.parametrize(
-    ("kind", "protocol"),
-    [
-        ("AgentPlugin", "edgecitadel.managed-agent.v1"),
-        ("ManagedAgent", "edgecitadel.plugin.v1"),
-    ],
-)
-def test_package_kind_requires_its_matching_protocol(
-    valid_package: Path, kind: str, protocol: str
-) -> None:
+def test_managed_agent_requires_managed_protocol(valid_package: Path) -> None:
     document = _load_manifest(valid_package)
-    document["kind"] = kind
-    if kind == "ManagedAgent":
-        document["apiVersion"] = "edgecitadel.io/v1alpha2"
-        runtime = document["runtime"]
-        assert isinstance(runtime, dict)
-        runtime["kind"] = "agent_runtime"
     compatibility = document["compatibility"]
     assert isinstance(compatibility, dict)
-    compatibility["protocols"] = [protocol]
+    compatibility["protocols"] = ["edgecitadel.plugin.v1"]
     _write_manifest(valid_package, document)
 
-    with pytest.raises(CompatibilityError, match="must use"):
+    with pytest.raises(CompatibilityError, match="supported process protocol"):
+        validate_package(valid_package, verify_integrity=False)
+
+
+def test_legacy_agent_plugin_manifest_is_rejected(valid_package: Path) -> None:
+    document = _load_manifest(valid_package)
+    document["apiVersion"] = "edgecitadel.io/v1alpha1"
+    document["kind"] = "AgentPlugin"
+    _write_manifest(valid_package, document)
+
+    with pytest.raises(ManifestValidationError, match="managed-agent"):
         validate_package(valid_package, verify_integrity=False)
 
 
 def test_managed_agent_rejects_multiple_agent_identities(valid_package: Path) -> None:
     document = _load_manifest(valid_package)
-    document["kind"] = "ManagedAgent"
-    document["apiVersion"] = "edgecitadel.io/v1alpha2"
-    runtime = document["runtime"]
-    assert isinstance(runtime, dict)
-    runtime["kind"] = "agent_runtime"
-    compatibility = document["compatibility"]
-    assert isinstance(compatibility, dict)
-    compatibility["protocols"] = ["edgecitadel.managed-agent.v1"]
     agents = document["agents"]
     assert isinstance(agents, list)
     second = copy.deepcopy(agents[0])
@@ -318,11 +303,11 @@ def test_rejects_ambiguous_supported_protocols(
 ) -> None:
     _replace_protocols(
         valid_package,
-        ["edgecitadel.plugin.v1", "edgecitadel.plugin.v2"],
+        ["edgecitadel.managed-agent.v1", "edgecitadel.managed-agent.v2"],
     )
     monkeypatch.setattr(
         "edgecitadel_supervisor.validator.SUPPORTED_PROTOCOLS",
-        frozenset({"edgecitadel.plugin.v1", "edgecitadel.plugin.v2"}),
+        frozenset({"edgecitadel.managed-agent.v1", "edgecitadel.managed-agent.v2"}),
     )
 
     with pytest.raises(CompatibilityError, match="process protocol"):
@@ -334,21 +319,21 @@ def test_duplicate_declared_protocols_remain_schema_invalid(
 ) -> None:
     _replace_protocols(
         valid_package,
-        ["edgecitadel.plugin.v1", "edgecitadel.plugin.v1"],
+        ["edgecitadel.managed-agent.v1", "edgecitadel.managed-agent.v1"],
     )
 
-    with pytest.raises(ManifestValidationError, match="agent-plugin"):
+    with pytest.raises(ManifestValidationError, match="managed-agent"):
         validate_package(valid_package, verify_integrity=False)
 
 
-def test_duplicate_agent_ids_are_rejected_explicitly(valid_package: Path) -> None:
+def test_managed_agent_rejects_duplicate_identity_entries(valid_package: Path) -> None:
     document = _load_manifest(valid_package)
     agents = document["agents"]
     assert isinstance(agents, list)
     agents.append(copy.deepcopy(agents[0]))
     _write_manifest(valid_package, document)
 
-    with pytest.raises(ManifestValidationError, match="Duplicate agent ID"):
+    with pytest.raises(ManifestValidationError, match="exactly one Agent identity"):
         validate_package(valid_package, verify_integrity=False)
 
 
@@ -384,7 +369,7 @@ def test_duplicate_agent_skill_names_remain_schema_invalid(
 ) -> None:
     _replace_agent_skills(valid_package, ["placeholder", "placeholder"])
 
-    with pytest.raises(ManifestValidationError, match="agent-plugin"):
+    with pytest.raises(ManifestValidationError, match="managed-agent"):
         validate_package(valid_package, verify_integrity=False)
 
 
@@ -432,7 +417,7 @@ def test_duplicate_plugin_manifest_key_is_rejected_without_leaking_value(
     manifest = valid_package / "plugin.yaml"
     manifest.write_text(
         manifest.read_text().replace(
-            "kind: AgentPlugin\n", "kind: AgentPlugin\nkind: do-not-leak\n"
+            "kind: ManagedAgent\n", "kind: ManagedAgent\nkind: do-not-leak\n"
         )
     )
 

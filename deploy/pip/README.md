@@ -51,7 +51,7 @@ Build in an isolated environment, inspect the wheel, then install it into a
 second clean environment. A valid wheel must contain at least:
 
 - the wheel data root's `share/edgecitadel/docker-compose.yml`;
-- `share/edgecitadel/scripts/edgecitadel_cli.py` and `plugin_runner.py`;
+- `share/edgecitadel/scripts/edgecitadel_cli.py`;
 - `share/edgecitadel/plugin-toolkit/pyproject.toml` and `src/`;
 - `share/edgecitadel/plugins/`, `native-plugins/`, and `schemas/`;
 - the Core `aggregator`, `frontend`, `nats`, and `nginx` assets.

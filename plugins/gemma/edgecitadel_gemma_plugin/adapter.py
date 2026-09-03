@@ -6,7 +6,7 @@ Phase 2.5 enhancements over Phase 2:
 - Token streaming via task.progress envelopes (hybrid 8-tok/100ms flush).
 - text.classify uses Ollama format='json' + JSON-schema validation.
 
-Spec: docs/superpowers/specs/2026-04-30-gemma-enhancements-design.md
+Architecture: docs/architecture/managed-agents-and-native-plugins.md
 """
 
 from __future__ import annotations

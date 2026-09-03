@@ -32,8 +32,8 @@ def plugin_document(
     extensions: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
-        "apiVersion": "edgecitadel.io/v1alpha1",
-        "kind": "AgentPlugin",
+        "apiVersion": "edgecitadel.io/v1alpha2",
+        "kind": "ManagedAgent",
         "metadata": {
             "name": "example",
             "displayName": "Example",
@@ -43,9 +43,10 @@ def plugin_document(
         },
         "compatibility": {
             "supervisorApi": ">=0.1.0,<0.2.0",
-            "protocols": ["edgecitadel.plugin.v1"],
+            "protocols": ["edgecitadel.managed-agent.v1"],
         },
         "runtime": {
+            "kind": "agent_runtime",
             "command": ["python", "-m", "runtime"],
             "healthTimeoutSeconds": 10,
             "restartPolicy": "on-failure",
@@ -95,7 +96,7 @@ def lock_document(*, version: str = "0.1.0") -> dict[str, object]:
         "package": {
             "id": "local.example",
             "version": version,
-            "protocol": "edgecitadel.plugin.v1",
+            "protocol": "edgecitadel.managed-agent.v1",
         },
         "files": [{"path": "plugin.yaml", "sha256": "0" * 64}],
         "skills": [
@@ -110,21 +111,21 @@ def lock_document(*, version: str = "0.1.0") -> dict[str, object]:
 
 
 def test_plugin_schema_accepts_separate_package_and_agent_identity() -> None:
-    validator("agent-plugin.v1alpha1.schema.json").validate(plugin_document())
+    validator("managed-agent.v1alpha2.schema.json").validate(plugin_document())
 
 
 def test_plugin_schema_accepts_portable_python_requirements_path() -> None:
     document = plugin_document()
     document["runtime"]["pythonRequirements"] = "requirements.txt"
 
-    validator("agent-plugin.v1alpha1.schema.json").validate(document)
+    validator("managed-agent.v1alpha2.schema.json").validate(document)
 
 
 def test_plugin_schema_accepts_explicit_environment_variables() -> None:
     document = plugin_document()
     document["runtime"]["environmentVariables"] = ["MODEL_NAME", "LOG_LEVEL"]
 
-    validator("agent-plugin.v1alpha1.schema.json").validate(document)
+    validator("managed-agent.v1alpha2.schema.json").validate(document)
 
 
 @pytest.mark.parametrize("name", ["lowercase", "BAD-NAME", "1INVALID"])
@@ -133,7 +134,7 @@ def test_plugin_schema_rejects_invalid_environment_variable(name: str) -> None:
     document["runtime"]["environmentVariables"] = [name]
 
     with pytest.raises(ValidationError):
-        validator("agent-plugin.v1alpha1.schema.json").validate(document)
+        validator("managed-agent.v1alpha2.schema.json").validate(document)
 
 
 @pytest.mark.parametrize("path", ["/requirements.txt", "../requirements.txt"])
@@ -142,12 +143,12 @@ def test_plugin_schema_rejects_unsafe_python_requirements_path(path: str) -> Non
     document["runtime"]["pythonRequirements"] = path
 
     with pytest.raises(ValidationError):
-        validator("agent-plugin.v1alpha1.schema.json").validate(document)
+        validator("managed-agent.v1alpha2.schema.json").validate(document)
 
 
 @pytest.mark.parametrize("agent_id", ["agent_1", "a" * 64])
 def test_plugin_schema_accepts_canonical_agent_ids(agent_id: str) -> None:
-    validator("agent-plugin.v1alpha1.schema.json").validate(
+    validator("managed-agent.v1alpha2.schema.json").validate(
         plugin_document(agent_id=agent_id)
     )
 
@@ -155,7 +156,7 @@ def test_plugin_schema_accepts_canonical_agent_ids(agent_id: str) -> None:
 @pytest.mark.parametrize("agent_id", ["agent.1", "agent..1", "a" * 65])
 def test_plugin_schema_rejects_noncanonical_agent_ids(agent_id: str) -> None:
     with pytest.raises(ValidationError):
-        validator("agent-plugin.v1alpha1.schema.json").validate(
+        validator("managed-agent.v1alpha2.schema.json").validate(
             plugin_document(agent_id=agent_id)
         )
 
@@ -165,7 +166,7 @@ def test_plugin_schema_rejects_unknown_core_field() -> None:
     document["unexpected"] = True
 
     with pytest.raises(ValidationError):
-        validator("agent-plugin.v1alpha1.schema.json").validate(document)
+        validator("managed-agent.v1alpha2.schema.json").validate(document)
 
 
 def test_binding_schema_accepts_and_requires_runtime_execution_name() -> None:
@@ -188,7 +189,7 @@ def test_lock_schema_accepts_lock_record_shape() -> None:
     ("schema_name", "document"),
     [
         (
-            "agent-plugin.v1alpha1.schema.json",
+            "managed-agent.v1alpha2.schema.json",
             plugin_document(version="1.0.0-01"),
         ),
         (
@@ -210,7 +211,7 @@ def test_schemas_reject_semver_numeric_prerelease_identifiers_with_leading_zeros
     ("schema_name", "document"),
     [
         (
-            "agent-plugin.v1alpha1.schema.json",
+            "managed-agent.v1alpha2.schema.json",
             plugin_document(extensions={"x:<": {}}),
         ),
         (
@@ -231,7 +232,7 @@ def test_extension_maps_reject_malformed_absolute_uri_keys(
     ("schema_name", "document"),
     [
         (
-            "agent-plugin.v1alpha1.schema.json",
+            "managed-agent.v1alpha2.schema.json",
             plugin_document(extensions={"x:foo#bar#baz": {}}),
         ),
         (
@@ -252,7 +253,7 @@ def test_extension_maps_reject_absolute_uri_keys_with_repeated_fragments(
     ("schema_name", "document"),
     [
         (
-            "agent-plugin.v1alpha1.schema.json",
+            "managed-agent.v1alpha2.schema.json",
             plugin_document(
                 extensions={
                     "com.example.feature": {},
@@ -285,7 +286,7 @@ def test_extension_maps_accept_reverse_domain_and_ipv6_absolute_uri_keys(
     ("schema_name", "document_factory", "path_location"),
     [
         (
-            "agent-plugin.v1alpha1.schema.json",
+            "managed-agent.v1alpha2.schema.json",
             plugin_document,
             ("skills", "directory"),
         ),
@@ -324,7 +325,7 @@ def test_relative_paths_reject_control_characters(
     ("schema_name", "document"),
     [
         (
-            "agent-plugin.v1alpha1.schema.json",
+            "managed-agent.v1alpha2.schema.json",
             {**plugin_document(), "skills": {"directory": "技能"}},
         ),
         (

@@ -1,5 +1,5 @@
 {
-  "name": "openclaw-dashboard",
+  "name": "edgecitadel-dashboard",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -21,7 +21,6 @@
     "react-dom": "^18.3.1",
     "react-force-graph-2d": "^1.25.7",
     "react-hot-toast": "^2.4.1",
-    "recharts": "^2.13.3",
     "zustand": "^5.0.2"
   },
   "devDependencies": {

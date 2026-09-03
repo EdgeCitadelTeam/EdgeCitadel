@@ -27,7 +27,7 @@ categories:
         remediation: "sudo tailscale up — host should be on the tailnet"
       - name: tailscale-tag-set
         cmd: bash -c 'tailscale status --json | python3 -c "import sys,json; d=json.load(sys.stdin); assert \"tag:edgecitadel-aggregator\" in d.get(\"Self\",{}).get(\"Tags\",[]), \"tag missing\""'
-        remediation: "tag this host in https://login.tailscale.com/admin/machines per setup-linux guide"
+        remediation: "tag this host in https://login.tailscale.com/admin/machines per docs/onboarding.md"
 
   - name: User & FS
     checks:
@@ -59,21 +59,11 @@ categories:
         cmd: bash -c 'model=$(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.models --format lines | head -1); ollama list | awk "{print \$1}" | grep -qx "$model"'
         remediation: "sudo -u edgecitadel ollama pull $(python3 /opt/edgecitadel/deploy/lib/parse-manifest.py get ollama.models --format lines | head -1)"
 
-  - name: Legacy AgentPlugin runtimes
-    checks:
-      - name: shell-venv-installed
-        cmd: bash -c '[[ -x /var/lib/edgecitadel/venvs/shell/bin/python ]]'
-        remediation: "sudo /opt/edgecitadel/deploy/lib/setup-venvs.sh"
-
   - name: Systemd units
     checks:
       - name: ollama-unit-enabled
         cmd: systemctl is-enabled --quiet edgecitadel-ollama
         remediation: "sudo systemctl enable edgecitadel-ollama (deploy-host.sh does this)"
-      - name: shell-unit-installed-not-enabled
-        cmd: bash -c 'systemctl cat edgecitadel-shell >/dev/null 2>&1 && ! systemctl is-enabled --quiet edgecitadel-shell'
-        remediation: "Shell Plugin is opt-in; if intentionally enabled, ignore this check"
-
   - name: Docker stack
     checks:
       - name: nats-container-up
@@ -115,15 +105,6 @@ categories:
         cmd: bash -c 'set -a; source /etc/edgecitadel/env; set +a; nats --server="nats://${NATS_TOKEN}@localhost:4222" kv ls 2>/dev/null | grep -q AGENT_STATE'
         remediation: "KV bucket not used by current aggregator code (warn-only)"
 
-  - name: Agents
-    checks:
-      # API field names: agent_id (not id), agent_state (not status). Schema
-      # confirmed in aggregator/main.py /api/agents response.
-      - name: us-openclaw-heartbeat-fresh
-        level: warn   # not our agent, just observe
-        cmd: python3 -c "import urllib.request,json,datetime; d=json.loads(urllib.request.urlopen('http://localhost/api/agents').read()); a=next((x for x in d if x.get('agent_id')=='us-openclaw'),None); assert a is not None, 'us-openclaw not registered (cutover may have lost it)'; assert a.get('agent_state')=='online'; hb=datetime.datetime.fromisoformat(a['last_heartbeat'].replace('Z','+00:00')); assert (datetime.datetime.now(datetime.timezone.utc)-hb).total_seconds()<300"
-        remediation: "openclaw tool may need to reconnect; we don't manage its lifecycle"
-
   - name: Backups
     checks:
       # warn-only on first install: cron runs at 06:25 UTC, so the daily
@@ -146,7 +127,7 @@ categories:
         remediation: "check ACL allows operator devices to reach tag:edgecitadel-aggregator:80"
       - name: tailnet-port-4222-open
         cmd: bash -c 'TS_IP=$(tailscale ip -4 | head -1); nc -z -w2 "$TS_IP" 4222'
-        remediation: "ACL or firewall blocking — check setup-linux guide § Tailnet ACL"
+        remediation: "ACL or firewall blocking — check docs/onboarding.md"
 
   - name: Round-trip smoke
     checks:

@@ -8,7 +8,7 @@ Claude-specific configuration lives under `.claude/`:
 
 - `settings.json` contains shared hooks and permissions.
 - `settings.local.json` and `CLAUDE.local.md` are uncommitted personal overrides.
-- `rules/` provides path-scoped implementation guidance.
-- `commands/` and `agents/` provide Claude Code workflows and subagents.
+- `commands/` provides lightweight Claude Code workflows that defer to
+  `AGENTS.md`.
 - `skills/` contains compatibility links to the canonical recipes in
   `.agents/skills/`.

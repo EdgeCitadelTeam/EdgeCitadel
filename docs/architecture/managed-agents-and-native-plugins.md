@@ -30,6 +30,7 @@ not a separately registered Agent.
 - **Implemented:** Home Assistant is a Managed Agent backed by a service
   adapter. It shares the deployment model with Gemma but does not pretend to own
   Home Assistant itself.
+- **Implemented:** Hermes is a Managed Adapter with token-file configuration.
 - **Implemented:** Pi, Claude Code, and Codex integrate through their native package,
   skill, hook, and MCP mechanisms.
 - **Implemented:** One EdgeCitadel Service, `agentd`,
@@ -67,8 +68,6 @@ These do not block the first implementation unless code evidence shows otherwise
 
 - Whether a later release may explicitly opt into headless invocation of a native
   Agent host. The first release must remain active-session only.
-- Whether Hermes should ultimately be a Native Agent Plugin, an external connector,
-  or a Managed Agent. Classify it from its actual lifecycle before changing it.
 - Whether Home Assistant should later gain a HACS-native integration. The current
   out-of-process adapter remains a Managed Agent until that exists.
 - Whether the internal `plugin-toolkit/` directory and Python package names should
@@ -102,11 +101,10 @@ These do not block the first implementation unless code evidence shows otherwise
   and Codex use their native extension/plugin mechanisms and a common MCP bridge.
 - Watchdog has been removed after deadline, session-loss, presence, advisory,
   and Core max-delivery reconciliation moved to authoritative owners.
-- Legacy `AgentPlugin` records remain readable and continue on the compatibility
-  runtime. `plugins.json` remains a rollback artifact after atomic normalization
-  to `managed-agents.json`; conversion of an installed legacy runtime requires
-  installing its current Managed Agent package rather than changing semantics
-  silently.
+- Legacy package records remain readable for inspection and stop operations, but
+  cannot be launched. `plugins.json` remains a rollback artifact after atomic
+  normalization to `managed-agents.json`; conversion requires installing the
+  current Managed Agent package rather than changing semantics silently.
 
 ## 3. Problem and evidence
 
@@ -346,9 +344,8 @@ edgecitadel agent stop gemma
 edgecitadel agent remove gemma
 ```
 
-`edgecitadel plugin ...` must not remain the documented path. During migration it
-may be a bounded compatibility alias that prints the exact replacement command.
-Do not keep two independently implemented lifecycle paths.
+`edgecitadel agent ...` is the sole package lifecycle. The unreleased legacy
+aliases were removed rather than maintaining two public command paths.
 
 ### 9.2 Managed Agent package contract
 
@@ -406,22 +403,15 @@ installation.
 
 ### 9.5 Other current packages
 
-Before deletion, produce a disposition table backed by imports, tests, docs, and
-runtime behavior:
-
-- **Hermes:** classify as Managed Agent, Managed Adapter, or future native
-  connector. Preserve it until a replacement has parity.
-- **Shell:** keep only if it has a supported product role; otherwise move the
-  minimum necessary behavior to developer fixtures and remove it from onboarding.
-- **Echo and placeholder:** keep as non-user-facing validation/integration
-  fixtures when they provide unique coverage.
-- **OpenClaw client:** retain its separate browser/session trust boundary unless a
-  native connector demonstrably replaces it.
-- **Watchdog:** follow the dedicated migration in section 12.
-
-No package may be deleted merely because it looks unused. Prove reachability and
-replacement, then remove code, tests, docs, bundled artifacts, and packaging
-references together.
+- **Hermes:** migrated to a Managed Adapter under agentd ownership.
+- **Shell:** the installable unrestricted product package was removed; `shell-1`
+  remains only as a deterministic E2E fixture identity.
+- **Echo and placeholder:** migrated to non-user-facing Managed Agent validation
+  and integration fixtures.
+- **OpenClaw client:** removed with its unused ingress and token surface; the
+  historical SQLite filename remains to preserve runtime state.
+- **Watchdog:** removed after its reconciliation behavior moved to authoritative
+  owners as described in section 12.
 
 ## 10. Integration model B: Native Agent Plugins
 
@@ -751,16 +741,10 @@ Developer examples belong in contributor documentation.
 
 ### 16.2 CLI compatibility
 
-If users may already rely on `edgecitadel plugin`, provide a time-bounded alias:
-
-```text
-plugin install gemma -> agent install gemma
-plugin list          -> agent list
-```
-
-The alias must call the same implementation and print a deprecation message. Do
-not retain the alias if evidence confirms no released or supported installation
-uses it; record that repository-level decision in the design and changelog.
+The repository had no tags or published GitHub releases establishing the legacy
+CLI as a supported contract. The `plugin` and `supervisor` aliases were removed;
+legacy local records remain available only through the `agent` inspection and
+stop paths and are rejected before launch.
 
 ### 16.3 Mixed versions
 
@@ -849,7 +833,8 @@ and expose no NATS credentials.
 4. Convert Home Assistant as `service_adapter` without changing HA ownership.
 5. Migrate existing install state and retain runtime data.
 6. Move Echo/placeholder to explicit developer fixtures.
-7. Classify Hermes, Shell, and OpenClaw; change only with replacement evidence.
+7. Migrate Hermes, remove the Shell product package, and remove OpenClaw after
+   recording replacement and reachability evidence.
 8. Remove Managed Agent wording from public Plugin instructions.
 
 Gate: fresh and migrated Gemma/Home Assistant installs pass lifecycle, task,
@@ -991,14 +976,15 @@ unexplained failure as unrelated without proving it at the merge base.
 
 ### 19.5 Verified implementation evidence
 
-The final repository verification on 2026-09-02 produced this evidence:
+The cleanup verification on 2026-09-02 produced this evidence:
 
 - changed Python sources pass Ruff check and format verification; the SDK's
   seven files and agentd's ten files pass strict mypy in the declared Python
   3.12 test/type environment;
-- the root suite passes with 838 tests and 37 platform/opt-in skips, the
-  Aggregator suite passes with 136 tests and five skips, and the complete
-  Plugin Toolkit suite passes with 569 tests and three skips;
+- the root suite passes with 832 tests and 37 platform/opt-in skips; the Plugin
+  Toolkit suite passes with 572 tests and three skips, while its explicitly
+  configured live-NATS pull-consumer cases pass two tests; the migrated
+  schema/package focus passes 249 tests;
 - owned real-NATS tests pass for agentd connector round trips, Core
   max-delivery reconciliation, exact destination stream ownership, Leaf
   disconnect/reconnect, duplicate suppression, local NATS restart, wrong Leaf
@@ -1012,6 +998,10 @@ The final repository verification on 2026-09-02 produced this evidence:
   without removing mutable state; Homebrew style and strict tap audit pass;
 - Core and Edge NATS configurations pass `nats-server -t`, and a full Compose
   restart plus live health and operator checks pass.
+
+The live pull-consumer fixture skips immediately unless `NATS_URL_TEST` is
+provided and provisions the sender inbox required for result publication when
+run against a real broker.
 
 Pi is additionally type-checked, packed, and dependency-audited; Claude Code
 and Codex package layouts and skills pass their native validators, and Codex was

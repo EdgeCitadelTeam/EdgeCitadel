@@ -20,7 +20,6 @@ services:
       - NATS_TOKEN=${NATS_TOKEN}
       - NATS_LEAF_USERNAME=${NATS_LEAF_USERNAME}
       - NATS_LEAF_PASSWORD=${NATS_LEAF_PASSWORD}
-      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 5s
@@ -37,6 +36,7 @@ services:
     volumes:
       - ./data:/data
     environment:
+      # Historical filename retained for state compatibility.
       - DB_PATH=/data/openclaw.db
       - NATS_URL=nats://nats:4222
       - NATS_TOKEN=${NATS_TOKEN}

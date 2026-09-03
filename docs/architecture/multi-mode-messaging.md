@@ -220,8 +220,8 @@ long-lived Leaf credential.
 Only agentd receives these mode-selected broker values. Managed Agents receive
 the private agentd socket location plus their declared configuration; Native
 Agent Plugins receive a scoped connector token. Neither integration type gets
-NATS or Leaf credentials. Legacy `AgentPlugin` packages retain the table above
-only during the compatibility window.
+NATS or Leaf credentials. Legacy installed-package records are read-only
+compatibility state: they can be inspected or stopped, but never launched.
 
 ## 9. Runtime scenarios
 
@@ -317,7 +317,7 @@ local client, JetStream, and Leaf evidence overrides a stale lifecycle label.
   are the required follow-up.
 - **Mitigated in new integrations:** agentd alone holds the node client token;
   Native Agent Plugins use separate local connector credentials. Legacy direct
-  NATS packages remain a compatibility risk until converted or removed.
+  NATS package launch support has been removed; old records are inspect/stop-only.
 
 ## 13. Failure analysis
 

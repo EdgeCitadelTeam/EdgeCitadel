@@ -7,7 +7,7 @@ if (!process.env.APP_URL || !process.env.AGG_URL) {
 
 module.exports = defineConfig({
   testDir: './tests',
-  // These suites exercise Plugins and upstream services intentionally absent
+  // These suites exercise Managed Agents and upstream services intentionally absent
   // from the hermetic Core + shell fixture. Run them with
   // `npm run test:external-plugins` against an explicitly prepared stack.
   testIgnore: [

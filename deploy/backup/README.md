@@ -121,4 +121,3 @@ have problems beyond what local backups fix.
 
 - Backup script: `/opt/edgecitadel/deploy/backup/edgecitadel-backup.sh`
 - Cron files: `/etc/cron.daily/edgecitadel-backup`, `/etc/cron.weekly/edgecitadel-backup-weekly`
-- Phase 5 spec: `docs/superpowers/specs/2026-05-04-host-deploy-design.md` § 7

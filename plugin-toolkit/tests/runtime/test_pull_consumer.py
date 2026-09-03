@@ -10,12 +10,14 @@ from nats.aio.client import Client as NATS
 from edgecitadel_plugin_runtime.pull_consumer import PullConsumer, Context
 from edgecitadel_plugin_runtime.jetstream import ensure_consumer, ensure_stream
 
-NATS_URL = os.environ.get("NATS_URL_TEST", "nats://localhost:4222")
+NATS_URL = os.environ.get("NATS_URL_TEST")
 TOKEN = os.environ.get("NATS_TOKEN_TEST", os.environ.get("NATS_TOKEN", ""))
 pytestmark = pytest.mark.asyncio
 
 
 async def _connect():
+    if not NATS_URL:
+        pytest.skip("NATS_URL_TEST unset")
     nc = NATS()
     try:
         await nc.connect(servers=[NATS_URL], token=TOKEN, connect_timeout=1)
@@ -29,6 +31,7 @@ async def test_fifo_one_at_a_time():
     js = nc.jetstream()
     agent_id = f"test-{uuid.uuid4().hex[:6]}"
     await ensure_stream(js, agent_id)
+    await ensure_stream(js, "test-sender")
     await ensure_consumer(js, agent_id, ack_wait_sec=30)
 
     processing: list[str] = []
@@ -72,6 +75,7 @@ async def test_dedup_via_nats_msg_id():
     js = nc.jetstream()
     agent_id = f"dedup-{uuid.uuid4().hex[:6]}"
     await ensure_stream(js, agent_id)
+    await ensure_stream(js, "test")
     await ensure_consumer(js, agent_id, ack_wait_sec=10)
 
     calls = 0

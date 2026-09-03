@@ -7,7 +7,7 @@
 # See deploy/README.md for the schema reference and how to add a dep.
 
 [python]
-# Retained AgentPlugin runtimes use this Python version. Matches the backend baseline.
+# Managed Agent runtimes use this Python version. Matches the backend baseline.
 version = "3.12"
 packages_ubuntu = ["python3.12", "python3.12-venv", "python3.12-dev"]
 packages_macos  = ["python@3.12"]
@@ -37,13 +37,6 @@ common = ["curl", "jq", "sqlite3", "tar", "gzip", "cron", "gpg"]
 # nats-server is installed for nats_leaf validation and runtime; single-client
 # never starts the binary.
 common = ["jq", "sqlite", "gnu-tar", "coreutils", "gnupg", "nats-server"]
-
-[plugins]
-# Legacy AgentPlugin runtimes only. Managed Agents such as Gemma and Home
-# Assistant are installed with `edgecitadel agent install` and supervised by
-# agentd; this host-deploy path must not create a second lifecycle owner.
-enabled           = []
-optional_disabled = ["shell"]
 
 [verification]
 # Time budget for the round-trip smoke test (Phase 6 of deploy-host.sh).
