@@ -99,31 +99,6 @@ def make_app(for_testing: bool = False) -> FastAPI:
     )
 
     db.init_db(db_path)
-    lab_run_id = os.environ.get("LAB_RUN_ID")
-    if lab_run_id:
-        from .lab_inventory import build_lab_router
-        from scripts.research.lab_config import LabConfigError, validate_run_id
-
-        token_sha256 = os.environ.get("LAB_TOKEN_SHA256", "")
-        inventory_value = os.environ.get("LAB_INVENTORY_PATH", "")
-        try:
-            validate_run_id(lab_run_id)
-            if len(token_sha256) != 64 or any(
-                char not in "0123456789abcdef" for char in token_sha256
-            ):
-                raise LabConfigError("lab token hash is invalid")
-            inventory_path = Path(inventory_value)
-            if not inventory_path.is_absolute():
-                raise LabConfigError("lab inventory path must be absolute")
-        except LabConfigError as error:
-            raise RuntimeError("invalid lab runtime configuration") from error
-        app.include_router(
-            build_lab_router(
-                run_id=lab_run_id,
-                token_sha256=token_sha256,
-                inventory_path=inventory_path,
-            )
-        )
 
     @app.on_event("startup")
     async def _startup():

@@ -15,6 +15,8 @@ from pathlib import Path
 import nats
 import pytest
 
+from tests.nats_server import NATS_IMAGE
+
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -24,7 +26,7 @@ pytestmark = [
     ),
 ]
 ROOT = Path(__file__).parents[2]
-IMAGE = json.loads((ROOT / "scripts/research/toolchain.json").read_text())["nats_image"]
+IMAGE = NATS_IMAGE
 OWNER_LABEL = "ai.edgecitadel.owner=test-nats-leaf"
 
 

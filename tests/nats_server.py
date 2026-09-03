@@ -19,17 +19,18 @@ import nats
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
-_ROOT = Path(__file__).resolve().parents[2]
-_TOOLCHAIN = _ROOT / "scripts" / "research" / "toolchain.json"
+NATS_IMAGE = (
+    "nats@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927"
+)
 _OWNER_LABEL = "ai.edgecitadel.owner=test-nats"
 _READY_TIMEOUT_SECONDS = 10.0
 _ASYNC_READY_BUDGET_SECONDS = 9.5
 
 
 def _nats_image() -> str:
-    value = json.loads(_TOOLCHAIN.read_text(encoding="utf-8"))["nats_image"]
+    value = NATS_IMAGE
     if not isinstance(value, str) or not value.startswith("nats@sha256:"):
-        raise ValueError("toolchain nats_image must be a digest-pinned NATS image")
+        raise ValueError("NATS_IMAGE must be a digest-pinned NATS image")
     return value
 
 

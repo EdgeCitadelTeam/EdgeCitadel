@@ -87,7 +87,7 @@ The cleanup is complete when all of the following are true:
 | Native plugins and Managed Agents are the current integration direction | Implemented | Current architecture and root instructions identify these as the two public integration paths. |
 | OpenClaw is not a coherent supported path | Implemented | The client is not launched or packaged; its required token is not provisioned by NATS; the login token store is written but never enforced; advertised HTTP dispatch is absent. |
 | Hermes and Shell still depend on the legacy AgentPlugin runtime | Implemented | Their manifests use the legacy runtime/contract; therefore shared runtime deletion cannot precede their migration/removal. |
-| `shell-1` is also a deterministic test identity | Implemented | E2E and research workflows depend on that identity and behavior, independently of whether an installable Shell product package exists. |
+| `shell-1` is also a deterministic test identity | Implemented | E2E depends on that identity and behavior, independently of whether an installable Shell product package exists. |
 | `.claude/` contains both current integration and stale repository facts | Implemented | Settings and skill links are active, while rules/commands/agent prompts reference removed ADRs, adapters, services, directories, and old messaging behavior. |
 | Current quality gates have discovery gaps | Implemented | A frontend tooling contract is outside normal discovery, frontend unit tests are omitted from the commit gate, helper E2E suites are separate, and GitHub workflows only cover Claude automation. |
 | Existing local runtime state may matter even without releases | Assumed | Preserve all data and provide a compatibility reader for installed legacy state; do not infer that absence of releases makes local state disposable. |
@@ -102,7 +102,7 @@ The cleanup is complete when all of the following are true:
 | Tool-specific workflows | `.claude/commands/`, `.claude/skills/` | Thin platform integration with no duplicated architecture facts |
 | Agent package lifecycle | `edgecitadel agent`, agentd, Managed Agent schema/runtime | Gemma, Home Assistant, migrated Hermes |
 | Existing-host integrations | `native-plugins/` | Pi, Claude Code, Codex |
-| Deterministic test agent | Research/E2E fixture runtime | `shell-1` identity retained only where tests require it |
+| Deterministic test agent | E2E-owned fixture runtime | `shell-1` identity retained only where tests require it |
 | Messaging contracts | `schemas/`, NATS config, aggregator router | All agents and dashboard |
 | Runtime state | External state directory and SQLite | Compatibility readers; never cleanup scripts |
 
@@ -120,8 +120,8 @@ This is the disposition for every top-level source category found in the scan. T
 | `plugins/` | Installable Managed Agent packages, legacy runtimes, examples | Keep Gemma, Home Assistant, and examples; migrate Hermes; remove Shell | 5-7 |
 | `native-plugins/` | Native integrations for Pi, Claude Code, and Codex | Keep; update only stale cross-references and verification | 2, 9 |
 | `edgecitadel/` | Python distribution entrypoint and build-time runtime assets | Keep; remove deprecated CLI aliases/assets and verify wheel contents | 4, 7, 9 |
-| `scripts/` | Product CLI implementation, deployment/research tooling, checks | Keep supported commands; delete dead fixtures/A2A/worktree/legacy runner paths | 1, 7-8 |
-| `schemas/` | Shared messaging and Agent Card contracts | Keep; remove only proven orphan research schemas; add reference-closure checks | 1, 3 |
+| `scripts/` | Product CLI implementation, deployment tooling, checks | Keep supported commands; delete dead fixtures/A2A/worktree/legacy runner paths | 1, 7-8 |
+| `schemas/` | Shared messaging and Agent Card contracts | Keep product contracts; delete the retired experiment schemas | 1, 3 |
 | `tests/` | Root CLI, packaging, schema, and workflow regression coverage | Keep; consolidate dependency setup and migrate assertions with removed surfaces | 1-9 |
 | `e2e/` | Deterministic Playwright and stack/lifecycle integration tests | Keep; delete obsolete env; make suite discovery/ownership explicit | 1, 3-7 |
 | `deploy/` | Host provisioning, manifests, systemd, Homebrew | Keep; remove legacy Shell/plugin runtime deployment and repair stale docs | 2, 6-9 |
@@ -133,7 +133,7 @@ This is the disposition for every top-level source category found in the scan. T
 | `.codex/` | Codex project task state | Remove unused duplicated role configuration | 2 |
 | `.github/` | Templates and automation | Keep; fix stale checklist and add actual hermetic CI coverage | 2-3 |
 | `tmp/` | Accidental export staging | Delete tracked export artifact and keep temporary output ignored | 1 |
-| `data/`, `nats/data/` | Runtime databases, research output, and broker state | Preserve; never include in automatic repository cleanup | All |
+| `data/`, `nats/data/` | Runtime databases and broker state | Preserve; never include in automatic repository cleanup | All |
 
 ## Dependency order
 
@@ -222,7 +222,7 @@ were preserved.
 ### Exit gate
 
 - `ruff`/syntax checks are clean for changed Python.
-- Root, research, and schema tests pass.
+- Root and schema tests pass.
 - Frontend unit tests and production build pass after lock regeneration.
 - A built wheel and source distribution contain none of the deleted files.
 - Inventory rows for each deletion include direct search evidence.
@@ -311,7 +311,7 @@ Status: Implemented
 2. Remove the aggregator login endpoint, `_OPENCLAW_TOKENS`, OpenClaw ingress callback, NATS subscription, and focused tests from `aggregator/{main,aggregator}.py` and `aggregator/tests/test_api.py`.
 3. Remove `OPENCLAW_TOKEN` from `.env.example`, `docker-compose.yml`, `scripts/edgecitadel_cli.py`, generated environment logic, checks, and their tests.
 4. Remove `openclaw.*` permissions/comments from `nats/nats.conf` and `nats/nats.conf.tpl`.
-5. Remove stale references from `AGENTS.md`, `CONTRIBUTING.md`, `deploy/backup/**`, `deploy/lib/checks.yaml`, `docs/architecture/**`, E2E/research Compose, and frontend package metadata. Inspect Nginx for a route, but do not manufacture a change if none exists.
+5. Remove stale references from `AGENTS.md`, `CONTRIBUTING.md`, `deploy/backup/**`, `deploy/lib/checks.yaml`, `docs/architecture/**`, E2E Compose, and frontend package metadata. Inspect Nginx for a route, but do not manufacture a change if none exists.
 6. Rename the frontend npm package only if it is still named for OpenClaw and the lockfile update is isolated; this is source metadata, not runtime state.
 7. Retain the `openclaw.db` filename with a compatibility comment and an explicit allowlist entry. A future state migration may rename it with backup, dual-read, and rollback support.
 
@@ -367,11 +367,11 @@ Status: Implemented
 
 ### Decision
 
-Delete the installable unrestricted Shell AgentPlugin. Preserve `shell-1` only as a deterministic, in-test native fixture identity where existing research and E2E assertions require it. An agent identifier is not evidence that a product package must remain.
+Delete the installable unrestricted Shell AgentPlugin. Preserve `shell-1` only as a deterministic, in-test native fixture identity where E2E assertions require it. An agent identifier is not evidence that a product package must remain.
 
 ### Changes
 
-1. Move any unique deterministic behaviors required by tests into the existing research/E2E native control fixture.
+1. Move any unique deterministic behaviors required by tests into the E2E-owned native control fixture.
 2. Prove the owned test stack launches that fixture directly and does not install `plugins/shell`.
 3. Update test prose and fixtures to label `shell-1` as non-production. Generic toolkit tests may use a neutral `worker-1` identifier when identity is irrelevant.
 4. Delete `plugins/shell/`, Shell runtime tests, deploy manifest entries, and systemd templates that install or launch the product package.
@@ -379,7 +379,7 @@ Delete the installable unrestricted Shell AgentPlugin. Preserve `shell-1` only a
 
 ### Exit gate
 
-- Deterministic E2E and the full research suite pass with the product package absent.
+- Deterministic E2E passes with the product package absent.
 - No install, deploy, or onboarding path presents Shell as a supported agent.
 - Wheel/package inspection finds no Shell manifest/runtime or unrestricted sandbox declaration.
 - Test-only fixture boundaries prevent real operator commands from reaching a host shell.
@@ -435,7 +435,7 @@ Delete `scripts/update-a2a-schema.sh`. Its source URL is dead, it references a d
 
 ### Generated and cache directories
 
-Keep ignores for build output, node modules, virtualenvs, caches, test results, and research results. Provide an optional, target-specific cache cleanup command, but never include `data/`, a repository root, `$HOME`, or unresolved globs. Local cleanup requires an exact preview and confirmation.
+Keep ignores for build output, node modules, virtualenvs, caches, and test results. Provide an optional, target-specific cache cleanup command, but never include `data/`, a repository root, `$HOME`, or unresolved globs. Local cleanup requires an exact preview and confirmation.
 
 ### Exit gate
 
@@ -475,6 +475,27 @@ Run from a clean checkout with documented tool versions:
 | Deleted ADR/adapter/spec paths, `thoughts/` | No active documentation or agent-config matches |
 | `HERMES_TOKEN` | No direct secret value contract; only `HERMES_TOKEN_FILE` and redaction tests |
 
+## Superseding cleanup: retire the lab/research harness
+
+Status: Implemented
+
+The experiment harness was not part of the supported product direction and made
+the generic Python CI job depend on a separately provisioned multi-container
+environment. Remove `scripts/research/`, `tests/research/`, the lab-only backend
+router, and the three research evidence schemas. Remove their packaging,
+dependency, ignore, and contributor-command references.
+
+Preserve only capabilities still required by maintained tests:
+
+- move the deterministic `shell-1` fixture and its EdgeCitadel transport into
+  `e2e/fixture_agent/`;
+- move the reusable owned NATS server helper into `tests/nats_server.py`;
+- keep the digest-pinned NATS image under the owning E2E/test configuration.
+
+The result must have no production import or package dependency on the retired
+harness. Root Python tests, package builds, and the isolated E2E suite are the
+replacement gates.
+
 ### Completion record
 
 Update `AGENTS.md` for changed commands/directories/gates, regenerate the inventory with final dispositions, sync the plan and implemented facts into the Obsidian vault, and record any compatibility allowlist with an owner and removal date.
@@ -500,7 +521,7 @@ Do not combine PRs 4-7 into one unreviewable deletion. Cross-subsystem consisten
 |---|---|---|---|---|
 | Hidden external OpenClaw consumer | Low, based on no releases/references | High | Recheck releases/deployments; announce removal before execution if consumers exist | Subject monitoring and deployment search |
 | Hermes upgrade loses state or secret | Medium | High | Same identity, file secret, staged activation, backed-up record, rollback fixture | Upgrade and log-redaction tests; live smoke |
-| Shell package removal breaks research | Medium | High | Separate fixture first; keep `shell-1` test identity | Full research plus deterministic E2E |
+| Shell package removal breaks E2E | Medium | High | Separate fixture first; keep `shell-1` test identity | Deterministic E2E |
 | Legacy state becomes unreadable | Medium | High | Read-only migration reader; fixture from real record shape; no destructive rewrite | Clean-install and upgrade tests |
 | Package omits a required asset or includes debris | Medium | Medium | Build/install/archive inspection in CI | Package-content assertions |
 | Docs/tool prompts drift again | High | Medium | Single ownership model; thin adapters; stale-path check | Documentation/config test |
@@ -517,9 +538,7 @@ Do not combine PRs 4-7 into one unreviewable deletion. Cross-subsystem consisten
 - `tmp/google-doc-export/nats-agent-communication-sources.sanitized.docx`
 - `e2e/.env.test`
 - `tests/requirements.txt`
-- `scripts/research/fixtures/fake_actuator_agent.py`
-- `scripts/research/configs/schema/hardware.schema.json`
-- `scripts/research/configs/schema/network.schema.json`
+- Retired lab/research harness files listed in the superseding cleanup section
 - `frontend/tests/tooling-contract.test.cjs`
 
 ### Delete only as a coordinated subsystem migration

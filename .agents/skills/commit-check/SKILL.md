@@ -15,12 +15,12 @@ git diff --name-only           # unstaged changes
 
 ## 2. Python Quality (if .py files changed)
 ```bash
-uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/
-uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ --check
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ e2e/fixture_agent/
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ e2e/fixture_agent/ --check
 cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m compileall -q .
 cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m pytest -q
 uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest -q scripts/tests
-./scripts/research/run-python -m pytest tests/ -x --tb=short
+uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest tests scripts/tests deploy/tests schemas/tests -x --tb=short
 ```
 All must pass with zero errors.
 

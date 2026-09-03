@@ -43,7 +43,7 @@ test('accepts only bounded lowercase run IDs', () => {
   }
 })
 
-test('pins the NATS image to the research toolchain digest', () => {
+test('pins the NATS image to the E2E stack digest', () => {
   assert.throws(() => makeStackConfig({ runId: 'run-a001', repoRoot: '/repo', scratchRoot: '/scratch', natsImage: 'nats:latest' }), /NATS image/)
 })
 

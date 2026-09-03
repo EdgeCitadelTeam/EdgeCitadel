@@ -19,7 +19,6 @@ frontend/dist/
 # Data
 data/*.db
 data/*.sqlite
-data/research/
 !data/.gitkeep
 nats/data/
 

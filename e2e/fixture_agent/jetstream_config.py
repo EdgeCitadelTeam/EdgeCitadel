@@ -1,4 +1,4 @@
-"""Fixed JetStream topology used by the durable benchmark modes."""
+"""JetStream topology for the deterministic E2E fixture agent."""
 
 from __future__ import annotations
 

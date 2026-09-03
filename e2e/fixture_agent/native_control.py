@@ -1,11 +1,10 @@
-"""Transport-independent deterministic native control fixture."""
+"""Deterministic EdgeCitadel fixture agent for end-to-end tests."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import hashlib
-import importlib
 import json
 import math
 import os
@@ -37,7 +36,8 @@ from edgecitadel_plugin_runtime.task_executor import (
 from edgecitadel_plugin_runtime.task_publisher import EventSink
 from edgecitadel_plugin_runtime.task_types import PublicationReceipt
 from edgecitadel_plugin_runtime.validator import canonical_json, default_validator
-from scripts.research.modes.base import Mode, TaskTransport
+from e2e.fixture_agent.edgecitadel_transport import EdgeCitadelTransport
+from e2e.fixture_agent.transport import Mode, TaskTransport
 
 BEHAVIORS = ("echo", "delegate", "progress", "actuator")
 CRASH_POINTS = (
@@ -673,7 +673,7 @@ def build_agent_card(config: NativeControlConfig) -> dict[str, object]:
     inbox = f"nats://edgecitadel/agents.{config.agent_id}.inbox"
     return {
         "name": config.agent_id,
-        "description": "Deterministic EdgeCitadel research worker.",
+        "description": "Deterministic EdgeCitadel E2E fixture agent.",
         "version": "1.0.0",
         "url": inbox,
         "provider": {
@@ -704,8 +704,8 @@ def build_agent_card(config: NativeControlConfig) -> dict[str, object]:
             {
                 "id": "fixture.execute",
                 "name": "fixture-execute",
-                "description": "Execute deterministic research tasks.",
-                "tags": ["research"],
+                "description": "Execute deterministic E2E tasks.",
+                "tags": ["testing"],
             }
         ],
         "defaultInputModes": ["application/json"],
@@ -866,12 +866,8 @@ def runtime_endpoints(
     config: NativeControlConfig,
     environ: Mapping[str, str],
 ) -> dict[str, str]:
-    if config.mode == Mode.CENTRAL_RELAY.value:
-        key = "RELAY_URL"
-        schemes = {"http", "https"}
-    else:
-        key = "NATS_URL"
-        schemes = {"nats"}
+    key = "NATS_URL"
+    schemes = {"nats"}
     try:
         value = environ[key]
     except (KeyError, TypeError):
@@ -899,59 +895,14 @@ def build_transport(
     token: str,
     event_sink: EventSink,
 ) -> TaskTransport:
-    if config.mode == Mode.CENTRAL_RELAY.value:
-        module = importlib.import_module("scripts.research.modes.central_relay")
-        transport_factory = cast(
-            Callable[..., TaskTransport], module.CentralRelayTransport
-        )
-
-        return transport_factory(
-            relay_url=endpoints["RELAY_URL"],
-            run_id=config.run_id,
-            token=token,
-            event_sink=event_sink,
-        )
-
     agent_card = build_agent_card(config)
-    nats_url = endpoints["NATS_URL"]
-    if config.mode == Mode.CORE_ONLY.value:
-        module = importlib.import_module("scripts.research.modes.core_nats")
-        transport_factory = cast(Callable[..., TaskTransport], module.CoreNatsTransport)
-
-        return transport_factory(
-            nats_url=nats_url,
-            run_id=config.run_id,
-            token=token,
-            event_sink=event_sink,
-            agent_card=agent_card,
-        )
-    if config.mode == Mode.EDGECITADEL.value:
-        module = importlib.import_module("scripts.research.modes.edgecitadel")
-        transport_factory = cast(
-            Callable[..., TaskTransport], module.EdgeCitadelTransport
-        )
-
-        return transport_factory(
-            nats_url=nats_url,
-            run_id=config.run_id,
-            token=token,
-            event_sink=event_sink,
-            agent_card=agent_card,
-        )
-    if config.mode == Mode.ALL_DURABLE.value:
-        module = importlib.import_module("scripts.research.modes.all_durable")
-        transport_factory = cast(
-            Callable[..., TaskTransport], module.AllDurableTransport
-        )
-
-        return transport_factory(
-            nats_url=nats_url,
-            run_id=config.run_id,
-            token=token,
-            event_sink=event_sink,
-            agent_card=agent_card,
-        )
-    raise ValueError("invalid mode")
+    return EdgeCitadelTransport(
+        nats_url=endpoints["NATS_URL"],
+        run_id=config.run_id,
+        token=token,
+        event_sink=event_sink,
+        agent_card=agent_card,
+    )
 
 
 async def main(

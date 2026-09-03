@@ -7,7 +7,7 @@ import pytest
 from nats.aio.client import Client as NATS
 
 from aggregator.jetstream_bootstrap import ensure_consumer, ensure_stream
-from tests.research.nats_server import NatsServer
+from tests.nats_server import NatsServer
 
 
 pytestmark = pytest.mark.skipif(

@@ -405,7 +405,7 @@ installation.
 
 - **Hermes:** migrated to a Managed Adapter under agentd ownership.
 - **Shell:** the installable unrestricted product package was removed; `shell-1`
-  remains only as a deterministic research/E2E fixture identity.
+  remains only as a deterministic E2E fixture identity.
 - **Echo and placeholder:** migrated to non-user-facing Managed Agent validation
   and integration fixtures.
 - **OpenClaw client:** removed with its unused ingress and token surface; the

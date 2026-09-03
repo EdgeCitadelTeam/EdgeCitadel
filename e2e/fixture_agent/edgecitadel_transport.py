@@ -1,4 +1,4 @@
-"""Split-plane EdgeCitadel benchmark transport."""
+"""Split-plane transport for the deterministic E2E fixture agent."""
 
 from __future__ import annotations
 
@@ -35,13 +35,13 @@ from edgecitadel_plugin_runtime.validator import (
     canonical_json,
     default_validator,
 )
-from scripts.research.modes.base import (
+from e2e.fixture_agent.transport import (
     EventSink,
     Mode,
     ObservedEnvelope,
     TransportSnapshot,
 )
-from scripts.research.modes.jetstream_config import (
+from e2e.fixture_agent.jetstream_config import (
     durable_name,
     task_stream_config,
     transient_stream_config,

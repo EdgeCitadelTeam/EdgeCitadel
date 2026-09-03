@@ -1,4 +1,4 @@
-"""Transport-neutral contract for benchmark modes."""
+"""Transport contract for the deterministic E2E fixture agent."""
 
 from __future__ import annotations
 
@@ -15,10 +15,7 @@ if TYPE_CHECKING:
 
 
 class Mode(str, Enum):
-    CENTRAL_RELAY = "central-relay"
-    CORE_ONLY = "core-only"
     EDGECITADEL = "edgecitadel"
-    ALL_DURABLE = "all-durable"
 
 
 class ObserverDelivery(Protocol):
