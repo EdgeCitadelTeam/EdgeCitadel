@@ -6,8 +6,7 @@ sources, schemas, agentd sources, Managed Agents, and Native Agent Plugins under
 environment's `share/edgecitadel` directory while keeping mutable state under
 `~/.edgecitadel`.
 
-There is no public PyPI release yet. Test the checked-out source in an isolated
-environment:
+To test the checked-out source in an isolated environment:
 
 ```bash
 python3 -m venv /tmp/edgecitadel-pip-test
@@ -15,7 +14,7 @@ python3 -m venv /tmp/edgecitadel-pip-test
 /tmp/edgecitadel-pip-test/bin/edgecitadel --version
 ```
 
-After an explicitly authorized PyPI release, the intended user command is:
+Install the public release from PyPI in an isolated environment:
 
 ```bash
 python3 -m venv ~/.edgecitadel/cli-venv
