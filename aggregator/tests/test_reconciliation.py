@@ -41,6 +41,14 @@ def _advisory() -> bytes:
     ).encode()
 
 
+def _consumer_info(*, delivered_count: int = 5) -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(max_deliver=5, max_ack_pending=1),
+        delivered=SimpleNamespace(consumer_seq=delivered_count, stream_seq=42),
+        ack_floor=SimpleNamespace(consumer_seq=0, stream_seq=0),
+    )
+
+
 @pytest.mark.asyncio
 async def test_max_delivery_advisory_emits_system_failure(
     tmp_path, envelope_schema_path, card_schema_path, monkeypatch
@@ -55,6 +63,7 @@ async def test_max_delivery_advisory_emits_system_failure(
     )
     task_id = "10000000-0000-4000-8000-000000000001"
     router.js = SimpleNamespace(
+        consumer_info=AsyncMock(return_value=_consumer_info()),
         get_msg=AsyncMock(return_value=SimpleNamespace(data=_source_envelope(task_id))),
         publish=AsyncMock(),
     )
@@ -108,6 +117,7 @@ async def test_duplicate_advisory_does_not_emit_duplicate_outbox_result(
     )
     task_id = "10000000-0000-4000-8000-000000000001"
     router.js = SimpleNamespace(
+        consumer_info=AsyncMock(return_value=_consumer_info()),
         get_msg=AsyncMock(return_value=SimpleNamespace(data=_source_envelope(task_id))),
         publish=publish,
     )
@@ -182,6 +192,39 @@ async def test_non_utf8_advisory_is_ignored(
 
 
 @pytest.mark.asyncio
+async def test_forged_early_advisory_cannot_fail_a_task(
+    tmp_path, envelope_schema_path, card_schema_path, monkeypatch
+) -> None:
+    database_path = tmp_path / "aggregator.sqlite3"
+    monkeypatch.setenv("EDGECITADEL_DB_WIPE", "1")
+    db.init_db(str(database_path))
+    router = MessageRouter(
+        db_path=str(database_path),
+        envelope_schema=envelope_schema_path,
+        card_schema=card_schema_path,
+    )
+    router.js = SimpleNamespace(
+        consumer_info=AsyncMock(return_value=_consumer_info(delivered_count=1)),
+        get_msg=AsyncMock(),
+        publish=AsyncMock(),
+    )
+    router.nc = SimpleNamespace(publish=AsyncMock())
+
+    await router.on_advisory(
+        SimpleNamespace(
+            subject=(
+                "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.worker-1_inbox"
+            ),
+            data=_advisory(),
+        )
+    )
+
+    router.js.get_msg.assert_not_awaited()
+    router.js.publish.assert_not_awaited()
+    router.nc.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_advisory_headers_cannot_inject_a_subject(
     tmp_path, envelope_schema_path, card_schema_path, monkeypatch
 ) -> None:
@@ -195,6 +238,7 @@ async def test_advisory_headers_cannot_inject_a_subject(
     )
     task_id = "10000000-0000-4000-8000-000000000001"
     router.js = SimpleNamespace(
+        consumer_info=AsyncMock(return_value=_consumer_info()),
         get_msg=AsyncMock(
             return_value=SimpleNamespace(
                 data=_source_envelope(task_id, sender="aggregator.>")

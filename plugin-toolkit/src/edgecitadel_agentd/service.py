@@ -355,6 +355,7 @@ def dispatch(
             deadline_at_ms=params.get("deadline_at_ms"),
             task_id=params.get("task_id"),
             trace_id=params.get("trace_id"),
+            context_id=params.get("context_id"),
         )
     if operation == "task.claim":
         return store.claim_next_task(

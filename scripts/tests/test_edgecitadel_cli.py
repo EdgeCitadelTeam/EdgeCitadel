@@ -359,6 +359,50 @@ def test_managed_agent_upgrade_rolls_back_state_and_package_on_failed_readiness(
     assert not (state_dir / "plugins/local.demo/0.2.0").exists()
 
 
+def test_managed_agent_upgrade_retires_replaced_connector(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("version one")
+    (source / "plugin.lock.json").write_text('{"version": 1}')
+    _write_node(state_dir)
+    inventory = _inventory()
+    inventory["package"]["kind"] = "ManagedAgent"
+    inventory["agents"][0]["id"] = "old-agent"
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: inventory)
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    args = Namespace(
+        source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+    )
+    assert cli.command_plugin_install(args) == 0
+    cli._secure_write(
+        state_dir / "connectors" / "managed-old-agent.token", "old-token\n"
+    )
+
+    upgraded = _inventory()
+    upgraded["package"].update({"kind": "ManagedAgent", "version": "0.2.0"})
+    upgraded["agents"][0]["id"] = "new-agent"
+    (source / "plugin.yaml").write_text("version two")
+    (source / "plugin.lock.json").write_text('{"version": 2}')
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: upgraded)
+    calls = []
+
+    def agentd_rpc(_state_dir, operation, **params):
+        calls.append((operation, params))
+        if operation == "connector.list":
+            return [{"connector_id": "managed-old-agent", "revoked": False}]
+        if operation == "connector.revoke":
+            return {"revoked": True}
+        raise AssertionError(operation)
+
+    monkeypatch.setattr(cli, "_agentd_rpc", agentd_rpc)
+
+    assert cli.command_plugin_install(args) == 0
+
+    assert ("connector.revoke", {"connector_id": "managed-old-agent"}) in calls
+    assert not (state_dir / "connectors" / "managed-old-agent.token").exists()
+
+
 def test_legacy_plugin_state_migrates_atomically_and_keeps_backup(tmp_path):
     legacy = {
         "version": 1,

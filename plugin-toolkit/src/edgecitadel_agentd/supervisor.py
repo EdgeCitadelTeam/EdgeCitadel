@@ -102,21 +102,37 @@ class ManagedAgentSupervisor:
             str(record["package_id"]): record
             for record in self.store.list_managed_agents()
         }
-        with self._lock:
-            runtime = {key: dict(value) for key, value in self._runtime.items()}
         result: list[dict[str, object]] = []
-        for package_id in sorted(desired.keys() | runtime.keys()):
+        with self._lock:
+            package_ids = desired.keys() | self._runtime.keys()
+        for package_id in sorted(package_ids):
             record = desired.get(package_id, {})
-            observed = runtime.get(package_id, {})
+            with self._lock:
+                actual = self._runtime.get(package_id)
+                running = actual is not None and self._runtime_is_owned(
+                    package_id, actual
+                )
+                if (
+                    actual is not None
+                    and not running
+                    and actual.get("runtime_state") == "running"
+                ):
+                    returncode = actual.get("returncode")
+                    actual.update(
+                        runtime_state="exited",
+                        pid=None,
+                        process_identity=None,
+                        detail=f"process exited with status {returncode}",
+                    )
+                    self._persist_runtime_state()
+                observed = dict(actual or {})
             pid = observed.get("pid")
-            running = self._runtime_is_owned(package_id, observed)
+            runtime_state = str(observed.get("runtime_state", "stopped"))
             result.append(
                 {
                     **record,
                     "package_id": package_id,
-                    "runtime_state": "running"
-                    if running
-                    else str(observed.get("runtime_state", "stopped")),
+                    "runtime_state": "running" if running else runtime_state,
                     "pid": pid if running else None,
                     "detail": observed.get("detail", "stopped"),
                 }
@@ -195,7 +211,10 @@ class ManagedAgentSupervisor:
             if observed is not None and observed.get("restart_blocked"):
                 continue
             now = time.monotonic()
-            if observed is not None and observed.get("runtime_state") == "running":
+            if observed is not None and observed.get("runtime_state") in {
+                "running",
+                "exited",
+            }:
                 returncode = observed.get("returncode")
                 should_restart = restart_policy == "always" or (
                     restart_policy == "on-failure" and returncode != 0

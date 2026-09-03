@@ -118,6 +118,35 @@ def test_supervisor_respects_never_restart_policy(tmp_path: Path) -> None:
         store.close()
 
 
+def test_status_persists_a_child_exit_instead_of_reporting_stale_running(
+    tmp_path: Path,
+) -> None:
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    supervisor, launch = _configure(tmp_path, store)
+    document = json.loads(launch.read_text())
+    document["restart_policy"] = "never"
+    document["argv"] = [sys.executable, "-c", "raise SystemExit(0)"]
+    launch.write_text(json.dumps(document))
+    launch.chmod(0o600)
+    try:
+        supervisor._reconcile_once()
+        child = supervisor._children["local.test"]
+        child.wait(timeout=5)
+
+        status = supervisor.status()[0]
+        persisted = json.loads(
+            (tmp_path / "agentd" / "managed-processes.json").read_text()
+        )["processes"]["local.test"]
+
+        assert status["runtime_state"] == "exited"
+        assert status["pid"] is None
+        assert persisted["runtime_state"] == "exited"
+        assert persisted["returncode"] == 0
+    finally:
+        supervisor.stop()
+        store.close()
+
+
 def _process_exists(pid: int) -> bool:
     try:
         os.kill(pid, 0)

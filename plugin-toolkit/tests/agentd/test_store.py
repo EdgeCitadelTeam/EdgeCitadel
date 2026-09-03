@@ -31,8 +31,26 @@ def test_store_initializes_private_wal_database(store: AgentdStore) -> None:
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.path.parent.stat().st_mode & 0o777 == 0o700
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_version_five_database_migrates_context_id_atomically(tmp_path: Path) -> None:
+    path = tmp_path / "private" / "agentd.sqlite3"
+    original = AgentdStore(path)
+    original.close()
+    with sqlite3.connect(path) as connection:
+        connection.execute("ALTER TABLE tasks DROP COLUMN context_id")
+        connection.execute("PRAGMA user_version=5")
+
+    migrated = AgentdStore(path)
+    try:
+        with sqlite3.connect(path) as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert "context_id" in columns
+    finally:
+        migrated.close()
 
 
 def test_connector_authentication_session_and_presence(store: AgentdStore) -> None:
@@ -327,11 +345,15 @@ def test_remote_task_queues_one_idempotent_transport_message(
         recipient_id="remote-agent",
         payload={"request": "work"},
         task_id="10000000-0000-4000-8000-000000000001",
+        context_id="30000000-0000-4000-8000-000000000001",
     )
     pending = store.pending_transport()
     assert len(pending) == 1
     assert pending[0]["task_id"] == task["task_id"]
     assert pending[0]["envelope"]["task_id"] == "10000000-0000-4000-8000-000000000001"
+    assert (
+        pending[0]["envelope"]["context_id"] == "30000000-0000-4000-8000-000000000001"
+    )
 
     store.mark_transport_published(str(pending[0]["message_id"]))
     assert store.pending_transport() == []
@@ -557,6 +579,7 @@ def test_transport_redelivery_does_not_duplicate_logical_task(
         "sender_id": "remote-agent",
         "recipient_id": "edge-one-pi",
         "task_id": "10000000-0000-4000-8000-000000000001",
+        "context_id": "30000000-0000-4000-8000-000000000001",
         "timestamp": "2026-01-01T00:00:00.000Z",
         "payload": {
             "request": "work",
@@ -570,7 +593,71 @@ def test_transport_redelivery_does_not_duplicate_logical_task(
         first["task_id"] == second["task_id"] == "10000000-0000-4000-8000-000000000001"
     )
     assert second["state"] == "offered"
+    assert second["context_id"] == "30000000-0000-4000-8000-000000000001"
     assert len(store.list_tasks()) == 1
+
+
+def test_system_max_delivery_result_marks_sender_task_undeliverable(
+    store: AgentdStore,
+) -> None:
+    task_id = "10000000-0000-4000-8000-000000000001"
+    store.create_task(
+        sender_id="edge-one-pi",
+        recipient_id="remote-agent",
+        payload={"body": "work"},
+        task_id=task_id,
+    )
+
+    result = store.ingest_transport_envelope(
+        {
+            "v": 1,
+            "id": "20000000-0000-4000-8000-000000000002",
+            "type": "result",
+            "sender_id": "edgecitadel-system",
+            "recipient_id": "edge-one-pi",
+            "task_id": task_id,
+            "task_state": "failed",
+            "timestamp": "2026-01-01T00:00:00.000Z",
+            "payload": {
+                "error": "recipient_unavailable",
+                "recipient_id": "remote-agent",
+                "trigger": "max_deliveries",
+            },
+        }
+    )
+
+    assert result["state"] == "undeliverable"
+    assert result["terminal_reason"] == "recipient_unavailable"
+
+
+def test_system_result_cannot_mark_a_different_recipient_undeliverable(
+    store: AgentdStore,
+) -> None:
+    task_id = "10000000-0000-4000-8000-000000000001"
+    store.create_task(
+        sender_id="edge-one-pi",
+        recipient_id="remote-agent",
+        payload={"body": "work"},
+        task_id=task_id,
+    )
+    envelope = {
+        "v": 1,
+        "id": "20000000-0000-4000-8000-000000000002",
+        "type": "result",
+        "sender_id": "edgecitadel-system",
+        "recipient_id": "edge-one-pi",
+        "task_id": task_id,
+        "task_state": "failed",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "payload": {
+            "error": "recipient_unavailable",
+            "recipient_id": "other-agent",
+            "trigger": "max_deliveries",
+        },
+    }
+
+    with pytest.raises(StoreError, match="only the recipient"):
+        store.ingest_transport_envelope(envelope)
 
 
 def test_transport_rejects_conflicting_duplicate_task_id(

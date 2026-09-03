@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from nats.aio.client import Client as NATS
+from nats.errors import TimeoutError as NatsTimeoutError
 
 from aggregator import database as db
 from aggregator.aggregator import MessageRouter
@@ -115,7 +116,24 @@ async def test_real_max_delivery_advisory_emits_correlated_failure(
             "timestamp": "2026-01-01T00:00:00.000Z",
             "payload": {"body": "work"},
         }
-        await router.js.publish("agents.worker-1.inbox", json.dumps(source).encode())
+        source_ack = await router.js.publish(
+            "agents.worker-1.inbox", json.dumps(source).encode()
+        )
+        forged = {
+            "type": "io.nats.jetstream.advisory.v1.max_deliver",
+            "stream": "AGENT_INBOX",
+            "consumer": "worker-1_inbox",
+            "stream_seq": source_ack.seq,
+            "deliveries": 2,
+        }
+        await nc.publish(
+            "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.worker-1_inbox",
+            json.dumps(forged).encode(),
+        )
+        await nc.flush()
+        with pytest.raises(NatsTimeoutError):
+            await result_sub.next_msg(timeout=0.25)
+
         first = (await worker.fetch(batch=1, timeout=5))[0]
         await first.nak()
         second = (await worker.fetch(batch=1, timeout=5))[0]
@@ -137,7 +155,7 @@ async def test_real_max_delivery_advisory_emits_correlated_failure(
             "recipient_id": "worker-1",
             "trigger": "max_deliveries",
         }
-        assert db.count_poison_by_agent() == {"worker-1": 1}
+        assert db.count_poison_by_agent() == {"worker-1": 2}
     finally:
         if not nc.is_closed:
             await nc.close()

@@ -143,6 +143,7 @@ class NativeMcpServer:
         )
         opened = cast(Mapping[str, object], self.client.call("session.open"))
         self.session_id = str(opened["session_id"])
+        self._session_lock = threading.Lock()
         self._stop = threading.Event()
         self._lease_thread = threading.Thread(target=self._renew_lease, daemon=True)
         self._lease_thread.start()
@@ -150,17 +151,34 @@ class NativeMcpServer:
     def close(self) -> None:
         self._stop.set()
         self._lease_thread.join(timeout=2)
+        with self._session_lock:
+            session_id = self.session_id
         try:
-            self.client.call("session.close", session_id=self.session_id)
+            self.client.call("session.close", session_id=session_id)
         except AgentdClientError:
             pass
 
     def _renew_lease(self) -> None:
         while not self._stop.wait(20):
+            with self._session_lock:
+                session_id = self.session_id
             try:
-                self.client.call("session.renew", session_id=self.session_id)
-            except AgentdClientError:
-                return
+                self.client.call("session.renew", session_id=session_id)
+            except AgentdClientError as error:
+                # agentd may be temporarily unavailable during an upgrade or
+                # restart. Retry transient failures and replace a session that
+                # agentd already expired while it was unavailable.
+                if str(error) == "active session was not found":
+                    try:
+                        opened = cast(
+                            Mapping[str, object], self.client.call("session.open")
+                        )
+                    except AgentdClientError:
+                        continue
+                    with self._session_lock:
+                        if self.session_id == session_id:
+                            self.session_id = str(opened["session_id"])
+                continue
 
     def handle(self, request: Mapping[str, object]) -> dict[str, object] | None:
         method = request.get("method")

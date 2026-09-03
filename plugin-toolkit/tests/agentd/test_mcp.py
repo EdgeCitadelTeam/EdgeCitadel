@@ -3,9 +3,9 @@ from __future__ import annotations
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
-from edgecitadel_agentd.client import AgentdClient
+from edgecitadel_agentd.client import AgentdClient, AgentdClientError
 from edgecitadel_agentd.mcp import TOOLS, NativeMcpServer
 from edgecitadel_agentd.service import serve, socket_path_for
 
@@ -161,3 +161,66 @@ def test_native_packages_do_not_contain_broker_credentials() -> None:
     for path in files:
         content = path.read_text(errors="replace")
         assert not any(value in content for value in forbidden), path
+
+
+def test_native_mcp_lease_renewer_retries_after_agentd_unavailable() -> None:
+    class Stop:
+        calls = 0
+
+        def wait(self, _timeout: float) -> bool:
+            self.calls += 1
+            return self.calls > 2
+
+    class Client:
+        calls = 0
+
+        def call(self, operation: str, **params: object) -> object:
+            assert operation == "session.renew"
+            assert params == {"session_id": "session-one"}
+            self.calls += 1
+            if self.calls == 1:
+                raise AgentdClientError("agentd is unavailable")
+            return {"lease_expires_at_ms": 1}
+
+    server = NativeMcpServer.__new__(NativeMcpServer)
+    server._stop = cast(Any, Stop())
+    server.client = cast(Any, Client())
+    server.session_id = "session-one"
+    server._session_lock = threading.Lock()
+
+    server._renew_lease()
+
+    assert server.client.calls == 2
+
+
+def test_native_mcp_lease_renewer_reopens_an_expired_session() -> None:
+    class Stop:
+        calls = 0
+
+        def wait(self, _timeout: float) -> bool:
+            self.calls += 1
+            return self.calls > 1
+
+    class Client:
+        operations: list[tuple[str, dict[str, object]]] = []
+
+        def call(self, operation: str, **params: object) -> object:
+            self.operations.append((operation, params))
+            if operation == "session.renew":
+                raise AgentdClientError("active session was not found")
+            assert operation == "session.open"
+            return {"session_id": "session-two"}
+
+    server = NativeMcpServer.__new__(NativeMcpServer)
+    server._stop = cast(Any, Stop())
+    server.client = cast(Any, Client())
+    server.session_id = "session-one"
+    server._session_lock = threading.Lock()
+
+    server._renew_lease()
+
+    assert server.session_id == "session-two"
+    assert server.client.operations == [
+        ("session.renew", {"session_id": "session-one"}),
+        ("session.open", {}),
+    ]

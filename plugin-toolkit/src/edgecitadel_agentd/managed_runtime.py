@@ -168,7 +168,7 @@ async def run(config_path: str | Path, handler: Handler) -> None:
                 "sender_id": record["sender_id"],
                 "recipient_id": agent_id,
                 "task_id": task_id,
-                "context_id": task_id,
+                "context_id": record.get("context_id") or task_id,
                 "hop_count": 0,
                 "timestamp": _timestamp(),
                 "payload": {

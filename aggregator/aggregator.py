@@ -220,6 +220,37 @@ class MessageRouter:
             record_poison()
             return
         try:
+            info = await self.js.consumer_info(stream, consumer)
+        except Exception as error:
+            log.warning(
+                "could not verify max-delivery consumer state: %s",
+                type(error).__name__,
+            )
+            record_poison()
+            return
+        config = getattr(info, "config", None)
+        delivered = getattr(info, "delivered", None)
+        ack_floor = getattr(info, "ack_floor", None)
+        max_deliver = getattr(config, "max_deliver", None)
+        max_ack_pending = getattr(config, "max_ack_pending", None)
+        delivered_stream_seq = getattr(delivered, "stream_seq", None)
+        delivered_consumer_seq = getattr(delivered, "consumer_seq", None)
+        acked_consumer_seq = getattr(ack_floor, "consumer_seq", None)
+        deliveries = adv.get("deliveries")
+        if (
+            max_ack_pending != 1
+            or type(max_deliver) is not int
+            or max_deliver <= 0
+            or deliveries != max_deliver
+            or delivered_stream_seq != stream_seq
+            or type(delivered_consumer_seq) is not int
+            or type(acked_consumer_seq) is not int
+            or delivered_consumer_seq - acked_consumer_seq < max_deliver
+        ):
+            log.warning("max-delivery advisory did not match consumer state")
+            record_poison()
+            return
+        try:
             original = await self.js.get_msg(stream, seq=stream_seq)
             original_env = json.loads(original.data)
         except Exception as error:  # NATS uses multiple not-found/timeout types.

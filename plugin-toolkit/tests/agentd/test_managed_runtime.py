@@ -78,6 +78,7 @@ skills:
         envelope: dict[str, Any], _context: object
     ) -> tuple[dict[str, Any], str]:
         assert "NATS_TOKEN" not in os.environ
+        assert envelope["context_id"] == "30000000-0000-4000-8000-000000000001"
         return {"body": envelope["payload"]["request"]}, "completed"
 
     runtime = asyncio.create_task(run(config, handler))
@@ -121,6 +122,7 @@ skills:
                 "task.create",
                 recipient_id="gemma-1",
                 payload={"request": "hello"},
+                context_id="30000000-0000-4000-8000-000000000001",
             ),
         )
         for _ in range(100):

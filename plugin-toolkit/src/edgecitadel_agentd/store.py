@@ -18,7 +18,7 @@ from typing import cast
 from cryptography.fernet import Fernet, InvalidToken
 from edgecitadel_plugin_runtime.validator import ValidationError, default_validator
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -313,6 +313,14 @@ class AgentdStore:
                     ),
                 )
             self._connection.execute("PRAGMA user_version=5")
+            version = 5
+        if version == 5:
+            self._execute_migration_sql(
+                """
+                    ALTER TABLE tasks ADD COLUMN context_id TEXT;
+                    PRAGMA user_version=6;
+                    """
+            )
 
     def _execute_migration_sql(self, source: str) -> None:
         """Execute simple migration statements without executescript's implicit commit."""
@@ -914,6 +922,7 @@ class AgentdStore:
         deadline_at_ms: int | None = None,
         task_id: str | None = None,
         trace_id: str | None = None,
+        context_id: str | None = None,
         queue_transport: bool = True,
     ) -> dict[str, object]:
         if not sender_id or not recipient_id:
@@ -940,9 +949,13 @@ class AgentdStore:
             raise StoreError("task_id must be a UUIDv4")
         if trace_id is not None and not isinstance(trace_id, str):
             raise StoreError("trace_id must be a string")
+        if context_id is not None and not isinstance(context_id, str):
+            raise StoreError("context_id must be a UUIDv4")
         task_id = task_id or str(uuid.uuid4())
         trace_id = trace_id or uuid.uuid4().hex
         _require_uuid4(task_id, "task_id")
+        if context_id is not None:
+            _require_uuid4(context_id, "context_id")
         if not re.fullmatch(r"[0-9a-f]{32}", trace_id):
             raise StoreError(
                 "trace_id must contain exactly 32 lowercase hex characters"
@@ -953,9 +966,9 @@ class AgentdStore:
                     """
                     INSERT INTO tasks (
                         task_id, sender_id, recipient_id, skill_id, state,
-                        payload_json, trace_id, deadline_at_ms,
+                        payload_json, trace_id, context_id, deadline_at_ms,
                         created_at_ms, updated_at_ms
-                    ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_id,
@@ -964,6 +977,7 @@ class AgentdStore:
                         skill_id,
                         self._encode_content(payload),
                         trace_id,
+                        context_id,
                         deadline_at_ms,
                         now,
                         now,
@@ -997,6 +1011,8 @@ class AgentdStore:
                     "timestamp": self._iso_timestamp(now),
                     "payload": transport_payload,
                 }
+                if context_id is not None:
+                    envelope["context_id"] = context_id
                 self._queue_transport_locked(
                     message_id=message_id,
                     task_id=task_id,
@@ -1289,6 +1305,25 @@ class AgentdStore:
             try:
                 current = self.get_task(task_id)
                 actor_id = str(envelope.get("sender_id", ""))
+                payload = envelope.get("payload")
+                if (
+                    actor_id == "edgecitadel-system"
+                    and requested_state == "failed"
+                    and isinstance(payload, Mapping)
+                    and payload.get("error") == "recipient_unavailable"
+                    and payload.get("trigger") == "max_deliveries"
+                    and payload.get("recipient_id") == current["recipient_id"]
+                    and envelope.get("recipient_id") == current["sender_id"]
+                ):
+                    return self.transition_task(
+                        task_id=task_id,
+                        state="undeliverable",
+                        actor_id="edgecitadel-system",
+                        reason="recipient_unavailable",
+                        result=payload,
+                        evidence={"transport": "nats", "trigger": "max_deliveries"},
+                        queue_transport=False,
+                    )
                 if current["state"] == "queued":
                     current = self.transition_task(
                         task_id=task_id,
@@ -1384,6 +1419,7 @@ class AgentdStore:
                     ),
                     ("skill_id", existing["skill_id"], expected_skill),
                     ("deadline_at_ms", existing["deadline_at_ms"], expected_deadline),
+                    ("context_id", existing["context_id"], envelope.get("context_id")),
                     ("payload", existing["payload"], dict(payload)),
                 )
                 if actual != expected
@@ -1402,6 +1438,11 @@ class AgentdStore:
         task = self.create_task(
             task_id=task_id,
             trace_id=str(payload.get("trace_id") or uuid.uuid4().hex),
+            context_id=(
+                str(envelope["context_id"])
+                if envelope.get("context_id") is not None
+                else None
+            ),
             sender_id=str(envelope.get("sender_id", "")),
             recipient_id=str(envelope.get("recipient_id", "")),
             skill_id=(str(payload["skill_id"]) if payload.get("skill_id") else None),
@@ -1951,6 +1992,7 @@ class AgentdStore:
             "state": row["state"],
             "payload": self._decode_content(row["payload_json"]),
             "trace_id": row["trace_id"],
+            "context_id": row["context_id"],
             "deadline_at_ms": row["deadline_at_ms"],
             "created_at_ms": row["created_at_ms"],
             "updated_at_ms": row["updated_at_ms"],

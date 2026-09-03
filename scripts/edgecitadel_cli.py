@@ -2256,6 +2256,32 @@ def _installable_plugin_source(source: Path, state_dir: Path) -> Iterator[Path]:
         yield staged
 
 
+def _managed_connector_id(inventory: dict[str, Any]) -> str | None:
+    package = inventory.get("package")
+    agents = inventory.get("agents")
+    if (
+        not isinstance(package, dict)
+        or package.get("kind") != "ManagedAgent"
+        or not isinstance(agents, list)
+        or len(agents) != 1
+        or not isinstance(agents[0], dict)
+        or not isinstance(agents[0].get("id"), str)
+    ):
+        return None
+    return f"managed-{agents[0]['id']}"
+
+
+def _revoke_managed_connector(state_dir: Path, connector_id: str) -> None:
+    connectors = _agentd_rpc(state_dir, "connector.list")
+    connector = next(
+        (item for item in connectors if item.get("connector_id") == connector_id),
+        None,
+    )
+    if connector is not None and not connector.get("revoked"):
+        _agentd_rpc(state_dir, "connector.revoke", connector_id=connector_id)
+    _connector_token_path(state_dir, connector_id).unlink(missing_ok=True)
+
+
 def _install_plugin_source(
     args: argparse.Namespace, state_dir: Path, node: dict[str, Any], source: Path
 ) -> int:
@@ -2324,71 +2350,63 @@ def _install_plugin_source(
     _sync_managed_agent_state(state_dir, state)
     action = "upgraded" if upgrading else "installed"
     print(f"Managed Agent {plugin_id} {action} in the Agent service store.")
-    if not args.keep_disabled:
-        try:
+    try:
+        if not args.keep_disabled:
             _start_plugin(state_dir, plugin_id)
-        except UserError as error:
-            rollback = _load_plugins(state_dir)
-            if previous is None:
-                rollback["managed_agents"].pop(plugin_id, None)
-            else:
-                previous.update(
-                    enabled=False,
-                    pid=None,
-                    process_identity=None,
-                )
-                rollback["managed_agents"][plugin_id] = previous
-            _write_json(_plugins_path(state_dir), rollback)
-            _sync_managed_agent_state(state_dir, rollback)
-            previous_package = (
-                previous.get("inventory", {}).get("package", {})
-                if isinstance(previous, dict)
-                else {}
+        previous_connector_id = (
+            _managed_connector_id(previous.get("inventory", {}))
+            if isinstance(previous, dict)
+            else None
+        )
+        installed_connector_id = _managed_connector_id(installed_inventory)
+        if previous_connector_id and previous_connector_id != installed_connector_id:
+            _revoke_managed_connector(state_dir, previous_connector_id)
+    except UserError as error:
+        rollback = _load_plugins(state_dir)
+        if previous is None:
+            rollback["managed_agents"].pop(plugin_id, None)
+        else:
+            previous.update(
+                enabled=False,
+                pid=None,
+                process_identity=None,
             )
-            if (
-                installed_inventory["package"].get("kind") == "ManagedAgent"
-                and previous_package.get("kind") != "ManagedAgent"
-            ):
-                connector_id = f"managed-{installed_inventory['agents'][0]['id']}"
-                connectors = _agentd_rpc(state_dir, "connector.list")
-                connector = next(
-                    (
-                        item
-                        for item in connectors
-                        if item.get("connector_id") == connector_id
-                    ),
-                    None,
+            rollback["managed_agents"][plugin_id] = previous
+        _write_json(_plugins_path(state_dir), rollback)
+        _sync_managed_agent_state(state_dir, rollback)
+        previous_connector_id = (
+            _managed_connector_id(previous.get("inventory", {}))
+            if isinstance(previous, dict)
+            else None
+        )
+        installed_connector_id = _managed_connector_id(installed_inventory)
+        if installed_connector_id and installed_connector_id != previous_connector_id:
+            _revoke_managed_connector(state_dir, installed_connector_id)
+        _managed_launch_path(state_dir, plugin_id).unlink(missing_ok=True)
+        runtime_root = (
+            state_dir
+            / "plugin-runtimes"
+            / plugin_id
+            / str(installed_inventory["package"]["version"])
+        )
+        if runtime_root.exists():
+            shutil.rmtree(runtime_root)
+        recovery = "previous state restored"
+        if previous_enabled:
+            try:
+                _start_plugin(state_dir, plugin_id)
+                recovery = "previous version restarted"
+            except UserError:
+                recovery = (
+                    "previous version restored but could not restart; run "
+                    f"'{_command_name()} agent start {plugin_id}'"
                 )
-                if connector is not None and not connector.get("revoked"):
-                    _agentd_rpc(
-                        state_dir, "connector.revoke", connector_id=connector_id
-                    )
-                _connector_token_path(state_dir, connector_id).unlink(missing_ok=True)
-            _managed_launch_path(state_dir, plugin_id).unlink(missing_ok=True)
-            runtime_root = (
-                state_dir
-                / "plugin-runtimes"
-                / plugin_id
-                / str(installed_inventory["package"]["version"])
-            )
-            if runtime_root.exists():
-                shutil.rmtree(runtime_root)
-            recovery = "previous state restored"
-            if previous_enabled:
-                try:
-                    _start_plugin(state_dir, plugin_id)
-                    recovery = "previous version restarted"
-                except UserError:
-                    recovery = (
-                        "previous version restored but could not restart; run "
-                        f"'{_command_name()} agent start {plugin_id}'"
-                    )
-            if created_target:
-                _remove_managed_package_tree(target)
-            raise UserError(
-                f"Managed Agent {plugin_id} failed readiness; {recovery}. "
-                f"Original failure: {error}"
-            ) from error
+        if created_target:
+            _remove_managed_package_tree(target)
+        raise UserError(
+            f"Managed Agent {plugin_id} failed readiness; {recovery}. "
+            f"Original failure: {error}"
+        ) from error
     return 0
 
 
