@@ -7,4 +7,4 @@ pytest-asyncio>=0.24,<2
 PyYAML>=6,<7
 ruff==0.9.10
 build>=1,<2
--e plugin-toolkit
+-e agent-platform

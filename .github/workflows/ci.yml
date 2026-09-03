@@ -15,11 +15,11 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r scripts/requirements-test.txt
-      - run: python -m pip install -e 'plugin-toolkit[test]'
-      - run: ruff check --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ e2e/fixture_agent/
-      - run: ruff format --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ e2e/fixture_agent/ --check
+      - run: python -m pip install -e 'agent-platform[test]'
+      - run: ruff check --target-version py312 aggregator/ scripts/ agent-platform/ agent-packages/ tests/ deploy/tests/ e2e/fixture_agent/
+      - run: ruff format --target-version py312 aggregator/ scripts/ agent-platform/ agent-packages/ tests/ deploy/tests/ e2e/fixture_agent/ --check
       - run: python -m pytest -q tests scripts/tests deploy/tests schemas/tests
-      - run: python -m pytest -q plugin-toolkit/tests
+      - run: python -m pytest -q agent-platform/tests
       - run: python -m build
 
   frontend:

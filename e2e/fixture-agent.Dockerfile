@@ -2,8 +2,8 @@ FROM python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd0426631771
 
 WORKDIR /app
 
-COPY plugin-toolkit /app/plugin-toolkit
-RUN python -m pip install --no-cache-dir -e /app/plugin-toolkit
+COPY agent-platform /app/agent-platform
+RUN python -m pip install --no-cache-dir -e /app/agent-platform
 
 COPY schemas /app/schemas
 COPY e2e/fixture_agent /app/e2e/fixture_agent

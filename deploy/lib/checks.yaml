@@ -41,7 +41,7 @@ categories:
         cmd: python3 /opt/edgecitadel/deploy/lib/reconcile-env.py --check
         remediation: "sudo python3 /opt/edgecitadel/deploy/lib/reconcile-env.py"
       - name: opt-edgecitadel-exists
-        cmd: bash -c '[[ -d /opt/edgecitadel && -d /opt/edgecitadel/plugins ]]'
+        cmd: bash -c '[[ -d /opt/edgecitadel && -d /opt/edgecitadel/agent-packages ]]'
         remediation: "sudo deploy-host.sh --update --source-dir /root/snap/EdgeCitadel"
       - name: var-lib-edgecitadel-owned
         cmd: bash -c '[[ "$(stat -c %U /var/lib/edgecitadel)" == "edgecitadel" ]]'

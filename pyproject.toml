@@ -36,7 +36,7 @@ exclude = [
   "**/*.pyc",
   "**/node_modules/**",
   "aggregator/tests/**",
-  "plugin-toolkit/tests/**",
+  "agent-platform/tests/**",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -49,15 +49,17 @@ include = [
   "/frontend",
   "/nats",
   "/nginx",
-  "/native-plugins",
-  "/plugin-toolkit/pyproject.toml",
-  "/plugin-toolkit/schemas",
-  "/plugin-toolkit/src",
+  "/agent-packages",
   "/plugins",
+  "/agent-platform/pyproject.toml",
+  "/agent-platform/schemas",
+  "/agent-platform/src",
   "/schemas",
   "/scripts/__init__.py",
   "/scripts/edgecitadel_cli.py",
+  "/scripts/installation_assets.py",
   "/scripts/nats_leaf.py",
+  "/scripts/plugin_installation.py",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -68,10 +70,10 @@ only-include = [
   "frontend",
   "nats",
   "nginx",
-  "native-plugins",
-  "plugin-toolkit/schemas",
-  "plugin-toolkit/src",
+  "agent-packages",
   "plugins",
+  "agent-platform/schemas",
+  "agent-platform/src",
   "schemas",
 ]
 
@@ -81,16 +83,18 @@ only-include = [
 "frontend" = "edgecitadel-0.1.0.data/data/share/edgecitadel/frontend"
 "nats" = "edgecitadel-0.1.0.data/data/share/edgecitadel/nats"
 "nginx" = "edgecitadel-0.1.0.data/data/share/edgecitadel/nginx"
-"native-plugins" = "edgecitadel-0.1.0.data/data/share/edgecitadel/native-plugins"
-"plugin-toolkit/schemas" = "edgecitadel-0.1.0.data/data/share/edgecitadel/plugin-toolkit/schemas"
-"plugin-toolkit/src" = "edgecitadel-0.1.0.data/data/share/edgecitadel/plugin-toolkit/src"
+"agent-packages" = "edgecitadel-0.1.0.data/data/share/edgecitadel/agent-packages"
 "plugins" = "edgecitadel-0.1.0.data/data/share/edgecitadel/plugins"
+"agent-platform/schemas" = "edgecitadel-0.1.0.data/data/share/edgecitadel/agent-platform/schemas"
+"agent-platform/src" = "edgecitadel-0.1.0.data/data/share/edgecitadel/agent-platform/src"
 "schemas" = "edgecitadel-0.1.0.data/data/share/edgecitadel/schemas"
 
 [tool.hatch.build.targets.wheel.force-include]
 ".env.example" = "edgecitadel-0.1.0.data/data/share/edgecitadel/.env.example"
 "docker-compose.yml" = "edgecitadel-0.1.0.data/data/share/edgecitadel/docker-compose.yml"
-"plugin-toolkit/pyproject.toml" = "edgecitadel-0.1.0.data/data/share/edgecitadel/plugin-toolkit/pyproject.toml"
+"agent-platform/pyproject.toml" = "edgecitadel-0.1.0.data/data/share/edgecitadel/agent-platform/pyproject.toml"
 "scripts/__init__.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/__init__.py"
 "scripts/edgecitadel_cli.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/edgecitadel_cli.py"
+"scripts/installation_assets.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/installation_assets.py"
 "scripts/nats_leaf.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/nats_leaf.py"
+"scripts/plugin_installation.py" = "edgecitadel-0.1.0.data/data/share/edgecitadel/scripts/plugin_installation.py"
