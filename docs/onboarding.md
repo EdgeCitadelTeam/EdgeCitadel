@@ -7,14 +7,29 @@ Connector sessions opened by Plugins.
 
 ## Install
 
-```bash
-pip install edgecitadel
-# or
-brew install edgecitadel
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if it is
+not already available, then install EdgeCitadel as an isolated CLI tool:
 
+```bash
+uv tool install edgecitadel
+```
+
+On macOS, Homebrew is also supported:
+
+```bash
+brew install edgecitadel
+```
+
+Verify the installation, then run the guided installer:
+
+```bash
 edgecitadel --version
 edgecitadel install
 ```
+
+`uv tool install` avoids modifying an operating-system-managed Python
+environment. The [Python distribution guide](../deploy/pip/README.md) documents
+a manual virtual-environment fallback.
 
 The guided installer enrolls the host, starts agentd, detects supported native
 hosts, installs only the Plugins the user selects, and reports Plugin package
@@ -183,7 +198,7 @@ directory and files restricted to the account that runs EdgeCitadel.
 ## Upgrade, rollback, and uninstall
 
 ```bash
-pip install --upgrade edgecitadel
+uv tool upgrade edgecitadel
 # or
 brew upgrade edgecitadel
 ```
@@ -214,7 +229,7 @@ edgecitadel service stop
 edgecitadel messaging stop  # nats_leaf only
 ```
 
-Then run `pip uninstall edgecitadel` or `brew uninstall edgecitadel`. Both
+Then run `uv tool uninstall edgecitadel` or `brew uninstall edgecitadel`. Both
 preserve `~/.edgecitadel`; deleting that state is a separate, explicit operator
 decision after backup. Removing the Home Assistant adapter never removes or
 changes Home Assistant itself.

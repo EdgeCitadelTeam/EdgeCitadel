@@ -6,13 +6,22 @@ active Pi, Claude Code, and Codex sessions through their native plugin systems.
 
 ## Install
 
-Choose one method:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if it is
+not already available, then install EdgeCitadel as an isolated CLI tool:
 
 ```bash
-pip install edgecitadel
-# or
+uv tool install edgecitadel
+```
+
+On macOS, Homebrew is also supported:
+
+```bash
 brew install edgecitadel
 ```
+
+`uv tool install` avoids modifying an operating-system-managed Python
+environment. See the [Python distribution guide](deploy/pip/README.md) for a
+manual virtual-environment fallback.
 
 Then run the guided, idempotent installer from the project where host-local
 Plugins should be configured:
@@ -115,8 +124,8 @@ Stop a Core without deleting its data with `edgecitadel down`.
 Use the package manager that installed EdgeCitadel:
 
 ```bash
-pip install --upgrade edgecitadel
-pip uninstall edgecitadel
+uv tool upgrade edgecitadel
+uv tool uninstall edgecitadel
 
 brew upgrade edgecitadel
 brew uninstall edgecitadel
