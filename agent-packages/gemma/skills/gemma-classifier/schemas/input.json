@@ -1,1 +1,0 @@
-{"type":"object","properties":{"body":{"type":"string"},"categories":{"type":"array","items":{"type":"string"}}},"required":["body"],"additionalProperties":true}

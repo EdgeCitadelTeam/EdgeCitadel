@@ -5,7 +5,6 @@ import pytest
 from edgecitadel_supervisor.inventory import build_inventory
 from edgecitadel_supervisor.validator import validate_package
 
-
 PLUGINS = Path(__file__).parents[2] / "agent-packages"
 
 
@@ -16,7 +15,7 @@ PLUGINS = Path(__file__).parents[2] / "agent-packages"
             "gemma",
             "edgecitadel.gemma",
             "edgecitadel_gemma_plugin",
-            4,
+            1,
             "ManagedAgent",
             "model_agent",
         ),
@@ -55,8 +54,12 @@ def test_builtin_plugin_is_locked_and_has_an_executable_runtime(
     assert inventory["runtime"]["command"] == ["python", "-m", module]
     assert len(inventory["skills"]) == skill_count
     assert (PLUGINS / name / module / "__main__.py").is_file()
-    requirements = inventory["runtime"]["pythonRequirements"]
-    assert (PLUGINS / name / requirements).is_file()
+    requirements = inventory["runtime"].get("pythonRequirements")
+    if name == "gemma":
+        assert requirements is None
+    else:
+        assert isinstance(requirements, str)
+        assert (PLUGINS / name / requirements).is_file()
     adapter = (PLUGINS / name / module / "adapter.py").read_text()
     assert "edgecitadel_agentd.managed_runtime" in adapter
     assert "edgecitadel_plugin_runtime.template" not in adapter

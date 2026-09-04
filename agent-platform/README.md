@@ -51,11 +51,11 @@ command imports handlers or executes plugin runtime code.
 Both console-script and module forms are supported:
 
 ```bash
-edgecitadel-supervisor lock ../agent-packages/examples/placeholder
-edgecitadel-supervisor validate ../agent-packages/examples/placeholder
+edgecitadel-supervisor lock ../agent-packages/examples/echo
+edgecitadel-supervisor validate ../agent-packages/examples/echo
 
-python -m edgecitadel_supervisor lock ../agent-packages/examples/placeholder
-python -m edgecitadel_supervisor validate ../agent-packages/examples/placeholder
+python -m edgecitadel_supervisor lock ../agent-packages/examples/echo
+python -m edgecitadel_supervisor validate ../agent-packages/examples/echo
 ```
 
 Finalize every package file before running `lock`; any subsequent package byte
@@ -71,7 +71,7 @@ Run the focused checks from this directory:
 ```bash
 python -m pytest -q
 python -m compileall -q src tests
-python -m edgecitadel_supervisor validate ../agent-packages/examples/placeholder
+python -m edgecitadel_supervisor validate ../agent-packages/examples/echo
 mypy --strict src/edgecitadel_plugin_sdk tests/typecheck_sdk_consumer.py
 ```
 

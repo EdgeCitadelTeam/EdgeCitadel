@@ -4,8 +4,8 @@ kind: ManagedAgent
 metadata:
   name: gemma
   displayName: Gemma Agent
-  description: Local Ollama-backed reasoning, summarization, classification, and code explanation.
-  version: 0.3.0
+  description: Lightweight local Gemma chat through Ollama.
+  version: 0.4.0
   publisher: edgecitadel
 
 compatibility:
@@ -15,8 +15,7 @@ compatibility:
 runtime:
   kind: model_agent
   command: [python, -m, edgecitadel_gemma_plugin]
-  pythonRequirements: edgecitadel_gemma_plugin/requirements.txt
-  environmentVariables: [OLLAMA_HOST, OLLAMA_PORT, OLLAMA_MODEL, OLLAMA_TIMEOUT_SEC, LOG_LEVEL]
+  environmentVariables: [OLLAMA_HOST, OLLAMA_PORT, OLLAMA_MODEL, OLLAMA_TIMEOUT_SEC]
   healthTimeoutSeconds: 30
   restartPolicy: on-failure
 
@@ -25,11 +24,11 @@ skills:
 
 agents:
   - id: gemma-1
-    skillNames: [gemma-reasoner, gemma-summarizer, gemma-classifier, gemma-code-explainer]
+    skillNames: [gemma-chat]
     listensBroadcast: false
 
 permissions:
-  knowledge: [memory-turns]
+  knowledge: []
   messaging:
     outboundAgents: [aggregator]
   network:

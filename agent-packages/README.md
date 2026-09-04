@@ -1,17 +1,30 @@
 # EdgeCitadel Agent Packages
 
-`agent-packages/` contains installable EdgeCitadel Agent Packages and legacy
-packages kept during migration.
+`agent-packages/` contains installable EdgeCitadel Agent Packages.
 Host schemas, SDK protocols, validation logic, and tests live in
 [`../agent-platform/`](../agent-platform/). See
-[`examples/echo`](examples/echo/README.md) for a developer fixture and
-[`examples/placeholder`](examples/placeholder/README.md) for a validation-only
-example.
+[`examples/echo`](examples/echo/README.md) for the minimal executable developer
+and validation fixture.
+
+Each immediate product directory is one independently installable package. Its
+manifest, runtime, skills, permissions, dependencies, and integrity lock stay
+together so the supervisor can validate, install, upgrade, and remove that unit
+without relying on repository-global state:
+
+- `gemma/` runs a lightweight local-model Agent owned by EdgeCitadel.
+- `homeassistant/` runs an EdgeCitadel-owned adapter to an independently managed
+  Home Assistant service.
+- `hermes/` currently runs an EdgeCitadel-owned adapter to an independently
+  managed Hermes service.
+- `examples/echo/` is the sole developer and lifecycle smoke fixture.
+
+`agent-platform/` does not own Gemma, Hermes, or Home Assistant. It owns the
+generic package contract and Managed Agent lifecycle used by these packages.
 
 ## Agent Package layout
 
 ```text
-my-plugin/
+my-agent/
   plugin.yaml
   plugin.lock.json
   unique_python_package/
@@ -27,7 +40,8 @@ my-plugin/
       assets/           # optional
 ```
 
-- `plugin.yaml` declares package identity and version, supervisor/protocol
+- `plugin.yaml` (a compatibility filename retained from the original package
+  format) declares package identity and version, supervisor/protocol
   compatibility, runtime metadata, agent identities, requested permissions, and
   security intent.
 - `plugin.lock.json` is the generated canonical inventory and SHA-256 integrity

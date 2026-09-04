@@ -375,14 +375,16 @@ Do not imply OS sandbox enforcement until it exists.
 
 ### 9.3 Gemma
 
-Gemma remains a complete EdgeCitadel-managed model Agent. Preserve:
+Gemma starts as a lightweight EdgeCitadel-managed model harness. Preserve:
 
-- Ollama configuration and readiness;
-- reasoning, summarization, classification, and code-explanation capabilities;
-- durable inbox and correlated progress/result behavior;
-- dependency isolation;
-- process restart and logs;
-- effect/outcome idempotency.
+- one stateless chat skill over the local Ollama API;
+- a small default model with an environment override;
+- no package-specific Python dependencies;
+- durable inbox, correlated result delivery, process restart, and logs supplied
+  by the shared Managed Agent lifecycle.
+
+Memory, streaming, tool loops, structured task skills, and task-specific prompt
+logic are later capabilities, not requirements of the first edge harness.
 
 Its documentation must say that EdgeCitadel installs and operates the Agent
 Runtime; it is not added to a pre-existing Agent application.
@@ -406,8 +408,8 @@ installation.
 - **Hermes:** migrated to a Managed Adapter under agentd ownership.
 - **Shell:** the installable unrestricted product package was removed; `shell-1`
   remains only as a deterministic E2E fixture identity.
-- **Echo and placeholder:** migrated to non-user-facing Managed Agent validation
-  and integration fixtures.
+- **Echo:** retained as the single non-user-facing Managed Agent validation and
+  integration fixture; the duplicate placeholder fixture was removed.
 - **OpenClaw client:** removed with its unused ingress and token surface; the
   historical SQLite filename remains to preserve runtime state.
 - **Watchdog:** removed after its reconciliation behavior moved to authoritative
@@ -721,7 +723,7 @@ Keep the root README concise and user-oriented:
 6. verify with `status`/`doctor`;
 7. upgrade/uninstall while preserving data.
 
-Do not put Echo, placeholder, framework rationale, contributor virtualenv setup,
+Do not put Echo, framework rationale, contributor virtualenv setup,
 unpublished-release caveats, or fixed-port exposition in the primary user path.
 Developer examples belong in contributor documentation.
 
@@ -832,7 +834,7 @@ and expose no NATS credentials.
 3. Convert Gemma without capability or reliability regression.
 4. Convert Home Assistant as `service_adapter` without changing HA ownership.
 5. Migrate existing install state and retain runtime data.
-6. Move Echo/placeholder to explicit developer fixtures.
+6. Move Echo to an explicit developer fixture.
 7. Migrate Hermes, remove the Shell product package, and remove OpenClaw after
    recording replacement and reachability evidence.
 8. Remove Managed Agent wording from public Plugin instructions.

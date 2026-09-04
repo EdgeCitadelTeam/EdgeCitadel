@@ -1,19 +1,18 @@
 # Gemma Managed Agent
 
-Gemma is a complete EdgeCitadel-managed Agent backed by a local Ollama service. It
-provides reasoning, summarization, classification, and code-explanation skills.
+Gemma is a minimal EdgeCitadel Managed Agent that sends one chat prompt to a
+local Ollama service and returns the response. It deliberately has no memory,
+tool loop, streaming layer, or task-specific skills.
 
-Install it after joining an Edge:
+Install Ollama, pull the small default model, then install the Agent Package:
 
 ```bash
+ollama pull gemma3:1b
 edgecitadel agent install gemma
 ```
 
-The Agent service validates `plugin.yaml` and `plugin.lock.json`, creates a
-private runtime from `edgecitadel_gemma_plugin/requirements.txt`, and supervises
-the process. Gemma talks only to the private agentd connector API and never
-receives NATS or Leaf credentials. Configure Ollama with `OLLAMA_HOST`,
-`OLLAMA_PORT`, and `OLLAMA_MODEL` before starting the Agent when the defaults are
-not suitable.
+Set `OLLAMA_HOST`, `OLLAMA_PORT`, `OLLAMA_MODEL`, or `OLLAMA_TIMEOUT_SEC` before
+starting the Agent to override the local defaults. The package has no additional
+Python dependencies, so EdgeCitadel runs it in the shared Managed Agent runtime.
 
 Runtime tests live in `agent-platform/tests/gemma_runtime/`.
