@@ -279,6 +279,14 @@ EdgeCitadelTeam/edgecitadel` between `brew tap` and `brew install`. After that
 explicit trust, the public archive installed, `brew test` passed, and the
 installed CLI reported 0.2.0 with the Leaf option.
 
+The 0.2.0 PyPI page embeds the README metadata captured before this Homebrew 6
+behavior was found, so that immutable snapshot still omits the trust line.
+PyPI stores metadata from the first file uploaded for a release and subsequent
+uploads do not update it. The mutable GitHub README, onboarding guide, Homebrew
+tap README, and GitHub release notes contain the tested command. A future
+package release will naturally refresh PyPI's rendered description; this does
+not affect uv/pip installation or the published formula.
+
 ## Fixed-source simplified retest flow
 
 The remote Core still ran the pre-fix invitation command, so `sed` was needed
@@ -1024,6 +1032,15 @@ git commit -m 'docs(infra): record public 0.2.0 release'
 git push origin main
 ```
 
+After confirming PyPI's first-upload metadata rule, the immutable-description
+caveat was prepared for this final follow-up:
+
+```bash
+git add /Users/yefanzhang/workplace/edge-research/docs/acceptance/nats-leaf-simplified-install-2026-09-04.md
+git commit -m 'docs(infra): note PyPI metadata snapshot'
+git push origin main
+```
+
 ## External documentation checked
 
 The official OpenAI Plugin documentation was checked before testing Codex. It
@@ -1033,6 +1050,9 @@ session before newly installed skills or tools become available:
 
 - [Plugins](https://developers.openai.com/codex/plugins/)
 - [Codex CLI reference](https://developers.openai.com/codex/cli/reference/)
+- [PyPI JSON API](https://docs.pypi.org/api/json/), which documents that the
+  first uploaded release metadata is retained rather than updated by later
+  files.
 
 ## Final verification
 
@@ -1071,6 +1091,9 @@ session before newly installed skills or tools become available:
   and the primary uv tool all installed from the public index.
 - Official Homebrew tap: public stable formula, strict online audit, public
   install, and `brew test` passed after the Homebrew 6 trust step.
+- PyPI's immutable 0.2.0 long-description snapshot predates discovery of the
+  Homebrew 6 trust gate; the canonical public repository, tap, and release notes
+  carry the corrected Homebrew sequence.
 - GitHub source CI and the PyPI trusted-publishing workflow completed
   successfully.
 
