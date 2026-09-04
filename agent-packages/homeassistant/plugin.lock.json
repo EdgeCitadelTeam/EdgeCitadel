@@ -2,7 +2,7 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "5c8a07eb3ffc6aaaff8dd3e12eec7ddb585991ebde6b1f1303e46fef99459303"
+      "sha256": "88ad90415098e7248ced2fc700fb8b3f4278a841b2e6b28ed31b306ba2824caa"
     },
     {
       "path": "edgecitadel_homeassistant_plugin/__init__.py",

@@ -28,7 +28,7 @@ def test_pip_metadata_and_runtime_assets_are_declared() -> None:
         f"edgecitadel-{config['project']['version']}.data/data/share/edgecitadel"
     )
     assert forced["docker-compose.yml"] == f"{data_prefix}/docker-compose.yml"
-    assert sources["agent-platform/src"] == f"{data_prefix}/agent-platform/src"
+    assert sources["agent-runtime/src"] == f"{data_prefix}/agent-runtime/src"
     assert sources["agent-packages"] == f"{data_prefix}/agent-packages"
     assert sources["plugins"] == f"{data_prefix}/plugins"
     assert sources["schemas"] == f"{data_prefix}/schemas"

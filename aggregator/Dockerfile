@@ -1,8 +1,8 @@
 FROM python:3.12-slim
 WORKDIR /app/aggregator
-COPY agent-platform/ /app/agent-platform/
+COPY agent-runtime/ /app/agent-runtime/
 COPY aggregator/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt -e /app/agent-platform
+RUN pip install --no-cache-dir -r requirements.txt -e /app/agent-runtime
 WORKDIR /app
 COPY aggregator/ ./aggregator/
 COPY schemas/ ./schemas/

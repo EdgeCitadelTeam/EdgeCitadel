@@ -1180,13 +1180,13 @@ def test_plugin_python_builds_and_reuses_requirements_scoped_runtime(
     assert (first.parents[1] / ".edgecitadel-runtime").stat().st_mode & 0o777 == 0o600
 
     upgraded_root = tmp_path / "upgraded-cellar"
-    upgraded_platform = upgraded_root / "agent-platform"
-    (upgraded_platform / "src" / "edgecitadel_agentd").mkdir(parents=True)
-    (upgraded_platform / "pyproject.toml").write_text("")
+    upgraded_runtime = upgraded_root / "agent-runtime"
+    (upgraded_runtime / "src" / "edgecitadel_agentd").mkdir(parents=True)
+    (upgraded_runtime / "pyproject.toml").write_text("")
     monkeypatch.setattr(cli, "INSTALL_ROOT", upgraded_root)
     assert cli._plugin_python(tmp_path, "edgecitadel.gemma", record) == first
     assert len(commands) == 4
-    assert str(upgraded_platform) in commands[3]
+    assert str(upgraded_runtime) in commands[3]
 
 
 def test_plugin_python_rejects_missing_declared_requirements(tmp_path):

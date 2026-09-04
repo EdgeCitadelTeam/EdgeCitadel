@@ -53,7 +53,7 @@ test.describe('Phase 2 smoke — Gemma round trip', () => {
     // Empty body fails Pydantic validation at the API layer, returning 422.
     // We DON'T test the Managed Agent handler's "empty_prompt" rejection here (that
     // would require a malformed envelope going through NATS, which is
-    // is covered by agent-platform/tests/gemma_runtime/).
+    // is covered by agent-runtime/tests/gemma_runtime/).
     const post = await request.post(
       `${API}/api/command/gemma-1?sender_id=${TEST_RUNNER}`,
       { data: { body: '' } });

@@ -30,7 +30,7 @@ try:
     from .installation_assets import (
         AssetResolutionError,
         agent_packages_root,
-        agent_platform_root,
+        agent_runtime_root,
         plugin_source,
         plugins_root,
     )
@@ -40,7 +40,7 @@ except ImportError:  # Executed by the installed scripts/edgecitadel wrapper.
     from installation_assets import (  # type: ignore[no-redef]
         AssetResolutionError,
         agent_packages_root,
-        agent_platform_root,
+        agent_runtime_root,
         plugin_source,
         plugins_root,
     )
@@ -968,7 +968,7 @@ def _toolkit_python(state_dir: Path) -> Path:
             "--quiet",
             "--disable-pip-version-check",
             "-e",
-            str(_asset_root(agent_platform_root)),
+            str(_asset_root(agent_runtime_root)),
         ]
     )
     _secure_write(marker, expected)
@@ -1668,7 +1668,7 @@ def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> P
                 "--quiet",
                 "--disable-pip-version-check",
                 "-e",
-                str(_asset_root(agent_platform_root)),
+                str(_asset_root(agent_runtime_root)),
                 "-r",
                 str(requirements_path),
             ]
@@ -2708,7 +2708,7 @@ def command_install(args: argparse.Namespace) -> int:
         assets = {
             "agent_packages": str(agent_packages_root(INSTALL_ROOT)),
             "plugins": str(plugins_root(INSTALL_ROOT)),
-            "agent_platform": str(agent_platform_root(INSTALL_ROOT)),
+            "agent_runtime": str(agent_runtime_root(INSTALL_ROOT)),
         }
     except AssetResolutionError as error:
         raise OperationalError(str(error)) from error

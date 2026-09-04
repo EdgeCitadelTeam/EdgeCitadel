@@ -12,4 +12,4 @@ non-default `HERMES_BASE_URL`, `HERMES_MODEL`, or `HERMES_TIMEOUT_SEC` settings
 when starting `edgecitadel.hermes`. The ignored `agent.env` convention is for
 legacy source checkouts only; the Managed Agent accepts configuration solely
 through the manifest-declared environment allowlist. Tests live in
-`agent-platform/tests/hermes_runtime/`.
+`agent-runtime/tests/hermes_runtime/`.

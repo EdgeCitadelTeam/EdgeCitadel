@@ -28,7 +28,7 @@ idempotent `edgecitadel install` onboarding flow while retaining explicit
 5. Rename repository directories:
    - `plugins/` -> `agent-packages/`;
    - `native-plugins/` -> `plugins/`;
-   - `plugin-toolkit/` -> `agent-platform/`.
+   - `plugin-toolkit/` -> `agent-runtime/`.
 6. Add `edgecitadel plugin install|list|status|remove|repair` while preserving
    `edgecitadel connector list|status|revoke` for runtime state.
 7. Add `edgecitadel install` as an interactive orchestration command that reuses
@@ -218,7 +218,7 @@ edge-research/
 │   └── marketplaces/
 │       ├── codex.json
 │       └── claude-code.json
-└── agent-platform/
+└── agent-runtime/
     ├── pyproject.toml
     ├── schemas/
     ├── src/
@@ -415,7 +415,7 @@ duplicate another package manager's state.
   ```text
   Agent Packages: agent-packages/ -> plugins/
   Plugins:        plugins/        -> native-plugins/
-  Agent platform: agent-platform/ -> plugin-toolkit/
+  Agent runtime:  agent-runtime/  -> plugin-toolkit/
   ```
 
   The fallback is for mixed source checkouts and downstream packagers. It must
@@ -452,7 +452,7 @@ pre-existing host packages; real-host smoke tests pass for each supported host.
 
 - Move `plugins/` to `agent-packages/`.
 - Move `native-plugins/` to `plugins/` and normalize host subdirectory names.
-- Move `plugin-toolkit/` to `agent-platform/` without renaming Python imports.
+- Move `plugin-toolkit/` to `agent-runtime/` without renaming Python imports.
 - Update root packaging, editable requirements, CI, Dockerfiles, test fixtures,
   docs, contributor commands, distribution entrypoint paths, and AGENTS.md in the
   same change.
@@ -591,11 +591,11 @@ cache storage remain owned by the native package managers.
 ### Distribution and integration tests
 
 - Build sdist and wheel; install the wheel in a clean virtual environment.
-- Assert `agent-packages/`, `plugins/`, and `agent-platform/` assets are present at
+- Assert `agent-packages/`, `plugins/`, and `agent-runtime/` assets are present at
   the expected installed paths.
 - Run `edgecitadel --version`, `doctor`, service startup smoke, Agent Package
   validation, Plugin dry-run, and uninstall/repair paths from the installed wheel.
-- Run the root pytest suites, agent-platform tests, frontend build/unit tests,
+- Run the root pytest suites, agent-runtime tests, frontend build/unit tests,
   deterministic Playwright suite, and the infrastructure verification gate.
 
 ### External acceptance tests
@@ -704,7 +704,7 @@ legacy layout can be removed.
 - `edgecitadel plugin ...`, `edgecitadel install`, and expanded `doctor` checks
   expose package installation separately from live Connector sessions.
 - Repository roots are now `agent-packages/`, `plugins/`, and
-  `agent-platform/`; Python imports, manifest kinds, protocols, connector IDs,
+  `agent-runtime/`; Python imports, manifest kinds, protocols, connector IDs,
   NATS subjects, SQLite state, and private installed-package paths are unchanged.
 - The Python distribution, Homebrew formula, Docker contexts, CI, contributor
   commands, package locks, and onboarding documentation consume the new roots.

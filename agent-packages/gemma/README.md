@@ -15,4 +15,4 @@ Set `OLLAMA_HOST`, `OLLAMA_PORT`, `OLLAMA_MODEL`, or `OLLAMA_TIMEOUT_SEC` before
 starting the Agent to override the local defaults. The package has no additional
 Python dependencies, so EdgeCitadel runs it in the shared Managed Agent runtime.
 
-Runtime tests live in `agent-platform/tests/gemma_runtime/`.
+Runtime tests live in `agent-runtime/tests/gemma_runtime/`.

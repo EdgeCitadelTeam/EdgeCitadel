@@ -52,7 +52,7 @@ second clean environment. A valid wheel must contain at least:
 
 - the wheel data root's `share/edgecitadel/docker-compose.yml`;
 - `share/edgecitadel/scripts/edgecitadel_cli.py`;
-- `share/edgecitadel/agent-platform/pyproject.toml` and `src/`;
+- `share/edgecitadel/agent-runtime/pyproject.toml` and `src/`;
 - `share/edgecitadel/agent-packages/`, `plugins/`, and `schemas/`;
 - the Core `aggregator`, `frontend`, `nats`, and `nginx` assets.
 

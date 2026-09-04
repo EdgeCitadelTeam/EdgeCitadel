@@ -1,6 +1,6 @@
-# EdgeCitadel Agent Platform
+# EdgeCitadel Agent Runtime
 
-`agent-platform/` contains agentd, the Managed Agent runtime, and repository-side
+`agent-runtime/` contains agentd, the Managed Agent runtime, and repository-side
 infrastructure for validating installable EdgeCitadel packages. The
 `edgecitadel_supervisor` package owns safe
 loading, strict schemas, compatibility checks, canonical locks, and deterministic

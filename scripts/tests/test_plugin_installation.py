@@ -34,16 +34,16 @@ def test_asset_resolver_prefers_new_layout_and_warns_for_legacy(tmp_path, capsys
     assert "legacy Plugin layout" in capsys.readouterr().err
 
 
-def test_asset_resolver_keeps_agent_package_and_platform_fallbacks(tmp_path, capsys):
+def test_asset_resolver_keeps_agent_package_and_runtime_fallbacks(tmp_path, capsys):
     package = tmp_path / "plugins" / "examples" / "demo"
     package.mkdir(parents=True)
     (package / "plugin.yaml").write_text("kind: ManagedAgent\n")
-    platform = tmp_path / "plugin-toolkit"
-    (platform / "src" / "edgecitadel_agentd").mkdir(parents=True)
-    (platform / "pyproject.toml").write_text("")
+    runtime = tmp_path / "plugin-toolkit"
+    (runtime / "src" / "edgecitadel_agentd").mkdir(parents=True)
+    (runtime / "pyproject.toml").write_text("")
 
     assert assets.agent_packages_root(tmp_path) == (tmp_path / "plugins").resolve()
-    assert assets.agent_platform_root(tmp_path) == platform.resolve()
+    assert assets.agent_runtime_root(tmp_path) == runtime.resolve()
     assert capsys.readouterr().err.count("legacy") == 2
 
 

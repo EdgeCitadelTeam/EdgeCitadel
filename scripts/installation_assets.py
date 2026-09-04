@@ -61,12 +61,12 @@ def plugins_root(install_root: Path) -> Path:
     )
 
 
-def agent_platform_root(install_root: Path) -> Path:
+def agent_runtime_root(install_root: Path) -> Path:
     """Return agentd/runtime sources while preserving Python import names."""
     return _resolve(
         install_root,
-        label="Agent Platform",
-        current="agent-platform",
+        label="Agent Runtime",
+        current="agent-runtime",
         legacy="plugin-toolkit",
         valid=lambda path: path.is_dir()
         and (path / "pyproject.toml").is_file()

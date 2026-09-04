@@ -2,7 +2,7 @@
 
 `agent-packages/` contains installable EdgeCitadel Agent Packages.
 Host schemas, SDK protocols, validation logic, and tests live in
-[`../agent-platform/`](../agent-platform/). See
+[`../agent-runtime/`](../agent-runtime/). See
 [`examples/echo`](examples/echo/README.md) for the minimal executable developer
 and validation fixture.
 
@@ -18,7 +18,7 @@ without relying on repository-global state:
   managed Hermes service.
 - `examples/echo/` is the sole developer and lifecycle smoke fixture.
 
-`agent-platform/` does not own Gemma, Hermes, or Home Assistant. It owns the
+`agent-runtime/` does not own Gemma, Hermes, or Home Assistant. It owns the
 generic package contract and Managed Agent lifecycle used by these packages.
 
 ## Agent Package layout
@@ -81,7 +81,7 @@ content hash, and provenance are record and audit metadata.
 
 ## Author workflow
 
-From an activated editable environment in `agent-platform/`:
+From an activated editable environment in `agent-runtime/`:
 
 1. Finalize every file in the package, including optional resources.
 2. Generate or regenerate the canonical lock:

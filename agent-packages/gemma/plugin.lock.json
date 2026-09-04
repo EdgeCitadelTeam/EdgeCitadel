@@ -2,7 +2,7 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "7e1ca0d5bf4e578d5fb88ea5818e115ad78f5fd723cca0d35801136a46fb63dc"
+      "sha256": "6f8fb7dd3fe9afa5eef128d306b72fe7365e7d9ebd68ac4ee2d6c3640df76208"
     },
     {
       "path": "edgecitadel_gemma_plugin/__init__.py",
