@@ -2,16 +2,21 @@
 
 ## Verdict
 
-Pass after remediation against a locally built 0.2.0 wheel. The initial public
-0.1.0 acceptance remains recorded below because it explains the release gap and
-the defects found. After the fixes, one `edgecitadel install` command enrolled
-this Mac as a `nats_leaf` Edge against `jim-eq`, started NATS and agentd, repaired
-the prior Codex marketplace registration, and installed the Plugin. Both the
-manifest's exact MCP entrypoint and a new Codex session successfully called
-`edgecitadel_diagnose` and observed `mode=nats_leaf`.
+Pass in the public 0.2.0 release. The initial public 0.1.0 acceptance remains
+recorded below because it explains the release gap and the defects found. The
+fix is committed on `main` at `d6b6b38a01116fd9539181d59fcf06dc014e3dd2`, the
+`v0.2.0` GitHub release targets that exact commit, and PyPI serves both the wheel
+and source distribution. The GitHub Actions source gates and trusted-publishing
+workflow passed.
 
-PyPI itself still serves 0.1.0. The tested 0.2.0 artifact is local and has not
-been published, tagged, committed, or pushed.
+A fresh `uv tool install edgecitadel==0.2.0` from PyPI was then used for a new
+one-command `nats_leaf` setup against `jim-eq`. It enrolled the Edge, started
+NATS and agentd, installed the Codex Plugin, and exposed the seven Plugin MCP
+tools. Both the exact MCP entrypoint and a new Codex session called
+`edgecitadel_diagnose` and observed a ready `nats_leaf` service. The official
+Homebrew tap was also published and installed from its public URL.
+
+### Initial public 0.1.0 run
 
 | Check | Result | Evidence |
 |---|---|---|
@@ -38,21 +43,37 @@ been published, tagged, committed, or pushed.
 | Python regression suites | PASS | Root: 154 passed, 3 skipped. Agent runtime: 542 passed, 3 skipped. Ruff and Homebrew style passed. |
 | Infrastructure regression gate | PASS | Full Compose rebuild, NATS/API smoke checks, 22 Node helper tests, and one Chromium operator-journey test passed. |
 
+### Public 0.2.0 release retest
+
+| Check | Result | Evidence |
+|---|---|---|
+| GitHub source release | PASS | Public `v0.2.0` is neither draft nor prerelease and targets `d6b6b38a01116fd9539181d59fcf06dc014e3dd2`; source CI passed. |
+| PyPI publication | PASS | PyPI serves `edgecitadel-0.2.0-py3-none-any.whl` and `edgecitadel-0.2.0.tar.gz`; trusted-publishing run `33902099775` passed. |
+| Clean public `uv` and `pip` installs | PASS | Isolated installs from PyPI reported `edgecitadel 0.2.0`, exposed `install`, and included `--messaging-mode {single-client,nats_leaf}`. |
+| Public one-command Leaf setup | PASS | The PyPI-installed CLI configured `codex-public-leaf-20260904` with one Edge-side `install` command. |
+| Exact Plugin MCP and native Codex session | PASS | Seven tools were listed; both direct MCP and a fresh Codex process diagnosed the ready `nats_leaf` service. |
+| Core Leaf observation | PASS | A strict Core `/leafz` assertion found `edgecitadel-codex-public-leaf-20260904`. |
+| Official Homebrew tap | PASS | `EdgeCitadelTeam/homebrew-edgecitadel` is public; its stable formula uses the immutable release archive and verified SHA-256, and public `brew install` plus `brew test` passed. |
+
 ## Resulting local state
 
-- Local tool: `edgecitadel==0.2.0`, installed by `uv` from the locally built
-  wheel. PyPI remains at 0.1.0.
+- Primary local tool: `edgecitadel==0.2.0`, installed by `uv` from public PyPI.
+  Its environment has no `direct_url.json`, confirming it is no longer tied to
+  the locally built wheel.
+- Homebrew formula: public `edgecitadelteam/edgecitadel/edgecitadel` 0.2.0 is
+  also installed and tested; the uv executable appears earlier on this Mac's
+  `PATH`.
 - Passing acceptance Edge state:
-  `/Users/yefanzhang/.edgecitadel-acceptance-nats-leaf-fixed-20260904`.
-- Passing Edge identity: `codex-local-leaf-fixed-20260904`.
+  `/Users/yefanzhang/.edgecitadel-public-nats-leaf-20260904`.
+- Passing Edge identity: `codex-public-leaf-20260904`.
 - Core: `http://jim-eq`; upstream NATS: `nats://jim-eq:4222`.
 - Local leaf client: `nats://127.0.0.1:4223`; monitor: `http://127.0.0.1:8223`.
-- The passing NATS leaf and isolated `agentd` were left running. The old
-  acceptance leaf and agentd were stopped before the retest to release ports
-  4223 and 8223.
+- The public-release NATS leaf and isolated `agentd` were left running. The old
+  fixed-source acceptance leaf and agentd were stopped before the public retest
+  to release ports 4223 and 8223.
 - The Codex Plugin was left installed and enabled globally from the current
   `share/edgecitadel/plugins` marketplace, and its MCP bridge is functional with
-  the local 0.2.0 wheel.
+  the public 0.2.0 distribution.
 - Two Codex policy/environment probes started `agentd` against the unrelated
   default state and registered `core-codex`. That connector was revoked, its
   token was removed, and the default-state service was stopped again.
@@ -80,9 +101,9 @@ command after a successful public install.
 Required fix: publish a new version containing the unified installer and ensure
 the release gate installs from the public index before asserting the README flow.
 
-Resolution status: source and package metadata now identify the next
-distribution as 0.2.0, and its wheel passed clean-install testing. Publication
-is still pending explicit authorization, so this remains unresolved on PyPI.
+Resolution: 0.2.0 was built by GitHub Actions, published to PyPI with trusted
+publishing, and installed from the public index in clean uv and pip
+environments. The published wheel exposes the documented unified installer.
 
 ### 2. The unified installer still cannot create a NATS leaf
 
@@ -129,8 +150,8 @@ Impact: the documented Plugin command fails and has a surprising side effect.
 Required fix: ship the new native-host Plugin driver and validate the requested
 host/source before starting or modifying services.
 
-Resolution status: the 0.2.0 wheel contains the native-host driver, but users of
-PyPI 0.1.0 will not receive it until a new release is published.
+Resolution: public 0.2.0 contains the native-host driver, and the PyPI-installed
+CLI completed the new Codex Plugin setup and live MCP acceptance.
 
 ### 5. Codex marketplace setup succeeds, but the Plugin MCP bridge is broken
 
@@ -247,7 +268,18 @@ both default and Leaf Edges. They retain `edgecitadel join` only as the explicit
 lower-level operation for users who intentionally manage services and Plugins
 separately.
 
-## Successful simplified retest flow
+### 13. Homebrew 6 blocks an untrusted third-party tap
+
+The stable formula passed a local-tap install, but the first install from the
+new public tap stopped with `Refusing to load formula ... from untrusted tap`.
+This is a Homebrew 6 trust gate and cannot be detected by testing a local tap.
+
+Resolution: the public flow now includes `brew trust --tap
+EdgeCitadelTeam/edgecitadel` between `brew tap` and `brew install`. After that
+explicit trust, the public archive installed, `brew test` passed, and the
+installed CLI reported 0.2.0 with the Leaf option.
+
+## Fixed-source simplified retest flow
 
 The remote Core still ran the pre-fix invitation command, so `sed` was needed
 only while capturing that remote output. On a Core running the fixed source,
@@ -269,6 +301,24 @@ For a normal new Core, the intended newcomer path is the two public commands
 then asks whether to create or join and which Plugin hosts to configure. A Leaf
 Edge additionally needs an invitation from its Core and a native `nats-server`
 binary because the Leaf is a server topology, not a Python package.
+
+## Public-release simplified retest flow
+
+The fixed-source services were stopped, the uv tool was replaced from public
+PyPI, and a new isolated state proved that no local wheel or source checkout was
+needed on the Edge. The invitation value was kept in a shell variable and is
+not recorded:
+
+```bash
+uv tool install --force --no-cache --no-config 'edgecitadel==0.2.0'
+leaf_invitation="$(ssh root@jim-eq 'cd /root/snap/EdgeCitadel && ./scripts/edgecitadel invite --node-id codex-public-leaf-20260904 --host jim-eq' | sed -n '/^ecjoin:\/\//p')"
+edgecitadel install --join "$leaf_invitation" --messaging-mode nats_leaf --plugin codex --scope user --yes --json --state-dir /Users/yefanzhang/.edgecitadel-public-nats-leaf-20260904
+```
+
+The command returned `ok: true`. Messaging status showed the local process,
+client, JetStream, local readiness, and Leaf connection healthy; agentd was
+ready with a connected `nats_leaf` transport. A strict query on the Core found
+the corresponding prefixed Leaf name.
 
 ## Initial successful fallback flow
 
@@ -850,6 +900,130 @@ git diff --check
 git status --short --branch
 ```
 
+### Release, public-index, and public-tap commands
+
+The release commit, source CI, GitHub Release, and PyPI publication used these
+commands:
+
+```bash
+git commit -m 'fix(infra): complete simplified Edge installation'
+git push origin main
+git remote set-url origin https://github.com/EdgeCitadelTeam/EdgeCitadel.git
+gh run watch "$ci_run_id" --repo EdgeCitadelTeam/EdgeCitadel --compact --exit-status
+gh release create v0.2.0 --repo EdgeCitadelTeam/EdgeCitadel --target d6b6b38a01116fd9539181d59fcf06dc014e3dd2 --title 'EdgeCitadel 0.2.0' --generate-notes --draft --fail-on-no-commits
+gh release edit v0.2.0 --repo EdgeCitadelTeam/EdgeCitadel --notes 'EdgeCitadel 0.2.0 delivers the simplified installation flow documented for new Core and Edge hosts.
+
+Highlights:
+- Adds the unified edgecitadel install flow for Core, single-client Edge, and durable nats_leaf Edge setup.
+- Installs and repairs native Codex, Claude Code, and Pi Plugins through their host package managers.
+- Fixes capture-safe invitation output and the native Plugin-to-agentd RPC parameter envelope.
+- Automatically repairs stale Codex marketplace paths left by a distribution upgrade.
+- Publishes canonical EdgeCitadelTeam metadata and adds tag/version plus clean-wheel release gates.
+
+Verified with 154 root tests, 186 backend tests, 542 agent-runtime tests, strict type and Ruff gates, a clean 0.2.0 wheel install, full Docker health checks, 22 helper tests, 13 Chromium workflows, and live NATS-leaf/Codex acceptance against jim-eq.
+
+Install with:
+
+    uv tool install edgecitadel
+    edgecitadel install
+
+Full changelog: https://github.com/EdgeCitadelTeam/EdgeCitadel/compare/v0.1.0...v0.2.0'
+gh release edit v0.2.0 --repo EdgeCitadelTeam/EdgeCitadel --draft=false --latest
+gh run watch "$publish_run_id" --repo EdgeCitadelTeam/EdgeCitadel --compact --exit-status
+curl -fsS https://pypi.org/pypi/edgecitadel/json | jq -e '{version: .info.version, project_urls: .info.project_urls, files: [.urls[] | {filename, yanked, upload_time_iso_8601}]} | select(.version == "0.2.0")'
+```
+
+The public package was installed independently through both supported Python
+paths before replacing the primary uv tool:
+
+```bash
+public_verify_root="$(mktemp -d /tmp/edgecitadel-public-0.2.0.XXXXXX)"
+UV_TOOL_DIR="$public_verify_root/uv-tools" UV_TOOL_BIN_DIR="$public_verify_root/uv-bin" uv tool install --no-cache --no-config 'edgecitadel==0.2.0'
+"$public_verify_root/uv-bin/edgecitadel" --version
+"$public_verify_root/uv-bin/edgecitadel" install --help | rg -- '--messaging-mode'
+UV_TOOL_DIR="$public_verify_root/uv-tools" UV_TOOL_BIN_DIR="$public_verify_root/uv-bin" uv tool list
+/Users/yefanzhang/workplace/edge-research/.venv/bin/python -m venv "$public_verify_root/pip-venv"
+PIP_NO_CACHE_DIR=1 "$public_verify_root/pip-venv/bin/python" -m pip install --disable-pip-version-check 'edgecitadel==0.2.0'
+"$public_verify_root/pip-venv/bin/edgecitadel" --version
+"$public_verify_root/pip-venv/bin/python" -c 'from importlib.metadata import metadata; value = metadata("edgecitadel"); assert value["Version"] == "0.2.0"; assert "EdgeCitadelTeam/EdgeCitadel" in value["Project-URL"]'
+rm -r "$public_verify_root"
+uv tool install --force --no-cache --no-config 'edgecitadel==0.2.0'
+edgecitadel --version
+find /Users/yefanzhang/.local/share/uv/tools/edgecitadel/lib -path '*/edgecitadel-0.2.0.dist-info/direct_url.json' -print
+```
+
+The fresh public Leaf and Plugin acceptance used these commands. The invitation
+was unset immediately after use and its value was never printed:
+
+```bash
+edgecitadel service stop --state-dir /Users/yefanzhang/.edgecitadel-acceptance-nats-leaf-fixed-20260904
+edgecitadel messaging stop --state-dir /Users/yefanzhang/.edgecitadel-acceptance-nats-leaf-fixed-20260904
+test ! -e /Users/yefanzhang/.edgecitadel-public-nats-leaf-20260904
+set -euo pipefail
+leaf_invitation="$(ssh root@jim-eq 'cd /root/snap/EdgeCitadel && ./scripts/edgecitadel invite --node-id codex-public-leaf-20260904 --host jim-eq' | sed -n '/^ecjoin:\/\//p')"
+test -n "$leaf_invitation"
+edgecitadel install --join "$leaf_invitation" --messaging-mode nats_leaf --plugin codex --scope user --yes --json --state-dir /Users/yefanzhang/.edgecitadel-public-nats-leaf-20260904
+unset leaf_invitation
+edgecitadel messaging status --json --state-dir /Users/yefanzhang/.edgecitadel-public-nats-leaf-20260904
+edgecitadel service status --json --state-dir /Users/yefanzhang/.edgecitadel-public-nats-leaf-20260904
+edgecitadel plugin status codex --scope user --json
+curl -fsS 'http://127.0.0.1:8223/healthz?js-enabled-only=true'
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"public-release-test","version":"1"}}}' '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"edgecitadel_diagnose","arguments":{}}}' | EDGECITADEL_STATE_DIR=/Users/yefanzhang/.edgecitadel-public-nats-leaf-20260904 edgecitadel native-mcp --host-type codex
+codex exec --ephemeral --approve-for-me -c 'mcp_servers.edgecitadel={command="edgecitadel",args=["native-mcp","--host-type","codex"],env={EDGECITADEL_STATE_DIR="/Users/yefanzhang/.edgecitadel-public-nats-leaf-20260904"}}' --cd /Users/yefanzhang/workplace/edge-research --json 'Use the installed EdgeCitadel Plugin to call edgecitadel_diagnose exactly once. Do not use shell commands. Return only whether the service is ready and which messaging mode it reports.'
+curl -fsS http://jim-eq:8222/leafz | jq -e 'any((.leafs // [])[]?; .name == "edgecitadel-codex-public-leaf-20260904")'
+```
+
+The first official-tap creation attempt returned HTTP 403. These diagnostics
+showed that the authenticated account's organization membership was pending;
+accepting that existing invitation made the retry succeed:
+
+```bash
+gh repo create EdgeCitadelTeam/homebrew-edgecitadel --public --description 'Homebrew tap for EdgeCitadel' --homepage 'https://github.com/EdgeCitadelTeam/EdgeCitadel' --license MIT --add-readme --disable-issues --disable-wiki
+gh auth status
+gh api user/memberships/orgs/EdgeCitadelTeam --jq '{state, role, organization: .organization.login}'
+gh api --method PATCH user/memberships/orgs/EdgeCitadelTeam -f state=active --jq '{state, role, organization: .organization.login}'
+gh repo create EdgeCitadelTeam/homebrew-edgecitadel --public --description 'Homebrew tap for EdgeCitadel' --homepage 'https://github.com/EdgeCitadelTeam/EdgeCitadel' --license MIT --add-readme --disable-issues --disable-wiki
+curl -LfsS https://github.com/EdgeCitadelTeam/EdgeCitadel/archive/refs/tags/v0.2.0.tar.gz | shasum -a 256
+gh repo clone EdgeCitadelTeam/homebrew-edgecitadel /tmp/edgecitadel-homebrew-tap.OenEUL
+brew style /tmp/edgecitadel-homebrew-tap.OenEUL/Formula/edgecitadel.rb
+brew tap-new --no-git local/edgecitadel-release
+cp /tmp/edgecitadel-homebrew-tap.OenEUL/Formula/edgecitadel.rb /opt/homebrew/Library/Taps/local/homebrew-edgecitadel-release/Formula/edgecitadel.rb
+brew install local/edgecitadel-release/edgecitadel
+brew test local/edgecitadel-release/edgecitadel
+/opt/homebrew/opt/edgecitadel/bin/edgecitadel --version
+/opt/homebrew/opt/edgecitadel/bin/edgecitadel install --help | rg -- '--messaging-mode|nats_leaf'
+brew audit --strict --online local/edgecitadel-release/edgecitadel
+git -C /tmp/edgecitadel-homebrew-tap.OenEUL commit -m 'feat: add EdgeCitadel 0.2.0 formula'
+git -C /tmp/edgecitadel-homebrew-tap.OenEUL push origin main
+brew uninstall edgecitadel
+brew untap local/edgecitadel-release
+brew tap EdgeCitadelTeam/edgecitadel
+brew install edgecitadel
+```
+
+The last command initially stopped at Homebrew 6's untrusted-tap gate. The
+supported trust command resolved it, after which public installation and testing
+passed:
+
+```bash
+brew trust --tap edgecitadelteam/edgecitadel
+brew install edgecitadel
+brew test edgecitadel
+/opt/homebrew/opt/edgecitadel/bin/edgecitadel --version
+/opt/homebrew/opt/edgecitadel/bin/edgecitadel install --help | rg -- '--messaging-mode|nats_leaf'
+git -C /tmp/edgecitadel-homebrew-tap.OenEUL commit -m 'docs: document Homebrew 6 trust step'
+git -C /tmp/edgecitadel-homebrew-tap.OenEUL push origin main
+```
+
+The final source-repository documentation reconciliation was prepared for these
+closing commands:
+
+```bash
+git add /Users/yefanzhang/workplace/edge-research/README.md /Users/yefanzhang/workplace/edge-research/deploy/homebrew/README.md /Users/yefanzhang/workplace/edge-research/docs/onboarding.md /Users/yefanzhang/workplace/edge-research/docs/acceptance/nats-leaf-simplified-install-2026-09-04.md
+git commit -m 'docs(infra): record public 0.2.0 release'
+git push origin main
+```
+
 ## External documentation checked
 
 The official OpenAI Plugin documentation was checked before testing Codex. It
@@ -891,7 +1065,14 @@ session before newly installed skills or tools become available:
 - Final launchd state: only the isolated acceptance `agentd` label remained;
   the NATS leaf remained a live process because custom state selects process
   mode.
-- PyPI was not changed and still serves EdgeCitadel 0.1.0.
+- GitHub release `v0.2.0`: public, final, and pinned to the verified source
+  commit.
+- PyPI 0.2.0: public wheel and source distribution; isolated uv, isolated pip,
+  and the primary uv tool all installed from the public index.
+- Official Homebrew tap: public stable formula, strict online audit, public
+  install, and `brew test` passed after the Homebrew 6 trust step.
+- GitHub source CI and the PyPI trusted-publishing workflow completed
+  successfully.
 
 ## Simplification check
 
@@ -903,6 +1084,8 @@ codex --scope user --yes`. There is no separate `join`, `service start`, Codex
 marketplace, or Codex Plugin command.
 
 `nats-server` remains an external prerequisite only for `nats_leaf`, just as
-Docker remains an external prerequisite for a Core. The remaining action needed
-to make the documented public flow work is publishing the tested 0.2.0 package;
-uv cannot install commits that have not been released to PyPI.
+Docker remains an external prerequisite for a Core. The tested 0.2.0 package is
+now public on PyPI, so the two-command Core path and one-command Edge setup after
+invitation work without a source checkout. macOS users can alternatively use
+the public Homebrew tap; Homebrew 6 adds one explicit tap-trust command before
+installation.

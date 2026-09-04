@@ -17,8 +17,12 @@ On macOS, Homebrew is also supported through the EdgeCitadel tap:
 
 ```bash
 brew tap EdgeCitadelTeam/edgecitadel
+brew trust --tap EdgeCitadelTeam/edgecitadel
 brew install edgecitadel
 ```
+
+Homebrew 6 requires the trust step before loading formulas from a non-official
+tap.
 
 `uv tool install` avoids modifying an operating-system-managed Python
 environment. See the [Python distribution guide](deploy/pip/README.md) for a

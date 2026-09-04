@@ -4,6 +4,7 @@ The Homebrew package is the single CLI distribution for both node modes:
 
 ```text
 brew tap EdgeCitadelTeam/edgecitadel
+brew trust --tap EdgeCitadelTeam/edgecitadel
 brew install edgecitadel
 ├── edgecitadel create       # core; Docker prerequisite
 ├── edgecitadel install --join ... --plugin codex --scope user --yes
@@ -75,8 +76,12 @@ After the tap exists, the intended public commands are:
 
 ```bash
 brew tap EdgeCitadelTeam/edgecitadel
+brew trust --tap EdgeCitadelTeam/edgecitadel
 brew install edgecitadel
 ```
+
+Homebrew 6 requires the trust step before loading formulas from a non-official
+tap. Earlier Homebrew versions do not enforce this gate.
 
 ## Docker boundary
 
