@@ -1,8 +1,0 @@
-apiVersion: edgecitadel.io/v1alpha1
-kind: AgentSkillBinding
-skillId: text.summarize
-version: 0.2.5
-execution: {kind: runtime-handler, name: text.summarize}
-schemas: {input: schemas/input.json, output: schemas/output.json}
-requires: {knowledge: [memory-turns], network: ["http://127.0.0.1:11434"], devices: []}
-extensions: {}

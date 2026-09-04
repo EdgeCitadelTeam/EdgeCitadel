@@ -11,7 +11,7 @@ brew install edgecitadel
 ```
 
 The formula installs read-only application assets in its Cellar `libexec` and
-uses `~/.edgecitadel` for node state, secrets, agentd files, Managed Agents, logs,
+uses `~/.edgecitadel` for node state, secrets, agentd files, Agent Packages, logs,
 SQLite, and JetStream data. Homebrew upgrades therefore do not replace runtime
 state. The first Agent or connector command automatically prepares the private
 agentd Python environment and loads a per-user LaunchAgent; users do not install
@@ -63,7 +63,7 @@ been published. Publishing is a separate, explicitly authorized operation.
 4. Put the formula in `zhonghaozhan/homebrew-edgecitadel` as
    `Formula/edgecitadel.rb`.
 5. Verify a clean install, upgrade with preserved `~/.edgecitadel`, Core create,
-   Edge join, Managed Agent and Native Agent Plugin installation, and uninstall.
+   Edge join, Agent Package and Plugin installation, and uninstall.
 
 After the tap exists, the intended public commands are:
 

@@ -10,7 +10,7 @@ do_update() {
       "${SOURCE_DIR}/" /opt/edgecitadel/
   run chown -R edgecitadel:edgecitadel /opt/edgecitadel
 
-  # Managed Agents are owned by agentd. Retire superseded direct units
+  # Agents installed from packages are owned by agentd. Retire superseded direct units
   # without deleting their state, logs, or dependency environments.
   for u in edgecitadel-shell edgecitadel-gemma edgecitadel-homeassistant edgecitadel-watchdog; do
     if systemctl is-active --quiet "$u" 2>/dev/null; then

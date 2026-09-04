@@ -18,13 +18,13 @@
 - `aggregator/` - Python FastAPI backend, NATS subscriptions, SQLite persistence
 - `frontend/` - React/Vite dashboard; the only UI source root
 - `e2e/` - Playwright end-to-end tests
-- `plugin-toolkit/` - agentd, Managed Agent runtime, schemas, SDK protocols, package validation, and tests
-- `plugins/` - Installable Managed Agent packages and developer examples
-- `native-plugins/` - Native Agent Plugins for Pi, Claude Code, and Codex
+- `agent-runtime/` - agentd, Agent Package runtime, schemas, SDK protocols, validation, and tests
+- `agent-packages/` - Installable Agent Packages and developer examples
+- `plugins/` - Native Plugins for Pi, Claude Code, and Codex
 - `edgecitadel/` - Python distribution entrypoint; packaged runtime assets are assembled at build time
 
 ## Commands
-- Newcomer setup: `./scripts/edgecitadel create`
+- Newcomer setup: `./scripts/edgecitadel install`
 - Enroll a host: `./scripts/edgecitadel invite --node-id <node-id> --host <reachable-host>` then `./scripts/edgecitadel join '<invitation>'`
 - Install a Managed Agent: `./scripts/edgecitadel agent install <package-path>`
 - Inspect the local service: `./scripts/edgecitadel service status`
@@ -40,7 +40,7 @@
 - Frontend build: `cd frontend && npm run build`
 - Frontend tests: `cd frontend && npm test`
 - Deterministic E2E tests: `cd e2e && npm test`; external Managed Agent suites require a prepared stack and run with `APP_URL=... AGG_URL=... npm run test:external-plugins`
-- Plugin checks (smoke): `cd plugin-toolkit && python -m pytest -q && python -m edgecitadel_supervisor validate ../plugins/examples/placeholder`; see `plugin-toolkit/README.md` for the full contributor gate.
+- Agent Package checks (smoke): `cd agent-runtime && python -m pytest -q && python -m edgecitadel_supervisor validate ../agent-packages/examples/echo`; see `agent-runtime/README.md` for the full contributor gate.
 
 ## Working rules
 - Inspect any nested `AGENTS.md` before editing in a subdirectory.

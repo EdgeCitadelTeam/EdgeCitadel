@@ -10,7 +10,7 @@ Architecture: [`../docs/architecture/managed-agents-and-native-plugins.md`](../d
 - `lib/checks.yaml` — every `--check` check lives here.
 
 This production-host installer owns the Core stack and Ollama dependency. It
-does not start Managed Agents directly. Install them through `edgecitadel agent
+does not start Agents from packages directly. Install them through `edgecitadel agent
 install` on an enrolled Edge so agentd is their sole lifecycle owner. During
 update, obsolete direct Shell, Gemma, Home Assistant, and Watchdog units are
 stopped and disabled without deleting state or logs.

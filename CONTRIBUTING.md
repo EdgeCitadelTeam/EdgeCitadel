@@ -33,8 +33,8 @@ those shared sources.
 
 ```bash
 # Python gates are defined in .agents/skills/commit-check/SKILL.md.
-uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ e2e/fixture_agent/
-uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ plugin-toolkit/ plugins/ tests/ deploy/tests/ e2e/fixture_agent/ --check
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ agent-runtime/ agent-packages/ tests/ deploy/tests/ e2e/fixture_agent/
+uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ agent-runtime/ agent-packages/ tests/ deploy/tests/ e2e/fixture_agent/ --check
 cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m pytest -q
 cd .. && uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest -q tests scripts/tests deploy/tests schemas/tests
 
@@ -93,8 +93,9 @@ nats/            NATS server config
 nginx/           Reverse proxy config
 e2e/             Playwright tests
 scripts/         Utility scripts
-plugin-toolkit/  agentd, Managed Agent runtime, SDK, validation, and tests
-plugins/         Installable Managed Agent packages and examples
+agent-runtime/   agentd, Agent Package runtime, SDK, validation, and tests
+agent-packages/  Installable Agent Packages and examples
+plugins/         Native host Plugins for Codex, Claude Code, and Pi
 .agents/         Canonical shared verification skills
 .claude/         Claude-specific settings, commands, and shared-skill links
 ```

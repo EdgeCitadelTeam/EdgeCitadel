@@ -14,9 +14,165 @@ from pathlib import Path
 import pytest
 
 from scripts import edgecitadel_cli as cli
+from scripts import plugin_installation as plugin_api
 
 
 REPO_ROOT = Path(__file__).parents[2]
+
+
+def test_parser_exposes_unified_and_explicit_plugin_commands():
+    parser = cli._build_parser()
+
+    unified = parser.parse_args(
+        ["install", "--create", "--plugin", "codex", "--yes", "--dry-run"]
+    )
+    explicit = parser.parse_args(
+        ["plugin", "install", "claude-code", "--scope", "project", "--yes"]
+    )
+
+    assert unified.func is cli.command_install
+    assert unified.plugins == ["codex"]
+    assert explicit.func is cli.command_native_plugin
+    assert explicit.scope == "project"
+
+
+def test_structured_step_output_has_stable_schema(capsys):
+    step = cli._installation_step(
+        "distribution", "edgecitadel", "succeeded", False, {"path": "/safe"}
+    )
+
+    cli._emit_steps("install", [step], True)
+
+    document = json.loads(capsys.readouterr().out)
+    assert set(document) == {"schema_version", "command", "ok", "changed", "steps"}
+    assert set(document["steps"][0]) == {
+        "step",
+        "target",
+        "state",
+        "changed",
+        "evidence",
+        "recovery_command",
+    }
+
+
+def test_main_maps_valid_runtime_failure_to_operational_exit_code(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "command_install",
+        lambda _args: (_ for _ in ()).throw(cli.OperationalError("not ready")),
+    )
+    parser = cli._build_parser()
+    monkeypatch.setattr(cli, "_build_parser", lambda: parser)
+
+    assert cli.main(["install", "--create", "--plugin", "codex", "--yes"]) == 1
+    assert "not ready" in capsys.readouterr().err
+
+
+def test_json_runtime_error_is_one_structured_document(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "command_install",
+        lambda _args: (_ for _ in ()).throw(cli.UserError("choose a host")),
+    )
+    parser = cli._build_parser()
+    monkeypatch.setattr(cli, "_build_parser", lambda: parser)
+
+    assert (
+        cli.main(
+            [
+                "install",
+                "--create",
+                "--plugin",
+                "codex",
+                "--yes",
+                "--json",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert document["ok"] is False
+    assert document["steps"][0]["evidence"] == {"error": "choose a host"}
+    assert captured.err == ""
+
+
+def test_unified_install_skips_missing_host_and_continues(
+    tmp_path, monkeypatch, capsys
+):
+    class FakeDriver:
+        def __init__(self, host):
+            self.host = host
+
+        def status(self, scope):
+            if self.host == "pi":
+                return plugin_api.PluginStatus(
+                    "pi", "absent", False, detail="pi executable not found"
+                )
+            return plugin_api.PluginStatus(
+                self.host, "absent", True, version="1.0.0", scope=scope
+            )
+
+        def plan(self, action, scope):
+            return plugin_api.PluginPlan(
+                self.host,
+                action,
+                scope,
+                "/plugins",
+                "/bin/host",
+                [["/bin/host", "install"]],
+            )
+
+        def apply(self, action, scope):
+            return plugin_api.PluginResult(
+                self.host,
+                "installed",
+                True,
+                plugin_api.PluginStatus(
+                    self.host,
+                    "installed",
+                    True,
+                    version="1.0.0",
+                    scope=scope,
+                    source="/plugins",
+                ),
+            )
+
+    monkeypatch.setattr(cli, "INSTALL_ROOT", REPO_ROOT)
+    monkeypatch.setattr(
+        cli,
+        "_load_node",
+        lambda _state: {"mode": "edge", "agent_id": "edge-one"},
+    )
+    monkeypatch.setattr(cli, "_agentd_process_detail", lambda _state: (True, "ok"))
+    monkeypatch.setattr(
+        cli, "_start_agentd", lambda _state: {"running": True, "detail": "ok"}
+    )
+    monkeypatch.setattr(cli, "_agentd_rpc", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        cli,
+        "driver_for",
+        lambda host, *_args, **_kwargs: FakeDriver(host),
+    )
+    args = Namespace(
+        create=False,
+        invitation=None,
+        plugins=["pi", "codex"],
+        scope="user",
+        host="localhost",
+        yes=True,
+        dry_run=False,
+        json=True,
+        state_dir=str(tmp_path),
+    )
+
+    assert cli.command_install(args) == 0
+    states = {
+        step["target"]: step["state"]
+        for step in json.loads(capsys.readouterr().out)["steps"]
+        if step["step"] == "plugin"
+    }
+    assert states == {"pi": "skipped", "codex": "installed"}
 
 
 def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeypatch):
@@ -70,7 +226,7 @@ def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
 
 def test_pip_bundled_plugin_staging_excludes_installer_bytecode(tmp_path, monkeypatch):
     install_root = tmp_path / "share" / "edgecitadel"
-    source = install_root / "plugins" / "examples" / "echo"
+    source = install_root / "agent-packages" / "examples" / "echo"
     (source / "runtime" / "__pycache__").mkdir(parents=True)
     (source / "plugin.yaml").write_text("package: {}\n")
     (source / "runtime" / "__main__.py").write_text("pass\n")
@@ -1024,10 +1180,13 @@ def test_plugin_python_builds_and_reuses_requirements_scoped_runtime(
     assert (first.parents[1] / ".edgecitadel-runtime").stat().st_mode & 0o777 == 0o600
 
     upgraded_root = tmp_path / "upgraded-cellar"
+    upgraded_runtime = upgraded_root / "agent-runtime"
+    (upgraded_runtime / "src" / "edgecitadel_agentd").mkdir(parents=True)
+    (upgraded_runtime / "pyproject.toml").write_text("")
     monkeypatch.setattr(cli, "INSTALL_ROOT", upgraded_root)
     assert cli._plugin_python(tmp_path, "edgecitadel.gemma", record) == first
     assert len(commands) == 4
-    assert str(upgraded_root / "plugin-toolkit") in commands[3]
+    assert str(upgraded_runtime) in commands[3]
 
 
 def test_plugin_python_rejects_missing_declared_requirements(tmp_path):
@@ -1045,10 +1204,12 @@ def test_plugin_python_rejects_missing_declared_requirements(tmp_path):
 
 def test_plugin_install_resolves_bundled_plugin_before_example(tmp_path, monkeypatch):
     install_root = tmp_path / "install"
-    bundled = install_root / "plugins" / "gemma"
-    example = install_root / "plugins" / "examples" / "gemma"
+    bundled = install_root / "agent-packages" / "gemma"
+    example = install_root / "agent-packages" / "examples" / "gemma"
     bundled.mkdir(parents=True)
     example.mkdir(parents=True)
+    (bundled / "plugin.yaml").write_text("kind: ManagedAgent\n")
+    (example / "plugin.yaml").write_text("kind: ManagedAgent\n")
     monkeypatch.setattr(cli, "INSTALL_ROOT", install_root)
     monkeypatch.setattr(cli, "_load_node", lambda state_dir: {})
     observed = {}

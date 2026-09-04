@@ -8,8 +8,8 @@ class Edgecitadel < Formula
 
   def install
     libexec.install ".env.example", "docker-compose.yml"
-    libexec.install "aggregator", "frontend", "nats", "nginx", "native-plugins"
-    libexec.install "plugin-toolkit", "plugins", "schemas", "scripts"
+    libexec.install "aggregator", "frontend", "nats", "nginx"
+    libexec.install "agent-packages", "agent-runtime", "plugins", "schemas", "scripts"
 
     python = formula_opt_bin("python@3.12")/"python3.12"
     (bin/"edgecitadel").write <<~SH

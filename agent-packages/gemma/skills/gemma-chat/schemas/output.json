@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "body": {"type": "string"},
+    "model": {"type": "string"},
+    "skill_id": {"const": "reasoning.chat"}
+  },
+  "required": ["body", "model", "skill_id"],
+  "additionalProperties": false
+}

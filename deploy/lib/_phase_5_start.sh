@@ -38,7 +38,7 @@ phase_5_start() {
     done
   fi
 
-  log_info "Managed Agents are installed separately with edgecitadel agent install"
+  log_info "Agent Packages are installed separately with edgecitadel agent install"
 
   log_info "Phase 5: OK"
 }

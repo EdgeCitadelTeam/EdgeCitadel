@@ -1,7 +1,7 @@
 # EdgeCitadel
 
 EdgeCitadel connects AI Agents across a Core and enrolled Edge hosts. It runs
-complete Managed Agents such as Gemma and Home Assistant adapters, and connects
+complete Agents from packages such as Gemma and Home Assistant adapters, and connects
 active Pi, Claude Code, and Codex sessions through their native plugin systems.
 
 ## Install
@@ -14,7 +14,15 @@ pip install edgecitadel
 brew install edgecitadel
 ```
 
-Verify it with `edgecitadel --version`.
+Then run the guided, idempotent installer from the project where host-local
+Plugins should be configured:
+
+```bash
+edgecitadel install
+```
+
+For automation, make every choice explicit, for example
+`edgecitadel install --create --plugin codex --scope user --yes`.
 
 ## Create a Core
 
@@ -54,9 +62,10 @@ In both modes, Agent integrations talk to the host-local EdgeCitadel service.
 Only `nats_leaf` needs a local NATS server; it is the durable local message bus
 and maintains the outbound Leaf connection to Core.
 
-## Install a Managed Agent
+## Install an Agent Package
 
-Managed Agents are complete runtimes operated by EdgeCitadel:
+Agent Packages contain complete runtimes operated by EdgeCitadel. An installed
+runtime may declare one or more Agent identities:
 
 ```bash
 edgecitadel agent install gemma
@@ -66,32 +75,28 @@ edgecitadel agent status edgecitadel.gemma
 
 Home Assistant is installed the same way after its URL, token, and allowlist are
 configured. EdgeCitadel operates the adapter and never installs or removes Home
-Assistant itself. See the [Gemma guide](plugins/gemma/README.md) and
-[Home Assistant guide](plugins/homeassistant/README.md).
+Assistant itself. See the [Gemma guide](agent-packages/gemma/README.md) and
+[Home Assistant guide](agent-packages/homeassistant/README.md).
 
 ## Connect an existing Agent
 
-These plugins add Agent discovery, delegation, inbox, task-state, trace, and
+Plugins add Agent discovery, delegation, inbox, task-state, trace, and
 diagnostic tools to an active host session. They do not start the host in the
 background, and EdgeCitadel does not pass NATS credentials through the plugin
 protocol.
 
 ```bash
-# Pi
-pi install "$(edgecitadel connector path pi)"
-
-# Claude Code
-claude plugin marketplace add "$(edgecitadel connector path claude-code)"
-claude plugin install edgecitadel@edgecitadel
-
-# Codex
-codex plugin marketplace add "$(edgecitadel connector path codex)"
-codex plugin add edgecitadel@edgecitadel
+edgecitadel plugin install codex
+edgecitadel plugin install claude-code --scope project
+edgecitadel plugin install pi --scope user
+edgecitadel plugin list
 ```
 
-Start a new host session, then use its `edgecitadel_*` tools. Inspect active
-connections with `edgecitadel connector list` and `edgecitadel connector status
-<connector-id>`.
+Each command delegates to the host's native package manager and reports package
+installation separately from activation. Start a new host session, then use its
+`edgecitadel_*` tools. Inspect active sessions with `edgecitadel connector list`
+and `edgecitadel connector status <connector-id>`; use
+`edgecitadel plugin repair <host>` after a distribution path changes.
 
 ## Operate
 

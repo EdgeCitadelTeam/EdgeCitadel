@@ -1,0 +1,58 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "6f8fb7dd3fe9afa5eef128d306b72fe7365e7d9ebd68ac4ee2d6c3640df76208"
+    },
+    {
+      "path": "edgecitadel_gemma_plugin/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "edgecitadel_gemma_plugin/__main__.py",
+      "sha256": "f911ac1039e1867510c29dea90c5e6b2f87511a8bb8c895941ec0dc1ec66a7af"
+    },
+    {
+      "path": "edgecitadel_gemma_plugin/adapter.py",
+      "sha256": "f8592e0568a600ef60178cb63bab368c58319b3b53ec7265376b16e08481a0c4"
+    },
+    {
+      "path": "edgecitadel_gemma_plugin/config.yaml",
+      "sha256": "867ee26abcd1b6f9c63a29285868773aef9f8d75378044b79adc54d6950369c2"
+    },
+    {
+      "path": "plugin.yaml",
+      "sha256": "f47594fcf60a97a137f14082163c0700591576fe09bc1c9dc1e1e00b2151f576"
+    },
+    {
+      "path": "skills/gemma-chat/SKILL.md",
+      "sha256": "81c46974124cc2f3ba331b12a724958483cb48a46092e2336be97440e84244dc"
+    },
+    {
+      "path": "skills/gemma-chat/binding.yaml",
+      "sha256": "d1ebf366e672b304eba459f50c97d946206470ef970faf93ec5622e4d722d10b"
+    },
+    {
+      "path": "skills/gemma-chat/schemas/input.json",
+      "sha256": "5dde9b1d493c65d7cac4052e6c3a4c581109047a45c570596a527b83f491a11b"
+    },
+    {
+      "path": "skills/gemma-chat/schemas/output.json",
+      "sha256": "f6f58f1f5c16e576110d1f769df43aac2f29bcf6fad40a11a1744f2f09245e6e"
+    }
+  ],
+  "lockVersion": 1,
+  "package": {
+    "id": "edgecitadel.gemma",
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.4.0"
+  },
+  "skills": [
+    {
+      "contentSha256": "81c46974124cc2f3ba331b12a724958483cb48a46092e2336be97440e84244dc",
+      "name": "gemma-chat",
+      "skillId": "reasoning.chat",
+      "version": "0.3.0"
+    }
+  ]
+}

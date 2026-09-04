@@ -135,7 +135,7 @@ flowchart LR
 flowchart LR
     subgraph EdgeHost[Edge host]
         P1[Managed Agent]
-        P2[Native Agent Plugin]
+        P2[Host Plugin]
         D[agentd]
         L[Local NATS :4223]
         EJS[(Edge JetStream domain)]
@@ -217,7 +217,7 @@ long-lived Leaf credential.
 | `single-client` | Core client URL | fleet client credential | unset |
 | `nats_leaf` | `nats://127.0.0.1:4223` | Edge-local client credential | Edge-specific domain |
 
-Only agentd receives these mode-selected broker values. Managed Agents receive
+Only agentd receives these mode-selected broker values. Agents from packages receive
 the private agentd socket location plus their declared configuration; Native
 Agent Plugins receive a scoped connector token. Neither integration type gets
 NATS or Leaf credentials. Legacy installed-package records are read-only
@@ -316,7 +316,7 @@ local client, JetStream, and Leaf evidence overrides a stale lifecycle label.
   as another Leaf. Per-node NKey/JWT credentials plus accounts and subject ACLs
   are the required follow-up.
 - **Mitigated in new integrations:** agentd alone holds the node client token;
-  Native Agent Plugins use separate local connector credentials. Legacy direct
+  Host Plugins use separate local Connector credentials. Legacy direct
   NATS package launch support has been removed; old records are inspect/stop-only.
 
 ## 13. Failure analysis

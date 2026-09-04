@@ -19,15 +19,36 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 from urllib.parse import urlparse
 
 try:
     from . import nats_leaf
+    from .installation_assets import (
+        AssetResolutionError,
+        agent_packages_root,
+        agent_runtime_root,
+        plugin_source,
+        plugins_root,
+    )
+    from .plugin_installation import HOSTS, PluginResult, driver_for
 except ImportError:  # Executed by the installed scripts/edgecitadel wrapper.
     import nats_leaf  # type: ignore[no-redef]
+    from installation_assets import (  # type: ignore[no-redef]
+        AssetResolutionError,
+        agent_packages_root,
+        agent_runtime_root,
+        plugin_source,
+        plugins_root,
+    )
+    from plugin_installation import (  # type: ignore[no-redef]
+        HOSTS,
+        PluginResult,
+        driver_for,
+    )
 
 
 VERSION = "0.1.0"
@@ -85,6 +106,17 @@ def _command_name() -> str:
 
 class UserError(RuntimeError):
     """Expected failure that should be shown without a traceback."""
+
+
+class OperationalError(UserError):
+    """A valid operation failed because runtime state was unavailable."""
+
+
+def _asset_root(resolver: Any) -> Path:
+    try:
+        return resolver(INSTALL_ROOT)
+    except AssetResolutionError as error:
+        raise OperationalError(str(error)) from error
 
 
 def _state_dir(value: str | None = None) -> Path:
@@ -777,6 +809,54 @@ def command_doctor(args: argparse.Namespace) -> int:
                     online, detail = False, str(error)
                 add_check(f"agent_{agent_id}", f"agent {agent_id}", online, detail)
 
+    try:
+        plugins_root(INSTALL_ROOT)
+        add_check(
+            "plugin_assets",
+            "Plugin distribution assets",
+            True,
+            "available",
+        )
+        for host in HOSTS:
+            plugin_status = driver_for(
+                host, INSTALL_ROOT, project_root=Path.cwd()
+            ).status("user")
+            optional_absence = plugin_status.state == "absent"
+            add_check(
+                f"plugin_{host}",
+                f"Plugin {host}",
+                plugin_status.state == "installed" or optional_absence,
+                (
+                    "not installed (optional)"
+                    if optional_absence
+                    else plugin_status.state
+                ),
+            )
+    except AssetResolutionError as error:
+        add_check("plugin_assets", "Plugin distribution assets", False, str(error))
+
+    if node:
+        agentd_running, _ = _agentd_process_detail(state_dir)
+        if agentd_running:
+            connector_inventory = _agentd_rpc(state_dir, "connector.list")
+            if not isinstance(connector_inventory, list):
+                connector_inventory = []
+            for connector in connector_inventory:
+                if not isinstance(connector, dict):
+                    continue
+                host_type = connector.get("host_type")
+                if host_type not in HOSTS:
+                    continue
+                active = bool(
+                    connector.get("session_active") and not connector.get("revoked")
+                )
+                add_check(
+                    f"connector_{connector.get('connector_id', host_type)}",
+                    f"Connector {connector.get('connector_id', host_type)}",
+                    active,
+                    "active" if active else "inactive",
+                )
+
     all_ok = bool(checks and all(item["ok"] for item in checks))
     if all_ok:
         health = "healthy"
@@ -888,7 +968,7 @@ def _toolkit_python(state_dir: Path) -> Path:
             "--quiet",
             "--disable-pip-version-check",
             "-e",
-            str(INSTALL_ROOT / "plugin-toolkit"),
+            str(_asset_root(agent_runtime_root)),
         ]
     )
     _secure_write(marker, expected)
@@ -1353,12 +1433,15 @@ def _connector_token(state_dir: Path, connector_id: str) -> str:
 
 def command_connector(args: argparse.Namespace) -> int:
     if args.connector_action == "path":
-        root = INSTALL_ROOT / "native-plugins"
-        path = root / "pi-edgecitadel" if args.host_type == "pi" else root
-        if not path.is_dir():
-            raise UserError(
-                "Native Agent Plugin assets are missing; reinstall EdgeCitadel"
-            )
+        try:
+            path = plugin_source(INSTALL_ROOT, args.host_type)
+        except AssetResolutionError as error:
+            raise UserError(str(error)) from error
+        print(
+            "warning: 'connector path' is deprecated; use "
+            f"'{_command_name()} plugin install {args.host_type}'",
+            file=sys.stderr,
+        )
         print(path)
         return 0
     state_dir = _state_dir(args.state_dir)
@@ -1396,7 +1479,7 @@ def command_connector(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(connectors, indent=2))
         elif not connectors:
-            print("No Native Agent Plugins registered.")
+            print("No Plugin Connectors registered.")
         else:
             for connector in connectors:
                 state = "revoked" if connector["revoked"] else "registered"
@@ -1585,7 +1668,7 @@ def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> P
                 "--quiet",
                 "--disable-pip-version-check",
                 "-e",
-                str(INSTALL_ROOT / "plugin-toolkit"),
+                str(_asset_root(agent_runtime_root)),
                 "-r",
                 str(requirements_path),
             ]
@@ -1600,7 +1683,7 @@ def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> P
 
 def _validate_plugin(source: Path, state_dir: Path) -> dict[str, Any]:
     if not source.is_dir():
-        raise UserError(f"Managed Agent package directory does not exist: {source}")
+        raise UserError(f"Agent Package directory does not exist: {source}")
     python = _toolkit_python(state_dir)
     command = [str(python), "-m", "edgecitadel_supervisor", "validate", str(source)]
     try:
@@ -2090,8 +2173,8 @@ def _assert_agent_ids_available(
 
 @contextmanager
 def _installable_plugin_source(source: Path, state_dir: Path) -> Iterator[Path]:
-    """Stage pip-bundled Managed Agents without installer-generated bytecode."""
-    bundled_root = (INSTALL_ROOT / "plugins").resolve()
+    """Stage pip-bundled Agent Packages without installer-generated bytecode."""
+    bundled_root = _asset_root(agent_packages_root).resolve()
     if not IS_PIP or not source.is_relative_to(bundled_root):
         yield source
         return
@@ -2276,8 +2359,9 @@ def command_plugin_install(args: argparse.Namespace) -> int:
     node = _load_node(state_dir)
     _prepare_managed_agent_service(args, state_dir)
     requested_source = Path(args.source).expanduser()
-    bundled_source = INSTALL_ROOT / "plugins" / args.source
-    example_source = INSTALL_ROOT / "plugins" / "examples" / args.source
+    packages = _asset_root(agent_packages_root)
+    bundled_source = packages / args.source
+    example_source = packages / "examples" / args.source
     source = next(
         (
             candidate.resolve()
@@ -2297,7 +2381,7 @@ def command_plugin_list(args: argparse.Namespace) -> int:
     plugins = _load_plugins(state_dir)["managed_agents"]
     if not plugins:
         print(
-            f"No Managed Agents installed. Use: {_command_name()} agent install <path-or-name>"
+            f"No Agent Packages installed. Use: {_command_name()} agent install <path-or-name>"
         )
         return 0
     managed_status = {
@@ -2436,6 +2520,416 @@ def command_plugin_remove(args: argparse.Namespace) -> int:
     return 0
 
 
+def _plugin_result_step(result: PluginResult) -> dict[str, Any]:
+    return {
+        "step": "plugin",
+        "target": result.host,
+        "state": result.state,
+        "changed": result.changed,
+        "evidence": {
+            "status": result.status.to_dict(),
+            "commands": [
+                {
+                    "argv": item.argv,
+                    "returncode": item.returncode,
+                    "stdout": item.stdout,
+                    "stderr": item.stderr,
+                    "timed_out": item.timed_out,
+                }
+                for item in result.evidence
+            ],
+        },
+        "recovery_command": result.recovery_command,
+    }
+
+
+def _status_step(status: Any) -> dict[str, Any]:
+    return {
+        "step": "plugin",
+        "target": status.host,
+        "state": "failed" if status.state == "unsupported" else status.state,
+        "changed": False,
+        "evidence": {"status": status.to_dict()},
+        "recovery_command": None,
+    }
+
+
+def _emit_steps(command: str, steps: list[dict[str, Any]], as_json: bool) -> None:
+    successful = {
+        "absent",
+        "available",
+        "installed",
+        "unchanged",
+        "planned",
+        "skipped",
+        "succeeded",
+    }
+    ok = all(step["state"] in successful for step in steps)
+    document = {
+        "schema_version": 1,
+        "command": command,
+        "ok": ok,
+        "changed": any(step["changed"] for step in steps),
+        "steps": steps,
+    }
+    if as_json:
+        print(json.dumps(document, indent=2))
+        return
+    for step in steps:
+        line = f"{step['step']} {step['target']}: {step['state']}"
+        status = step["evidence"].get("status")
+        if isinstance(status, dict) and status.get("detail"):
+            line += f" ({status['detail']})"
+        print(line)
+        if step["recovery_command"]:
+            print(f"  recovery: {step['recovery_command']}")
+
+
+def _confirm_native_plans(plans: list[Any], assume_yes: bool) -> None:
+    if not plans:
+        return
+    print("Plugin installation plan:", file=sys.stderr)
+    for plan in plans:
+        print(
+            f"- {plan.host}: action={plan.action} scope={plan.scope} "
+            f"source={plan.source}",
+            file=sys.stderr,
+        )
+        if plan.target_file:
+            print(f"  native settings target: {plan.target_file}", file=sys.stderr)
+        print(
+            f"  grants host capabilities: {', '.join(plan.capabilities)}",
+            file=sys.stderr,
+        )
+        for operation in plan.operations:
+            print(f"  command: {' '.join(operation)}", file=sys.stderr)
+    if assume_yes:
+        return
+    if not sys.stdin.isatty():
+        raise UserError("Plugin mutation requires a TTY confirmation or --yes")
+    if input("Continue? [y/N] ").strip().lower() not in {"y", "yes"}:
+        raise UserError("Plugin installation was not approved")
+
+
+def command_native_plugin(args: argparse.Namespace) -> int:
+    hosts = list(HOSTS) if args.plugin_action == "list" else [args.host]
+    steps: list[dict[str, Any]] = []
+    if args.plugin_action in {"list", "status"}:
+        for host in hosts:
+            driver = driver_for(host, INSTALL_ROOT, project_root=Path.cwd())
+            steps.append(_status_step(driver.status(args.scope)))
+        _emit_steps(f"plugin {args.plugin_action}", steps, args.json)
+        if any(step["evidence"]["status"]["state"] == "unsupported" for step in steps):
+            return 2
+        return 1 if any(step["state"] == "unknown" for step in steps) else 0
+
+    driver = driver_for(args.host, INSTALL_ROOT, project_root=Path.cwd())
+    before = driver.status(args.scope)
+    if before.state in {"unknown", "unsupported"}:
+        result = PluginResult(
+            args.host,
+            "failed",
+            False,
+            before,
+            recovery_command=(
+                f"{_command_name()} plugin status {args.host} --scope {args.scope}"
+            ),
+        )
+    elif args.plugin_action == "install" and before.state == "stale":
+        result = PluginResult(
+            args.host,
+            "failed",
+            False,
+            before,
+            recovery_command=(
+                f"{_command_name()} plugin repair {args.host} --scope {args.scope}"
+            ),
+        )
+    elif (
+        args.plugin_action == "install"
+        and before.state == "installed"
+        or args.plugin_action == "remove"
+        and before.state == "absent"
+    ):
+        result = driver.apply(args.plugin_action, args.scope)
+    else:
+        try:
+            plan = driver.plan(args.plugin_action, args.scope)
+        except (AssetResolutionError, ValueError) as error:
+            raise UserError(str(error)) from error
+        _confirm_native_plans([plan], args.yes or args.dry_run)
+        if args.dry_run:
+            result = PluginResult(args.host, "planned", False, before)
+        else:
+            result = driver.apply(args.plugin_action, args.scope)
+    steps.append(_plugin_result_step(result))
+    _emit_steps(f"plugin {args.plugin_action}", steps, args.json)
+    if result.exit_code == 130:
+        return 130
+    if result.status.state == "unsupported":
+        return 2
+    return 0 if result.ok else 1
+
+
+def _installation_step(
+    step: str,
+    target: str,
+    state: str,
+    changed: bool,
+    evidence: dict[str, Any],
+    recovery: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "step": step,
+        "target": target,
+        "state": state,
+        "changed": changed,
+        "evidence": evidence,
+        "recovery_command": recovery,
+    }
+
+
+def _interactive_install_choices(args: argparse.Namespace) -> None:
+    if args.create or args.invitation:
+        return
+    print("This host is not enrolled.", file=sys.stderr)
+    choice = input("Create a new Core or join an existing one? [create/join] ").strip()
+    if choice == "create":
+        args.create = True
+    elif choice == "join":
+        args.invitation = input("Invitation: ").strip()
+    else:
+        raise UserError("choose 'create' or 'join'")
+
+
+def command_install(args: argparse.Namespace) -> int:
+    steps: list[dict[str, Any]] = []
+    try:
+        assets = {
+            "agent_packages": str(agent_packages_root(INSTALL_ROOT)),
+            "plugins": str(plugins_root(INSTALL_ROOT)),
+            "agent_runtime": str(agent_runtime_root(INSTALL_ROOT)),
+        }
+    except AssetResolutionError as error:
+        raise OperationalError(str(error)) from error
+    steps.append(
+        _installation_step("distribution", "edgecitadel", "succeeded", False, assets)
+    )
+
+    state_dir = _state_dir(args.state_dir)
+    try:
+        node = _load_node(state_dir)
+        steps.append(
+            _installation_step(
+                "enrollment",
+                str(node.get("agent_id", "host")),
+                "unchanged",
+                False,
+                {"mode": node["mode"]},
+            )
+        )
+    except UserError:
+        if not args.create and not args.invitation:
+            if args.json or not sys.stdin.isatty():
+                raise UserError(
+                    "an unenrolled host requires --create or --join <invitation>"
+                )
+            _interactive_install_choices(args)
+        if args.dry_run:
+            mode = "core" if args.create else "edge"
+            steps.append(
+                _installation_step("enrollment", mode, "planned", False, {"mode": mode})
+            )
+            node = None
+        else:
+            captured = StringIO()
+            with redirect_stdout(captured):
+                if args.create:
+                    command_create(
+                        argparse.Namespace(
+                            host=args.host,
+                            state_dir=args.state_dir,
+                            no_start=False,
+                            timeout=120,
+                        )
+                    )
+                else:
+                    command_join(
+                        argparse.Namespace(
+                            invitation=args.invitation,
+                            state_dir=args.state_dir,
+                            messaging_mode="single-client",
+                        )
+                    )
+            node = _load_node(state_dir)
+            steps.append(
+                _installation_step(
+                    "enrollment",
+                    str(node["agent_id"]),
+                    "succeeded",
+                    True,
+                    {"mode": node["mode"], "output": captured.getvalue().strip()},
+                )
+            )
+
+    if args.dry_run:
+        steps.append(
+            _installation_step(
+                "service", "agentd", "planned", False, {"action": "start"}
+            )
+        )
+    else:
+        running, _ = _agentd_process_detail(state_dir)
+        try:
+            observation = _start_agentd(state_dir)
+        except UserError as error:
+            raise OperationalError(str(error)) from error
+        steps.append(
+            _installation_step(
+                "service",
+                "agentd",
+                "unchanged" if running else "succeeded",
+                not running,
+                observation,
+                f"{_command_name()} service status",
+            )
+        )
+
+    selected = list(dict.fromkeys(args.plugins or []))
+    if not selected and not args.json and sys.stdin.isatty():
+        available = [
+            host
+            for host in HOSTS
+            if driver_for(host, INSTALL_ROOT, project_root=Path.cwd()).detect().state
+            == "available"
+        ]
+        print(
+            f"Available Plugin hosts: {', '.join(available) or 'none'}", file=sys.stderr
+        )
+        raw = input("Plugins to install (comma-separated, blank for none): ").strip()
+        selected = [item.strip() for item in raw.split(",") if item.strip()]
+    elif not selected and (args.yes or args.json or not sys.stdin.isatty()):
+        raise UserError("non-interactive installation requires at least one --plugin")
+    invalid = sorted(set(selected) - set(HOSTS))
+    if invalid:
+        raise UserError(f"unsupported Plugin host: {', '.join(invalid)}")
+
+    planned: list[Any] = []
+    drivers: list[Any] = []
+    for host in selected:
+        driver = driver_for(host, INSTALL_ROOT, project_root=Path.cwd())
+        before = driver.status(args.scope)
+        if before.state == "absent" and not before.available:
+            steps.append(
+                _plugin_result_step(
+                    PluginResult(
+                        host,
+                        "skipped",
+                        False,
+                        before,
+                    )
+                )
+            )
+            continue
+        if before.state in {"unknown", "unsupported"}:
+            steps.append(
+                _plugin_result_step(
+                    PluginResult(
+                        host,
+                        "failed",
+                        False,
+                        before,
+                        recovery_command=(
+                            f"{_command_name()} plugin status {host} "
+                            f"--scope {args.scope}"
+                        ),
+                    )
+                )
+            )
+            break
+        if before.state == "installed":
+            steps.append(
+                _plugin_result_step(PluginResult(host, "unchanged", False, before))
+            )
+            continue
+        if before.state == "stale":
+            steps.append(
+                _plugin_result_step(
+                    PluginResult(
+                        host,
+                        "failed",
+                        False,
+                        before,
+                        recovery_command=(
+                            f"{_command_name()} plugin repair {host} "
+                            f"--scope {args.scope}"
+                        ),
+                    )
+                )
+            )
+            break
+        try:
+            planned.append(driver.plan("install", args.scope))
+        except (AssetResolutionError, ValueError) as error:
+            raise UserError(str(error)) from error
+        drivers.append(driver)
+    if planned:
+        _confirm_native_plans(planned, args.yes or args.dry_run)
+    if args.dry_run:
+        for plan, driver in zip(planned, drivers, strict=True):
+            steps.append(
+                _plugin_result_step(
+                    PluginResult(plan.host, "planned", False, driver.status(args.scope))
+                )
+            )
+    else:
+        for driver in drivers:
+            result = driver.apply("install", args.scope)
+            steps.append(_plugin_result_step(result))
+            if not result.ok:
+                break
+
+    if not args.dry_run and node is not None:
+        connectors = _agentd_rpc(state_dir, "connector.list")
+        for host in selected:
+            connector = next(
+                (
+                    item
+                    for item in connectors
+                    if item.get("host_type") == host and not item.get("revoked")
+                ),
+                None,
+            )
+            active = bool(connector and connector.get("session_active"))
+            steps.append(
+                _installation_step(
+                    "connector",
+                    host,
+                    "succeeded" if active else "skipped",
+                    False,
+                    {
+                        "session": "active" if active else "inactive",
+                        "detail": (
+                            "Connector is active"
+                            if active
+                            else "start a new host session to activate the installed Plugin"
+                        ),
+                    },
+                    None if active else f"{_command_name()} connector list",
+                )
+            )
+
+    _emit_steps("install", steps, args.json)
+    unsupported = any(
+        step["evidence"].get("status", {}).get("state") == "unsupported"
+        for step in steps
+    )
+    if unsupported:
+        return 2
+    failed = any(step["state"] in {"failed", "unknown", "degraded"} for step in steps)
+    return 1 if failed else 0
+
+
 def command_messaging(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     node = _load_node(state_dir)
@@ -2492,6 +2986,21 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"edgecitadel {VERSION}")
     parser.add_argument("--verbose", action="store_true", help=argparse.SUPPRESS)
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    install = subparsers.add_parser(
+        "install", help="Enroll this host and install native host Plugins"
+    )
+    enrollment = install.add_mutually_exclusive_group()
+    enrollment.add_argument("--create", action="store_true")
+    enrollment.add_argument("--join", dest="invitation")
+    install.add_argument("--plugin", dest="plugins", action="append", choices=HOSTS)
+    install.add_argument("--scope", choices=("user", "project"), default="user")
+    install.add_argument("--host", default="localhost", help="Core hostname")
+    install.add_argument("--yes", action="store_true")
+    install.add_argument("--dry-run", action="store_true")
+    install.add_argument("--json", action="store_true")
+    install.add_argument("--state-dir", help=argparse.SUPPRESS)
+    install.set_defaults(func=command_install)
 
     create = subparsers.add_parser("create", help="Create or reconcile the first node")
     create.add_argument(
@@ -2572,7 +3081,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     agent_install.add_argument("--state-dir", help=argparse.SUPPRESS)
     agent_install.set_defaults(func=command_plugin_install)
-    agent_list = agent_commands.add_parser("list", help="List Managed Agents")
+    agent_list = agent_commands.add_parser("list", help="List installed Agent Packages")
     agent_list.add_argument("--state-dir", help=argparse.SUPPRESS)
     agent_list.set_defaults(func=command_plugin_list)
     agent_status = agent_commands.add_parser(
@@ -2605,19 +3114,55 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_remove.add_argument("--state-dir", help=argparse.SUPPRESS)
     agent_remove.set_defaults(func=command_plugin_remove)
 
+    native_plugin = subparsers.add_parser(
+        "plugin", help="Install and inspect native host Plugins"
+    )
+    native_plugin_commands = native_plugin.add_subparsers(
+        dest="plugin_action", required=True
+    )
+    native_plugin_list = native_plugin_commands.add_parser(
+        "list", help="List native host Plugin installation state"
+    )
+    native_plugin_list.add_argument(
+        "--scope", choices=("user", "project"), default="user"
+    )
+    native_plugin_list.add_argument("--json", action="store_true")
+    native_plugin_list.set_defaults(func=command_native_plugin, host=None)
+    native_plugin_status = native_plugin_commands.add_parser(
+        "status", help="Show one native host Plugin installation"
+    )
+    native_plugin_status.add_argument("host", choices=HOSTS)
+    native_plugin_status.add_argument(
+        "--scope", choices=("user", "project"), default="user"
+    )
+    native_plugin_status.add_argument("--json", action="store_true")
+    native_plugin_status.set_defaults(func=command_native_plugin)
+    for action, help_text in (
+        ("install", "Install through the host's native package manager"),
+        ("repair", "Re-register the current packaged Plugin source"),
+        ("remove", "Remove the Plugin through its native package manager"),
+    ):
+        action_parser = native_plugin_commands.add_parser(action, help=help_text)
+        action_parser.add_argument("host", choices=HOSTS)
+        action_parser.add_argument(
+            "--scope", choices=("user", "project"), default="user"
+        )
+        action_parser.add_argument("--yes", action="store_true")
+        action_parser.add_argument("--dry-run", action="store_true")
+        action_parser.add_argument("--json", action="store_true")
+        action_parser.set_defaults(func=command_native_plugin)
+
     connector = subparsers.add_parser(
-        "connector", help="Register and inspect Native Agent Plugins"
+        "connector", help="Register and inspect live Plugin sessions"
     )
     connector_commands = connector.add_subparsers(
         dest="connector_action", required=True
     )
-    connector_path = connector_commands.add_parser(
-        "path", help="Print the packaged native-plugin path for a host"
-    )
+    connector_path = connector_commands.add_parser("path", help=argparse.SUPPRESS)
     connector_path.add_argument("host_type", choices=("pi", "claude-code", "codex"))
     connector_path.set_defaults(func=command_connector)
     connector_register = connector_commands.add_parser(
-        "register", help="Register a Native Agent Plugin"
+        "register", help="Register a Plugin Connector session"
     )
     connector_register.add_argument("connector_id")
     connector_register.add_argument(
@@ -2627,20 +3172,20 @@ def _build_parser() -> argparse.ArgumentParser:
     connector_register.add_argument("--state-dir", help=argparse.SUPPRESS)
     connector_register.set_defaults(func=command_connector)
     connector_list = connector_commands.add_parser(
-        "list", help="List Native Agent Plugins"
+        "list", help="List Plugin Connector sessions"
     )
     connector_list.add_argument("--json", action="store_true")
     connector_list.add_argument("--state-dir", help=argparse.SUPPRESS)
     connector_list.set_defaults(func=command_connector)
     connector_status = connector_commands.add_parser(
-        "status", help="Show one Native Agent Plugin registration and session"
+        "status", help="Show one Plugin Connector registration and session"
     )
     connector_status.add_argument("connector_id")
     connector_status.add_argument("--json", action="store_true")
     connector_status.add_argument("--state-dir", help=argparse.SUPPRESS)
     connector_status.set_defaults(func=command_connector)
     connector_revoke = connector_commands.add_parser(
-        "revoke", help="Revoke a Native Agent Plugin"
+        "revoke", help="Revoke a Plugin Connector credential"
     )
     connector_revoke.add_argument("connector_id")
     connector_revoke.add_argument("--state-dir", help=argparse.SUPPRESS)
@@ -2686,7 +3231,7 @@ def _build_parser() -> argparse.ArgumentParser:
     trace_purge.set_defaults(func=command_trace)
 
     native_mcp = subparsers.add_parser(
-        "native-mcp", help="Run the MCP bridge for a Native Agent Plugin"
+        "native-mcp", help="Run the MCP bridge for a host Plugin"
     )
     native_mcp.add_argument(
         "--host-type", choices=("pi", "claude-code", "codex"), required=True
@@ -2706,19 +3251,52 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _emit_cli_error(args: argparse.Namespace, message: str) -> None:
+    if getattr(args, "json", False):
+        command = str(getattr(args, "command", "edgecitadel"))
+        action = getattr(args, "plugin_action", None)
+        if action:
+            command += f" {action}"
+        target = getattr(args, "host", None) or "edgecitadel"
+        _emit_steps(
+            command,
+            [
+                _installation_step(
+                    "plugin" if args.command == "plugin" else "distribution",
+                    str(target),
+                    "failed",
+                    False,
+                    {"error": message},
+                )
+            ],
+            True,
+        )
+    else:
+        print(f"error: {message}", file=sys.stderr)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except OperationalError as error:
+        _emit_cli_error(args, str(error))
+        return 1
     except UserError as error:
-        print(f"error: {error}", file=sys.stderr)
+        _emit_cli_error(args, str(error))
         return 2
+    except KeyboardInterrupt:
+        _emit_cli_error(args, "operation interrupted")
+        return 130
     except Exception as error:  # pragma: no cover - defensive CLI boundary
         if getattr(args, "verbose", False):
             raise
-        print(f"error: unexpected failure: {type(error).__name__}", file=sys.stderr)
-        print("rerun with --verbose for technical detail", file=sys.stderr)
+        _emit_cli_error(
+            args,
+            f"unexpected failure: {type(error).__name__}; "
+            "rerun with --verbose for technical detail",
+        )
         return 3
 
 

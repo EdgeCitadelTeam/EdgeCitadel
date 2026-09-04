@@ -2,7 +2,8 @@
 
 The `edgecitadel` command installs on both Core and Edge hosts. A Core provides
 enrollment, shared NATS/JetStream, the API, and dashboard. An Edge runs the
-host-local EdgeCitadel service and any Managed Agents or Native Agent Plugins.
+host-local EdgeCitadel service, Agents installed from Agent Packages, and
+Connector sessions opened by Plugins.
 
 ## Install
 
@@ -12,8 +13,13 @@ pip install edgecitadel
 brew install edgecitadel
 
 edgecitadel --version
+edgecitadel install
 ```
 
+The guided installer enrolls the host, starts agentd, detects supported native
+hosts, installs only the Plugins the user selects, and reports Plugin package
+state separately from Connector activity. Use explicit `--create` or `--join`,
+one or more `--plugin`, `--scope`, and `--yes` flags for non-interactive use.
 Use the same package manager for upgrades and uninstall.
 
 ## Create a Core
@@ -58,12 +64,13 @@ The selected mode is durable. Repeating `join` with the same mode is safe;
 requesting a different mode is rejected rather than silently changing message
 ownership.
 
-## Managed Agents
+## Agent Packages
 
-A Managed Agent is a complete long-running runtime operated by EdgeCitadel.
-Gemma owns its model-backed Agent harness. The Home Assistant package is a
-Managed Adapter: EdgeCitadel owns the adapter process, while the user's Home
-Assistant installation and data remain external.
+An Agent Package contains a complete long-running runtime operated by
+EdgeCitadel and declares one or more Agent identities. Gemma owns its
+model-backed Agent harness. The Home Assistant Agent Package contains an
+adapter process, while the user's Home Assistant installation and data remain
+external.
 
 ```bash
 edgecitadel agent install gemma
@@ -77,29 +84,32 @@ edgecitadel agent remove edgecitadel.gemma
 
 Installation validates the package and lock before execution, shows requested
 permissions, creates a private dependency runtime, records immutable package
-state, and waits for a fresh Agent registration. Managed Agents call the local
+state, and waits for a fresh Agent registration. Agents call the local
 agentd socket and do not receive NATS or Leaf credentials.
 
 Legacy package records remain inspectable and stoppable during local-state
-migration, but the removed `plugin` command cannot install or launch them.
+migration; the `agent` command remains their lifecycle surface.
 
-## Native Agent Plugins
+## Plugins and Connectors
 
 Pi, Claude Code, and Codex keep ownership of their model, tools, permissions,
 session, and execution loop. Their EdgeCitadel plugins add host-native skills
 and MCP tools backed by agentd:
 
 ```bash
-pi install "$(edgecitadel connector path pi)"
-
-claude plugin marketplace add "$(edgecitadel connector path claude-code)"
-claude plugin install edgecitadel@edgecitadel
-
-codex plugin marketplace add "$(edgecitadel connector path codex)"
-codex plugin add edgecitadel@edgecitadel
+edgecitadel plugin install pi --scope user
+edgecitadel plugin install claude-code --scope project
+edgecitadel plugin install codex --scope user
+edgecitadel plugin list
 ```
 
-The connector is available only while its host session is active. Closing the
+These commands delegate installation to each native host package manager.
+Re-running an install is a no-op when source, scope, and version match; use
+`edgecitadel plugin repair <host>` when a distribution upgrade moves the
+packaged source. Codex supports user scope; Claude Code and Pi support user and
+project scope.
+
+A Connector is available only while its host session is active. Closing the
 session closes its renewable lease and agentd publishes an unavailable state.
 An inbox entry is not automatic consent to execute: the host plugin records an
 explicit acceptance, running state, and one terminal result.
@@ -132,8 +142,8 @@ agentd is the only writer of its private SQLite database. It records task
 orchestration, attempts, bounded diagnostic events, metadata-only traces, and
 presence history. Native plugins use the scoped local API rather than opening
 the database or connecting to NATS. Private file modes isolate other OS users,
-not arbitrary code running as the same user; install native plugins only into
-trusted Agent hosts. The Managed Agent effect/outcome ledger remains separate
+not arbitrary code running as the same user; install Plugins only into trusted
+Agent hosts. The Agent Package effect/outcome ledger remains separate
 so external side effects keep their idempotency boundary.
 
 Trace metadata is retained for at most 30 days, with record caps enforced in
@@ -162,9 +172,9 @@ directory and files restricted to the account that runs EdgeCitadel.
   start`.
 - `doctor` reports disconnected task transport: restore Core connectivity; in
   `nats_leaf`, confirm local messaging first with `edgecitadel messaging status`.
-- Managed Agent does not register: inspect `edgecitadel agent logs <package-id>`
+- Agent Package does not register its Agent: inspect `edgecitadel agent logs <package-id>`
   and then run `edgecitadel doctor`.
-- Native tools are absent: start a new host session and check `edgecitadel
+- Plugin tools are absent: start a new host session and check `edgecitadel
   connector status <connector-id>`.
 - On Linux without a systemd user manager, `agentd` uses a current-login
   background process; run `edgecitadel service start` after a host reboot.
@@ -179,12 +189,12 @@ brew upgrade edgecitadel
 ```
 
 Package upgrades preserve `~/.edgecitadel`, including node identity, connector
-credentials, SQLite state, Managed Agent data, logs, and local JetStream data.
+credentials, SQLite state, Agent Package data, logs, and local JetStream data.
 Legacy `plugins.json` is retained as a rollback record after its atomic migration
 to `managed-agents.json`. Stale Watchdog records are ignored because task and
 presence reconciliation are now system-owned.
 
-Installing a newer Managed Agent package is transactional. If its fresh process
+Installing a newer Agent Package is transactional. If its fresh process
 does not become ready, EdgeCitadel restores the prior install record and restarts
 the prior version when it was previously running. After a successful upgrade,
 the prior immutable package remains available for an explicit rollback:

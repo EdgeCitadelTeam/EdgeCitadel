@@ -1,0 +1,132 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "88ad90415098e7248ced2fc700fb8b3f4278a841b2e6b28ed31b306ba2824caa"
+    },
+    {
+      "path": "edgecitadel_homeassistant_plugin/__init__.py",
+      "sha256": "6704c9d353b0bdf9241e5cc317d4c7e1775162ac8dcce189327d066c4069647a"
+    },
+    {
+      "path": "edgecitadel_homeassistant_plugin/__main__.py",
+      "sha256": "83192dacaaa902e354e260f28eb600c5302d3a0a1ed671975159ea9dafb0bae0"
+    },
+    {
+      "path": "edgecitadel_homeassistant_plugin/adapter.py",
+      "sha256": "1e6c9a9d819c69984e51172f4aa0e112745b4bf48ac2695ac241d9b78d8ff488"
+    },
+    {
+      "path": "edgecitadel_homeassistant_plugin/client.py",
+      "sha256": "9fc072578b6ec79c3dab978f485bdaa86abd8780f0712b4f1005b8e54affda45"
+    },
+    {
+      "path": "edgecitadel_homeassistant_plugin/config.yaml",
+      "sha256": "f642c549fa100d1fa3e46ef6fa86dd6c1f3a8fc44d3baa5b89ff3d9383096d2f"
+    },
+    {
+      "path": "edgecitadel_homeassistant_plugin/requirements.txt",
+      "sha256": "8887061555675832da303dbee1b9355b7b0c0bf6cb6589d159b6a43a37b30e85"
+    },
+    {
+      "path": "plugin.yaml",
+      "sha256": "d4397c463a9a8be94ab785a3c091ed62355bab7830c2439ca9e31497877575aa"
+    },
+    {
+      "path": "skills/control-light/SKILL.md",
+      "sha256": "05db4bdc6a7f11f550829e57f8ac5b3c1ef97058ef1494ad39c164163adc44ae"
+    },
+    {
+      "path": "skills/control-light/binding.yaml",
+      "sha256": "1ac4914a21cb64989a6f31c67e8c42c14c088e8bd4b119291463bb8db5948346"
+    },
+    {
+      "path": "skills/control-light/schemas/input.json",
+      "sha256": "5f23de6dac908ba46e9d7d9e881809e57b21afa1394d5cc8315ea8a5914dcf17"
+    },
+    {
+      "path": "skills/control-light/schemas/output.json",
+      "sha256": "31259dcce1aec6aac8a7352eda5cc970d4fed2a21e1a0b6bdd8a3a139a3252d7"
+    },
+    {
+      "path": "skills/read-camera-luma/SKILL.md",
+      "sha256": "8089f74d607e6e260791c92ba5c1cb74cb7da9bc70de4a29426b1242b44e61d7"
+    },
+    {
+      "path": "skills/read-camera-luma/binding.yaml",
+      "sha256": "4cec958cf6355ec72134b3545a0e63e5f1e0e67f2c5d62f647739ba1a2ed1f45"
+    },
+    {
+      "path": "skills/read-camera-luma/schemas/input.json",
+      "sha256": "e67a53cfeb68d3f6b0423fa69d9179d88fa07a6aab947d2331ffc66611647603"
+    },
+    {
+      "path": "skills/read-camera-luma/schemas/output.json",
+      "sha256": "31259dcce1aec6aac8a7352eda5cc970d4fed2a21e1a0b6bdd8a3a139a3252d7"
+    },
+    {
+      "path": "skills/read-state/SKILL.md",
+      "sha256": "c755277055f5ad6346d0626bb7aaddf76b78fff49484d1e170b36eb168f3c604"
+    },
+    {
+      "path": "skills/read-state/binding.yaml",
+      "sha256": "65d92423dc9fbc90309aab28fbde300d28af3c0f7e4a2a79f9352423d5c86dfe"
+    },
+    {
+      "path": "skills/read-state/schemas/input.json",
+      "sha256": "632c31f1e2c0f6815a817ce6c1572406102df4d44b2f93211e2720fac63226a8"
+    },
+    {
+      "path": "skills/read-state/schemas/output.json",
+      "sha256": "31259dcce1aec6aac8a7352eda5cc970d4fed2a21e1a0b6bdd8a3a139a3252d7"
+    },
+    {
+      "path": "skills/run-sequence/SKILL.md",
+      "sha256": "0f7f8daf1c37428543a580ffc9b785680bfe95b90c89d67707486378a9147b9e"
+    },
+    {
+      "path": "skills/run-sequence/binding.yaml",
+      "sha256": "4a6e68f8afc6cec961261c10c32b5acaadc31489cd6fd2e538aa74f45b3235da"
+    },
+    {
+      "path": "skills/run-sequence/schemas/input.json",
+      "sha256": "4cdf8ffbf79e61a36f3b9c54182657cd1fcb5a143932d0467b85bc85f7ac6853"
+    },
+    {
+      "path": "skills/run-sequence/schemas/output.json",
+      "sha256": "31259dcce1aec6aac8a7352eda5cc970d4fed2a21e1a0b6bdd8a3a139a3252d7"
+    }
+  ],
+  "lockVersion": 1,
+  "package": {
+    "id": "edgecitadel.homeassistant",
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.2.0"
+  },
+  "skills": [
+    {
+      "contentSha256": "05db4bdc6a7f11f550829e57f8ac5b3c1ef97058ef1494ad39c164163adc44ae",
+      "name": "control-light",
+      "skillId": "homeassistant.light",
+      "version": "0.1.0"
+    },
+    {
+      "contentSha256": "8089f74d607e6e260791c92ba5c1cb74cb7da9bc70de4a29426b1242b44e61d7",
+      "name": "read-camera-luma",
+      "skillId": "homeassistant.camera",
+      "version": "0.1.0"
+    },
+    {
+      "contentSha256": "c755277055f5ad6346d0626bb7aaddf76b78fff49484d1e170b36eb168f3c604",
+      "name": "read-state",
+      "skillId": "homeassistant.state",
+      "version": "0.1.0"
+    },
+    {
+      "contentSha256": "0f7f8daf1c37428543a580ffc9b785680bfe95b90c89d67707486378a9147b9e",
+      "name": "run-sequence",
+      "skillId": "homeassistant.experiment",
+      "version": "0.1.0"
+    }
+  ]
+}

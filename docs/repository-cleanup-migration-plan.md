@@ -14,8 +14,10 @@ a compatibility promise for the removed CLI and runtime surfaces.
 
 The implementation differs from the proposal in two evidence-backed ways:
 
-1. Echo and placeholder were also legacy packages, so both were migrated to
-   `ManagedAgent` fixtures before schema/runtime retirement.
+1. Echo and placeholder were also legacy packages, so both were initially
+   migrated to `ManagedAgent` fixtures before schema/runtime retirement. The
+   placeholder was later removed because Echo covers the same contract with an
+   executable smoke path.
 2. The duplicated `.claude/agents`, `.claude/rules`, and `.codex/agents`
    definitions had no active repository consumers. They were deleted instead of
    recreated as thin copies; Claude commands and skill links now defer to

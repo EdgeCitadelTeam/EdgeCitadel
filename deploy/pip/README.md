@@ -2,7 +2,7 @@
 
 The Python distribution provides the same `edgecitadel` command and both
 messaging modes as the Homebrew Formula. It installs immutable Core Compose
-sources, schemas, agentd sources, Managed Agents, and Native Agent Plugins under the Python
+sources, schemas, agentd sources, Agent Packages, and host Plugins under the Python
 environment's `share/edgecitadel` directory while keeping mutable state under
 `~/.edgecitadel`.
 
@@ -52,8 +52,8 @@ second clean environment. A valid wheel must contain at least:
 
 - the wheel data root's `share/edgecitadel/docker-compose.yml`;
 - `share/edgecitadel/scripts/edgecitadel_cli.py`;
-- `share/edgecitadel/plugin-toolkit/pyproject.toml` and `src/`;
-- `share/edgecitadel/plugins/`, `native-plugins/`, and `schemas/`;
+- `share/edgecitadel/agent-runtime/pyproject.toml` and `src/`;
+- `share/edgecitadel/agent-packages/`, `plugins/`, and `schemas/`;
 - the Core `aggregator`, `frontend`, `nats`, and `nginx` assets.
 
 It must not contain `.env`, runtime data, virtual environments, `node_modules`,
