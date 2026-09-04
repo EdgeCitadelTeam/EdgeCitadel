@@ -14,9 +14,10 @@ not already available, then install EdgeCitadel as an isolated CLI tool:
 uv tool install edgecitadel
 ```
 
-On macOS, Homebrew is also supported:
+On macOS, Homebrew is also supported through the EdgeCitadel tap:
 
 ```bash
+brew tap EdgeCitadelTeam/edgecitadel
 brew install edgecitadel
 ```
 
@@ -34,8 +35,9 @@ a manual virtual-environment fallback.
 The guided installer enrolls the host, starts agentd, detects supported native
 hosts, installs only the Plugins the user selects, and reports Plugin package
 state separately from Connector activity. Use explicit `--create` or `--join`,
-one or more `--plugin`, `--scope`, and `--yes` flags for non-interactive use.
-Use the same package manager for upgrades and uninstall.
+one or more `--plugin`, `--scope`, and `--yes` flags for non-interactive use;
+when joining, select `--messaging-mode single-client|nats_leaf`. Use the same
+package manager for upgrades and uninstall.
 
 ## Create a Core
 
@@ -58,16 +60,23 @@ On the Core:
 edgecitadel invite --node-id studio-macmini --host core.example.internal
 ```
 
-Run the returned command on the Edge. The invitation is expiring, single-use,
-and stored as a digest on the Core.
+Copy the returned invitation URI to the Edge. The invitation is expiring,
+single-use, and stored as a digest on the Core.
 
 ```bash
-# Default: the EdgeCitadel service connects directly to Core NATS.
-edgecitadel join 'ecjoin://...'
+# Default: enroll, start services, install the Plugin, and connect agentd
+# directly to Core NATS.
+edgecitadel install --join 'ecjoin://...' --plugin codex --scope user --yes
 
-# Same-host Agent messaging remains available if the Core link is down.
-edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
+# Enroll, start services, and install the Codex Plugin in one command while
+# preserving same-host Agent messaging if the Core link goes down.
+edgecitadel install --join 'ecjoin://...' --messaging-mode nats_leaf --plugin codex --scope user --yes
 ```
+
+Both unified commands enroll the Edge, start its services, install the selected
+Plugin, and report Plugin and Connector state. `edgecitadel join` remains
+available as the enrollment-only command when service and Plugin setup are
+intentionally managed separately.
 
 `single-client` does not use a local NATS process. `nats_leaf` runs one local
 NATS server and connects it outbound to the Core through an authenticated Leaf
@@ -120,9 +129,10 @@ edgecitadel plugin list
 
 These commands delegate installation to each native host package manager.
 Re-running an install is a no-op when source, scope, and version match; use
-`edgecitadel plugin repair <host>` when a distribution upgrade moves the
-packaged source. Codex supports user scope; Claude Code and Pi support user and
-project scope.
+`edgecitadel install` to reconcile selected stale sources, or
+`edgecitadel plugin repair <host>` to do so explicitly when a distribution
+upgrade moves the packaged source. Codex supports user scope; Claude Code and Pi
+support user and project scope.
 
 A Connector is available only while its host session is active. Closing the
 session closes its renewable lease and agentd publishes an unavailable state.

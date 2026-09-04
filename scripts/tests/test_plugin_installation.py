@@ -134,6 +134,34 @@ def test_codex_unknown_json_blocks_mutation(tmp_path):
     assert runner.mutations == []
 
 
+def test_codex_missing_configured_marketplace_is_stale(tmp_path):
+    current = _write_plugin_assets(tmp_path)
+    legacy = tmp_path / "native-plugins"
+
+    def runner(command, cwd):
+        argv = list(command)
+        if argv[-1] == "--version":
+            return plugins.CommandEvidence(argv, 0, "codex-cli 0.153.0", "")
+        if argv[-4:] == ["plugin", "marketplace", "list", "--json"]:
+            return plugins.CommandEvidence(
+                argv,
+                1,
+                "",
+                "Error: failed to load marketplace(s):\n"
+                f"- `edgecitadel` at {legacy}: marketplace root does not contain "
+                "a supported manifest\n",
+            )
+        pytest.fail(f"unexpected command: {argv}")
+
+    driver = plugins.CodexDriver(tmp_path, runner=runner, executable="/opt/bin/codex")
+
+    status = driver.status()
+
+    assert driver.source == current
+    assert status.state == "stale"
+    assert status.source == str(legacy)
+
+
 def test_codex_timeout_reconciles_once_and_stops_before_next_operation(tmp_path):
     source = _write_plugin_assets(tmp_path)
     runner = CodexRunner(source)

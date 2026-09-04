@@ -3,10 +3,13 @@
 The Homebrew package is the single CLI distribution for both node modes:
 
 ```text
+brew tap EdgeCitadelTeam/edgecitadel
 brew install edgecitadel
 ├── edgecitadel create       # core; Docker prerequisite
-├── edgecitadel join ...     # single-client Edge; no Docker
-└── edgecitadel join ... --messaging-mode nats_leaf
+├── edgecitadel install --join ... --plugin codex --scope user --yes
+│                            # single-client Edge; no Docker
+└── edgecitadel install --join ... --messaging-mode nats_leaf \
+      --plugin codex --scope user --yes
                              # local NATS Leaf Edge; no Docker
 ```
 
@@ -25,12 +28,14 @@ metadata, and JetStream data remain under `~/.edgecitadel/nats_leaf`, never the
 Cellar. Uninstall and upgrade leave that state intact unless the operator
 explicitly removes it.
 
-## Current HEAD formula
+## Source and stable formulas
 
-There is no upstream tag or GitHub release yet, so the checked-in formula is
-intentionally `HEAD`-only. Homebrew 6 no longer installs arbitrary local Formula
-paths, so contributors test it through a temporary local tap after this work is
-present on the configured remote:
+The formula checked into this repository is intentionally `HEAD`-only so it can
+exercise the source tree without a circular archive checksum. Stable formulas
+are published separately in `EdgeCitadelTeam/homebrew-edgecitadel`. Homebrew 6
+no longer installs arbitrary local Formula paths, so contributors test source
+changes through a temporary local tap after the work is present on the
+configured remote:
 
 ```bash
 brew tap-new --no-git local/edgecitadel
@@ -50,8 +55,9 @@ also run `edgecitadel messaging stop`. Formula upgrades retain all state. Run
 agentd environment; `edgecitadel messaging restart` is needed only when the
 local NATS configuration or binary changed.
 
-Do not advertise `brew install edgecitadel` until a release archive and tap have
-been published. Publishing is a separate, explicitly authorized operation.
+Do not advertise a new version until its release archive and tap formula have
+both been published and tested. Publishing is a separate, explicitly authorized
+operation.
 
 ## Stable release checklist
 
@@ -60,7 +66,7 @@ been published. Publishing is a separate, explicitly authorized operation.
 3. Add the archive `url` and SHA-256 to the formula while retaining `head` for
    development builds. Add `version` only if Homebrew cannot infer it from the
    archive URL.
-4. Put the formula in `zhonghaozhan/homebrew-edgecitadel` as
+4. Put the formula in `EdgeCitadelTeam/homebrew-edgecitadel` as
    `Formula/edgecitadel.rb`.
 5. Verify a clean install, upgrade with preserved `~/.edgecitadel`, Core create,
    Edge join, Agent Package and Plugin installation, and uninstall.
@@ -68,7 +74,7 @@ been published. Publishing is a separate, explicitly authorized operation.
 After the tap exists, the intended public commands are:
 
 ```bash
-brew tap zhonghaozhan/edgecitadel
+brew tap EdgeCitadelTeam/edgecitadel
 brew install edgecitadel
 ```
 

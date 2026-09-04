@@ -13,9 +13,10 @@ not already available, then install EdgeCitadel as an isolated CLI tool:
 uv tool install edgecitadel
 ```
 
-On macOS, Homebrew is also supported:
+On macOS, Homebrew is also supported through the EdgeCitadel tap:
 
 ```bash
+brew tap EdgeCitadelTeam/edgecitadel
 brew install edgecitadel
 ```
 
@@ -31,7 +32,7 @@ edgecitadel install
 ```
 
 For automation, make every choice explicit, for example
-`edgecitadel install --create --plugin codex --scope user --yes`.
+`edgecitadel install --create --plugin codex --scope user --yes` on a Core.
 
 ## Create a Core
 
@@ -52,11 +53,11 @@ Create a one-time invitation on the Core:
 edgecitadel invite --node-id studio-macmini --host core.example.internal
 ```
 
-Run the returned `edgecitadel join` command on the Edge. The default
-`single-client` mode connects the EdgeCitadel service directly to Core NATS:
+Copy the returned invitation URI to the Edge. The default `single-client` mode
+connects the EdgeCitadel service directly to Core NATS:
 
 ```bash
-edgecitadel join 'ecjoin://...'
+edgecitadel install --join 'ecjoin://...' --plugin codex --scope user --yes
 ```
 
 Use `nats_leaf` when Agents on this host must keep communicating while the Core
@@ -64,8 +65,13 @@ connection is unavailable:
 
 ```bash
 brew install nats-server  # macOS; use your system package manager elsewhere
-edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
+edgecitadel install --join 'ecjoin://...' --messaging-mode nats_leaf --plugin codex --scope user --yes
 ```
+
+The unified commands enroll the Edge, start its EdgeCitadel services and any
+mode-specific NATS process, and install the selected native-host Plugin. Use the
+lower-level `edgecitadel join` command only when those remaining steps will be
+managed separately.
 
 In both modes, Agent integrations talk to the host-local EdgeCitadel service.
 Only `nats_leaf` needs a local NATS server; it is the durable local message bus
@@ -104,8 +110,9 @@ edgecitadel plugin list
 Each command delegates to the host's native package manager and reports package
 installation separately from activation. Start a new host session, then use its
 `edgecitadel_*` tools. Inspect active sessions with `edgecitadel connector list`
-and `edgecitadel connector status <connector-id>`; use
-`edgecitadel plugin repair <host>` after a distribution path changes.
+and `edgecitadel connector status <connector-id>`. The unified installer repairs
+a selected Plugin whose distribution path moved; use
+`edgecitadel plugin repair <host>` to perform that repair explicitly.
 
 ## Operate
 

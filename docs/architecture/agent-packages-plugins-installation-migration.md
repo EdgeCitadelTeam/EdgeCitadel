@@ -253,6 +253,7 @@ requirements rather than the illustrative tree above.
 
 ```text
 edgecitadel install [--create | --join <invitation>]
+                    [--messaging-mode <single-client|nats_leaf>]
                     [--plugin <codex|claude-code|pi>]...
                     [--scope <user|project>]
                     [--yes] [--dry-run] [--json]
@@ -362,7 +363,7 @@ persisted as an EdgeCitadel state machine:
 |---|---|---|---|---|
 | `plugin_available` | Confirmed install; host, scope, and source are explicit | Execute the planned native operations once | `plugin_installed` or `unknown` | Re-run native status; never infer success from the subprocess exit code alone |
 | `plugin_installed` | Status source, scope, path, or version differs | No mutation during status | `plugin_stale` | `plugin repair` re-registers the packaged source and re-observes status |
-| `plugin_stale` | Confirmed repair | Invoke the host's update/reinstall sequence once | `plugin_installed` or `unknown` | Preserve the prior installation on failure when the host supports atomic replacement |
+| `plugin_stale` | Confirmed explicit repair or unified-install reconciliation | Invoke the host's update/reinstall sequence once | `plugin_installed` or `unknown` | Preserve the prior installation on failure when the host supports atomic replacement |
 | `plugin_installed` or `plugin_stale` | Explicit remove for the same host and scope | Invoke native removal once | `plugin_available` or `unknown` | Re-observe native status; leave Connector revocation as a separate explicit action |
 | any Plugin state | Process restart or interrupted mutation | Read native status only | observed state | The ephemeral journal is lost safely because the native host is authoritative |
 
@@ -395,7 +396,7 @@ the printed native recovery command.
 | Multi-host installation partly succeeds | Stop before the next host, retain successes, and never remove a pre-existing Plugin | Optionally run the printed remove command only for a package proven newly installed by this invocation |
 | Plugin installed but Connector inactive | Treat installation as successful with a pending activation step | Start a new native host session and check `connector status` |
 | Core/NATS unavailable after local setup | Report `degraded`, preserving local configuration and installed Plugins | Restore transport and let agentd reconnect |
-| Distribution upgrade moves asset path | Report `stale`; `plugin repair` re-registers the current packaged source | Repair after every detected path/version mismatch |
+| Distribution upgrade moves asset path | Report `stale`; a confirmed unified install or `plugin repair` re-registers the current packaged source | Reconcile after every detected path/version mismatch |
 
 The operation journal is ephemeral because the native host remains authoritative
 for installed Plugin state. Do not add an EdgeCitadel database table merely to
@@ -615,7 +616,7 @@ cache storage remain owned by the native package managers.
 |---|---|---|---|
 | Path inversion breaks wheel assets or service startup | EdgeCitadel cannot operate after upgrade | Central path resolver, clean-wheel test, service smoke, compatibility fallback | Blocking |
 | Host CLI changes output or command syntax | Plugin driver misreports state | Minimum versions, machine-readable output where available, external acceptance suite | Blocking per host |
-| Existing marketplace stores an obsolete distribution path | Plugin stops working after upgrade | Detect source mismatch and provide idempotent `plugin repair` | Blocking |
+| Existing marketplace stores an obsolete distribution path | Plugin stops working after upgrade | Detect source mismatch and reconcile it in confirmed unified install or idempotent `plugin repair` | Blocking |
 | Unified installer claims success before a session exists | User cannot tell whether integration works | Separate installed Plugin from active Connector in state and output | Blocking |
 | Rollback removes an existing user Plugin | Destructive data/config loss | Pre-operation evidence and rollback only for newly installed package | Blocking |
 | Renaming schemas/imports multiplies compatibility work | Large risky refactor | Explicitly defer protocol and Python import renames | Accepted/deferred |

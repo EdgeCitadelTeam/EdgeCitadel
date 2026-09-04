@@ -24,7 +24,17 @@ def test_parser_exposes_unified_and_explicit_plugin_commands():
     parser = cli._build_parser()
 
     unified = parser.parse_args(
-        ["install", "--create", "--plugin", "codex", "--yes", "--dry-run"]
+        [
+            "install",
+            "--join",
+            "ecjoin://value",
+            "--messaging-mode",
+            "nats_leaf",
+            "--plugin",
+            "codex",
+            "--yes",
+            "--dry-run",
+        ]
     )
     explicit = parser.parse_args(
         ["plugin", "install", "claude-code", "--scope", "project", "--yes"]
@@ -32,6 +42,7 @@ def test_parser_exposes_unified_and_explicit_plugin_commands():
 
     assert unified.func is cli.command_install
     assert unified.plugins == ["codex"]
+    assert unified.messaging_mode == "nats_leaf"
     assert explicit.func is cli.command_native_plugin
     assert explicit.scope == "project"
 
@@ -175,6 +186,124 @@ def test_unified_install_skips_missing_host_and_continues(
     assert states == {"pi": "skipped", "codex": "installed"}
 
 
+def test_unified_install_repairs_stale_plugin_source(tmp_path, monkeypatch, capsys):
+    actions = []
+
+    class StaleDriver:
+        host = "codex"
+
+        def status(self, scope):
+            return plugin_api.PluginStatus(
+                self.host,
+                "stale",
+                True,
+                version="0.1.0",
+                scope=scope,
+                source="/old/plugins",
+            )
+
+        def plan(self, action, scope):
+            actions.append(("plan", action))
+            return plugin_api.PluginPlan(
+                self.host,
+                action,
+                scope,
+                "/plugins",
+                "/bin/codex",
+                [["/bin/codex", "plugin", "marketplace", "remove", "edgecitadel"]],
+            )
+
+        def apply(self, action, scope):
+            actions.append(("apply", action))
+            return plugin_api.PluginResult(
+                self.host,
+                "installed",
+                True,
+                plugin_api.PluginStatus(
+                    self.host,
+                    "installed",
+                    True,
+                    version="0.1.0",
+                    scope=scope,
+                    source="/plugins",
+                ),
+            )
+
+    monkeypatch.setattr(cli, "INSTALL_ROOT", REPO_ROOT)
+    monkeypatch.setattr(
+        cli,
+        "_load_node",
+        lambda _state: {"mode": "edge", "agent_id": "edge-one"},
+    )
+    monkeypatch.setattr(cli, "_agentd_process_detail", lambda _state: (True, "ok"))
+    monkeypatch.setattr(
+        cli, "_start_agentd", lambda _state: {"running": True, "detail": "ok"}
+    )
+    monkeypatch.setattr(cli, "_agentd_rpc", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "driver_for", lambda *_args, **_kwargs: StaleDriver())
+    args = Namespace(
+        create=False,
+        invitation=None,
+        messaging_mode="single-client",
+        plugins=["codex"],
+        scope="user",
+        host="localhost",
+        yes=True,
+        dry_run=False,
+        json=True,
+        state_dir=str(tmp_path),
+    )
+
+    assert cli.command_install(args) == 0
+    assert actions == [("plan", "repair"), ("apply", "repair")]
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_unified_install_forwards_nats_leaf_mode(tmp_path, monkeypatch):
+    observed = {}
+    monkeypatch.setattr(cli, "INSTALL_ROOT", REPO_ROOT)
+    monkeypatch.setattr(
+        cli,
+        "_load_node",
+        lambda _state: (_ for _ in ()).throw(cli.UserError("not enrolled")),
+    )
+
+    def join(args):
+        observed.update(vars(args))
+        raise cli.UserError("stop after join delegation")
+
+    monkeypatch.setattr(cli, "command_join", join)
+    args = Namespace(
+        create=False,
+        invitation="ecjoin://value",
+        messaging_mode="nats_leaf",
+        plugins=["codex"],
+        scope="user",
+        host="localhost",
+        yes=True,
+        dry_run=False,
+        json=False,
+        state_dir=str(tmp_path),
+    )
+
+    with pytest.raises(cli.UserError, match="stop after join delegation"):
+        cli.command_install(args)
+
+    assert observed["invitation"] == "ecjoin://value"
+    assert observed["messaging_mode"] == "nats_leaf"
+
+
+def test_interactive_install_collects_nats_leaf_mode(monkeypatch):
+    responses = iter(("join", "ecjoin://value", "nats_leaf"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
+    args = Namespace(create=False, invitation=None, messaging_mode="single-client")
+
+    cli._interactive_install_choices(args)
+
+    assert args.invitation == "ecjoin://value"
+    assert args.messaging_mode == "nats_leaf"
+
+
 def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "IS_PIP", True)
     monkeypatch.setattr(cli, "IS_HOMEBREW", False)
@@ -222,6 +351,43 @@ def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
     assert "WantedBy=default.target" in document
     assert "UMask=0077" in document
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_agentd_rpc_keeps_operation_params_separate_from_auth(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "_toolkit_python", lambda _state: Path("/toolkit/python"))
+    monkeypatch.setattr(cli, "_agentd_admin_token", lambda _state: "admin-secret")
+
+    def run(command, **kwargs):
+        captured["command"] = command
+        captured["request"] = json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"ok": True, "result": {"token": "connector-token"}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    result = cli._agentd_rpc(
+        tmp_path,
+        "connector.register",
+        connector_id="codex-local",
+        host_type="codex",
+        agent_id="edge-one-codex",
+    )
+
+    assert result == {"token": "connector-token"}
+    assert captured["request"] == {
+        "operation": "connector.register",
+        "params": {
+            "connector_id": "codex-local",
+            "host_type": "codex",
+            "agent_id": "edge-one-codex",
+        },
+        "admin_token": "admin-secret",
+    }
 
 
 def test_pip_bundled_plugin_staging_excludes_installer_bytecode(tmp_path, monkeypatch):
@@ -305,6 +471,47 @@ def test_invitation_round_trip_and_expiry():
     )
     with pytest.raises(cli.UserError, match="expiry is malformed"):
         cli._invitation_decode(malformed_expiry)
+
+
+def test_invite_stdout_is_only_the_capture_safe_invitation(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        cli,
+        "_load_node",
+        lambda _state: {"mode": "core", "core_url": "http://localhost"},
+    )
+    monkeypatch.setattr(
+        cli, "_read_env", lambda: {"EDGECITADEL_ADMIN_TOKEN": "admin-secret"}
+    )
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *_args, **_kwargs: {
+            "token": "t" * 43,
+            "agent_id": "edge-one",
+            "expires_at": time.time() + 900,
+        },
+    )
+
+    assert (
+        cli.command_invite(
+            Namespace(
+                state_dir=str(tmp_path),
+                host="core.test",
+                agent_id="edge-one",
+                expires=900,
+            )
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out.count("\n") == 1
+    assert captured.out.startswith("ecjoin://")
+    assert cli._invitation_decode(captured.out.strip())["agent_id"] == "edge-one"
+    assert "Single-use invitation" in captured.err
+    assert "Expires in 15 minute(s)." in captured.err
 
 
 @pytest.mark.parametrize(
@@ -1275,6 +1482,18 @@ def test_doctor_json_classifies_leaf_disconnect_as_degraded(
 def test_doctor_treats_disabled_plugin_and_agents_as_non_failing(
     tmp_path, monkeypatch, capsys
 ):
+    class AbsentPluginDriver:
+        def __init__(self, host):
+            self.host = host
+
+        def status(self, _scope):
+            return plugin_api.PluginStatus(
+                self.host,
+                "absent",
+                False,
+                detail=f"{self.host} is not installed",
+            )
+
     cli._write_json(
         tmp_path / "node.json",
         {
@@ -1318,6 +1537,11 @@ def test_doctor_treats_disabled_plugin_and_agents_as_non_failing(
         cli,
         "_agentd_rpc",
         lambda *_args, **_kwargs: {"transport": {"connected": True}},
+    )
+    monkeypatch.setattr(
+        cli,
+        "driver_for",
+        lambda host, *_args, **_kwargs: AbsentPluginDriver(host),
     )
 
     assert cli.command_doctor(Namespace(state_dir=str(tmp_path), json=True)) == 0

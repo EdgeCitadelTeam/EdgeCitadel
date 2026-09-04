@@ -51,7 +51,7 @@ except ImportError:  # Executed by the installed scripts/edgecitadel wrapper.
     )
 
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_ROOT = Path(os.environ.get("EDGECITADEL_INSTALL_ROOT", REPO_ROOT)).resolve()
 INSTALL_DISTRIBUTION = os.environ.get("EDGECITADEL_DISTRIBUTION", "source")
@@ -558,9 +558,12 @@ def command_invite(args: argparse.Namespace) -> int:
             "expires_at": response["expires_at"],
         }
     )
-    print("Single-use invitation (contains a temporary enrollment secret):")
+    print(
+        "Single-use invitation (contains a temporary enrollment secret):",
+        file=sys.stderr,
+    )
     print(invitation)
-    print(f"Expires in {args.expires // 60} minute(s).")
+    print(f"Expires in {args.expires // 60} minute(s).", file=sys.stderr)
     return 0
 
 
@@ -1121,7 +1124,7 @@ def _agentd_rpc(
     auth_token: str | None = None,
     **params: object,
 ) -> Any:
-    request: dict[str, object] = {"operation": operation, **params}
+    request: dict[str, object] = {"operation": operation, "params": params}
     if operation in AGENTD_ADMIN_OPERATIONS:
         request["admin_token"] = _agentd_admin_token(state_dir)
     if auth_connector_id is not None:
@@ -2698,11 +2701,23 @@ def _interactive_install_choices(args: argparse.Namespace) -> None:
         args.create = True
     elif choice == "join":
         args.invitation = input("Invitation: ").strip()
+        messaging_mode = (
+            input(
+                "Messaging mode [single-client/nats_leaf] (default: single-client): "
+            ).strip()
+            or "single-client"
+        )
+        if messaging_mode not in {"single-client", "nats_leaf"}:
+            raise UserError("choose 'single-client' or 'nats_leaf'")
+        args.messaging_mode = messaging_mode
     else:
         raise UserError("choose 'create' or 'join'")
 
 
 def command_install(args: argparse.Namespace) -> int:
+    messaging_mode = getattr(args, "messaging_mode", "single-client")
+    if args.create and messaging_mode != "single-client":
+        raise UserError("--messaging-mode applies only when joining an Edge")
     steps: list[dict[str, Any]] = []
     try:
         assets = {
@@ -2735,10 +2750,14 @@ def command_install(args: argparse.Namespace) -> int:
                     "an unenrolled host requires --create or --join <invitation>"
                 )
             _interactive_install_choices(args)
+            messaging_mode = getattr(args, "messaging_mode", "single-client")
         if args.dry_run:
             mode = "core" if args.create else "edge"
+            evidence = {"mode": mode}
+            if mode == "edge":
+                evidence["messaging_mode"] = messaging_mode
             steps.append(
-                _installation_step("enrollment", mode, "planned", False, {"mode": mode})
+                _installation_step("enrollment", mode, "planned", False, evidence)
             )
             node = None
         else:
@@ -2758,7 +2777,7 @@ def command_install(args: argparse.Namespace) -> int:
                         argparse.Namespace(
                             invitation=args.invitation,
                             state_dir=args.state_dir,
-                            messaging_mode="single-client",
+                            messaging_mode=messaging_mode,
                         )
                     )
             node = _load_node(state_dir)
@@ -2815,7 +2834,7 @@ def command_install(args: argparse.Namespace) -> int:
         raise UserError(f"unsupported Plugin host: {', '.join(invalid)}")
 
     planned: list[Any] = []
-    drivers: list[Any] = []
+    drivers: list[tuple[Any, str]] = []
     for host in selected:
         driver = driver_for(host, INSTALL_ROOT, project_root=Path.cwd())
         before = driver.status(args.scope)
@@ -2852,39 +2871,24 @@ def command_install(args: argparse.Namespace) -> int:
                 _plugin_result_step(PluginResult(host, "unchanged", False, before))
             )
             continue
-        if before.state == "stale":
-            steps.append(
-                _plugin_result_step(
-                    PluginResult(
-                        host,
-                        "failed",
-                        False,
-                        before,
-                        recovery_command=(
-                            f"{_command_name()} plugin repair {host} "
-                            f"--scope {args.scope}"
-                        ),
-                    )
-                )
-            )
-            break
+        action = "repair" if before.state == "stale" else "install"
         try:
-            planned.append(driver.plan("install", args.scope))
+            planned.append(driver.plan(action, args.scope))
         except (AssetResolutionError, ValueError) as error:
             raise UserError(str(error)) from error
-        drivers.append(driver)
+        drivers.append((driver, action))
     if planned:
         _confirm_native_plans(planned, args.yes or args.dry_run)
     if args.dry_run:
-        for plan, driver in zip(planned, drivers, strict=True):
+        for plan, (driver, _action) in zip(planned, drivers, strict=True):
             steps.append(
                 _plugin_result_step(
                     PluginResult(plan.host, "planned", False, driver.status(args.scope))
                 )
             )
     else:
-        for driver in drivers:
-            result = driver.apply("install", args.scope)
+        for driver, action in drivers:
+            result = driver.apply(action, args.scope)
             steps.append(_plugin_result_step(result))
             if not result.ok:
                 break
@@ -2993,6 +2997,12 @@ def _build_parser() -> argparse.ArgumentParser:
     enrollment = install.add_mutually_exclusive_group()
     enrollment.add_argument("--create", action="store_true")
     enrollment.add_argument("--join", dest="invitation")
+    install.add_argument(
+        "--messaging-mode",
+        choices=("single-client", "nats_leaf"),
+        default="single-client",
+        help="Managed Agent messaging topology when joining (default: single-client)",
+    )
     install.add_argument("--plugin", dest="plugins", action="append", choices=HOSTS)
     install.add_argument("--scope", choices=("user", "project"), default="user")
     install.add_argument("--host", default="localhost", help="Core hostname")

@@ -21,6 +21,15 @@ Use `uv tool upgrade edgecitadel` for upgrades. Tool mode owns its virtual
 environment and avoids modifying an operating-system-managed Python
 installation.
 
+After obtaining an invitation, a non-interactive NATS-leaf Edge setup is:
+
+```bash
+edgecitadel install --join 'ecjoin://...' --messaging-mode nats_leaf --plugin codex --scope user --yes
+```
+
+This command performs enrollment, starts the local NATS and EdgeCitadel
+services, and installs the selected native-host Plugin.
+
 To test the checked-out source in an isolated environment:
 
 ```bash

@@ -30,6 +30,7 @@
 - Inspect the local service: `./scripts/edgecitadel service status`
 - Homebrew formula style: `brew style deploy/homebrew/Formula/edgecitadel.rb`
 - Python package: `python -m build` then install the wheel in a clean virtual environment
+- Python release: publish a GitHub Release whose `v<version>` tag matches `pyproject.toml`; `.github/workflows/publish-pypi.yml` owns trusted PyPI publication
 - Root Python setup: `python3.12 -m venv .venv && .venv/bin/pip install -r scripts/requirements-test.txt`
 - Root Python tests: `.venv/bin/python -m pytest -q tests scripts/tests deploy/tests schemas/tests`
 - Full stack: `docker compose up --build -d`
@@ -53,6 +54,7 @@
 - No secrets, tokens, or local config in committed files.
 - Config changes update `.env.example`.
 - New host-level dependency (Phase 5+): edit `deploy/manifest.toml` only; deployment automation consumes it.
+- PyPI releases must pass the tag/version check, Twine validation, and clean installed-wheel smoke in `publish-pypi.yml`.
 - Verification: invoke the relevant `verify-*` skill (`verify-frontend`, `verify-backend`, `verify-infra`). Default smoke: `curl http://localhost:8222/healthz` and `curl http://localhost/api/system/status`.
 - Curl-only checks are not sufficient for UI or workflow changes. Playwright via `cd e2e && npm test` is the gate.
 

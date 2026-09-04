@@ -1,8 +1,8 @@
 class Edgecitadel < Formula
   desc "Create, join, and operate an EdgeCitadel agent network"
-  homepage "https://github.com/zhonghaozhan/EdgeCitadel"
+  homepage "https://github.com/EdgeCitadelTeam/EdgeCitadel"
   license "MIT"
-  head "https://github.com/zhonghaozhan/EdgeCitadel.git", branch: "main"
+  head "https://github.com/EdgeCitadelTeam/EdgeCitadel.git", branch: "main"
 
   depends_on "python@3.12"
 
@@ -23,8 +23,8 @@ class Edgecitadel < Formula
   def caveats
     <<~EOS
       Edge nodes do not require Docker:
-        edgecitadel join 'ecjoin://...'
-        edgecitadel join 'ecjoin://...' --messaging-mode nats_leaf
+        edgecitadel install --join 'ecjoin://...' --plugin codex --scope user --yes
+        edgecitadel install --join 'ecjoin://...' --messaging-mode nats_leaf --plugin codex --scope user --yes
         edgecitadel agent install gemma
 
       Core nodes require a running Docker Desktop or Docker Engine. The formula
@@ -39,6 +39,6 @@ class Edgecitadel < Formula
   end
 
   test do
-    assert_match "edgecitadel 0.1.0", shell_output("#{bin}/edgecitadel --version")
+    assert_match "edgecitadel 0.2.0", shell_output("#{bin}/edgecitadel --version")
   end
 end

@@ -169,6 +169,15 @@ def _same_path(left: object, right: Path) -> bool:
         return False
 
 
+def _failed_codex_marketplace_source(evidence: CommandEvidence) -> str | None:
+    combined = f"{evidence.stdout}\n{evidence.stderr}"
+    match = re.search(
+        r"(?m)^-\s+`edgecitadel`\s+at\s+(.+?):\s+marketplace root\b",
+        combined,
+    )
+    return match.group(1).strip() if match else None
+
+
 def _same_settings_path(value: str, source: Path, settings: Path) -> bool:
     try:
         candidate = Path(value).expanduser()
@@ -402,18 +411,20 @@ class CodexDriver(PluginDriver):
         detected = self.detect()
         if detected.state != "available":
             return detected
-        marketplaces = _json(self._run("plugin", "marketplace", "list", "--json"))
-        plugins = _json(
-            self._run(
-                "plugin",
-                "list",
-                "--marketplace",
-                "edgecitadel",
-                "--available",
-                "--json",
-            )
-        )
-        if not isinstance(marketplaces, dict) or not isinstance(plugins, dict):
+        marketplace_evidence = self._run("plugin", "marketplace", "list", "--json")
+        marketplaces = _json(marketplace_evidence)
+        if not isinstance(marketplaces, dict):
+            failed_source = _failed_codex_marketplace_source(marketplace_evidence)
+            if failed_source is not None and not _same_path(failed_source, self.source):
+                return PluginStatus(
+                    self.host,
+                    "stale",
+                    True,
+                    detected.version,
+                    scope,
+                    failed_source,
+                    "configured Codex marketplace path is stale",
+                )
             return PluginStatus(
                 self.host,
                 "unknown",
@@ -430,6 +441,34 @@ class CodexDriver(PluginDriver):
             ),
             None,
         )
+        if market is None:
+            return PluginStatus(
+                self.host,
+                "absent",
+                True,
+                detected.version,
+                scope,
+                detail="Plugin is not installed",
+            )
+        plugins = _json(
+            self._run(
+                "plugin",
+                "list",
+                "--marketplace",
+                "edgecitadel",
+                "--available",
+                "--json",
+            )
+        )
+        if not isinstance(plugins, dict):
+            return PluginStatus(
+                self.host,
+                "unknown",
+                True,
+                detected.version,
+                scope,
+                detail="Codex returned invalid Plugin JSON",
+            )
         installed = next(
             (
                 item
@@ -449,8 +488,8 @@ class CodexDriver(PluginDriver):
                 scope,
                 detail="Plugin is not installed",
             )
-        source = market.get("root") if isinstance(market, dict) else None
-        if source is None and isinstance(market, dict):
+        source = market.get("root")
+        if source is None:
             source = (
                 market.get("marketplaceSource", {}).get("source")
                 if isinstance(market.get("marketplaceSource"), dict)
