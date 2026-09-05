@@ -53,16 +53,21 @@ In an interactive terminal, the guide proceeds in this order:
 
 ## Create a Core
 
-Start Docker, then provide a hostname or address that Edge hosts can reach:
+For normal setup, run `edgecitadel install` and choose `create`. The guide asks
+for the hostname or address that Edge hosts can reach and completes the Core and
+Plugin setup; no separate `edgecitadel create` command is required.
+
+For unattended setup, start Docker and provide every choice as flags:
 
 ```bash
-edgecitadel create --host core.example.internal
+edgecitadel install --create --host core.example.internal --plugin codex --scope user --yes
 edgecitadel doctor
 ```
 
-`create` generates private local credentials, renders configuration, starts the
-Core services, and waits for NATS, JetStream, and the API. It is safe to rerun
-and preserves existing credentials and data.
+The unified command generates private local credentials, renders configuration,
+starts the Core services and agentd, waits for NATS, JetStream, and the API, and
+installs the selected Plugin. It is safe to rerun and preserves existing
+credentials and data.
 
 ## Join an Edge
 

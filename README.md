@@ -41,18 +41,24 @@ explains the Edge messaging choices, detects available native agent hosts, and
 shows the exact Plugin installation plan before asking for confirmation.
 
 For automation, make every choice explicit, for example
-`edgecitadel install --create --plugin codex --scope user --yes` on a Core.
+`edgecitadel install --create --host core.example.internal --plugin codex --scope user --yes`
+on a Core.
 
 ## Create a Core
 
-Start Docker, then choose a hostname or IP that Edge hosts can reach:
+For normal setup, run `edgecitadel install` and choose `create`. The guide asks
+for the hostname or IP that Edge hosts can reach; no separate `edgecitadel
+create` command is required.
+
+For unattended setup, start Docker and provide every choice as flags:
 
 ```bash
-edgecitadel create --host core.example.internal
+edgecitadel install --create --host core.example.internal --plugin codex --scope user --yes
 edgecitadel doctor
 ```
 
-The command checks local requirements and prints the dashboard URL.
+The unified command creates the Core, starts its services, installs the selected
+Plugin, checks local requirements, and prints the dashboard URL.
 
 ## Join an Edge
 
