@@ -39,6 +39,6 @@ class Edgecitadel < Formula
   end
 
   test do
-    assert_match "edgecitadel 0.2.0", shell_output("#{bin}/edgecitadel --version")
+    assert_match "edgecitadel 0.3.0", shell_output("#{bin}/edgecitadel --version")
   end
 end
