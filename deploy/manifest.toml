@@ -34,9 +34,7 @@ install_url_template = "https://github.com/nats-io/natscli/releases/download/v{v
 common = ["curl", "jq", "sqlite3", "tar", "gzip", "cron", "gpg"]
 
 [brew_packages]
-# nats-server is installed for nats_leaf validation and runtime; single-client
-# never starts the binary.
-common = ["jq", "sqlite", "gnu-tar", "coreutils", "gnupg", "nats-server"]
+common = ["jq", "sqlite", "gnu-tar", "coreutils", "gnupg"]
 
 [verification]
 # Time budget for the round-trip smoke test (Phase 6 of deploy-host.sh).

@@ -1106,9 +1106,126 @@ command: `edgecitadel install --join ... --messaging-mode nats_leaf --plugin
 codex --scope user --yes`. There is no separate `join`, `service start`, Codex
 marketplace, or Codex Plugin command.
 
-`nats-server` remains an external prerequisite only for `nats_leaf`, just as
-Docker remains an external prerequisite for a Core. The tested 0.2.0 package is
-now public on PyPI, so the two-command Core path and one-command Edge setup after
-invitation work without a source checkout. macOS users can alternatively use
-the public Homebrew tap; Homebrew 6 adds one explicit tap-trust command before
-installation.
+In the immutable public 0.2.0 artifacts, `nats-server` remains an external
+prerequisite only for `nats_leaf`, just as Docker remains an external
+prerequisite for a Core. That tested package is public on PyPI, so the
+two-command Core path and one-command Edge setup after invitation work without a
+source checkout. macOS users can alternatively use the public Homebrew tap;
+Homebrew 6 adds one explicit tap-trust command before installation.
+
+## 2026-09-05 follow-up: guided setup and managed NATS
+
+The preceding simplification statement remains the historical result for the
+immutable public 0.2.0 artifacts. A follow-up in the current, unreleased source
+removes the separate `nats-server` installation command for `nats_leaf` and
+makes interactive `edgecitadel install` an explicit terminal guide. This
+follow-up must ship in a new package version before the behavior is available
+from PyPI or the stable Homebrew tap.
+
+The interactive sequence is deterministic CLI code, not an Agent prompt:
+
+1. Choose `join` or `create` and see which role needs Docker.
+2. Enter the invitation for `join`, or a reachable Core hostname/IP for
+   `create`.
+3. For an Edge, choose `single-client` or `nats_leaf` after the guide explains
+   the availability tradeoff.
+4. Select from detected Codex, Claude Code, and Pi hosts.
+5. Review the exact native Plugin operations and confirm them.
+
+When `nats_leaf` is selected, resolution now prefers
+`EDGECITADEL_NATS_SERVER`, then an existing `nats-server` on `PATH`, then the
+managed binary. If none is usable, the CLI downloads NATS Server 2.14.6 for
+macOS or Linux on arm64 or amd64. It limits the archive size, matches the
+platform-specific SHA-256 from the official release, reads only the expected
+regular archive member, writes it atomically with mode 0700, verifies
+`nats-server --version`, and stores it below
+`~/.edgecitadel/runtime/nats-server/v2.14.6`. Download and config validation
+still happen before invitation redemption.
+
+The follow-up also repaired a real upgrade-state failure found during local
+verification. Re-running Python `venv` over a stale agentd environment left a
+dead uv-Python symlink in `supervisor/bin/python`; rebuilding the exclusively
+EdgeCitadel-owned environment with `python -m venv --clear` now removes stale
+interpreter links before reinstalling agentd. The observed default environment
+recovered to Python 3.14.4 and `edgecitadel service status` reported ready.
+
+### Follow-up commands executed
+
+Release and checksum verification:
+
+```bash
+gh release view --repo nats-io/nats-server --json tagName,publishedAt,isDraft,isPrerelease,isImmutable,url
+mktemp -d /tmp/nats-release-sums.XXXXXX
+gh release download v2.14.6 --repo nats-io/nats-server --pattern SHA256SUMS --dir /tmp/nats-release-sums.fqIAjV
+rg 'nats-server-v2.14.6-(darwin|linux)-(amd64|arm64)\.tar\.gz' /tmp/nats-release-sums.fqIAjV/SHA256SUMS
+/usr/bin/trash /tmp/nats-release-sums.fqIAjV
+```
+
+Guided create and join dry-runs were executed in real pseudo-terminals:
+
+```bash
+./scripts/edgecitadel install --dry-run --state-dir /tmp/edgecitadel-guided-ui-20260905
+# input: create, core.example.internal, codex
+./scripts/edgecitadel install --dry-run --state-dir /tmp/edgecitadel-guided-ui-join-20260905
+# input: join, ecjoin://test, nats_leaf, then blank to skip Plugins
+```
+
+Real managed-binary checks deliberately removed Homebrew from `PATH`; the clean
+wheel check used the same call after installation:
+
+```bash
+env PATH=/usr/bin:/bin /Users/yefanzhang/workplace/edge-research/.venv/bin/python - <<'PY'
+import tempfile
+from pathlib import Path
+from scripts import nats_leaf
+
+with tempfile.TemporaryDirectory(prefix="edgecitadel-nats-download-") as directory:
+    binary = nats_leaf._binary(Path(directory))
+    print(binary)
+    print(Path(binary).stat().st_mode & 0o777)
+PY
+docker run --rm --volume /Users/yefanzhang/workplace/edge-research:/work:ro --workdir /work python:3.12-slim python -c "import tempfile; from pathlib import Path; from scripts import nats_leaf; d=tempfile.TemporaryDirectory(); p=Path(nats_leaf._binary(Path(d.name))); print(p); print(oct(p.stat().st_mode & 0o777))"
+docker run --rm --platform linux/amd64 --volume /Users/yefanzhang/workplace/edge-research:/work:ro --workdir /work python:3.12-slim python -c "import tempfile; from pathlib import Path; from scripts import nats_leaf; d=tempfile.TemporaryDirectory(); p=Path(nats_leaf._binary(Path(d.name))); print(p); print(oct(p.stat().st_mode & 0o777))"
+```
+
+Package, service-recovery, and repository gates:
+
+```bash
+/Users/yefanzhang/workplace/edge-research/.venv/bin/python -m ruff check scripts/nats_leaf.py scripts/edgecitadel_cli.py scripts/tests/test_nats_leaf.py scripts/tests/test_edgecitadel_cli.py
+/Users/yefanzhang/workplace/edge-research/.venv/bin/python -m pytest -q tests scripts/tests deploy/tests schemas/tests
+RUN_NATS_LEAF_INTEGRATION=1 /Users/yefanzhang/workplace/edge-research/.venv/bin/python -m pytest -q scripts/tests/test_nats_leaf_topology.py
+/Users/yefanzhang/workplace/edge-research/.venv/bin/python -m build
+brew style deploy/homebrew/Formula/edgecitadel.rb
+./scripts/edgecitadel status --json
+/Users/yefanzhang/.edgecitadel/supervisor/bin/python --version
+./scripts/edgecitadel service status
+docker compose down && docker compose up --build -d
+curl --fail --silent --show-error http://localhost:8222/healthz
+curl --fail --silent --show-error http://localhost/api/system/status
+cd /Users/yefanzhang/workplace/edge-research/e2e && npm test
+```
+
+Results were 165 passed with 3 opt-in skips in the root suite, all 3 real
+Leaf-topology tests passed, Ruff and Formula style passed, the sdist/wheel built,
+macOS arm64 plus Linux arm64/amd64 official downloads executed and reported
+0700, the Core stack rebuilt healthy, both smoke endpoints passed, all 22 E2E
+helper tests passed, and all 13 Chromium workflows passed.
+
+### Follow-up problems encountered
+
+- The first release-metadata query requested an unsupported `gh` JSON field,
+  `isLatest`; rerunning without that field returned latest release v2.14.6.
+- The pre-existing default agentd environment contained a dead Python 3.12
+  symlink after its uv-managed base interpreter moved. The new `venv --clear`
+  behavior rebuilt and recovered it as described above.
+- A previous public-release acceptance Leaf still owns loopback ports 4223 and
+  8223. It was intentionally not interrupted, so this follow-up separated real
+  binary provisioning from the already passing three-topology Leaf integration
+  instead of claiming a second simultaneous local Leaf join.
+- Direct `rm -rf` cleanup of a test-only temporary wheel environment was blocked
+  by the execution safety policy; the exact directory was moved to macOS Trash
+  with `/usr/bin/trash` instead.
+- A final documentation search put Markdown backticks inside a double-quoted
+  shell pattern, which invoked the system `nats-server` through shell
+  substitution. It immediately exited because Core already owned port 4222; no
+  extra process or state survived.

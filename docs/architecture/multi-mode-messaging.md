@@ -110,7 +110,7 @@ documentation.
 | No duplicate destination storage | Prototype finding | One exact inbox owner; no wildcard on multiple domains |
 | No silent cross-node loss | Product requirement | No destination interest means publish timeout/error |
 | Loopback-only local exposure | Security requirement | `127.0.0.1` client and monitoring listeners |
-| Upgrade-safe state | Homebrew requirement | Config/data/log/PID under `~/.edgecitadel/nats_leaf` |
+| Upgrade-safe state | Distribution requirement | Config/data/log/PID under `~/.edgecitadel/nats_leaf`; managed binary under `~/.edgecitadel/runtime/nats-server` |
 | Deterministic recovery | Operations requirement | Explicit lifecycle state plus `messaging restart` |
 
 No throughput, latency, RPO, or fleet-size SLO is invented here. Existing
@@ -234,15 +234,18 @@ compatibility state: they can be inspected or stopped, but never launched.
 
 ### Join in `nats_leaf`
 
-1. Verify `nats-server` exists, ports are available, state paths are private,
-   and a placeholder config passes `nats-server -t` before redemption.
-2. Redeem the invitation with `messaging_mode=nats_leaf`.
-3. Write credentials/config to temporary 0600 files and validate the final
+1. Resolve `nats-server` from an explicit override or `PATH`; otherwise download
+   the pinned platform release into user-owned state after verifying its
+   SHA-256, archive layout, executable bit, and reported version.
+2. Verify ports are available, state paths are private, and a placeholder config
+   passes `nats-server -t` before redemption.
+3. Redeem the invitation with `messaging_mode=nats_leaf`.
+4. Write credentials/config to temporary 0600 files and validate the final
    config.
-4. Persist lifecycle `configuring`, install/start the user service, and wait for
+5. Persist lifecycle `configuring`, install/start the user service, and wait for
    process, client, JetStream, and Leaf readiness.
-5. Atomically commit v2 node state only after readiness.
-6. On failure, stop only the process created by this attempt, remove temporary
+6. Atomically commit v2 node state only after readiness.
+7. On failure, stop only the process created by this attempt, remove temporary
    state, preserve diagnostics, and explain that the invitation was consumed
    plus the exact recovery command.
 
@@ -399,8 +402,8 @@ details.
 
 1. Implemented state/CLI/enrollment compatibility and tests.
 2. Implemented Core Leaf listener, credential reconciliation, and config validation.
-3. Implemented Edge config/lifecycle/status plus explicit local `nats-server`
-   preflight and platform package-manager guidance for `nats_leaf` only.
+3. Implemented Edge config/lifecycle/status plus pinned, integrity-checked local
+   `nats-server` provisioning and preflight for `nats_leaf` only.
 4. Implemented exact-subject stream reconciliation and agentd endpoint selection.
 5. Implemented isolated fault integration tests and operator UX.
 6. Completed full-stack verification and evidence capture; synchronized this

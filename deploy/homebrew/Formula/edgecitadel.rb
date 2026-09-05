@@ -33,8 +33,8 @@ class Edgecitadel < Formula
 
       Persistent state is stored under ~/.edgecitadel, outside the Cellar.
       nats_leaf uses a user-level local NATS service; single-client does not
-      need it. Before joining with nats_leaf, install it with:
-        brew install nats-server
+      need it. If nats-server is absent from PATH, EdgeCitadel downloads its
+      pinned, checksum-verified binary into ~/.edgecitadel/runtime/nats-server.
     EOS
   end
 

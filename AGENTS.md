@@ -24,7 +24,7 @@
 - `edgecitadel/` - Python distribution entrypoint; packaged runtime assets are assembled at build time
 
 ## Commands
-- Newcomer setup: `./scripts/edgecitadel install`
+- Newcomer setup (guided create/join, messaging, and Plugins): `./scripts/edgecitadel install`
 - Enroll a host: `./scripts/edgecitadel invite --node-id <node-id> --host <reachable-host>` then `./scripts/edgecitadel join '<invitation>'`
 - Install a Managed Agent: `./scripts/edgecitadel agent install <package-path>`
 - Inspect the local service: `./scripts/edgecitadel service status`

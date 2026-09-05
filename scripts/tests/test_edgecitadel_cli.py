@@ -293,7 +293,7 @@ def test_unified_install_forwards_nats_leaf_mode(tmp_path, monkeypatch):
     assert observed["messaging_mode"] == "nats_leaf"
 
 
-def test_interactive_install_collects_nats_leaf_mode(monkeypatch):
+def test_interactive_install_collects_nats_leaf_mode(monkeypatch, capsys):
     responses = iter(("join", "ecjoin://value", "nats_leaf"))
     monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
     args = Namespace(create=False, invitation=None, messaging_mode="single-client")
@@ -302,6 +302,30 @@ def test_interactive_install_collects_nats_leaf_mode(monkeypatch):
 
     assert args.invitation == "ecjoin://value"
     assert args.messaging_mode == "nats_leaf"
+    guidance = capsys.readouterr().err
+    assert "Step 1: Choose this host's role" in guidance
+    assert "Step 2: Join the existing Core" in guidance
+    assert "Step 3: Choose Edge messaging" in guidance
+    assert "installs a pinned local NATS" in guidance
+
+
+def test_interactive_install_collects_reachable_core_host(monkeypatch, capsys):
+    responses = iter(("create", "core.example.internal"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
+    args = Namespace(
+        create=False,
+        invitation=None,
+        messaging_mode="single-client",
+        host="localhost",
+    )
+
+    cli._interactive_install_choices(args)
+
+    assert args.create is True
+    assert args.host == "core.example.internal"
+    guidance = capsys.readouterr().err
+    assert "Step 2: Configure the new Core" in guidance
+    assert "future Edge hosts can reach" in guidance
 
 
 def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeypatch):
@@ -326,6 +350,39 @@ def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeyp
     assert document["RunAtLoad"] is True
     assert document["KeepAlive"] == {"SuccessfulExit": False}
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_toolkit_python_clears_stale_virtual_environment(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setattr(cli, "INSTALL_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "agent_runtime_root", lambda _root: runtime)
+    venv = tmp_path / "state" / "supervisor"
+    python = venv / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("stale", encoding="utf-8")
+    (venv / ".edgecitadel-toolkit-version").write_text(
+        "an older interpreter\n", encoding="utf-8"
+    )
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if command[1:4] == ["-m", "venv", "--clear"]:
+            python.parent.mkdir(parents=True, exist_ok=True)
+            python.write_text("rebuilt", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_run", run)
+
+    assert cli._toolkit_python(tmp_path / "state") == python
+    assert commands[0] == [
+        cli.sys.executable,
+        "-m",
+        "venv",
+        "--clear",
+        str(venv),
+    ]
+    assert commands[1][:4] == [str(python), "-m", "pip", "install"]
 
 
 def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):

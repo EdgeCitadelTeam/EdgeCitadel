@@ -961,7 +961,7 @@ def _toolkit_python(state_dir: Path) -> Path:
         return python
 
     print("Preparing the local Agent service...", file=sys.stderr)
-    _run([sys.executable, "-m", "venv", str(venv)])
+    _run([sys.executable, "-m", "venv", "--clear", str(venv)])
     _run(
         [
             str(python),
@@ -2591,7 +2591,7 @@ def _emit_steps(command: str, steps: list[dict[str, Any]], as_json: bool) -> Non
 def _confirm_native_plans(plans: list[Any], assume_yes: bool) -> None:
     if not plans:
         return
-    print("Plugin installation plan:", file=sys.stderr)
+    print("\nPlugin setup: review the installation plan.", file=sys.stderr)
     for plan in plans:
         print(
             f"- {plan.host}: action={plan.action} scope={plan.scope} "
@@ -2610,7 +2610,7 @@ def _confirm_native_plans(plans: list[Any], assume_yes: bool) -> None:
         return
     if not sys.stdin.isatty():
         raise UserError("Plugin mutation requires a TTY confirmation or --yes")
-    if input("Continue? [y/N] ").strip().lower() not in {"y", "yes"}:
+    if input("Install these Plugins? [y/N] ").strip().lower() not in {"y", "yes"}:
         raise UserError("Plugin installation was not approved")
 
 
@@ -2692,26 +2692,63 @@ def _installation_step(
     }
 
 
+def _interactive_choice(
+    prompt: str, choices: tuple[str, ...], *, default: str | None = None
+) -> str:
+    while True:
+        choice = input(prompt).strip().lower()
+        if not choice and default:
+            return default
+        if choice in choices:
+            return choice
+        print(f"Please choose {' or '.join(choices)}.", file=sys.stderr)
+
+
 def _interactive_install_choices(args: argparse.Namespace) -> None:
     if args.create or args.invitation:
         return
-    print("This host is not enrolled.", file=sys.stderr)
-    choice = input("Create a new Core or join an existing one? [create/join] ").strip()
+    print("EdgeCitadel guided setup", file=sys.stderr)
+    print("\nStep 1: Choose this host's role.", file=sys.stderr)
+    print(
+        "  join   Connect this host to an existing Core (no Docker needed).",
+        file=sys.stderr,
+    )
+    print("  create Start a new Core on this host (Docker required).", file=sys.stderr)
+    choice = _interactive_choice("Join or create? [join/create] ", ("join", "create"))
     if choice == "create":
         args.create = True
-    elif choice == "join":
-        args.invitation = input("Invitation: ").strip()
-        messaging_mode = (
-            input(
-                "Messaging mode [single-client/nats_leaf] (default: single-client): "
-            ).strip()
-            or "single-client"
+        default_host = getattr(args, "host", "localhost")
+        print("\nStep 2: Configure the new Core.", file=sys.stderr)
+        print(
+            "Enter the hostname or IP that future Edge hosts can reach. "
+            "Use localhost only for a local-only setup.",
+            file=sys.stderr,
         )
-        if messaging_mode not in {"single-client", "nats_leaf"}:
-            raise UserError("choose 'single-client' or 'nats_leaf'")
-        args.messaging_mode = messaging_mode
+        args.host = (
+            input(f"Reachable Core hostname or IP [{default_host}]: ").strip()
+            or default_host
+        )
     else:
-        raise UserError("choose 'create' or 'join'")
+        print("\nStep 2: Join the existing Core.", file=sys.stderr)
+        print("Paste the one-time invitation created on the Core.", file=sys.stderr)
+        args.invitation = input("Invitation: ").strip()
+        if not args.invitation:
+            raise UserError("an invitation is required to join a Core")
+        print("\nStep 3: Choose Edge messaging.", file=sys.stderr)
+        print(
+            "  single-client Connect directly to Core; simplest and the default.",
+            file=sys.stderr,
+        )
+        print(
+            "  nats_leaf    Keep same-host messaging available during Core outages; "
+            "EdgeCitadel installs a pinned local NATS when needed.",
+            file=sys.stderr,
+        )
+        args.messaging_mode = _interactive_choice(
+            "Messaging mode [single-client/nats_leaf] (default: single-client): ",
+            ("single-client", "nats_leaf"),
+            default="single-client",
+        )
 
 
 def command_install(args: argparse.Namespace) -> int:
@@ -2822,6 +2859,11 @@ def command_install(args: argparse.Namespace) -> int:
             if driver_for(host, INSTALL_ROOT, project_root=Path.cwd()).detect().state
             == "available"
         ]
+        print("\nPlugin setup: choose native agent hosts to connect.", file=sys.stderr)
+        print(
+            "Select only hosts already installed on this machine; blank skips Plugins.",
+            file=sys.stderr,
+        )
         print(
             f"Available Plugin hosts: {', '.join(available) or 'none'}", file=sys.stderr
         )

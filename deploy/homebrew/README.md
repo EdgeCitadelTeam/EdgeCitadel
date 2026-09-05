@@ -22,12 +22,15 @@ agentd Python environment and loads a per-user LaunchAgent; users do not install
 or run a root service. That first command needs internet access to download
 agentd's declared Python dependencies.
 
-`nats-server` is deliberately separate because only `nats_leaf` needs it. Install
-it with `brew install nats-server` before choosing that mode; `single-client`
-does not install or start it. In `nats_leaf`, configuration, Leaf credentials, logs, PID/service
-metadata, and JetStream data remain under `~/.edgecitadel/nats_leaf`, never the
-Cellar. Uninstall and upgrade leave that state intact unless the operator
-explicitly removes it.
+Only `nats_leaf` needs `nats-server`. If it is absent from `PATH`, EdgeCitadel
+downloads a pinned official binary for supported macOS/Linux arm64 and amd64
+hosts, verifies its SHA-256 and version, and installs it under
+`~/.edgecitadel/runtime/nats-server`. Set `EDGECITADEL_NATS_SERVER` to use a
+custom executable. `single-client` does not install or start NATS locally. In
+`nats_leaf`, configuration, Leaf credentials, logs, PID/service metadata, and
+JetStream data remain under `~/.edgecitadel/nats_leaf`, never the Cellar.
+Uninstall and upgrade leave both state directories intact unless the operator
+explicitly removes them.
 
 ## Source and stable formulas
 

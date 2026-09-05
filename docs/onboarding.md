@@ -43,6 +43,14 @@ one or more `--plugin`, `--scope`, and `--yes` flags for non-interactive use;
 when joining, select `--messaging-mode single-client|nats_leaf`. Use the same
 package manager for upgrades and uninstall.
 
+In an interactive terminal, the guide proceeds in this order:
+
+1. Choose `join` or `create`.
+2. Enter the one-time invitation or the new Core's reachable hostname/IP.
+3. On an Edge, choose `single-client` or `nats_leaf` after reading the tradeoff.
+4. Select from the native agent hosts detected on the machine.
+5. Review the exact Plugin installation plan and confirm it.
+
 ## Create a Core
 
 Start Docker, then provide a hostname or address that Edge hosts can reach:
@@ -84,9 +92,12 @@ intentionally managed separately.
 
 `single-client` does not use a local NATS process. `nats_leaf` runs one local
 NATS server and connects it outbound to the Core through an authenticated Leaf
-Node. Users who select `nats_leaf` install `nats-server` with their operating-
-system package manager (`brew install nats-server` on macOS). It is needed
-because a Leaf Node is a NATS server topology, not a client feature.
+Node. If no `nats-server` is already on `PATH`, EdgeCitadel downloads the pinned
+NATS release for macOS or Linux on arm64 or amd64, verifies its SHA-256 and
+version, and installs it under `~/.edgecitadel/runtime/nats-server`. Set
+`EDGECITADEL_NATS_SERVER` to use another executable. A Leaf Node still needs a
+real NATS server process; the simplified flow now provisions that process
+without a separate package-manager command.
 
 The selected mode is durable. Repeating `join` with the same mode is safe;
 requesting a different mode is rejected rather than silently changing message
@@ -195,7 +206,9 @@ directory and files restricted to the account that runs EdgeCitadel.
 - Docker unavailable during `create`: start Docker Desktop or Docker Engine and
   rerun the same command.
 - Invitation expired or already used: create a new invitation on the Core.
-- `nats_leaf` setup fails: install `nats-server`, then use a new invitation; a
+- `nats_leaf` download fails before enrollment: restore internet access, install
+  `nats-server` on `PATH`, or set `EDGECITADEL_NATS_SERVER`, then rerun with the
+  same invitation. If setup fails after redemption, create a new invitation; a
   redeemed invitation is never silently reused after partial setup.
 - `doctor` reports the EdgeCitadel service stopped: run `edgecitadel service
   start`.
