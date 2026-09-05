@@ -410,6 +410,75 @@ def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_linux_agentd_enables_and_verifies_systemd_linger(monkeypatch, capsys):
+    calls = []
+    linger_enabled = False
+
+    def run(command, **_kwargs):
+        nonlocal linger_enabled
+        calls.append(command)
+        if command[1] == "enable-linger":
+            linger_enabled = True
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(
+            command, 0, "yes\n" if linger_enabled else "no\n", ""
+        )
+
+    monkeypatch.setattr(cli.shutil, "which", lambda _command: "/usr/bin/loginctl")
+    monkeypatch.setattr(cli.pwd, "getpwuid", lambda _uid: Namespace(pw_name="alice"))
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    cli._ensure_agentd_systemd_linger()
+
+    assert calls == [
+        [
+            "/usr/bin/loginctl",
+            "show-user",
+            "alice",
+            "--property=Linger",
+            "--value",
+        ],
+        ["/usr/bin/loginctl", "enable-linger", "alice"],
+        [
+            "/usr/bin/loginctl",
+            "show-user",
+            "alice",
+            "--property=Linger",
+            "--value",
+        ],
+    ]
+    assert (
+        "Enabled persistent systemd user services for alice." in capsys.readouterr().err
+    )
+
+
+def test_linux_agentd_reports_manual_linger_recovery(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda _command: None)
+    monkeypatch.setattr(cli.pwd, "getpwuid", lambda _uid: Namespace(pw_name="alice"))
+
+    with pytest.raises(cli.UserError, match="sudo loginctl enable-linger alice"):
+        cli._ensure_agentd_systemd_linger()
+
+
+def test_linux_agentd_verifies_linger_before_reusing_running_service(
+    tmp_path, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(cli, "_agentd_uses_systemd", lambda: True)
+    monkeypatch.setattr(
+        cli, "_ensure_agentd_systemd_linger", lambda: calls.append("linger")
+    )
+    monkeypatch.setattr(
+        cli, "_agentd_process_detail", lambda _state: (True, "pid 123, ready")
+    )
+    monkeypatch.setattr(
+        cli, "_agentd_rpc", lambda *_args, **_kwargs: {"status": "ready"}
+    )
+
+    assert cli._start_agentd(tmp_path)["running"] is True
+    assert calls == ["linger"]
+
+
 def test_agentd_rpc_keeps_operation_params_separate_from_auth(tmp_path, monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "_toolkit_python", lambda _state: Path("/toolkit/python"))

@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import plistlib
+import pwd
 import secrets
 import shutil
 import signal
@@ -1033,6 +1034,41 @@ def _agentd_uses_systemd() -> bool:
     )
 
 
+def _systemd_linger_enabled(loginctl: str, user: str) -> bool:
+    result = subprocess.run(
+        [loginctl, "show-user", user, "--property=Linger", "--value"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "yes"
+
+
+def _ensure_agentd_systemd_linger() -> None:
+    loginctl = shutil.which("loginctl")
+    user = pwd.getpwuid(os.getuid()).pw_name
+    recovery = f"sudo loginctl enable-linger {user}"
+    if loginctl is None:
+        raise UserError(
+            "persistent EdgeCitadel user services require loginctl; "
+            f"run '{recovery}', then retry"
+        )
+    if _systemd_linger_enabled(loginctl, user):
+        return
+    result = subprocess.run(
+        [loginctl, "enable-linger", user],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not _systemd_linger_enabled(loginctl, user):
+        raise UserError(
+            "EdgeCitadel could not enable persistent systemd user services; "
+            f"run '{recovery}', then retry"
+        )
+    print(f"Enabled persistent systemd user services for {user}.", file=sys.stderr)
+
+
 def _agentd_systemd_path(state_dir: Path) -> Path:
     return _agentd_state_dir(state_dir) / _agentd_systemd_unit_name(state_dir)
 
@@ -1176,6 +1212,9 @@ def _agentd_process_detail(state_dir: Path) -> tuple[bool, str]:
 
 
 def _start_agentd(state_dir: Path) -> dict[str, Any]:
+    uses_systemd = _agentd_uses_systemd()
+    if uses_systemd:
+        _ensure_agentd_systemd_linger()
     running, detail = _agentd_process_detail(state_dir)
     if running:
         return {
@@ -1222,7 +1261,7 @@ def _start_agentd(state_dir: Path) -> dict[str, Any]:
                 "EdgeCitadel user service could not be loaded; "
                 f"inspect {log_path} and retry '{_command_name()} service start'"
             )
-    elif _agentd_uses_systemd():
+    elif uses_systemd:
         _render_agentd_systemd(state_dir, python)
         unit_name = _agentd_systemd_unit_name(state_dir)
         for command in (
