@@ -92,6 +92,7 @@ NATIVE_CONNECTOR_CAPABILITIES = (
     "edgecitadel_trace",
     "edgecitadel_diagnose",
 )
+CORE_NATS_IMAGE = f"nats:{nats_leaf.NATS_SERVER_VERSION}-alpine"
 PLACEHOLDERS = {
     "NATS_TOKEN": {"", "change-me", "changeme"},
     "NATS_LEAF_USERNAME": {"", "change-me-leaf-user", "changeme"},
@@ -251,7 +252,7 @@ def _validate_core_nats_config(env: dict[str, str]) -> None:
                 str(ENV_PATH),
                 "--mount",
                 f"type=bind,source={config},target=/etc/nats/nats.conf,readonly",
-                "nats:2.10-alpine",
+                CORE_NATS_IMAGE,
                 "-c",
                 "/etc/nats/nats.conf",
                 "-t",

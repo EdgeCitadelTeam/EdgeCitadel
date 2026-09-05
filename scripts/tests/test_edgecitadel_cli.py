@@ -1053,6 +1053,13 @@ def test_installed_compose_override_redirects_all_mutable_mounts(
     assert str(REPO_ROOT / "docker-compose.yml") in command
 
 
+def test_core_nats_image_matches_managed_leaf_version():
+    expected = f"nats:{cli.nats_leaf.NATS_SERVER_VERSION}-alpine"
+
+    assert cli.CORE_NATS_IMAGE == expected
+    assert f"image: {expected}" in (REPO_ROOT / "docker-compose.yml").read_text()
+
+
 def test_create_reports_missing_docker_before_writing_state(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda _: None)
     args = Namespace(
