@@ -2793,6 +2793,31 @@ def _interactive_install_choices(args: argparse.Namespace) -> None:
         )
 
 
+def _interactive_plugin_choices() -> list[str]:
+    detected = [
+        driver_for(host, INSTALL_ROOT, project_root=Path.cwd()).detect()
+        for host in HOSTS
+    ]
+    available = [status.host for status in detected if status.state == "available"]
+    attention = [
+        status
+        for status in detected
+        if status.available and status.state in {"unknown", "unsupported"}
+    ]
+    print("\nPlugin setup: choose native agent hosts to connect.", file=sys.stderr)
+    print(
+        "Select only hosts already installed on this machine; blank skips Plugins.",
+        file=sys.stderr,
+    )
+    print(f"Available Plugin hosts: {', '.join(available) or 'none'}", file=sys.stderr)
+    if attention:
+        print("Plugin hosts needing attention:", file=sys.stderr)
+        for status in attention:
+            print(f"  {status.host}: {status.detail}", file=sys.stderr)
+    raw = input("Plugins to install (comma-separated, blank for none): ").strip()
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 def command_install(args: argparse.Namespace) -> int:
     messaging_mode = getattr(args, "messaging_mode", "single-client")
     if args.create and messaging_mode != "single-client":
@@ -2895,22 +2920,7 @@ def command_install(args: argparse.Namespace) -> int:
 
     selected = list(dict.fromkeys(args.plugins or []))
     if not selected and not args.json and sys.stdin.isatty():
-        available = [
-            host
-            for host in HOSTS
-            if driver_for(host, INSTALL_ROOT, project_root=Path.cwd()).detect().state
-            == "available"
-        ]
-        print("\nPlugin setup: choose native agent hosts to connect.", file=sys.stderr)
-        print(
-            "Select only hosts already installed on this machine; blank skips Plugins.",
-            file=sys.stderr,
-        )
-        print(
-            f"Available Plugin hosts: {', '.join(available) or 'none'}", file=sys.stderr
-        )
-        raw = input("Plugins to install (comma-separated, blank for none): ").strip()
-        selected = [item.strip() for item in raw.split(",") if item.strip()]
+        selected = _interactive_plugin_choices()
     elif not selected and (args.yes or args.json or not sys.stdin.isatty()):
         raise UserError("non-interactive installation requires at least one --plugin")
     invalid = sorted(set(selected) - set(HOSTS))

@@ -328,6 +328,39 @@ def test_interactive_install_collects_reachable_core_host(monkeypatch, capsys):
     assert "future Edge hosts can reach" in guidance
 
 
+def test_interactive_plugin_choices_explain_unsupported_hosts(monkeypatch, capsys):
+    class FakeDriver:
+        def __init__(self, host):
+            self.host = host
+
+        def detect(self):
+            if self.host == "codex":
+                return plugin_api.PluginStatus(
+                    self.host,
+                    "unsupported",
+                    True,
+                    version="0.116.0",
+                    detail="requires codex >= 0.151.0",
+                )
+            return plugin_api.PluginStatus(
+                self.host,
+                "absent",
+                False,
+                detail=f"{self.host} executable not found",
+            )
+
+    monkeypatch.setattr(
+        cli, "driver_for", lambda host, *_args, **_kwargs: FakeDriver(host)
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    assert cli._interactive_plugin_choices() == []
+    guidance = capsys.readouterr().err
+    assert "Available Plugin hosts: none" in guidance
+    assert "codex: requires codex >= 0.151.0" in guidance
+    assert "claude-code executable not found" not in guidance
+
+
 def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "IS_PIP", True)
     monkeypatch.setattr(cli, "IS_HOMEBREW", False)
