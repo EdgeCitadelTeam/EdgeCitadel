@@ -1051,11 +1051,11 @@ def _render_agentd_systemd(state_dir: Path, python: Path) -> None:
             "ExecStart="
             f"{_systemd_quote(python)} -m edgecitadel_agentd --state-dir "
             f"{_systemd_quote(service_dir)}",
-            f"WorkingDirectory={_systemd_quote(INSTALL_ROOT)}",
+            f"WorkingDirectory={INSTALL_ROOT}",
             "Restart=on-failure",
             "RestartSec=2",
-            f"StandardOutput={_systemd_quote(f'append:{service_dir / "agentd.log"}')}",
-            f"StandardError={_systemd_quote(f'append:{service_dir / "agentd.log"}')}",
+            f"StandardOutput=append:{service_dir / 'agentd.log'}",
+            f"StandardError=append:{service_dir / 'agentd.log'}",
             "UMask=0077",
             "",
             "[Install]",

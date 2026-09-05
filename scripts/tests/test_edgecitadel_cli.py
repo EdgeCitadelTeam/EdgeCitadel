@@ -402,9 +402,9 @@ def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
         f'ExecStart="{python}" -m edgecitadel_agentd --state-dir '
         f'"{tmp_path / "agentd"}"' in document
     )
-    assert f'WorkingDirectory="{tmp_path / "installed root"}"' in document
-    assert f'StandardOutput="append:{tmp_path / "agentd" / "agentd.log"}"' in document
-    assert f'StandardError="append:{tmp_path / "agentd" / "agentd.log"}"' in document
+    assert f"WorkingDirectory={tmp_path / 'installed root'}" in document
+    assert f"StandardOutput=append:{tmp_path / 'agentd' / 'agentd.log'}" in document
+    assert f"StandardError=append:{tmp_path / 'agentd' / 'agentd.log'}" in document
     assert "WantedBy=default.target" in document
     assert "UMask=0077" in document
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
