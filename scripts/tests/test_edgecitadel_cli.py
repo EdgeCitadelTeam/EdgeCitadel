@@ -1068,6 +1068,16 @@ def test_create_reports_missing_docker_before_writing_state(tmp_path, monkeypatc
     assert not (tmp_path / "state" / "node.json").exists()
 
 
+def test_http_json_normalizes_connection_reset(monkeypatch):
+    def reset_connection(*_args, **_kwargs):
+        raise ConnectionResetError("connection reset by peer")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", reset_connection)
+
+    with pytest.raises(cli.UserError, match="cannot reach EdgeCitadel core"):
+        cli._http_json("http://core.example/api/system/status")
+
+
 def test_join_parser_uses_exact_messaging_mode_names():
     parser = cli._build_parser()
     assert (

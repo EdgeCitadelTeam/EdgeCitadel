@@ -349,6 +349,8 @@ def _http_json(
         raise UserError(
             f"cannot reach EdgeCitadel core at {url}: {error.reason}"
         ) from error
+    except OSError as error:
+        raise UserError(f"cannot reach EdgeCitadel core at {url}: {error}") from error
 
 
 def _wait_for_core(core_url: str, timeout: int) -> None:
