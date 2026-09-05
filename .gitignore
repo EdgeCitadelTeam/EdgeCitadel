@@ -39,6 +39,9 @@ CLAUDE.local.md
 *.swp
 *.swo
 
+# Local working documentation (plans, acceptance transcripts, and research)
+local-docs/
+
 # OS
 .DS_Store
 Thumbs.db

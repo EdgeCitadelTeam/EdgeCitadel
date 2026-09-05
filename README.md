@@ -35,19 +35,30 @@ Plugins should be configured:
 edgecitadel install
 ```
 
+The terminal guide first asks whether this host should join an existing Core or
+create a new one. It then collects the reachable Core address or invitation,
+explains the Edge messaging choices, detects available native agent hosts, and
+shows the exact Plugin installation plan before asking for confirmation.
+
 For automation, make every choice explicit, for example
-`edgecitadel install --create --plugin codex --scope user --yes` on a Core.
+`edgecitadel install --create --host core.example.internal --plugin codex --scope user --yes`
+on a Core.
 
 ## Create a Core
 
-Start Docker, then choose a hostname or IP that Edge hosts can reach:
+For normal setup, run `edgecitadel install` and choose `create`. The guide asks
+for the hostname or IP that Edge hosts can reach; no separate `edgecitadel
+create` command is required.
+
+For unattended setup, start Docker and provide every choice as flags:
 
 ```bash
-edgecitadel create --host core.example.internal
+edgecitadel install --create --host core.example.internal --plugin codex --scope user --yes
 edgecitadel doctor
 ```
 
-The command checks local requirements and prints the dashboard URL.
+The unified command creates the Core, starts its services, installs the selected
+Plugin, checks local requirements, and prints the dashboard URL.
 
 ## Join an Edge
 
@@ -68,7 +79,6 @@ Use `nats_leaf` when Agents on this host must keep communicating while the Core
 connection is unavailable:
 
 ```bash
-brew install nats-server  # macOS; use your system package manager elsewhere
 edgecitadel install --join 'ecjoin://...' --messaging-mode nats_leaf --plugin codex --scope user --yes
 ```
 
@@ -79,7 +89,10 @@ managed separately.
 
 In both modes, Agent integrations talk to the host-local EdgeCitadel service.
 Only `nats_leaf` needs a local NATS server; it is the durable local message bus
-and maintains the outbound Leaf connection to Core.
+and maintains the outbound Leaf connection to Core. If `nats-server` is not
+already on `PATH`, EdgeCitadel downloads its pinned, SHA-256-verified NATS
+release into `~/.edgecitadel/runtime/nats-server`. A custom executable can be
+selected with `EDGECITADEL_NATS_SERVER`.
 
 ## Install an Agent Package
 

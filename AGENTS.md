@@ -22,9 +22,11 @@
 - `agent-packages/` - Installable Agent Packages and developer examples
 - `plugins/` - Native Plugins for Pi, Claude Code, and Codex
 - `edgecitadel/` - Python distribution entrypoint; packaged runtime assets are assembled at build time
+- `docs/` - Tracked project guides and stable architecture/wiki documentation
+- `local-docs/` - Ignored local implementation plans, acceptance transcripts, and research notes
 
 ## Commands
-- Newcomer setup: `./scripts/edgecitadel install`
+- Newcomer setup (guided create/join, messaging, and Plugins): `./scripts/edgecitadel install`
 - Enroll a host: `./scripts/edgecitadel invite --node-id <node-id> --host <reachable-host>` then `./scripts/edgecitadel join '<invitation>'`
 - Install a Managed Agent: `./scripts/edgecitadel agent install <package-path>`
 - Inspect the local service: `./scripts/edgecitadel service status`

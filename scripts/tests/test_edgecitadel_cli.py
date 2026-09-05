@@ -293,7 +293,7 @@ def test_unified_install_forwards_nats_leaf_mode(tmp_path, monkeypatch):
     assert observed["messaging_mode"] == "nats_leaf"
 
 
-def test_interactive_install_collects_nats_leaf_mode(monkeypatch):
+def test_interactive_install_collects_nats_leaf_mode(monkeypatch, capsys):
     responses = iter(("join", "ecjoin://value", "nats_leaf"))
     monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
     args = Namespace(create=False, invitation=None, messaging_mode="single-client")
@@ -302,6 +302,63 @@ def test_interactive_install_collects_nats_leaf_mode(monkeypatch):
 
     assert args.invitation == "ecjoin://value"
     assert args.messaging_mode == "nats_leaf"
+    guidance = capsys.readouterr().err
+    assert "Step 1: Choose this host's role" in guidance
+    assert "Step 2: Join the existing Core" in guidance
+    assert "Step 3: Choose Edge messaging" in guidance
+    assert "installs a pinned local NATS" in guidance
+
+
+def test_interactive_install_collects_reachable_core_host(monkeypatch, capsys):
+    responses = iter(("create", "core.example.internal"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
+    args = Namespace(
+        create=False,
+        invitation=None,
+        messaging_mode="single-client",
+        host="localhost",
+    )
+
+    cli._interactive_install_choices(args)
+
+    assert args.create is True
+    assert args.host == "core.example.internal"
+    guidance = capsys.readouterr().err
+    assert "Step 2: Configure the new Core" in guidance
+    assert "future Edge hosts can reach" in guidance
+
+
+def test_interactive_plugin_choices_explain_unsupported_hosts(monkeypatch, capsys):
+    class FakeDriver:
+        def __init__(self, host):
+            self.host = host
+
+        def detect(self):
+            if self.host == "codex":
+                return plugin_api.PluginStatus(
+                    self.host,
+                    "unsupported",
+                    True,
+                    version="0.116.0",
+                    detail="requires codex >= 0.151.0",
+                )
+            return plugin_api.PluginStatus(
+                self.host,
+                "absent",
+                False,
+                detail=f"{self.host} executable not found",
+            )
+
+    monkeypatch.setattr(
+        cli, "driver_for", lambda host, *_args, **_kwargs: FakeDriver(host)
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    assert cli._interactive_plugin_choices() == []
+    guidance = capsys.readouterr().err
+    assert "Available Plugin hosts: none" in guidance
+    assert "codex: requires codex >= 0.151.0" in guidance
+    assert "claude-code executable not found" not in guidance
 
 
 def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeypatch):
@@ -328,6 +385,39 @@ def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeyp
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_toolkit_python_clears_stale_virtual_environment(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setattr(cli, "INSTALL_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "agent_runtime_root", lambda _root: runtime)
+    venv = tmp_path / "state" / "supervisor"
+    python = venv / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("stale", encoding="utf-8")
+    (venv / ".edgecitadel-toolkit-version").write_text(
+        "an older interpreter\n", encoding="utf-8"
+    )
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if command[1:4] == ["-m", "venv", "--clear"]:
+            python.parent.mkdir(parents=True, exist_ok=True)
+            python.write_text("rebuilt", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_run", run)
+
+    assert cli._toolkit_python(tmp_path / "state") == python
+    assert commands[0] == [
+        cli.sys.executable,
+        "-m",
+        "venv",
+        "--clear",
+        str(venv),
+    ]
+    assert commands[1][:4] == [str(python), "-m", "pip", "install"]
+
+
 def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "IS_PIP", True)
     monkeypatch.setattr(cli, "IS_HOMEBREW", False)
@@ -345,12 +435,81 @@ def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
         f'ExecStart="{python}" -m edgecitadel_agentd --state-dir '
         f'"{tmp_path / "agentd"}"' in document
     )
-    assert f'WorkingDirectory="{tmp_path / "installed root"}"' in document
-    assert f'StandardOutput="append:{tmp_path / "agentd" / "agentd.log"}"' in document
-    assert f'StandardError="append:{tmp_path / "agentd" / "agentd.log"}"' in document
+    assert f"WorkingDirectory={tmp_path / 'installed root'}" in document
+    assert f"StandardOutput=append:{tmp_path / 'agentd' / 'agentd.log'}" in document
+    assert f"StandardError=append:{tmp_path / 'agentd' / 'agentd.log'}" in document
     assert "WantedBy=default.target" in document
     assert "UMask=0077" in document
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_linux_agentd_enables_and_verifies_systemd_linger(monkeypatch, capsys):
+    calls = []
+    linger_enabled = False
+
+    def run(command, **_kwargs):
+        nonlocal linger_enabled
+        calls.append(command)
+        if command[1] == "enable-linger":
+            linger_enabled = True
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(
+            command, 0, "yes\n" if linger_enabled else "no\n", ""
+        )
+
+    monkeypatch.setattr(cli.shutil, "which", lambda _command: "/usr/bin/loginctl")
+    monkeypatch.setattr(cli.pwd, "getpwuid", lambda _uid: Namespace(pw_name="alice"))
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    cli._ensure_agentd_systemd_linger()
+
+    assert calls == [
+        [
+            "/usr/bin/loginctl",
+            "show-user",
+            "alice",
+            "--property=Linger",
+            "--value",
+        ],
+        ["/usr/bin/loginctl", "enable-linger", "alice"],
+        [
+            "/usr/bin/loginctl",
+            "show-user",
+            "alice",
+            "--property=Linger",
+            "--value",
+        ],
+    ]
+    assert (
+        "Enabled persistent systemd user services for alice." in capsys.readouterr().err
+    )
+
+
+def test_linux_agentd_reports_manual_linger_recovery(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda _command: None)
+    monkeypatch.setattr(cli.pwd, "getpwuid", lambda _uid: Namespace(pw_name="alice"))
+
+    with pytest.raises(cli.UserError, match="sudo loginctl enable-linger alice"):
+        cli._ensure_agentd_systemd_linger()
+
+
+def test_linux_agentd_verifies_linger_before_reusing_running_service(
+    tmp_path, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(cli, "_agentd_uses_systemd", lambda: True)
+    monkeypatch.setattr(
+        cli, "_ensure_agentd_systemd_linger", lambda: calls.append("linger")
+    )
+    monkeypatch.setattr(
+        cli, "_agentd_process_detail", lambda _state: (True, "pid 123, ready")
+    )
+    monkeypatch.setattr(
+        cli, "_agentd_rpc", lambda *_args, **_kwargs: {"status": "ready"}
+    )
+
+    assert cli._start_agentd(tmp_path)["running"] is True
+    assert calls == ["linger"]
 
 
 def test_agentd_rpc_keeps_operation_params_separate_from_auth(tmp_path, monkeypatch):
@@ -996,6 +1155,13 @@ def test_installed_compose_override_redirects_all_mutable_mounts(
     assert str(REPO_ROOT / "docker-compose.yml") in command
 
 
+def test_core_nats_image_matches_managed_leaf_version():
+    expected = f"nats:{cli.nats_leaf.NATS_SERVER_VERSION}-alpine"
+
+    assert cli.CORE_NATS_IMAGE == expected
+    assert f"image: {expected}" in (REPO_ROOT / "docker-compose.yml").read_text()
+
+
 def test_create_reports_missing_docker_before_writing_state(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda _: None)
     args = Namespace(
@@ -1009,6 +1175,16 @@ def test_create_reports_missing_docker_before_writing_state(tmp_path, monkeypatc
         cli.command_create(args)
 
     assert not (tmp_path / "state" / "node.json").exists()
+
+
+def test_http_json_normalizes_connection_reset(monkeypatch):
+    def reset_connection(*_args, **_kwargs):
+        raise ConnectionResetError("connection reset by peer")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", reset_connection)
+
+    with pytest.raises(cli.UserError, match="cannot reach EdgeCitadel core"):
+        cli._http_json("http://core.example/api/system/status")
 
 
 def test_join_parser_uses_exact_messaging_mode_names():

@@ -64,10 +64,12 @@ For a manual virtual-environment installation:
 ~/.edgecitadel/cli-venv/bin/python -m pip uninstall edgecitadel
 ```
 
-The `nats-server` executable is intentionally not a Python dependency. It is a
-native service required only for `nats_leaf`; install it through the operating
-system package manager or an official NATS release and confirm that
-`nats-server` is on `PATH` before joining. `single-client` does not need it.
+The `nats-server` executable is a native service, not a Python dependency, and
+is required only for `nats_leaf`. When it is absent from `PATH`, EdgeCitadel
+downloads its pinned official release for supported macOS/Linux arm64 and amd64
+hosts, verifies the archive SHA-256 and binary version, and installs it under
+`~/.edgecitadel/runtime/nats-server`. Set `EDGECITADEL_NATS_SERVER` to select a
+custom executable. `single-client` neither downloads nor starts NATS locally.
 
 ## Build verification
 

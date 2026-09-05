@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import stat
+import tarfile
 from pathlib import Path
 
 import pytest
 
 from scripts import nats_leaf
+
+
+def _release_archive(asset_name: str, binary: bytes) -> bytes:
+    output = io.BytesIO()
+    root_name = asset_name.removesuffix(".tar.gz")
+    with tarfile.open(fileobj=output, mode="w:gz") as archive:
+        member = tarfile.TarInfo(f"{root_name}/nats-server")
+        member.mode = 0o755
+        member.size = len(binary)
+        archive.addfile(member, io.BytesIO(binary))
+    return output.getvalue()
 
 
 def _render(state_dir: Path) -> str:
@@ -42,6 +56,112 @@ def test_domain_is_stable_and_node_specific():
 def test_leaf_endpoint_rejects_invalid_upstream():
     with pytest.raises(nats_leaf.NatsLeafError, match="upstream"):
         nats_leaf.leaf_endpoint("http://core.test")
+
+
+@pytest.mark.parametrize(
+    ("system", "machine", "expected"),
+    (
+        ("darwin", "x86_64", "darwin-amd64"),
+        ("darwin", "arm64", "darwin-arm64"),
+        ("linux", "amd64", "linux-amd64"),
+        ("linux", "aarch64", "linux-arm64"),
+    ),
+)
+def test_platform_asset_maps_supported_systems(system, machine, expected, monkeypatch):
+    monkeypatch.setattr(nats_leaf.sys, "platform", system)
+    monkeypatch.setattr(nats_leaf.platform, "machine", lambda: machine)
+
+    _, _, asset_name, checksum = nats_leaf._platform_asset()
+
+    assert expected in asset_name
+    assert len(checksum) == 64
+
+
+def test_platform_asset_explains_external_binary_fallback(monkeypatch):
+    monkeypatch.setattr(nats_leaf.sys, "platform", "freebsd")
+    monkeypatch.setattr(nats_leaf.platform, "machine", lambda: "riscv64")
+
+    with pytest.raises(nats_leaf.NatsLeafError, match="EDGECITADEL_NATS_SERVER"):
+        nats_leaf._platform_asset()
+
+
+def test_explicit_binary_override_takes_precedence(tmp_path, monkeypatch):
+    binary = tmp_path / "custom-nats-server"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o700)
+    monkeypatch.setenv("EDGECITADEL_NATS_SERVER", str(binary))
+    monkeypatch.setattr(
+        nats_leaf.shutil,
+        "which",
+        lambda _name: (_ for _ in ()).throw(AssertionError("PATH was consulted")),
+    )
+
+    assert nats_leaf._binary(tmp_path) == str(binary.resolve())
+
+
+def test_missing_nats_server_is_provisioned_once_with_verified_release(
+    tmp_path, monkeypatch, capsys
+):
+    asset_name = "nats-server-v2.14.6-darwin-arm64.tar.gz"
+    archive = _release_archive(asset_name, b"#!/bin/sh\necho 'nats-server: v2.14.6'\n")
+    downloads: list[str] = []
+    monkeypatch.delenv("EDGECITADEL_NATS_SERVER", raising=False)
+    monkeypatch.setattr(nats_leaf.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        nats_leaf,
+        "_platform_asset",
+        lambda: ("darwin", "arm64", asset_name, hashlib.sha256(archive).hexdigest()),
+    )
+    monkeypatch.setattr(
+        nats_leaf,
+        "_download_release_asset",
+        lambda name: downloads.append(name) or archive,
+    )
+
+    first = Path(nats_leaf._binary(tmp_path))
+    second = Path(nats_leaf._binary(tmp_path))
+
+    assert first == nats_leaf._managed_binary(tmp_path).resolve()
+    assert second == first
+    assert downloads == [asset_name]
+    assert stat.S_IMODE(first.stat().st_mode) == 0o700
+    assert "checksum-verified NATS Server v2.14.6" in capsys.readouterr().err
+
+
+def test_provision_rejects_release_with_wrong_checksum(tmp_path, monkeypatch):
+    asset_name = "nats-server-v2.14.6-linux-amd64.tar.gz"
+    archive = _release_archive(asset_name, b"#!/bin/sh\necho 'nats-server: v2.14.6'\n")
+    monkeypatch.setattr(
+        nats_leaf,
+        "_platform_asset",
+        lambda: ("linux", "amd64", asset_name, "0" * 64),
+    )
+    monkeypatch.setattr(nats_leaf, "_download_release_asset", lambda _name: archive)
+
+    with pytest.raises(nats_leaf.NatsLeafError, match="SHA-256"):
+        nats_leaf._provision_binary(tmp_path)
+
+    assert not nats_leaf._managed_binary(tmp_path).exists()
+
+
+def test_provision_rejects_archive_without_expected_regular_file(tmp_path, monkeypatch):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz") as archive:
+        link = tarfile.TarInfo("nats-server-v2.14.6-linux-amd64/nats-server")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/tmp/not-nats"
+        archive.addfile(link)
+    content = output.getvalue()
+    asset_name = "nats-server-v2.14.6-linux-amd64.tar.gz"
+    monkeypatch.setattr(
+        nats_leaf,
+        "_platform_asset",
+        lambda: ("linux", "amd64", asset_name, hashlib.sha256(content).hexdigest()),
+    )
+    monkeypatch.setattr(nats_leaf, "_download_release_asset", lambda _name: content)
+
+    with pytest.raises(nats_leaf.NatsLeafError, match="invalid layout"):
+        nats_leaf._provision_binary(tmp_path)
 
 
 def test_configure_writes_private_state_and_separates_credentials(

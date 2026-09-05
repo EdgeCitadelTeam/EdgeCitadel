@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import plistlib
+import pwd
 import secrets
 import shutil
 import signal
@@ -92,6 +93,7 @@ NATIVE_CONNECTOR_CAPABILITIES = (
     "edgecitadel_trace",
     "edgecitadel_diagnose",
 )
+CORE_NATS_IMAGE = f"nats:{nats_leaf.NATS_SERVER_VERSION}-alpine"
 PLACEHOLDERS = {
     "NATS_TOKEN": {"", "change-me", "changeme"},
     "NATS_LEAF_USERNAME": {"", "change-me-leaf-user", "changeme"},
@@ -251,7 +253,7 @@ def _validate_core_nats_config(env: dict[str, str]) -> None:
                 str(ENV_PATH),
                 "--mount",
                 f"type=bind,source={config},target=/etc/nats/nats.conf,readonly",
-                "nats:2.10-alpine",
+                CORE_NATS_IMAGE,
                 "-c",
                 "/etc/nats/nats.conf",
                 "-t",
@@ -349,6 +351,8 @@ def _http_json(
         raise UserError(
             f"cannot reach EdgeCitadel core at {url}: {error.reason}"
         ) from error
+    except OSError as error:
+        raise UserError(f"cannot reach EdgeCitadel core at {url}: {error}") from error
 
 
 def _wait_for_core(core_url: str, timeout: int) -> None:
@@ -961,7 +965,7 @@ def _toolkit_python(state_dir: Path) -> Path:
         return python
 
     print("Preparing the local Agent service...", file=sys.stderr)
-    _run([sys.executable, "-m", "venv", str(venv)])
+    _run([sys.executable, "-m", "venv", "--clear", str(venv)])
     _run(
         [
             str(python),
@@ -1030,6 +1034,41 @@ def _agentd_uses_systemd() -> bool:
     )
 
 
+def _systemd_linger_enabled(loginctl: str, user: str) -> bool:
+    result = subprocess.run(
+        [loginctl, "show-user", user, "--property=Linger", "--value"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "yes"
+
+
+def _ensure_agentd_systemd_linger() -> None:
+    loginctl = shutil.which("loginctl")
+    user = pwd.getpwuid(os.getuid()).pw_name
+    recovery = f"sudo loginctl enable-linger {user}"
+    if loginctl is None:
+        raise UserError(
+            "persistent EdgeCitadel user services require loginctl; "
+            f"run '{recovery}', then retry"
+        )
+    if _systemd_linger_enabled(loginctl, user):
+        return
+    result = subprocess.run(
+        [loginctl, "enable-linger", user],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not _systemd_linger_enabled(loginctl, user):
+        raise UserError(
+            "EdgeCitadel could not enable persistent systemd user services; "
+            f"run '{recovery}', then retry"
+        )
+    print(f"Enabled persistent systemd user services for {user}.", file=sys.stderr)
+
+
 def _agentd_systemd_path(state_dir: Path) -> Path:
     return _agentd_state_dir(state_dir) / _agentd_systemd_unit_name(state_dir)
 
@@ -1051,11 +1090,11 @@ def _render_agentd_systemd(state_dir: Path, python: Path) -> None:
             "ExecStart="
             f"{_systemd_quote(python)} -m edgecitadel_agentd --state-dir "
             f"{_systemd_quote(service_dir)}",
-            f"WorkingDirectory={_systemd_quote(INSTALL_ROOT)}",
+            f"WorkingDirectory={INSTALL_ROOT}",
             "Restart=on-failure",
             "RestartSec=2",
-            f"StandardOutput={_systemd_quote(f'append:{service_dir / "agentd.log"}')}",
-            f"StandardError={_systemd_quote(f'append:{service_dir / "agentd.log"}')}",
+            f"StandardOutput=append:{service_dir / 'agentd.log'}",
+            f"StandardError=append:{service_dir / 'agentd.log'}",
             "UMask=0077",
             "",
             "[Install]",
@@ -1173,6 +1212,9 @@ def _agentd_process_detail(state_dir: Path) -> tuple[bool, str]:
 
 
 def _start_agentd(state_dir: Path) -> dict[str, Any]:
+    uses_systemd = _agentd_uses_systemd()
+    if uses_systemd:
+        _ensure_agentd_systemd_linger()
     running, detail = _agentd_process_detail(state_dir)
     if running:
         return {
@@ -1219,7 +1261,7 @@ def _start_agentd(state_dir: Path) -> dict[str, Any]:
                 "EdgeCitadel user service could not be loaded; "
                 f"inspect {log_path} and retry '{_command_name()} service start'"
             )
-    elif _agentd_uses_systemd():
+    elif uses_systemd:
         _render_agentd_systemd(state_dir, python)
         unit_name = _agentd_systemd_unit_name(state_dir)
         for command in (
@@ -2591,7 +2633,7 @@ def _emit_steps(command: str, steps: list[dict[str, Any]], as_json: bool) -> Non
 def _confirm_native_plans(plans: list[Any], assume_yes: bool) -> None:
     if not plans:
         return
-    print("Plugin installation plan:", file=sys.stderr)
+    print("\nPlugin setup: review the installation plan.", file=sys.stderr)
     for plan in plans:
         print(
             f"- {plan.host}: action={plan.action} scope={plan.scope} "
@@ -2610,7 +2652,7 @@ def _confirm_native_plans(plans: list[Any], assume_yes: bool) -> None:
         return
     if not sys.stdin.isatty():
         raise UserError("Plugin mutation requires a TTY confirmation or --yes")
-    if input("Continue? [y/N] ").strip().lower() not in {"y", "yes"}:
+    if input("Install these Plugins? [y/N] ").strip().lower() not in {"y", "yes"}:
         raise UserError("Plugin installation was not approved")
 
 
@@ -2692,26 +2734,88 @@ def _installation_step(
     }
 
 
+def _interactive_choice(
+    prompt: str, choices: tuple[str, ...], *, default: str | None = None
+) -> str:
+    while True:
+        choice = input(prompt).strip().lower()
+        if not choice and default:
+            return default
+        if choice in choices:
+            return choice
+        print(f"Please choose {' or '.join(choices)}.", file=sys.stderr)
+
+
 def _interactive_install_choices(args: argparse.Namespace) -> None:
     if args.create or args.invitation:
         return
-    print("This host is not enrolled.", file=sys.stderr)
-    choice = input("Create a new Core or join an existing one? [create/join] ").strip()
+    print("EdgeCitadel guided setup", file=sys.stderr)
+    print("\nStep 1: Choose this host's role.", file=sys.stderr)
+    print(
+        "  join   Connect this host to an existing Core (no Docker needed).",
+        file=sys.stderr,
+    )
+    print("  create Start a new Core on this host (Docker required).", file=sys.stderr)
+    choice = _interactive_choice("Join or create? [join/create] ", ("join", "create"))
     if choice == "create":
         args.create = True
-    elif choice == "join":
-        args.invitation = input("Invitation: ").strip()
-        messaging_mode = (
-            input(
-                "Messaging mode [single-client/nats_leaf] (default: single-client): "
-            ).strip()
-            or "single-client"
+        default_host = getattr(args, "host", "localhost")
+        print("\nStep 2: Configure the new Core.", file=sys.stderr)
+        print(
+            "Enter the hostname or IP that future Edge hosts can reach. "
+            "Use localhost only for a local-only setup.",
+            file=sys.stderr,
         )
-        if messaging_mode not in {"single-client", "nats_leaf"}:
-            raise UserError("choose 'single-client' or 'nats_leaf'")
-        args.messaging_mode = messaging_mode
+        args.host = (
+            input(f"Reachable Core hostname or IP [{default_host}]: ").strip()
+            or default_host
+        )
     else:
-        raise UserError("choose 'create' or 'join'")
+        print("\nStep 2: Join the existing Core.", file=sys.stderr)
+        print("Paste the one-time invitation created on the Core.", file=sys.stderr)
+        args.invitation = input("Invitation: ").strip()
+        if not args.invitation:
+            raise UserError("an invitation is required to join a Core")
+        print("\nStep 3: Choose Edge messaging.", file=sys.stderr)
+        print(
+            "  single-client Connect directly to Core; simplest and the default.",
+            file=sys.stderr,
+        )
+        print(
+            "  nats_leaf    Keep same-host messaging available during Core outages; "
+            "EdgeCitadel installs a pinned local NATS when needed.",
+            file=sys.stderr,
+        )
+        args.messaging_mode = _interactive_choice(
+            "Messaging mode [single-client/nats_leaf] (default: single-client): ",
+            ("single-client", "nats_leaf"),
+            default="single-client",
+        )
+
+
+def _interactive_plugin_choices() -> list[str]:
+    detected = [
+        driver_for(host, INSTALL_ROOT, project_root=Path.cwd()).detect()
+        for host in HOSTS
+    ]
+    available = [status.host for status in detected if status.state == "available"]
+    attention = [
+        status
+        for status in detected
+        if status.available and status.state in {"unknown", "unsupported"}
+    ]
+    print("\nPlugin setup: choose native agent hosts to connect.", file=sys.stderr)
+    print(
+        "Select only hosts already installed on this machine; blank skips Plugins.",
+        file=sys.stderr,
+    )
+    print(f"Available Plugin hosts: {', '.join(available) or 'none'}", file=sys.stderr)
+    if attention:
+        print("Plugin hosts needing attention:", file=sys.stderr)
+        for status in attention:
+            print(f"  {status.host}: {status.detail}", file=sys.stderr)
+    raw = input("Plugins to install (comma-separated, blank for none): ").strip()
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def command_install(args: argparse.Namespace) -> int:
@@ -2816,17 +2920,7 @@ def command_install(args: argparse.Namespace) -> int:
 
     selected = list(dict.fromkeys(args.plugins or []))
     if not selected and not args.json and sys.stdin.isatty():
-        available = [
-            host
-            for host in HOSTS
-            if driver_for(host, INSTALL_ROOT, project_root=Path.cwd()).detect().state
-            == "available"
-        ]
-        print(
-            f"Available Plugin hosts: {', '.join(available) or 'none'}", file=sys.stderr
-        )
-        raw = input("Plugins to install (comma-separated, blank for none): ").strip()
-        selected = [item.strip() for item in raw.split(",") if item.strip()]
+        selected = _interactive_plugin_choices()
     elif not selected and (args.yes or args.json or not sys.stdin.isatty()):
         raise UserError("non-interactive installation requires at least one --plugin")
     invalid = sorted(set(selected) - set(HOSTS))
