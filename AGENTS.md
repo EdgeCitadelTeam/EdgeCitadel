@@ -22,6 +22,8 @@
 - `agent-packages/` - Installable Agent Packages and developer examples
 - `plugins/` - Native Plugins for Pi, Claude Code, and Codex
 - `edgecitadel/` - Python distribution entrypoint; packaged runtime assets are assembled at build time
+- `docs/` - Tracked project guides and stable architecture/wiki documentation
+- `local-docs/` - Ignored local implementation plans, acceptance transcripts, and research notes
 
 ## Commands
 - Newcomer setup (guided create/join, messaging, and Plugins): `./scripts/edgecitadel install`
