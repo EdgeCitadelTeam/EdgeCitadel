@@ -57,6 +57,7 @@ include = [
   "/schemas",
   "/scripts/__init__.py",
   "/scripts/edgecitadel_cli.py",
+  "/scripts/core_network.py",
   "/scripts/installation_assets.py",
   "/scripts/nats_leaf.py",
   "/scripts/plugin_installation.py",
@@ -95,6 +96,7 @@ only-include = [
 "agent-runtime/pyproject.toml" = "edgecitadel-0.3.0.data/data/share/edgecitadel/agent-runtime/pyproject.toml"
 "scripts/__init__.py" = "edgecitadel-0.3.0.data/data/share/edgecitadel/scripts/__init__.py"
 "scripts/edgecitadel_cli.py" = "edgecitadel-0.3.0.data/data/share/edgecitadel/scripts/edgecitadel_cli.py"
+"scripts/core_network.py" = "edgecitadel-0.3.0.data/data/share/edgecitadel/scripts/core_network.py"
 "scripts/installation_assets.py" = "edgecitadel-0.3.0.data/data/share/edgecitadel/scripts/installation_assets.py"
 "scripts/nats_leaf.py" = "edgecitadel-0.3.0.data/data/share/edgecitadel/scripts/nats_leaf.py"
 "scripts/plugin_installation.py" = "edgecitadel-0.3.0.data/data/share/edgecitadel/scripts/plugin_installation.py"

@@ -5,7 +5,8 @@ http_port: 8222
 jetstream {
     store_dir: "/data/jetstream"
     max_mem: 256MB
-    max_file: 1GB
+    # AGENT_INBOX reserves 1GB; leave capacity for MQTT session/message streams.
+    max_file: 2GB
 }
 
 # MQTT ingress is deploy-time opt-in (ADR-0004). Uncommented by render script.

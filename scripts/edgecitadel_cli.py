@@ -7,9 +7,11 @@ import base64
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import plistlib
 import pwd
+import re
 import secrets
 import shutil
 import signal
@@ -20,14 +22,14 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 from urllib.parse import urlparse
 
 try:
-    from . import nats_leaf
+    from . import core_network, nats_leaf
     from .installation_assets import (
         AssetResolutionError,
         agent_packages_root,
@@ -37,6 +39,7 @@ try:
     )
     from .plugin_installation import HOSTS, PluginResult, driver_for
 except ImportError:  # Executed by the installed scripts/edgecitadel wrapper.
+    import core_network  # type: ignore[no-redef]
     import nats_leaf  # type: ignore[no-redef]
     from installation_assets import (  # type: ignore[no-redef]
         AssetResolutionError,
@@ -145,12 +148,7 @@ def _read_env(path: Path = ENV_PATH) -> dict[str, str]:
 
 
 def _secure_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(content)
-    temporary.chmod(0o600)
-    temporary.replace(path)
-    path.chmod(0o600)
+    core_network.atomic_write(path, content)
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
@@ -208,13 +206,14 @@ def _ensure_env(path: Path = ENV_PATH) -> tuple[dict[str, str], bool]:
     return _read_env(path), changed
 
 
-def _render_nats_config() -> None:
+def _render_nats_config(*, mqtt_enabled: bool | None = None) -> None:
     source = INSTALL_ROOT / "nats" / "nats.conf.tpl"
     destination = CORE_RUNTIME_DIR / "nats" / "nats.conf"
     if not source.exists():
         raise UserError("NATS configuration template is missing from the installation")
     content = source.read_text()
-    mqtt_enabled = os.environ.get("EC_ENABLE_MQTT", "0") == "1"
+    if mqtt_enabled is None:
+        mqtt_enabled = os.environ.get("EC_ENABLE_MQTT", "0") == "1"
     if mqtt_enabled:
         rendered: list[str] = []
         inside = False
@@ -295,6 +294,12 @@ def _write_compose_override() -> Path:
 
 
 def _compose_command(*arguments: str) -> list[str]:
+    descriptor = core_network.read_descriptor(CORE_RUNTIME_DIR)
+    if descriptor is not None:
+        core_network.assert_identity(
+            descriptor.get("docker"), core_network.docker_identity()
+        )
+        return core_network.compose_command(CORE_RUNTIME_DIR, descriptor, *arguments)
     if not (IS_HOMEBREW or IS_PIP):
         return ["docker", "compose", *arguments]
     override = _write_compose_override()
@@ -323,6 +328,11 @@ def _run(command: Sequence[str], *, cwd: Path = REPO_ROOT) -> None:
         raise UserError(f"command failed ({error.returncode}): {rendered}") from error
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _http_json(
     url: str,
     *,
@@ -330,6 +340,7 @@ def _http_json(
     body: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 5,
+    local_admin: bool = False,
 ) -> Any:
     encoded = None if body is None else json.dumps(body).encode()
     request_headers = {"Accept": "application/json", **(headers or {})}
@@ -339,7 +350,14 @@ def _http_json(
         url, data=encoded, headers=request_headers, method=method
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        opener = (
+            urllib.request.build_opener(
+                urllib.request.ProxyHandler({}), _NoRedirect()
+            ).open
+            if local_admin
+            else urllib.request.urlopen
+        )
+        with opener(request, timeout=timeout) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as error:
         try:
@@ -360,13 +378,18 @@ def _wait_for_core(core_url: str, timeout: int) -> None:
     last_error = "not ready"
     while time.monotonic() < deadline:
         try:
-            status = _http_json(f"{core_url}/api/system/status", timeout=2)
+            status = _http_json(
+                f"{core_url}/api/system/status",
+                timeout=min(2, max(0.01, deadline - time.monotonic())),
+                local_admin=urlparse(core_url).hostname
+                in {"127.0.0.1", "localhost", "::1"},
+            )
             if status.get("nats_connected") and status.get("jetstream_stream_ok"):
                 return
             last_error = "NATS or JetStream is not ready"
         except UserError as error:
             last_error = str(error)
-        time.sleep(1)
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
     raise UserError(
         f"core did not become ready within {timeout}s ({last_error}); "
         f"run '{_command_name()} doctor'"
@@ -384,11 +407,34 @@ def _load_node(state_dir: Path) -> dict[str, Any]:
         value = json.loads(path.read_text())
     except json.JSONDecodeError as error:
         raise UserError(f"node state is invalid: {path}") from error
-    if not isinstance(value, dict) or value.get("version") not in {1, 2}:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("version")) is not int
+        or value["version"] not in {1, 2}
+    ):
         raise UserError(f"node state is unsupported: {path}")
     if value.get("mode") not in {"core", "edge"}:
         raise UserError(f"node state is unsupported: {path}")
     normalized = dict(value)
+    if normalized["mode"] == "core":
+        if normalized["version"] != 1 or not all(
+            isinstance(normalized.get(key), str) and normalized[key]
+            for key in ("core_url", "nats_url", "nats_token")
+        ):
+            raise UserError(f"Core node state is unsupported: {path}")
+        _advertised_urls(normalized["core_url"])
+        try:
+            broker = urlparse(normalized["nats_url"])
+            if (
+                broker.scheme not in {"nats", "tls"}
+                or not broker.hostname
+                or not broker.port
+            ):
+                raise ValueError("invalid broker endpoint")
+        except ValueError as error:
+            raise UserError(f"Core node state is unsupported: {path}") from error
+        if "core_network" in normalized:
+            core_network.validate_policy(normalized["core_network"])
     if normalized["mode"] == "edge":
         messaging_mode = normalized.get("messaging_mode", "single-client")
         if messaging_mode not in {"single-client", "nats_leaf"}:
@@ -434,24 +480,144 @@ def _invitation_decode(value: str) -> dict[str, Any]:
     required = {"version", "core_url", "nats_url", "token", "agent_id", "expires_at"}
     if not isinstance(payload, dict) or not required.issubset(payload):
         raise UserError("invitation is incomplete")
-    if payload["version"] != 1:
+    if type(payload["version"]) is not int or payload["version"] != 1:
         raise UserError("invitation version is unsupported")
     try:
         expires_at = float(payload["expires_at"])
     except (TypeError, ValueError) as error:
         raise UserError("invitation expiry is malformed") from error
+    if not math.isfinite(expires_at):
+        raise UserError("invitation expiry is malformed")
     if expires_at <= time.time():
-        raise UserError("invitation has expired; ask the core operator for a new one")
-    if urlparse(str(payload["core_url"])).scheme not in {"http", "https"}:
+        print(
+            "Invitation appears expired according to this computer's clock; the Core decides whether it is still valid.",
+            file=sys.stderr,
+        )
+    if not all(
+        isinstance(payload.get(key), str) and payload[key]
+        for key in ("core_url", "nats_url", "token", "agent_id")
+    ):
+        raise UserError("invitation fields are malformed")
+    if urlparse(payload["core_url"]).scheme not in {"http", "https"}:
         raise UserError("invitation core URL is unsupported")
-    if urlparse(str(payload["nats_url"])).scheme not in {"nats", "tls"}:
-        raise UserError("invitation broker URL is unsupported")
+    _advertised_urls(payload["core_url"])
+    try:
+        broker = urlparse(payload["nats_url"])
+        if (
+            broker.scheme not in {"nats", "tls"}
+            or not broker.hostname
+            or not broker.port
+            or broker.username is not None
+            or broker.password is not None
+            or broker.path not in {"", "/"}
+            or broker.query
+            or broker.fragment
+        ):
+            raise ValueError("invalid broker endpoint")
+    except ValueError as error:
+        raise UserError("invitation broker URL is unsupported") from error
     return payload
+
+
+def _tailscale_binary() -> str:
+    binary = shutil.which("tailscale")
+    if binary:
+        return binary
+    if sys.platform == "darwin":
+        for candidate in (
+            Path("/Applications/Tailscale.app/Contents/MacOS/Tailscale"),
+            Path.home() / "Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        ):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    raise UserError(
+        "Tailscale CLI was not found; install and connect Tailscale, then retry"
+    )
+
+
+def _detect_tailscale_ipv4() -> str:
+    """Read only this machine's usable address, without logging peer inventory."""
+    binary = _tailscale_binary()
+    try:
+        result = subprocess.run(
+            [binary, "status", "--json"],
+            timeout=5,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "TAILSCALE_BE_CLI": "1"},
+        )
+    except subprocess.TimeoutExpired as error:
+        raise UserError(
+            "Tailscale status timed out after 5 seconds; retry when it responds"
+        ) from error
+    except OSError as error:
+        raise UserError(
+            "Tailscale status could not run; check the local installation"
+        ) from error
+    if result.returncode:
+        raise UserError("Tailscale daemon is unavailable; start Tailscale and retry")
+    try:
+        status = json.loads(result.stdout)
+    except (ValueError, TypeError) as error:
+        raise UserError("Tailscale returned malformed status") from error
+    if not isinstance(status, dict):
+        raise UserError("Tailscale returned malformed status")
+    backend = status.get("BackendState")
+    if backend in {"NeedsLogin", "NeedsMachineAuth"}:
+        raise UserError(
+            "Tailscale requires sign-in or machine authorization; finish setup and retry"
+        )
+    if backend != "Running":
+        raise UserError("Tailscale is stopped or not ready; connect it and retry")
+    record = status.get("Self")
+    if not isinstance(record, dict) or record.get("Online") is not True:
+        raise UserError(
+            "Tailscale has no online self record; connect this machine and retry"
+        )
+    addresses = record.get("TailscaleIPs")
+    if not isinstance(addresses, list):
+        raise UserError("Tailscale returned malformed self addresses")
+    ipv4: set[str] = set()
+    ipv6 = False
+    for value in addresses:
+        if not isinstance(value, str):
+            raise UserError("Tailscale returned malformed self addresses")
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as error:
+            raise UserError("Tailscale returned malformed self addresses") from error
+        if address.version == 4 and address in ipaddress.ip_network("100.64.0.0/10"):
+            ipv4.add(str(address))
+        elif address.version == 6:
+            ipv6 = True
+    if len(ipv4) > 1:
+        raise UserError(
+            "Tailscale returned multiple self IPv4 addresses; resolve the ambiguity before retrying"
+        )
+    if not ipv4:
+        if ipv6:
+            raise UserError(
+                "IPv6-only Tailscale is not supported by guided setup; a self IPv4 address is required"
+            )
+        raise UserError(
+            "Tailscale has no usable self IPv4 address; connect this machine and retry"
+        )
+    return next(iter(ipv4))
 
 
 def _advertised_urls(host: str) -> tuple[str, str]:
     """Return Core and NATS URLs with a valid bracketed IPv6 authority."""
-    value = host.rstrip("/")
+    if (
+        not isinstance(host, str)
+        or not host
+        or any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in host
+        )
+    ):
+        raise UserError("advertised host is invalid")
+    value = host
     if "://" not in value:
         try:
             address = ipaddress.ip_address(value.strip("[]"))
@@ -462,25 +628,279 @@ def _advertised_urls(host: str) -> tuple[str, str]:
             core_url = f"http://{authority}"
     else:
         core_url = value
-    parsed = urlparse(core_url)
     try:
-        parsed.port
+        parsed = urlparse(core_url)
+        port = parsed.port
     except ValueError as error:
         raise UserError(
             "advertised IPv6 hosts with a scheme must use brackets"
         ) from error
-    if not parsed.hostname:
+    if (
+        not parsed.hostname
+        or parsed.scheme not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or "?" in core_url
+        or "#" in core_url
+        or port == 0
+        or "%" in parsed.hostname
+    ):
         raise UserError("advertised host is invalid")
     try:
         address = ipaddress.ip_address(parsed.hostname)
     except ValueError:
-        broker_authority = parsed.hostname
+        hostname = parsed.hostname.rstrip(".")
+        labels = hostname.split(".")
+        if len(hostname) > 253 or not all(
+            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label)
+            for label in labels
+        ):
+            raise UserError("advertised hostname is invalid")
+        broker_authority = parsed.hostname.lower()
     else:
+        effective_address = getattr(address, "ipv4_mapped", None) or address
+        if (
+            effective_address.is_unspecified
+            or effective_address.is_multicast
+            or effective_address.is_link_local
+        ):
+            raise UserError("advertised address must be a usable unicast address")
         broker_authority = f"[{address}]" if address.version == 6 else str(address)
+    core_url = f"{parsed.scheme}://{broker_authority}"
+    if port is not None:
+        core_url += f":{port}"
     return core_url, f"nats://{broker_authority}:4222"
 
 
-def command_create(args: argparse.Namespace) -> int:
+def _setup_input(prompt: str) -> str:
+    print(prompt, end="", file=sys.stderr, flush=True)
+    try:
+        return input("").strip()
+    except EOFError as error:
+        raise KeyboardInterrupt from error
+
+
+def _setup_interactive(args: argparse.Namespace) -> bool:
+    return bool(
+        sys.stdin.isatty()
+        and not any(getattr(args, key, False) for key in ("yes", "json", "dry_run"))
+    )
+
+
+def _deployment_menu() -> str:
+    print(
+        "This starts the full Core on this computer and requires Docker.\n\n"
+        "How would you like to deploy your NATS server?\n\n"
+        "1. Local only\n"
+        "   Run a shared server for multiple agents on this computer.\n"
+        "   Agents on other computers cannot connect.\n"
+        "2. Accessible over Tailscale\n"
+        "   Run a server that local and remote agents can connect to.\n"
+        "   All computers must first join the same Tailscale network.\n"
+        "   We’ll detect and fill in this computer’s Tailscale address.\n"
+        "3. Accessible at your own IP or hostname\n"
+        "   Run a server on an AWS instance, a LAN machine, or another host.\n"
+        "   Enter an address that your agents’ computers can reach.\n"
+        "   You’re responsible for configuring network access.\n",
+        file=sys.stderr,
+    )
+    while True:
+        selected = _setup_input("Choose 1, 2, or 3: ")
+        if selected in {"1", "2", "3"}:
+            return {"1": "local", "2": "tailscale", "3": "custom"}[selected]
+        print("Please choose 1, 2, or 3.", file=sys.stderr)
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    if hostname.rstrip(".").lower() == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return bool((getattr(address, "ipv4_mapped", None) or address).is_loopback)
+
+
+def _resolve_core_setup(
+    args: argparse.Namespace, existing: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Resolve in memory only; caller rechecks state under ownership locks."""
+    host = getattr(args, "host", None)
+    mode = getattr(args, "network", None)
+    bind = getattr(args, "bind_address", None)
+    interactive = _setup_interactive(args)
+    explicit = host is not None or mode is not None or bind is not None
+    if getattr(args, "invitation", None) and explicit:
+        raise UserError("Core network options cannot be used with --join")
+    if existing is not None:
+        if existing.get("mode") != "core":
+            raise UserError("this host is already an Edge; it cannot also become Core")
+        if not explicit:
+            if "core_network" in existing:
+                core_network.validate_policy(existing["core_network"])
+            return dict(existing)
+    if mode not in {None, "local", "tailscale", "custom"}:
+        raise UserError("Core network mode is invalid")
+    if bind is not None and mode not in {None, "custom"}:
+        raise UserError("--bind-address applies only to custom access")
+    if mode == "tailscale" and host is not None:
+        raise UserError(
+            "Tailscale detects this host's address; --host is not supported"
+        )
+    if mode is None and host is not None:
+        core_url, _ = _advertised_urls(host)
+        mode = (
+            "local"
+            if _is_loopback_host(urlparse(core_url).hostname or "")
+            else "custom"
+        )
+    if mode is None and bind is not None:
+        raise UserError(
+            "--bind-address requires --network custom or an explicit remote --host"
+        )
+    guided = mode is None and interactive
+    if mode is None:
+        mode = _deployment_menu() if interactive else "local"
+    while mode == "tailscale":
+        try:
+            host = _detect_tailscale_ipv4()
+            print(f"This computer's Tailscale address: {host}", file=sys.stderr)
+            bind = host
+            break
+        except UserError as error:
+            if not interactive:
+                raise
+            print(str(error), file=sys.stderr)
+            choice = _setup_input(
+                "Retry detection or return to menu? [retry/menu] "
+            ).lower()
+            if choice == "menu":
+                mode = _deployment_menu()
+                guided = True
+            elif choice != "retry":
+                print("Please choose retry or menu.", file=sys.stderr)
+    if mode == "local":
+        if bind is not None:
+            raise UserError("Local access cannot use --bind-address")
+        host = host or "127.0.0.1"
+        core_url, nats_url = _advertised_urls(host)
+        if not _is_loopback_host(urlparse(core_url).hostname or ""):
+            raise UserError("Local access requires a loopback --host")
+    else:
+        if not host and interactive:
+            host = _setup_input("Hostname or IP reachable by your agents: ")
+        if not host:
+            raise UserError("Custom access requires --host <reachable-host>")
+        if guided and ("://" in host or "/" in host):
+            raise UserError(
+                "Enter a hostname or IP in the guide; advanced API URLs require --host"
+            )
+        core_url, nats_url = _advertised_urls(host)
+        if guided and urlparse(core_url).port is not None:
+            raise UserError(
+                "Enter a hostname or IP in the guide; advanced API ports require --host"
+            )
+        hostname = urlparse(core_url).hostname or ""
+        if _is_loopback_host(hostname):
+            raise UserError("Custom access cannot advertise a loopback address")
+        addresses = core_network.resolve_addresses(hostname)
+        if any(_is_loopback_host(address) for address in addresses):
+            raise UserError("Custom hostname resolves to a loopback address")
+        for address in addresses:
+            _advertised_urls(address)
+        local = core_network.assigned_addresses()
+        if bind is None:
+            candidates = sorted(addresses & local)
+            if len(candidates) == 1:
+                bind = candidates[0]
+            elif interactive:
+                if candidates:
+                    print(
+                        "Assigned candidates: " + ", ".join(candidates), file=sys.stderr
+                    )
+                else:
+                    print(
+                        "The advertised address is not assigned here (or DNS is unresolved). Enter this computer's listening IP; NAT/proxy addresses are not bind addresses.",
+                        file=sys.stderr,
+                    )
+                bind = _setup_input("Assigned bind IP: ")
+            else:
+                raise UserError(
+                    "Advertised address has no unique assigned bind; supply --bind-address <local-ip>"
+                )
+        try:
+            bind = str(ipaddress.ip_address(bind))
+        except ValueError as error:
+            raise UserError(
+                "--bind-address must be an assigned IP, not a hostname"
+            ) from error
+        if bind not in local:
+            raise UserError("Selected bind address is not assigned to this computer")
+        if mode == "custom":
+            print(
+                "Custom access requires an operator-protected network. This command does not configure TLS, firewall rules, or a public HTTPS proxy.",
+                file=sys.stderr,
+            )
+        if not addresses:
+            print(
+                "Advertised DNS is unresolved; remote access remains unverified.",
+                file=sys.stderr,
+            )
+        elif len(addresses) > 1:
+            print(
+                "Advertised DNS has multiple answers; the selected bind is fixed, and remote access remains unverified.",
+                file=sys.stderr,
+            )
+    previous = existing.get("core_network") if existing else None
+    generation = previous["generation"] if isinstance(previous, dict) else 0
+    mqtt = (
+        previous.get("mqtt", False)
+        if isinstance(previous, dict)
+        else os.environ.get("EC_ENABLE_MQTT", "0") == "1"
+    )
+    policy = {
+        "version": 1,
+        "mode": mode,
+        "bind_address": bind,
+        "generation": generation or 1,
+        "mqtt": mqtt,
+    }
+    core_network.validate_policy(policy)
+    candidate = {
+        **(existing or {}),
+        "core_url": core_url,
+        "nats_url": nats_url,
+        "core_network": policy,
+    }
+    changed = existing is not None and any(
+        candidate.get(key) != existing.get(key)
+        for key in ("core_url", "nats_url", "core_network")
+    )
+    if changed:
+        policy["generation"] = generation + 1
+        old = (
+            previous.get("mode", "legacy/unknown")
+            if isinstance(previous, dict)
+            else "legacy/unknown"
+        )
+        print(
+            f"Core access change: {old} ({existing.get('core_url')}) -> {mode} ({core_url}). Existing invitations keep their old addresses; regenerate them for the new endpoint.",
+            file=sys.stderr,
+        )
+        if not getattr(args, "yes", False):
+            if not interactive:
+                raise UserError(
+                    "Changing existing Core access requires explicit options and --yes"
+                )
+            if _setup_input("Apply this access change? [yes/no] ").lower() != "yes":
+                raise KeyboardInterrupt
+    return candidate
+
+
+def _legacy_create(args: argparse.Namespace) -> int:
+    core_url, nats_url = _advertised_urls(args.host)
     state_dir = _state_dir(args.state_dir)
     existing_path = state_dir / NODE_STATE_NAME
     if existing_path.exists() and _load_node(state_dir)["mode"] != "core":
@@ -496,22 +916,26 @@ def command_create(args: argparse.Namespace) -> int:
     for directory in (CORE_RUNTIME_DIR / "data", CORE_RUNTIME_DIR / "nats" / "data"):
         directory.mkdir(parents=True, exist_ok=True)
     _render_nats_config()
-    _validate_core_nats_config(env)
+    if not args.no_start:
+        _validate_core_nats_config(env)
 
-    core_url, nats_url = _advertised_urls(args.host)
     node = {
         "version": 1,
         "mode": "core",
         "core_url": core_url,
         "nats_url": nats_url,
         "nats_token": env["NATS_TOKEN"],
+        "local_core_url": "http://127.0.0.1",
+        "plugin_nats_url": "nats://127.0.0.1:4222",
+        "plugin_nats_token": env["NATS_TOKEN"],
         "agent_id": "core",
         "created_at": int(time.time()),
     }
     if existing_path.exists():
         existing = _load_node(state_dir)
-        node["created_at"] = existing.get("created_at", node["created_at"])
-    _write_json(existing_path, node)
+        node = existing
+    else:
+        _write_json(existing_path, node)
 
     if not args.no_start:
         _run(_compose_command("up", "--build", "-d"), cwd=INSTALL_ROOT)
@@ -532,26 +956,392 @@ def command_create(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_create(args: argparse.Namespace) -> int:
+    timeout = getattr(args, "timeout", 120)
+    if not isinstance(timeout, int) or timeout <= 0:
+        raise UserError("--timeout must be positive")
+    state_dir = _state_dir(args.state_dir).resolve()
+    runtime = CORE_RUNTIME_DIR.resolve()
+    node_path = state_dir / NODE_STATE_NAME
+    existing = _load_node(state_dir) if node_path.exists() else None
+    pending = core_network.read_descriptor(runtime, state_dir)
+    resume = existing
+    if (
+        pending
+        and pending["phase"] in {"prepared", "applying", "failed", "stopped"}
+        and not any(
+            getattr(args, field, None) is not None
+            for field in ("network", "host", "bind_address")
+        )
+    ):
+        resume = _read_json(runtime / "core-candidate.json", {})
+        if (
+            resume.get("mode") != "core"
+            or core_network.validate_policy(resume.get("core_network"))["generation"]
+            != pending["generation"]
+        ):
+            raise UserError(
+                "Core apply recovery state is inconsistent; inspect the saved candidate"
+            )
+    candidate = _resolve_core_setup(args, resume)
+    if "core_network" not in candidate:
+        # No-option legacy reruns keep their historic composition and endpoints.
+        print(
+            "Core access policy is legacy/unknown; select --network explicitly to manage exposure.",
+            file=sys.stderr,
+        )
+        legacy_args = argparse.Namespace(**vars(args))
+        legacy_args.host = candidate["core_url"]
+        return _legacy_create(legacy_args)
+    selected = candidate["core_network"]
+    no_start = getattr(args, "no_start", False)
+    if not no_start and shutil.which("docker") is None:
+        raise UserError(
+            "Docker is required to start a Core node; install Docker Desktop/Engine, then rerun create"
+        )
+    with core_network.lock(runtime / ".core-runtime.lock"):
+        current = _load_node(state_dir) if node_path.exists() else None
+        if current != existing:
+            raise UserError(
+                "Core state changed while setup was open; rerun to review the current settings"
+            )
+        descriptor = core_network.read_descriptor(runtime, state_dir)
+        if descriptor is None:
+            project = (
+                "edgecitadel"
+                if IS_PIP or IS_HOMEBREW
+                else re.sub(r"[^a-z0-9_-]", "", INSTALL_ROOT.name.lower()).lstrip("-_")
+            )
+            if not project:
+                raise UserError(
+                    "Installation directory cannot determine a Compose project name"
+                )
+            descriptor = {
+                "version": 1,
+                "owner": str(node_path),
+                "runtime": str(runtime),
+                "compose_file": str((INSTALL_ROOT / "docker-compose.yml").resolve()),
+                "project": project,
+                "docker": None,
+                "generation": selected["generation"],
+                "applied_generation": None,
+                "phase": "configured",
+            }
+        if (
+            no_start
+            and existing
+            and ("core_network" not in existing or descriptor.get("docker") is not None)
+        ):
+            if candidate != existing:
+                raise UserError(
+                    "--no-start cannot change an applied or legacy policy; rerun without --no-start"
+                )
+            print(
+                "Core configuration preserved; no runtime checks or Docker operations performed (--no-start)."
+            )
+            return 0
+        identity = None if no_start else core_network.docker_identity()
+        discover_source = (
+            identity is not None
+            and descriptor.get("docker") is None
+            and not (IS_PIP or IS_HOMEBREW)
+        )
+        if identity is not None:
+            core_network.assert_identity(descriptor.get("docker"), identity)
+            if discover_source:
+                descriptor["project"] = core_network.source_project(
+                    identity, Path(descriptor["compose_file"]), descriptor["project"]
+                )
+        with (
+            core_network.project_lock(identity, descriptor["project"])
+            if identity
+            else nullcontext()
+        ):
+            applying = False
+            recreate = descriptor["phase"] in {"applying", "failed"} or (
+                descriptor["phase"] == "stopped"
+                and descriptor.get("applied_generation") != selected["generation"]
+            )
+            try:
+                if identity is not None:
+                    if (
+                        discover_source
+                        and core_network.source_project(
+                            identity,
+                            Path(descriptor["compose_file"]),
+                            descriptor["project"],
+                        )
+                        != descriptor["project"]
+                    ):
+                        raise UserError(
+                            "Source Core project changed during setup; retry to review ownership"
+                        )
+                    descriptor["docker"] = identity
+                    core_network.owned_containers(
+                        descriptor,
+                        allow_legacy=existing is not None
+                        and "core_network" not in existing,
+                    )
+                    # Validate ambient inputs before credentials or policy writes.
+                    core_network.compose_command(runtime, descriptor, "config")
+                    if (
+                        selected["mode"] == "tailscale"
+                        and _detect_tailscale_ipv4() != selected["bind_address"]
+                    ):
+                        raise UserError(
+                            "Tailscale self address changed during setup; rerun and review the address"
+                        )
+                    if (
+                        selected["bind_address"]
+                        and selected["bind_address"]
+                        not in core_network.assigned_addresses()
+                    ):
+                        raise UserError(
+                            "Selected bind address is no longer assigned; restore the interface before retrying"
+                        )
+                env_before = _read_env()
+                if (
+                    existing
+                    and existing.get("nats_token")
+                    and env_before.get("NATS_TOKEN") != existing["nats_token"]
+                ):
+                    raise UserError(
+                        "Core node and runtime credentials disagree; restore the matching local configuration before retrying"
+                    )
+                if (
+                    "EC_ENABLE_MQTT" in os.environ
+                    and (os.environ["EC_ENABLE_MQTT"] == "1") != selected["mqtt"]
+                ):
+                    raise UserError(
+                        "EC_ENABLE_MQTT conflicts with the saved Core policy"
+                    )
+                if identity is not None:
+                    core_network.preflight_model(
+                        runtime, descriptor, selected, env_before
+                    )
+                env, changed = _ensure_env()
+                for directory in (runtime / "data", runtime / "nats/data"):
+                    directory.mkdir(parents=True, exist_ok=True)
+                candidate.update(
+                    {
+                        "version": 1,
+                        "mode": "core",
+                        "agent_id": "core",
+                        "nats_token": env["NATS_TOKEN"],
+                        "local_core_url": "http://127.0.0.1",
+                        "plugin_nats_url": "nats://127.0.0.1:4222",
+                        "plugin_nats_token": env["NATS_TOKEN"],
+                        "created_at": candidate.get("created_at", int(time.time())),
+                    }
+                )
+                if (
+                    not no_start
+                    and existing
+                    and (
+                        existing.get("plugin_nats_url", existing.get("nats_url")),
+                        existing.get("plugin_nats_token", existing.get("nats_token")),
+                    )
+                    != (candidate["plugin_nats_url"], candidate["plugin_nats_token"])
+                ):
+                    running, _ = _agentd_process_detail(state_dir)
+                    if running:
+                        descriptor["agentd_restart_pending"] = True
+                descriptor.update(
+                    generation=selected["generation"],
+                    phase="configured" if no_start else "prepared",
+                )
+                _write_json(runtime / "core-candidate.json", candidate)
+                _write_json(runtime / core_network.DESCRIPTOR, descriptor)
+                _render_nats_config(mqtt_enabled=selected["mqtt"])
+                _secure_write(
+                    runtime / "docker-compose.managed.yml",
+                    core_network.render_override(
+                        runtime, descriptor["owner"], selected
+                    ),
+                )
+                if no_start:
+                    _write_json(node_path, candidate)
+                    print(
+                        f"Core configured for {selected['mode']} access; not started (--no-start). Runtime identity and remote access are unverified."
+                    )
+                    return 0
+                model = core_network._json_command(
+                    core_network.compose_command(
+                        runtime, descriptor, "config", "--format", "json"
+                    )
+                )
+                core_network.verify_model(model, selected)
+                _validate_core_nats_config(env)
+                descriptor["phase"] = "applying"
+                _write_json(runtime / core_network.DESCRIPTOR, descriptor)
+                applying = True
+                apply_arguments = ["up", "--build", "-d"]
+                if recreate:
+                    # A failed bind can leave a restartable container with
+                    # incomplete networking. Reapply its declared configuration.
+                    apply_arguments.append("--force-recreate")
+                _run(
+                    core_network.compose_command(runtime, descriptor, *apply_arguments),
+                    cwd=INSTALL_ROOT,
+                )
+                containers = core_network.owned_containers(descriptor)
+                core_network.verify_bindings(
+                    containers, selected, context=identity["context"]
+                )
+                _wait_for_core(candidate["local_core_url"], timeout)
+                for port in (4222, 7422):
+                    try:
+                        with socket.create_connection(("127.0.0.1", port), timeout=2):
+                            pass
+                    except OSError as error:
+                        raise OperationalError(
+                            f"Core local port {port} is not reachable"
+                        ) from error
+                _write_json(node_path, candidate)
+                descriptor.update(
+                    phase="ready", applied_generation=selected["generation"]
+                )
+                _write_json(runtime / core_network.DESCRIPTOR, descriptor)
+                applying = False
+                if descriptor.get("agentd_restart_pending", False):
+                    # Persisted before node commit: retry even if a prior run
+                    # saved the endpoint or stopped agentd before interruption.
+                    _stop_agentd(state_dir)
+                    _start_agentd(state_dir)
+                    descriptor["agentd_restart_pending"] = False
+                    _write_json(runtime / core_network.DESCRIPTOR, descriptor)
+                print(
+                    f"Core ready for {selected['mode']} access: {candidate['core_url']}"
+                )
+                print(
+                    "Local API, internal NATS/JetStream, and host client/Leaf ports are ready. Remote access is not yet verified."
+                )
+                print(
+                    f"Secrets {'generated' if changed else 'preserved'}. Next for local agents: {_command_name()} install --create --plugin <host> --yes"
+                )
+                return 0
+            except BaseException as error:
+                if applying:
+                    # A failed restriction never restores the old, broader map.
+                    try:
+                        core_network.owned_containers(descriptor, allow_legacy=True)
+                        _run(
+                            core_network.compose_command(
+                                runtime, descriptor, "stop", "nginx", "nats"
+                            ),
+                            cwd=INSTALL_ROOT,
+                        )
+                    except Exception:
+                        print(
+                            "Could not confirm the affected Core services stopped; inspect their bindings before retrying.",
+                            file=sys.stderr,
+                        )
+                    descriptor["phase"] = "failed"
+                    _write_json(runtime / core_network.DESCRIPTOR, descriptor)
+                    print(
+                        f"Core apply failed; data and credentials retained. Retry: {_command_name()} create --state-dir {state_dir}",
+                        file=sys.stderr,
+                    )
+                    if isinstance(error, UserError):
+                        raise OperationalError(str(error)) from error
+                raise
+
+
+@contextmanager
+def _core_administration(state_dir: Path, node: dict[str, Any]) -> Iterator[str]:
+    descriptor = core_network.read_descriptor(CORE_RUNTIME_DIR, state_dir)
+    identity = core_network.docker_identity()
+    managed = descriptor is not None
+    if descriptor is None:
+        descriptor = {
+            "owner": str((state_dir / NODE_STATE_NAME).resolve()),
+            "project": "edgecitadel"
+            if IS_PIP or IS_HOMEBREW
+            else INSTALL_ROOT.name.lower(),
+            "compose_file": str((INSTALL_ROOT / "docker-compose.yml").resolve()),
+            "runtime": str(CORE_RUNTIME_DIR.resolve()),
+            "docker": identity,
+        }
+    else:
+        core_network.assert_identity(descriptor.get("docker"), identity)
+        if descriptor["phase"] != "ready" or descriptor.get(
+            "applied_generation"
+        ) != node.get("core_network", {}).get("generation"):
+            raise UserError(
+                "Core is configured but not verified ready; rerun create before inviting an Edge"
+            )
+    with core_network.project_lock(identity, descriptor["project"]):
+        containers = core_network.owned_containers(descriptor, allow_legacy=not managed)
+        if managed:
+            core_network.verify_bindings(
+                containers, node["core_network"], context=identity["context"]
+            )
+        else:
+            nginx = [
+                item
+                for item in containers
+                if item["Config"]["Labels"].get("com.docker.compose.service") == "nginx"
+                and item.get("State", {}).get("Running")
+            ]
+            if len(nginx) != 1 or not any(
+                binding["HostPort"] == "80"
+                and binding["HostIp"] in {"0.0.0.0", "127.0.0.1"}
+                for binding in nginx[0]
+                .get("NetworkSettings", {})
+                .get("Ports", {})
+                .get("80/tcp", [])
+                or []
+            ):
+                raise UserError(
+                    "Legacy Core local administration endpoint could not be verified"
+                )
+        status = _http_json(
+            "http://127.0.0.1/api/system/status", timeout=2, local_admin=True
+        )
+        if (
+            not isinstance(status, dict)
+            or not status.get("nats_connected")
+            or not status.get("jetstream_stream_ok")
+        ):
+            raise OperationalError("Core local API/NATS is not ready for enrollment")
+        yield "http://127.0.0.1"
+
+
 def command_invite(args: argparse.Namespace) -> int:
+    with core_network.lock(CORE_RUNTIME_DIR / ".core-runtime.lock"):
+        return _command_invite_locked(args)
+
+
+def _command_invite_locked(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     node = _load_node(state_dir)
     if node["mode"] != "core":
         raise UserError("only a core node can create invitations")
+    if node.get("core_network", {}).get("mode") == "local":
+        raise UserError(
+            "Local-only Core cannot invite remote hosts; explicitly change --network to tailscale or custom first"
+        )
+    if getattr(args, "host", None):
+        core_url, nats_url = _advertised_urls(args.host)
+        if _is_loopback_host(urlparse(core_url).hostname or ""):
+            raise UserError("Remote invitations cannot advertise a loopback address")
+    else:
+        core_url, _ = _advertised_urls(node["core_url"])
+        nats_url = node["nats_url"]
     env = _read_env()
     admin_token = env.get("EDGECITADEL_ADMIN_TOKEN", "")
     if not admin_token:
         raise UserError("administrator credential is missing; rerun create")
 
-    core_url, nats_url = _advertised_urls(args.host)
-    response = _http_json(
-        f"{node['core_url']}/api/enrollment/invitations",
-        method="POST",
-        body={
-            "agent_id": args.agent_id,
-            "expires_in_seconds": args.expires,
-        },
-        headers={"X-EdgeCitadel-Admin-Token": admin_token},
-    )
+    with _core_administration(state_dir, node) as local_url:
+        response = _http_json(
+            f"{local_url}/api/enrollment/invitations",
+            method="POST",
+            body={"agent_id": args.agent_id, "expires_in_seconds": args.expires},
+            headers={"X-EdgeCitadel-Admin-Token": admin_token},
+            timeout=2,
+            local_admin=True,
+        )
     invitation = _invitation_encode(
         {
             "version": 1,
@@ -571,6 +1361,59 @@ def command_invite(args: argparse.Namespace) -> int:
     return 0
 
 
+def _probe_endpoint(url: str, *, port: int | None = None, timeout: float = 2) -> bool:
+    try:
+        parsed = urlparse(url)
+        selected_port = (
+            port
+            or parsed.port
+            or {"http": 80, "https": 443, "nats": 4222, "tls": 4222}.get(parsed.scheme)
+        )
+        if not parsed.hostname or not selected_port:
+            return False
+        addresses = core_network.resolve_addresses(parsed.hostname)
+        deadline = time.monotonic() + timeout
+        for address in sorted(addresses):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                with socket.create_connection(
+                    (address, selected_port), timeout=remaining
+                ):
+                    return True
+            except OSError:
+                continue
+    except (ValueError, core_network.NetworkError):
+        pass
+    return False
+
+
+def _join_preflight(invitation: dict[str, Any], mode: str) -> None:
+    if not _probe_endpoint(invitation["core_url"]):
+        raise OperationalError(
+            "Core enrollment API is unreachable; no redemption was attempted. Retry this invitation after restoring access, if still valid."
+        )
+    port = 7422 if mode == "nats_leaf" else urlparse(invitation["nats_url"]).port
+    if not _probe_endpoint(invitation["nats_url"], port=port):
+        raise OperationalError(
+            f"Core {'Leaf' if mode == 'nats_leaf' else 'client'} port {port} is unreachable; no redemption was attempted. Restore access before retrying this invitation."
+        )
+
+
+def _joined_transport_result(node: dict[str, Any]) -> int:
+    endpoint = node["plugin_nats_url"]
+    if not _tcp_ready(endpoint, timeout=2):
+        print(
+            "Enrollment is saved, but the configured broker is unavailable. Restore connectivity and use doctor/service start; do not redeem this invitation again."
+        )
+        return 1
+    print(
+        "Configured broker TCP port is reachable. Authenticated agent messaging and remote request/reply are not verified by this check."
+    )
+    return 0
+
+
 def command_join(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     state_path = state_dir / NODE_STATE_NAME
@@ -583,7 +1426,7 @@ def command_join(args: argparse.Namespace) -> int:
                     f"This host is already joined as {existing['agent_id']} "
                     f"with messaging mode {requested_mode}; no changes made."
                 )
-                return 0
+                return _joined_transport_result(existing)
             raise UserError(
                 "this host is already joined with messaging mode "
                 f"{existing['messaging_mode']}; requested {requested_mode}. "
@@ -592,6 +1435,7 @@ def command_join(args: argparse.Namespace) -> int:
         raise UserError("this host is already initialized as a core node")
 
     invitation = _invitation_decode(args.invitation)
+    _join_preflight(invitation, requested_mode)
     binary: str | None = None
     if requested_mode == "nats_leaf":
         try:
@@ -602,11 +1446,36 @@ def command_join(args: argparse.Namespace) -> int:
             )
         except nats_leaf.NatsLeafError as error:
             raise UserError(str(error)) from error
-    response = _http_json(
-        f"{invitation['core_url']}/api/enrollment/redeem",
-        method="POST",
-        body={"token": invitation["token"], "messaging_mode": requested_mode},
-    )
+    recovery = f"On the Core, create a new invitation with '{_command_name()} invite --node-id {invitation['agent_id']}'. Do not retry the redemption POST."
+    try:
+        response = _http_json(
+            f"{invitation['core_url']}/api/enrollment/redeem",
+            method="POST",
+            body={"token": invitation["token"], "messaging_mode": requested_mode},
+            timeout=2,
+        )
+    except (UserError, ValueError, OSError) as error:
+        cause = error.__cause__
+        if isinstance(cause, urllib.error.HTTPError) and cause.code in {
+            400,
+            401,
+            403,
+            409,
+            410,
+        }:
+            raise UserError(
+                f"Enrollment was rejected; the invitation may be invalid, expired, or already used. {recovery}"
+            ) from error
+        raise OperationalError(
+            f"Enrollment response was lost or unreadable; invitation consumption is uncertain. {recovery}"
+        ) from error
+    if (
+        not isinstance(response, dict)
+        or response.get("agent_id") != invitation["agent_id"]
+    ):
+        raise OperationalError(
+            f"Core returned an incomplete enrollment; invitation consumption is uncertain. {recovery}"
+        )
     common = {
         "version": 2,
         "mode": "edge",
@@ -619,7 +1488,9 @@ def command_join(args: argparse.Namespace) -> int:
     if requested_mode == "single-client":
         token = response.get("nats_token")
         if not isinstance(token, str) or not token:
-            raise UserError("core returned an incomplete single-client enrollment")
+            raise OperationalError(
+                f"Core returned an incomplete single-client enrollment; invitation consumption is uncertain. {recovery}"
+            )
         node = {
             **common,
             "plugin_nats_url": invitation["nats_url"],
@@ -630,8 +1501,15 @@ def command_join(args: argparse.Namespace) -> int:
     else:
         leaf_username = response.get("leaf_username")
         leaf_password = response.get("leaf_password")
-        if not isinstance(leaf_username, str) or not isinstance(leaf_password, str):
-            raise UserError("core returned an incomplete nats_leaf enrollment")
+        if (
+            not isinstance(leaf_username, str)
+            or not leaf_username
+            or not isinstance(leaf_password, str)
+            or not leaf_password
+        ):
+            raise OperationalError(
+                f"Core returned an incomplete nats_leaf enrollment; invitation consumption is uncertain. {recovery}"
+            )
         local_token = secrets.token_urlsafe(32)
         try:
             nats_leaf.configure_and_start(
@@ -658,27 +1536,24 @@ def command_join(args: argparse.Namespace) -> int:
             raise UserError(
                 "nats_leaf enrollment was redeemed but local setup failed; no node state "
                 "was committed. On the Core, create a new invitation with "
-                f"'{_command_name()} invite --node-id {invitation['agent_id']} "
-                "--host <reachable-host>', then rerun join"
+                f"'{_command_name()} invite --node-id {invitation['agent_id']}', then rerun join"
             ) from error
     if requested_mode == "single-client":
-        _private_directory(state_dir)
-        _write_json(state_path, node)
-    print(f"This host joined EdgeCitadel as {node['agent_id']}.")
+        try:
+            _private_directory(state_dir)
+            _write_json(state_path, node)
+        except OSError as error:
+            raise OperationalError(
+                "Redemption succeeded but saving local state failed. Inspect the state directory before continuing; do not redeem again blindly. If credentials are missing, request a new invitation on the Core."
+            ) from error
+    print(f"This host enrolled in EdgeCitadel as {node['agent_id']}.")
     print(f"Messaging mode: {requested_mode}")
     print(f"Next: {_command_name()} agent install <managed-agent-path-or-name>")
-    return 0
+    return _joined_transport_result(node)
 
 
 def _tcp_ready(nats_url: str, timeout: float = 1) -> bool:
-    parsed = urlparse(nats_url)
-    if not parsed.hostname or not parsed.port:
-        return False
-    try:
-        with socket.create_connection((parsed.hostname, parsed.port), timeout=timeout):
-            return True
-    except OSError:
-        return False
+    return _probe_endpoint(nats_url, timeout=timeout)
 
 
 def command_doctor(args: argparse.Namespace) -> int:
@@ -692,25 +1567,78 @@ def command_doctor(args: argparse.Namespace) -> int:
         node = _load_node(state_dir)
         messaging_mode = node.get("messaging_mode", "core")
         add_check("node_configuration", "node configuration", True, node["mode"])
-    except UserError as error:
+    except (UserError, core_network.NetworkError) as error:
         node = None
         messaging_mode = "unknown"
         add_check("node_configuration", "node configuration", False, str(error))
 
     if node:
+        managed_core = node["mode"] == "core" and "core_network" in node
+        owned_core = True
+        api_url = "http://127.0.0.1" if managed_core else node["core_url"]
+        if managed_core:
+            try:
+                with core_network.lock(CORE_RUNTIME_DIR / ".core-runtime.lock"):
+                    descriptor = core_network.read_descriptor(
+                        CORE_RUNTIME_DIR, state_dir
+                    )
+                    if (
+                        not descriptor
+                        or descriptor["phase"] != "ready"
+                        or descriptor.get("applied_generation")
+                        != node["core_network"]["generation"]
+                    ):
+                        raise UserError(
+                            "Core is configured but its applied generation is not ready; rerun create"
+                        )
+                    identity = core_network.docker_identity()
+                    core_network.assert_identity(descriptor.get("docker"), identity)
+                    with core_network.project_lock(identity, descriptor["project"]):
+                        core_network.verify_bindings(
+                            core_network.owned_containers(descriptor),
+                            node["core_network"],
+                            context=identity["context"],
+                        )
+                add_check(
+                    "core_runtime",
+                    "Owned Core runtime",
+                    True,
+                    "identity, generation and publications verified",
+                )
+            except (UserError, core_network.NetworkError) as error:
+                owned_core = False
+                add_check("core_runtime", "Owned Core runtime", False, str(error))
         core_api_ok = False
         try:
-            status = _http_json(f"{node['core_url']}/api/system/status", timeout=2)
+            if not owned_core:
+                raise UserError(
+                    "not probed: Core runtime identity or applied policy is unverified"
+                )
+            status = _http_json(
+                f"{api_url}/api/system/status", timeout=2, local_admin=managed_core
+            )
             core_api_ok = bool(
                 status.get("nats_connected") and status.get("jetstream_stream_ok")
             )
-            add_check("core_api", "core API", core_api_ok, node["core_url"])
+            add_check("core_api", "core API", core_api_ok, api_url)
         except UserError as error:
             add_check("core_api", "core API", False, str(error))
         upstream_url = node.get("upstream_nats_url", node.get("nats_url", ""))
-        core_nats_ok = bool(upstream_url and _tcp_ready(upstream_url))
+        if managed_core:
+            upstream_url = "nats://127.0.0.1:4222"
+        if messaging_mode == "nats_leaf":
+            parsed = urlparse(upstream_url)
+            hostname = parsed.hostname or ""
+            authority = f"[{hostname}]" if ":" in hostname else hostname
+            upstream_url = f"nats://{authority}:7422"
+        core_nats_ok = bool(owned_core and upstream_url and _tcp_ready(upstream_url))
         add_check(
-            "core_nats", "Core NATS", core_nats_ok, upstream_url or "not configured"
+            "core_leaf_port" if messaging_mode == "nats_leaf" else "core_nats",
+            "Core Leaf TCP port"
+            if messaging_mode == "nats_leaf"
+            else "Core NATS TCP port",
+            core_nats_ok,
+            upstream_url if owned_core else "not probed: runtime unverified",
         )
 
         local_observation: dict[str, Any] | None = None
@@ -742,27 +1670,31 @@ def command_doctor(args: argparse.Namespace) -> int:
             )
             add_check(
                 "local_agent_messaging",
-                "Local agent messaging",
+                "Local broker readiness",
                 local_observation["local_ready"],
                 "available" if local_observation["local_ready"] else "unavailable",
             )
             cross_node = bool(local_observation["leaf_connected"] and core_api_ok)
             add_check(
                 "cross_node_messaging",
-                "Cross-node messaging",
+                "Cross-node link",
                 cross_node,
-                "available" if cross_node else "paused",
+                "link connected; authenticated request/reply unverified"
+                if cross_node
+                else "paused",
             )
         elif node["mode"] == "edge":
             add_check("local_nats_process", "Local NATS", True, "not used")
 
-        if node["mode"] == "edge":
+        if node["mode"] in {"edge", "core"}:
             agentd_running, agentd_detail = _agentd_process_detail(state_dir)
             add_check(
                 "edgecitadel_service",
                 "EdgeCitadel service",
-                agentd_running,
-                agentd_detail,
+                agentd_running or node["mode"] == "core",
+                agentd_detail
+                if agentd_running or node["mode"] == "edge"
+                else "not running (optional for server-only Core)",
             )
             if agentd_running:
                 agentd_health = _agentd_rpc(state_dir, "health")
@@ -808,7 +1740,9 @@ def command_doctor(args: argparse.Namespace) -> int:
                 agent_id = declared_agent["id"]
                 try:
                     agent = _http_json(
-                        f"{node['core_url']}/api/agents/{agent_id}", timeout=1
+                        f"{api_url}/api/agents/{agent_id}",
+                        timeout=1,
+                        local_admin=managed_core,
                     )
                     online = agent.get("agent_state") == "online"
                     detail = agent.get("agent_state", "unknown")
@@ -908,12 +1842,36 @@ def command_doctor(args: argparse.Namespace) -> int:
 
 
 def command_down(args: argparse.Namespace) -> int:
-    node = _load_node(_state_dir(args.state_dir))
-    if node["mode"] != "core":
+    state_dir = _state_dir(args.state_dir)
+    descriptor = core_network.read_descriptor(CORE_RUNTIME_DIR, state_dir)
+    node = (
+        _load_node(state_dir)
+        if (state_dir / NODE_STATE_NAME).exists() or descriptor is None
+        else None
+    )
+    if node is not None and node["mode"] != "core":
         raise UserError(
             "down controls the Docker stack and is only valid on a core node"
         )
-    _run(_compose_command("down"), cwd=INSTALL_ROOT)
+    if descriptor is not None:
+        with core_network.lock(CORE_RUNTIME_DIR / ".core-runtime.lock"):
+            descriptor = core_network.read_descriptor(CORE_RUNTIME_DIR, state_dir)
+            if descriptor.get("docker") is None:
+                raise UserError(
+                    "Core has no applied Docker identity; no owned stack can be stopped"
+                )
+            identity = core_network.docker_identity()
+            core_network.assert_identity(descriptor.get("docker"), identity)
+            with core_network.project_lock(identity, descriptor["project"]):
+                core_network.owned_containers(descriptor)
+                _run(
+                    core_network.compose_command(CORE_RUNTIME_DIR, descriptor, "down"),
+                    cwd=INSTALL_ROOT,
+                )
+                descriptor["phase"] = "stopped"
+                _write_json(CORE_RUNTIME_DIR / core_network.DESCRIPTOR, descriptor)
+    else:
+        _run(_compose_command("down"), cwd=INSTALL_ROOT)
     print("EdgeCitadel core stopped. Local state and data were preserved.")
     return 0
 
@@ -959,13 +1917,48 @@ def _toolkit_python(state_dir: Path) -> Path:
     marker = venv / ".edgecitadel-toolkit-version"
     expected = (
         f"{VERSION}|{Path(sys.executable).resolve()}|{INSTALL_ROOT.resolve()}|"
-        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\n"
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|runtime-copy-v1\n"
     )
     if python.exists() and marker.exists() and marker.read_text() == expected:
         return python
 
     print("Preparing the local Agent service...", file=sys.stderr)
+    source = venv / "runtime-source"
+    # An interrupted older copy may retain read-only directory modes, which
+    # would otherwise prevent venv --clear from removing its generated files.
+    for copied in (source, venv / "schemas"):
+        if not copied.is_symlink():
+            for directory, _, _ in os.walk(copied):
+                Path(directory).chmod(0o700)
     _run([sys.executable, "-m", "venv", "--clear", str(venv)])
+    # Editable builds write metadata beside their source, while the runtime
+    # loads schemas relative to that source. Keep both in a private writable
+    # copy inside this venv; never modify potentially read-only bundled assets.
+    shutil.copytree(
+        _asset_root(agent_runtime_root),
+        source,
+        ignore=shutil.ignore_patterns(
+            ".venv",
+            ".git",
+            "build",
+            "dist",
+            "*.egg-info",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+        ),
+    )
+    shutil.copytree(
+        INSTALL_ROOT / "schemas",
+        venv / "schemas",
+        ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"),
+    )
+    # copytree preserves read-only Cellar modes. Both build metadata creation
+    # and later venv cleanup need writable directories in these private copies.
+    for copied in (source, venv / "schemas"):
+        for directory, _, _ in os.walk(copied):
+            Path(directory).chmod(0o700)
     _run(
         [
             str(python),
@@ -975,7 +1968,7 @@ def _toolkit_python(state_dir: Path) -> Path:
             "--quiet",
             "--disable-pip-version-check",
             "-e",
-            str(_asset_root(agent_runtime_root)),
+            str(source),
         ]
     )
     _secure_write(marker, expected)
@@ -2738,7 +3731,7 @@ def _interactive_choice(
     prompt: str, choices: tuple[str, ...], *, default: str | None = None
 ) -> str:
     while True:
-        choice = input(prompt).strip().lower()
+        choice = _setup_input(prompt).lower()
         if not choice and default:
             return default
         if choice in choices:
@@ -2759,17 +3752,7 @@ def _interactive_install_choices(args: argparse.Namespace) -> None:
     choice = _interactive_choice("Join or create? [join/create] ", ("join", "create"))
     if choice == "create":
         args.create = True
-        default_host = getattr(args, "host", "localhost")
         print("\nStep 2: Configure the new Core.", file=sys.stderr)
-        print(
-            "Enter the hostname or IP that future Edge hosts can reach. "
-            "Use localhost only for a local-only setup.",
-            file=sys.stderr,
-        )
-        args.host = (
-            input(f"Reachable Core hostname or IP [{default_host}]: ").strip()
-            or default_host
-        )
     else:
         print("\nStep 2: Join the existing Core.", file=sys.stderr)
         print("Paste the one-time invitation created on the Core.", file=sys.stderr)
@@ -2820,6 +3803,12 @@ def _interactive_plugin_choices() -> list[str]:
 
 def command_install(args: argparse.Namespace) -> int:
     messaging_mode = getattr(args, "messaging_mode", "single-client")
+    network_options = any(
+        getattr(args, field, None) is not None
+        for field in ("network", "host", "bind_address")
+    )
+    if getattr(args, "invitation", None) and network_options:
+        raise UserError("Core network options cannot be used with --join")
     if args.create and messaging_mode != "single-client":
         raise UserError("--messaging-mode applies only when joining an Edge")
     steps: list[dict[str, Any]] = []
@@ -2838,6 +3827,32 @@ def command_install(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     try:
         node = _load_node(state_dir)
+        if args.create:
+            if node["mode"] != "core":
+                raise UserError("An enrolled Edge cannot also become Core")
+            if args.dry_run:
+                planned = _resolve_core_setup(args, node)
+                steps.append(
+                    _installation_step(
+                        "core_access",
+                        "core",
+                        "planned",
+                        False,
+                        {
+                            "core_network": planned.get("core_network"),
+                            "runtime": "unverified",
+                        },
+                    )
+                )
+            elif network_options or "core_network" in node:
+                captured = StringIO()
+                with redirect_stdout(captured):
+                    command_create(
+                        argparse.Namespace(
+                            **{**vars(args), "no_start": False, "timeout": 120}
+                        )
+                    )
+                node = _load_node(state_dir)
         steps.append(
             _installation_step(
                 "enrollment",
@@ -2848,8 +3863,10 @@ def command_install(args: argparse.Namespace) -> int:
             )
         )
     except UserError:
+        if (state_dir / NODE_STATE_NAME).exists():
+            raise
         if not args.create and not args.invitation:
-            if args.json or not sys.stdin.isatty():
+            if args.json or args.yes or not sys.stdin.isatty():
                 raise UserError(
                     "an unenrolled host requires --create or --join <invitation>"
                 )
@@ -2860,6 +3877,10 @@ def command_install(args: argparse.Namespace) -> int:
             evidence = {"mode": mode}
             if mode == "edge":
                 evidence["messaging_mode"] = messaging_mode
+            else:
+                planned = _resolve_core_setup(args, None)
+                evidence["core_network"] = planned["core_network"]
+                evidence["runtime"] = "unverified"
             steps.append(
                 _installation_step("enrollment", mode, "planned", False, evidence)
             )
@@ -2871,19 +3892,25 @@ def command_install(args: argparse.Namespace) -> int:
                     command_create(
                         argparse.Namespace(
                             host=args.host,
+                            network=getattr(args, "network", None),
+                            bind_address=getattr(args, "bind_address", None),
+                            yes=args.yes,
+                            json=args.json,
                             state_dir=args.state_dir,
                             no_start=False,
                             timeout=120,
                         )
                     )
                 else:
-                    command_join(
+                    join_result = command_join(
                         argparse.Namespace(
                             invitation=args.invitation,
                             state_dir=args.state_dir,
                             messaging_mode=messaging_mode,
                         )
                     )
+                    if join_result:
+                        raise OperationalError(captured.getvalue().strip())
             node = _load_node(state_dir)
             steps.append(
                 _installation_step(
@@ -3099,7 +4126,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     install.add_argument("--plugin", dest="plugins", action="append", choices=HOSTS)
     install.add_argument("--scope", choices=("user", "project"), default="user")
-    install.add_argument("--host", default="localhost", help="Core hostname")
+    install.add_argument("--host", help="Core hostname")
+    install.add_argument("--network", choices=("local", "tailscale", "custom"))
+    install.add_argument(
+        "--bind-address", help="Assigned listening IP for custom access"
+    )
     install.add_argument("--yes", action="store_true")
     install.add_argument("--dry-run", action="store_true")
     install.add_argument("--json", action="store_true")
@@ -3107,8 +4138,13 @@ def _build_parser() -> argparse.ArgumentParser:
     install.set_defaults(func=command_install)
 
     create = subparsers.add_parser("create", help="Create or reconcile the first node")
+    create.add_argument("--host", help="Reachable hostname for this core")
+    create.add_argument("--network", choices=("local", "tailscale", "custom"))
     create.add_argument(
-        "--host", default="localhost", help="Reachable hostname for this core"
+        "--bind-address", help="Assigned listening IP for custom access"
+    )
+    create.add_argument(
+        "--yes", action="store_true", help="Acknowledge an explicit access change"
     )
     create.add_argument("--state-dir", help=argparse.SUPPRESS)
     create.add_argument(
@@ -3130,7 +4166,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Identity of the host being enrolled",
     )
     invite.add_argument(
-        "--host", required=True, help="Core hostname reachable by the edge node"
+        "--host",
+        help="Advanced advertised override (defaults to the saved Core endpoints)",
     )
     invite.add_argument("--expires", type=_expiry_seconds, default=900)
     invite.add_argument("--state-dir", help=argparse.SUPPRESS)
@@ -3387,10 +4424,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except OperationalError as error:
         _emit_cli_error(args, str(error))
         return 1
-    except UserError as error:
+    except core_network.RuntimeUnavailable as error:
+        _emit_cli_error(args, str(error))
+        return 1
+    except (UserError, core_network.NetworkError) as error:
         _emit_cli_error(args, str(error))
         return 2
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         _emit_cli_error(args, "operation interrupted")
         return 130
     except Exception as error:  # pragma: no cover - defensive CLI boundary

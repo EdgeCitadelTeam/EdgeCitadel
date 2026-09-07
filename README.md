@@ -36,36 +36,42 @@ edgecitadel install
 ```
 
 The terminal guide first asks whether this host should join an existing Core or
-create a new one. It then collects the reachable Core address or invitation,
+create a new one. It then offers local-only, Tailscale, or custom-address Core access, or collects an invitation,
 explains the Edge messaging choices, detects available native agent hosts, and
 shows the exact Plugin installation plan before asking for confirmation.
 
 For automation, make every choice explicit, for example
-`edgecitadel install --create --host core.example.internal --plugin codex --scope user --yes`
+`edgecitadel install --create --network tailscale --plugin codex --scope user --yes`
 on a Core.
 
 ## Create a Core
 
 For normal setup, run `edgecitadel install` and choose `create`. The guide asks
-for the hostname or IP that Edge hosts can reach; no separate `edgecitadel
-create` command is required.
+how the server should be reached. All three choices start the Core on this
+computer. `edgecitadel create` offers the same guide when only the server is needed.
 
 For unattended setup, start Docker and provide every choice as flags:
 
 ```bash
-edgecitadel install --create --host core.example.internal --plugin codex --scope user --yes
+edgecitadel install --create --network tailscale --plugin codex --scope user --yes
 edgecitadel doctor
 ```
 
 The unified command creates the Core, starts its services, installs the selected
 Plugin, checks local requirements, and prints the dashboard URL.
 
+Use `--network local` for loopback-only access. For an operator-protected custom
+network, use `--network custom --host core.example.internal --bind-address <assigned-ip>`.
+Docker Engine 28+ and Compose 2.24.4+ are required for managed access policy.
+See [onboarding](docs/onboarding.md#create-a-core) for reruns, address validation,
+network boundaries, and compatibility with earlier deployments.
+
 ## Join an Edge
 
 Create a one-time invitation on the Core:
 
 ```bash
-edgecitadel invite --node-id studio-macmini --host core.example.internal
+edgecitadel invite --node-id studio-macmini
 ```
 
 Copy the returned invitation URI to the Edge. The default `single-client` mode
