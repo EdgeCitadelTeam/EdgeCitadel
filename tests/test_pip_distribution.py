@@ -38,6 +38,11 @@ def test_pip_metadata_and_runtime_assets_are_declared() -> None:
     assert forced["scripts/plugin_installation.py"] == (
         f"{data_prefix}/scripts/plugin_installation.py"
     )
+    assert forced["scripts/core_network.py"] == f"{data_prefix}/scripts/core_network.py"
+    assert (
+        "/scripts/core_network.py"
+        in config["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+    )
 
 
 def test_pip_entrypoint_configures_source_checkout(monkeypatch) -> None:

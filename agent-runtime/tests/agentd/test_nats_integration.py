@@ -44,7 +44,10 @@ async def _wait_for(predicate, timeout: float = 10) -> None:
 
 
 @pytest.mark.asyncio
-async def test_connector_round_trip_through_owned_real_nats(tmp_path: Path) -> None:
+@pytest.mark.parametrize("node_mode", ["edge", "core", "legacy-core"])
+async def test_connector_round_trip_through_owned_real_nats(
+    tmp_path: Path, node_mode: str
+) -> None:
     executable = shutil.which("nats-server")
     if executable is None:
         pytest.skip("nats-server is not installed")
@@ -65,17 +68,16 @@ async def test_connector_round_trip_through_owned_real_nats(tmp_path: Path) -> N
     )
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "node.json").write_text(
-        json.dumps(
-            {
-                "version": 2,
-                "mode": "edge",
-                "messaging_mode": "single-client",
-                "plugin_nats_url": f"nats://127.0.0.1:{port}",
-                "plugin_nats_token": token,
-            }
-        )
-    )
+    node = {
+        "version": 2 if node_mode == "edge" else 1,
+        "mode": "edge" if node_mode == "edge" else "core",
+        "messaging_mode": "single-client",
+        "nats_url": f"nats://127.0.0.1:{port}",
+        "nats_token": token,
+    }
+    if node_mode != "legacy-core":
+        node.update(plugin_nats_url=node["nats_url"], plugin_nats_token=token)
+    (state_dir / "node.json").write_text(json.dumps(node))
     stop = threading.Event()
     service_thread = threading.Thread(
         target=serve, args=(state_dir / "agentd", stop), daemon=True
@@ -178,6 +180,42 @@ async def test_connector_round_trip_through_owned_real_nats(tmp_path: Path) -> N
 
         await _wait_for(completed)
         assert len(client.call("task.list")) == 1
+
+        # Same-host connectors deliberately route through agentd's local store.
+        # Keep this proof separate from the authenticated NATS round trip above.
+        registration_two = admin.call(
+            "connector.register",
+            connector_id="codex-local",
+            host_type="codex",
+            agent_id="core-local-codex",
+            capabilities=["edgecitadel_delegate", "edgecitadel_inbox"],
+        )
+        client_two = AgentdClient(
+            socket_path,
+            connector_id="codex-local",
+            token=str(registration_two["token"]),
+        )
+        client_two.call("session.open")
+
+        async def two_connectors_ready() -> bool:
+            return anonymous.call("health")["transport"].get("ready_inbox_count") == 2
+
+        await _wait_for(two_connectors_ready)
+        local_request = client.call(
+            "task.create",
+            recipient_id="core-local-codex",
+            payload={"request": "test-owned local round trip"},
+        )
+        received = client_two.call("task.list", recipient_id="core-local-codex")
+        assert [task["task_id"] for task in received] == [local_request["task_id"]]
+        local_reply = client_two.call(
+            "task.create",
+            recipient_id="edge-one-pi",
+            payload={"reply_to": local_request["task_id"]},
+        )
+        received_reply = client.call("task.get", task_id=local_reply["task_id"])
+        assert received_reply["sender_id"] == "core-local-codex"
+        assert received_reply["payload"]["reply_to"] == local_request["task_id"]
     finally:
         stop.set()
         service_thread.join(timeout=10)

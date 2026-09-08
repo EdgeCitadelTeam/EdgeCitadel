@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from argparse import Namespace
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -279,7 +280,7 @@ def test_unified_install_forwards_nats_leaf_mode(tmp_path, monkeypatch):
         messaging_mode="nats_leaf",
         plugins=["codex"],
         scope="user",
-        host="localhost",
+        host=None,
         yes=True,
         dry_run=False,
         json=False,
@@ -309,23 +310,23 @@ def test_interactive_install_collects_nats_leaf_mode(monkeypatch, capsys):
     assert "installs a pinned local NATS" in guidance
 
 
-def test_interactive_install_collects_reachable_core_host(monkeypatch, capsys):
-    responses = iter(("create", "core.example.internal"))
+def test_interactive_install_defers_access_to_shared_core_guide(monkeypatch, capsys):
+    responses = iter(("create",))
     monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
     args = Namespace(
         create=False,
         invitation=None,
         messaging_mode="single-client",
-        host="localhost",
+        host=None,
     )
 
     cli._interactive_install_choices(args)
 
     assert args.create is True
-    assert args.host == "core.example.internal"
+    assert args.host is None
     guidance = capsys.readouterr().err
     assert "Step 2: Configure the new Core" in guidance
-    assert "future Edge hosts can reach" in guidance
+    assert "Reachable Core hostname" not in guidance
 
 
 def test_interactive_plugin_choices_explain_unsupported_hosts(monkeypatch, capsys):
@@ -386,14 +387,25 @@ def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeyp
 
 
 def test_toolkit_python_clears_stale_virtual_environment(tmp_path, monkeypatch):
+    (tmp_path / "schemas").mkdir()
+    (tmp_path / "schemas/task-correlation.v1.json").write_text("{}")
     runtime = tmp_path / "runtime"
     runtime.mkdir()
+    (runtime / "pyproject.toml").write_text("test build source")
+    (runtime / "src").mkdir(mode=0o555)
+    (runtime / ".venv").mkdir()
+    (runtime / ".venv/ignored").write_text("not a distribution asset")
     monkeypatch.setattr(cli, "INSTALL_ROOT", tmp_path)
     monkeypatch.setattr(cli, "agent_runtime_root", lambda _root: runtime)
     venv = tmp_path / "state" / "supervisor"
     python = venv / "bin" / "python"
     python.parent.mkdir(parents=True)
     python.write_text("stale", encoding="utf-8")
+    stale_source = venv / "runtime-source/src"
+    stale_source.mkdir(parents=True)
+    (stale_source / "partial.py").write_text("previous interrupted copy")
+    stale_source.chmod(0o555)
+    (venv / "schemas").mkdir(mode=0o555)
     (venv / ".edgecitadel-toolkit-version").write_text(
         "an older interpreter\n", encoding="utf-8"
     )
@@ -402,8 +414,22 @@ def test_toolkit_python_clears_stale_virtual_environment(tmp_path, monkeypatch):
     def run(command, **_kwargs):
         commands.append(command)
         if command[1:4] == ["-m", "venv", "--clear"]:
+            assert stale_source.stat().st_mode & 0o777 == 0o700
+            assert (venv / "schemas").stat().st_mode & 0o777 == 0o700
+            cli.shutil.rmtree(venv / "runtime-source")
+            cli.shutil.rmtree(venv / "schemas")
             python.parent.mkdir(parents=True, exist_ok=True)
             python.write_text("rebuilt", encoding="utf-8")
+        elif command[1:4] == ["-m", "pip", "install"]:
+            staged = Path(command[-1])
+            assert staged != runtime
+            assert (staged / "pyproject.toml").read_text() == "test build source"
+            assert not (staged / ".venv").exists()
+            assert (
+                staged.parent / "schemas/task-correlation.v1.json"
+            ).read_text() == "{}"
+            (staged / "generated-metadata").write_text("build output")
+            (staged / "src/generated.egg-info").mkdir()
 
     monkeypatch.setattr(cli, "_run", run)
 
@@ -416,6 +442,13 @@ def test_toolkit_python_clears_stale_virtual_environment(tmp_path, monkeypatch):
         str(venv),
     ]
     assert commands[1][:4] == [str(python), "-m", "pip", "install"]
+    assert "-e" in commands[1]
+    assert Path(commands[1][-1]) == venv / "runtime-source"
+    assert (venv / "runtime-source/generated-metadata").is_file()
+    assert not (runtime / "generated-metadata").exists()
+    assert (runtime / "src").stat().st_mode & 0o777 == 0o555
+    assert cli._toolkit_python(tmp_path / "state") == python
+    assert len(commands) == 2
 
 
 def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
@@ -591,7 +624,7 @@ def test_ensure_env_is_idempotent_and_preserves_custom_values(tmp_path, monkeypa
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
-def test_invitation_round_trip_and_expiry():
+def test_invitation_round_trip_and_expiry(capsys):
     value = cli._invitation_encode(
         {
             "version": 1,
@@ -615,8 +648,8 @@ def test_invitation_round_trip_and_expiry():
             "expires_at": time.time() - 1,
         }
     )
-    with pytest.raises(cli.UserError, match="expired"):
-        cli._invitation_decode(expired)
+    assert cli._invitation_decode(expired)["agent_id"] == "macmini-agent"
+    assert "Core decides" in capsys.readouterr().err
 
     malformed_expiry = cli._invitation_encode(
         {
@@ -635,6 +668,10 @@ def test_invitation_round_trip_and_expiry():
 def test_invite_stdout_is_only_the_capture_safe_invitation(
     tmp_path, monkeypatch, capsys
 ):
+    monkeypatch.setattr(cli, "CORE_RUNTIME_DIR", tmp_path / "core")
+    monkeypatch.setattr(
+        cli, "_core_administration", lambda *args: nullcontext("http://127.0.0.1")
+    )
     monkeypatch.setattr(
         cli,
         "_load_node",
@@ -689,12 +726,210 @@ def test_advertised_urls_normalize_ipv6(host, core_url, nats_url):
     assert cli._advertised_urls(host) == (core_url, nats_url)
 
 
+def test_tailscale_detection_uses_self_not_peer(monkeypatch):
+    monkeypatch.setattr(cli, "_tailscale_binary", lambda: "/test/tailscale")
+
+    def status(command, **kwargs):
+        assert command == ["/test/tailscale", "status", "--json"]
+        assert kwargs["timeout"] == 5
+        assert kwargs["env"]["TAILSCALE_BE_CLI"] == "1"
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "BackendState": "Running",
+                    "Self": {
+                        "Online": True,
+                        "TailscaleIPs": ["fd7a:115c:a1e0::1", "100.80.0.1"],
+                    },
+                    "Peer": {"peer": {"TailscaleIPs": ["100.80.0.2"]}},
+                }
+            ),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", status)
+    assert cli._detect_tailscale_ipv4() == "100.80.0.1"
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        ([], "malformed"),
+        ({"BackendState": "NeedsLogin"}, "sign-in"),
+        ({"BackendState": "NeedsMachineAuth"}, "authorization"),
+        ({"BackendState": "Stopped"}, "stopped"),
+        ({"BackendState": "Running", "Self": {"Online": False}}, "online self"),
+        (
+            {"BackendState": "Running", "Self": {"Online": True, "TailscaleIPs": []}},
+            "no usable",
+        ),
+        (
+            {
+                "BackendState": "Running",
+                "Self": {"Online": True, "TailscaleIPs": ["::1"]},
+            },
+            "IPv6-only",
+        ),
+        (
+            {"BackendState": "Running", "Self": {"Online": True, "TailscaleIPs": [42]}},
+            "malformed",
+        ),
+        (
+            {
+                "BackendState": "Running",
+                "Self": {"Online": True, "TailscaleIPs": ["100.80.0.1", "100.80.0.2"]},
+            },
+            "multiple",
+        ),
+    ],
+)
+def test_tailscale_detection_classifies_status(monkeypatch, status, message):
+    monkeypatch.setattr(cli, "_tailscale_binary", lambda: "/test/tailscale")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, json.dumps(status)),
+    )
+    with pytest.raises(cli.UserError, match=message):
+        cli._detect_tailscale_ipv4()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "daemon", "json"])
+def test_tailscale_detection_does_not_expose_raw_output(monkeypatch, failure):
+    monkeypatch.setattr(cli, "_tailscale_binary", lambda: "/test/tailscale")
+
+    def status(*args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 5, output="private-peer-inventory")
+        return subprocess.CompletedProcess(
+            args, 1 if failure == "daemon" else 0, "private-peer-inventory"
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", status)
+    with pytest.raises(cli.UserError) as error:
+        cli._detect_tailscale_ipv4()
+    assert "private-peer-inventory" not in str(error.value)
+
+
+def test_tailscale_mac_bundle_discovery_without_path(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    bundle = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    monkeypatch.setattr(cli.Path, "is_file", lambda path: str(path) == bundle)
+    monkeypatch.setattr(cli.os, "access", lambda path, mode: str(path) == bundle)
+    assert cli._tailscale_binary() == bundle
+
+
+def test_tailscale_missing_binary(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    with pytest.raises(cli.UserError, match="not found"):
+        cli._tailscale_binary()
+
+
 def test_advertised_urls_reject_unbracketed_ipv6_with_scheme():
     with pytest.raises(cli.UserError, match="must use brackets"):
         cli._advertised_urls("http://2001:db8::1")
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "bad host",
+        "0.0.0.0",
+        "::",
+        "224.0.0.1",
+        "ff02::1",
+        "http://core.example/path",
+        "http://core.example//",
+        "ftp://core.example",
+        "http://user:password@core.example",
+        "core.example?token=x",
+        "core.example#fragment",
+        "core.example\n",
+        "-core.example",
+        "core..example",
+        "core.example:0",
+        "core.example:65536",
+        "http://[fe80::1%en0]",
+    ],
+)
+def test_advertised_urls_reject_invalid_endpoints(host):
+    with pytest.raises(cli.UserError):
+        cli._advertised_urls(host)
+
+
+def test_create_validates_host_before_any_mutation(tmp_path, monkeypatch):
+    def mutation():
+        pytest.fail("invalid host reached credential generation")
+
+    monkeypatch.setattr(cli, "_ensure_env", mutation)
+    with pytest.raises(cli.UserError):
+        cli.command_create(
+            Namespace(
+                host="bad host",
+                no_start=True,
+                state_dir=str(tmp_path / "state"),
+                timeout=1,
+            )
+        )
+    assert not (tmp_path / "state").exists()
+
+
+def test_create_no_start_does_not_execute_runtime_validation(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "CORE_RUNTIME_DIR", tmp_path / "core")
+    monkeypatch.setattr(
+        cli, "_ensure_env", lambda: ({"NATS_TOKEN": "test-only"}, False)
+    )
+    monkeypatch.setattr(cli, "_render_nats_config", lambda **kwargs: None)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("--no-start executed runtime validation")
+
+    monkeypatch.setattr(cli, "_validate_core_nats_config", forbidden)
+    monkeypatch.setattr(cli, "_run", forbidden)
+    assert (
+        cli.command_create(
+            Namespace(
+                host="localhost",
+                no_start=True,
+                state_dir=str(tmp_path / "state"),
+                timeout=1,
+            )
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize("content", ["{", '{"version": 99, "mode": "core"}'])
+def test_install_does_not_replace_corrupt_node(tmp_path, monkeypatch, content):
+    node_path = tmp_path / "node.json"
+    node_path.write_text(content)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("corrupt enrollment reached create")
+
+    monkeypatch.setattr(cli, "command_create", forbidden)
+    args = cli._build_parser().parse_args(
+        [
+            "install",
+            "--create",
+            "--yes",
+            "--plugin",
+            "codex",
+            "--state-dir",
+            str(tmp_path),
+        ]
+    )
+    with pytest.raises(cli.UserError, match="node state"):
+        cli.command_install(args)
+    assert node_path.read_text() == content
+
+
 def test_join_writes_restrictive_state_and_is_idempotent(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_join_preflight", lambda *args: None)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: True)
     invitation = cli._invitation_encode(
         {
             "version": 1,
@@ -726,6 +961,8 @@ def test_join_writes_restrictive_state_and_is_idempotent(tmp_path, monkeypatch, 
 
 
 def test_join_does_not_write_partial_state_when_redeem_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_join_preflight", lambda *args: None)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: True)
     invitation = cli._invitation_encode(
         {
             "version": 1,
@@ -743,7 +980,7 @@ def test_join_does_not_write_partial_state_when_redeem_fails(tmp_path, monkeypat
     )
     args = Namespace(invitation=invitation, state_dir=str(tmp_path))
 
-    with pytest.raises(cli.UserError, match="rejected"):
+    with pytest.raises(cli.OperationalError, match="consumption is uncertain"):
         cli.command_join(args)
     assert not (tmp_path / "node.json").exists()
 
@@ -1131,6 +1368,10 @@ def test_installed_create_keeps_mutable_core_files_outside_install_root(
     assert env_source == (core_dir / ".env").read_text()
     assert stat.S_IMODE((core_dir / ".env").stat().st_mode) == 0o600
     assert stat.S_IMODE((state_dir / "node.json").stat().st_mode) == 0o600
+    node = json.loads((state_dir / "node.json").read_text())
+    assert node["local_core_url"] == "http://127.0.0.1"
+    assert node["plugin_nats_url"] == "nats://127.0.0.1:4222"
+    assert node["plugin_nats_token"] == node["nats_token"]
 
 
 @pytest.mark.parametrize("distribution", ["homebrew", "pip"])
@@ -1232,6 +1473,8 @@ def test_join_rejects_conflicting_messaging_mode_without_mutation(tmp_path):
 
 
 def test_nats_leaf_join_commits_v2_only_after_local_readiness(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_join_preflight", lambda *args: None)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: True)
     invitation = cli._invitation_encode(
         {
             "version": 1,
@@ -1286,6 +1529,8 @@ def test_nats_leaf_join_commits_v2_only_after_local_readiness(tmp_path, monkeypa
 
 
 def test_nats_leaf_join_rolls_back_when_local_start_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_join_preflight", lambda *args: None)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: True)
     invitation = cli._invitation_encode(
         {
             "version": 1,

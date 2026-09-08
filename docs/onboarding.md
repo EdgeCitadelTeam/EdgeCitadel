@@ -46,21 +46,43 @@ package manager for upgrades and uninstall.
 In an interactive terminal, the guide proceeds in this order:
 
 1. Choose `join` or `create`.
-2. Enter the one-time invitation or the new Core's reachable hostname/IP.
+2. Enter the one-time invitation, or choose local-only, Tailscale, or custom Core access.
 3. On an Edge, choose `single-client` or `nats_leaf` after reading the tradeoff.
 4. Select from the native agent hosts detected on the machine.
 5. Review the exact Plugin installation plan and confirm it.
 
 ## Create a Core
 
-For normal setup, run `edgecitadel install` and choose `create`. The guide asks
-for the hostname or address that Edge hosts can reach and completes the Core and
-Plugin setup; no separate `edgecitadel create` command is required.
+Run `edgecitadel install` and choose `create` to configure the server, agentd and
+selected Plugins. Run `edgecitadel create` for the same deployment guide with
+server setup only. All three choices run the full Core on this computer; they
+do not provision a cloud instance or deploy to a different computer.
+
+1. **Local only:** publish the API, NATS clients, Leaf listener and monitoring on
+   `127.0.0.1`. Other computers cannot use this managed deployment directly.
+2. **Accessible over Tailscale:** detect this computer's connected Tailscale IPv4
+   and publish API/client/Leaf access there as well as on loopback. Monitoring
+   stays local. Install and sign in to Tailscale externally before setup; the
+   guide offers detection retry. Every connecting computer must join the same
+   tailnet and have appropriate access.
+3. **Accessible at your own IP or hostname:** advertise an address reachable by
+   your agents on an operator-protected network. The listening address must be
+   assigned to this computer. If DNS/public/NAT addresses do not identify one
+   assigned IP, supply `--bind-address`. This does not configure public-internet
+   TLS, API authorization, firewall rules, or certificate renewal.
+
+MQTT is optional: set `EC_ENABLE_MQTT=1` for the first `create` to include port
+1883 under the same access policy. The NATS file-storage budget is 2 GiB; the
+agent inbox reserves 1 GiB, leaving room for MQTT session and message streams.
 
 For unattended setup, start Docker and provide every choice as flags:
 
 ```bash
-edgecitadel install --create --host core.example.internal --plugin codex --scope user --yes
+edgecitadel install --create --network tailscale --plugin codex --scope user --yes
+# Server only, loopback-only access:
+edgecitadel create --network local --yes
+# Protected custom network; replace the IP with one assigned to this host:
+edgecitadel create --network custom --host core.example.internal --bind-address 192.168.1.10 --yes
 edgecitadel doctor
 ```
 
@@ -69,16 +91,76 @@ starts the Core services and agentd, waits for NATS, JetStream, and the API, and
 installs the selected Plugin. It is safe to rerun and preserves existing
 credentials and data.
 
+Managed activation requires a local Docker Engine/Desktop context, Engine 28+
+and Compose 2.24.4+. The generated override replaces the complete publication
+lists, including removing MQTT publication when MQTT is disabled. Container
+networking must use the qualified default NAT bridge. Administrator-installed
+forwarding, routing and raw `docker compose` are outside this policy: raw Compose
+does not read the CLI's saved access choice.
+
+Fresh non-interactive setup without a host/network choice uses local access.
+Interactive setup has no preselected network. `--yes` suppresses questions but
+does not bypass validation. `install --dry-run` resolves choices without applying
+them and reports runtime checks as unverified. `create --no-start` saves a
+configuration without running Docker; it cannot change an already applied or
+legacy deployment's access policy.
+
+Reruns reuse saved access settings. Explicit changes require acknowledgment or
+`--yes`, and preserve data and credentials. Existing invitations retain their
+encoded addresses; create new invitations for a changed endpoint. Failed apply
+keeps a candidate for retry and stops affected exposed services rather than
+restoring a broader old port map. Reuse the same state directory, Docker context
+and runtime when retrying; another `--state-dir` cannot claim the same Core.
+If first startup failed before writing the node record, `down` can still stop
+the owned stack using its runtime descriptor. A later `create` resumes the
+saved candidate, including its original access choice.
+Retries after failed or interrupted applies recreate the Core containers to
+restore their declared network configuration while retaining persistent data.
+
+When converting a source checkout, setup discovers the existing Compose project
+from its container labels, preserving a name originally supplied with `-p`.
+Multiple projects referencing the checkout, a conflicting
+`COMPOSE_PROJECT_NAME`, or mismatched ownership/data mounts stop conversion
+before apply. Resolve the conflicting deployment identity before retrying.
+
+An older deployment stays visibly `legacy/unknown` on a no-option rerun until
+you explicitly select a network mode. Earlier unattended remote `--host`
+commands can now require `--bind-address`; localhost/loopback hosts select local
+access. Advanced API addresses such as `https://core.example:8443/` are accepted
+with `--host`, but they do not create an HTTPS listener or change NATS port 4222
+or Leaf port 7422. Paths, credentials, queries, fragments and unusable addresses
+are rejected. A hostname resolving to loopback on the Core is unsuitable for
+remote advertisement, even if another computer resolves that name differently.
+
+Core readiness reports local API, internal NATS/JetStream and host client/Leaf
+ports independently of remote acceptance. A healthy local stack does not prove
+that every Edge can reach it. In the tested Linux Engine and macOS Docker
+Desktop configurations, an already-running broker retained authenticated
+loopback messaging after the Tailscale interface disappeared. Restarting its
+containers while that address was absent failed to bind the address, including
+the broker's loopback access. Restore Tailscale before starting or restarting
+the Core; no wildcard fallback is used.
+
+Before downgrading, stop the managed stack with the current CLI and back up its
+complete state and data. Old CLIs do not enforce this access policy; running an
+old `create` can widen exposure. A rollback needs explicitly reviewed bindings,
+not an assumption that the older CLI understands the managed descriptor.
+
 ## Join an Edge
 
 On the Core:
 
 ```bash
-edgecitadel invite --node-id studio-macmini --host core.example.internal
+edgecitadel invite --node-id studio-macmini
 ```
 
 Copy the returned invitation URI to the Edge. The invitation is expiring,
 single-use, and stored as a digest on the Core.
+The command reuses the saved advertised endpoints and sends administration
+credentials only to the verified local Core API, bypassing proxies and
+redirects. Standard output contains one invitation line for shell capture.
+Local-only deployments reject remote invitations; select a remote access mode
+first. `invite --host` remains an advanced override for remote/legacy deployments.
 
 ```bash
 # Default: enroll, start services, install the Plugin, and connect agentd
@@ -107,6 +189,14 @@ without a separate package-manager command.
 The selected mode is durable. Repeating `join` with the same mode is safe;
 requesting a different mode is rejected rather than silently changing message
 ownership.
+
+Before redeeming an invitation, `join` checks TCP reachability to the Core API
+and the selected transport: port 4222 for direct clients or 7422 for Leaf Nodes.
+Remote monitoring access on 8222 is unnecessary. A failed preflight does not
+consume the invitation. Successful enrollment saves credentials; the subsequent
+TCP check does not prove authenticated agent messaging or a remote reply. Use
+`doctor` to inspect transport health and exchange a task with a remote Agent to
+verify the complete path.
 
 ## Agent Packages
 
@@ -201,16 +291,32 @@ Core NATS, local NATS, JetStream, and Leaf connection. A healthy local broker
 with a disconnected Leaf is degraded: same-host work is available and
 cross-node work is paused.
 
+For a managed Core, `doctor` verifies runtime ownership, the applied generation,
+and network bindings before probing the literal local API and NATS endpoints.
+A server-only Core does not need a running agentd. Component health still does
+not prove a remote Agent can complete a request and reply.
+
 Back up and restore the complete `~/.edgecitadel/agentd` directory as one unit.
 Its SQLite database, `payload.key`, and `admin.token` are private, related state;
 restoring only the database makes encrypted task content unrecoverable. Keep the
 directory and files restricted to the account that runs EdgeCitadel.
 
+Service setup builds from a private runtime and schema copy inside its
+`supervisor` environment. Bundled installation assets can remain read-only;
+the generated copy is rebuilt when the service runtime changes.
+
 ## Troubleshooting
 
 - Docker unavailable during `create`: start Docker Desktop or Docker Engine and
   rerun the same command.
-- Invitation expired or already used: create a new invitation on the Core.
+- An invitation's local expiry warning is advisory; the Core decides whether it
+  can be redeemed. A Core rejection may mean invalid, expired, or already used:
+  create a new invitation.
+- Enrollment response lost or unreadable: consumption is uncertain. Request a
+  new invitation; do not blindly retry the one submitted.
+- Enrollment saved but transport unavailable: preserve the saved state, restore
+  connectivity, then run `edgecitadel doctor` and `edgecitadel service start`.
+  Repeating `join` checks the saved transport without redeeming again.
 - `nats_leaf` download fails before enrollment: restore internet access, install
   `nats-server` on `PATH`, or set `EDGECITADEL_NATS_SERVER`, then rerun with the
   same invitation. If setup fails after redemption, create a new invitation; a

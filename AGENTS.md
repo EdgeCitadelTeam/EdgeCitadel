@@ -27,7 +27,8 @@
 
 ## Commands
 - Newcomer setup (guided create/join, messaging, and Plugins): `./scripts/edgecitadel install`
-- Enroll a host: `./scripts/edgecitadel invite --node-id <node-id> --host <reachable-host>` then `./scripts/edgecitadel join '<invitation>'`
+- Create a Core: `./scripts/edgecitadel create` (shared local/Tailscale/custom guide); automation uses `--network`, custom `--bind-address`, and `--yes` for explicit access changes
+- Enroll a host: `./scripts/edgecitadel invite --node-id <node-id>` reuses saved remote endpoints, then `./scripts/edgecitadel join '<invitation>'`
 - Install a Managed Agent: `./scripts/edgecitadel agent install <package-path>`
 - Inspect the local service: `./scripts/edgecitadel service status`
 - Homebrew formula style: `brew style deploy/homebrew/Formula/edgecitadel.rb`
@@ -35,6 +36,7 @@
 - Python release: publish a GitHub Release whose `v<version>` tag matches `pyproject.toml`; `.github/workflows/publish-pypi.yml` owns trusted PyPI publication
 - Root Python setup: `python3.12 -m venv .venv && .venv/bin/pip install -r scripts/requirements-test.txt`
 - Root Python tests: `.venv/bin/python -m pytest -q tests scripts/tests deploy/tests schemas/tests`
+- Managed Compose model gate: `RUN_CORE_COMPOSE_MODEL=1 .venv/bin/python -m pytest -q scripts/tests/test_core_network.py` (local Engine 28+ / Compose 2.24.4+; skips are not proof)
 - Full stack: `docker compose up --build -d`
 - Restart: `docker compose down && docker compose up --build -d`
 - Backend setup: `cd aggregator && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
