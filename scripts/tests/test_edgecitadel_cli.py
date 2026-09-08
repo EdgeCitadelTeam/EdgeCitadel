@@ -1456,11 +1456,11 @@ def test_v1_edge_state_normalizes_without_rewrite(tmp_path):
     assert path.read_bytes() == original
 
 
-def test_join_rejects_conflicting_messaging_mode_without_mutation(tmp_path):
+def test_join_rejects_invalid_replacement_invitation_without_mutation(tmp_path):
     _write_node(tmp_path)
     original = (tmp_path / "node.json").read_bytes()
 
-    with pytest.raises(cli.UserError, match="already joined.*single-client.*nats_leaf"):
+    with pytest.raises(cli.UserError, match="invitation must start"):
         cli.command_join(
             Namespace(
                 invitation="not-consulted",
@@ -1563,7 +1563,7 @@ def test_nats_leaf_join_rolls_back_when_local_start_fails(tmp_path, monkeypatch)
         cli.nats_leaf, "cleanup_failed_join", lambda path: cleaned.append(path)
     )
 
-    with pytest.raises(cli.UserError, match="redeemed.*no node state"):
+    with pytest.raises(cli.UserError, match="redeemed.*new enrollment"):
         cli.command_join(
             Namespace(
                 invitation=invitation,

@@ -1414,30 +1414,98 @@ def _joined_transport_result(node: dict[str, Any]) -> int:
     return 0
 
 
+@contextmanager
+def _replace_join_state(
+    state_dir: Path, existing: dict[str, Any] | None
+) -> Iterator[None]:
+    """Keep old fleet credentials and queued work out of the new enrollment."""
+    if existing is None:
+        yield
+        return
+    backup_root = state_dir / "enrollment-backups"
+    _private_directory(backup_root)
+    backup = Path(tempfile.mkdtemp(prefix="previous-", dir=backup_root))
+    running, _ = _agentd_process_detail(state_dir)
+    leaf = existing.get("messaging_mode") == "nats_leaf"
+    inventory = _load_plugins(state_dir)
+    enabled = [
+        name
+        for name, record in inventory["managed_agents"].items()
+        if record.get("enabled")
+    ]
+    names = (NODE_STATE_NAME, "agentd", "connectors", "managed-launch", "nats_leaf")
+    moved: list[str] = []
+    stopped: list[str] = []
+    prepared = False
+    service_stopped = False
+    leaf_stopped = False
+    _write_json(backup / MANAGED_AGENT_STATE_NAME, inventory)
+    try:
+        # Keep installed packages, pausing their runtimes while credentials change.
+        for name in enabled:
+            stopped.append(name)
+            _stop_plugin(state_dir, name, quiet=True)
+        _stop_agentd(state_dir)
+        service_stopped = True
+        if leaf:
+            nats_leaf.stop(state_dir)
+            leaf_stopped = True
+        for name in names:
+            path = state_dir / name
+            if path.exists():
+                path.rename(backup / name)
+                moved.append(name)
+        prepared = True
+        yield
+    except BaseException:
+        # Preserve failed replacement files as well as the original credentials.
+        failed = backup / "failed-replacement"
+        _private_directory(failed)
+        for name in names if prepared else moved:
+            path = state_dir / name
+            if path.exists():
+                path.rename(failed / name)
+            if name in moved:
+                (backup / name).rename(path)
+        if leaf_stopped:
+            nats_leaf.start(state_dir)
+        if service_stopped and running:
+            _start_agentd(state_dir)
+        for name in stopped:
+            _start_plugin(state_dir, name)
+        print("Previous local enrollment restored.", file=sys.stderr)
+        raise
+    print(f"Previous enrollment saved in {backup}.")
+    try:
+        _start_agentd(state_dir)
+        for name in enabled:
+            _start_plugin(state_dir, name)
+    except (UserError, OSError) as error:
+        raise OperationalError(
+            "New enrollment is saved, but service activation failed. Run "
+            f"'{_command_name()} service restart' and restart any stopped Managed Agents; "
+            "do not redeem the invitation again."
+        ) from error
+    print("Restart your native agent host sessions to reconnect installed Plugins.")
+
+
 def command_join(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     state_path = state_dir / NODE_STATE_NAME
     requested_mode = getattr(args, "messaging_mode", "single-client")
-    if state_path.exists():
-        existing = _load_node(state_dir)
-        if existing["mode"] == "edge":
-            if existing["messaging_mode"] == requested_mode:
-                print(
-                    f"This host is already joined as {existing['agent_id']} "
-                    f"with messaging mode {requested_mode}; no changes made."
-                )
-                return _joined_transport_result(existing)
-            raise UserError(
-                "this host is already joined with messaging mode "
-                f"{existing['messaging_mode']}; requested {requested_mode}. "
-                "join does not convert messaging topology"
-            )
-        raise UserError("this host is already initialized as a core node")
-
+    existing = _load_node(state_dir) if state_path.exists() else None
     invitation = _invitation_decode(args.invitation)
+    invitation_digest = hashlib.sha256(args.invitation.encode()).hexdigest()
+    if existing and existing.get("invitation_digest") == invitation_digest:
+        if existing.get("messaging_mode") != requested_mode:
+            raise UserError("a new invitation is required to change messaging mode")
+        print(
+            f"This host is already joined as {existing['agent_id']}; no changes made."
+        )
+        return _joined_transport_result(existing)
     _join_preflight(invitation, requested_mode)
     binary: str | None = None
-    if requested_mode == "nats_leaf":
+    if requested_mode == "nats_leaf" and existing is None:
         try:
             binary = nats_leaf.preflight(
                 state_dir=state_dir,
@@ -1484,6 +1552,7 @@ def command_join(args: argparse.Namespace) -> int:
         "upstream_nats_url": invitation["nats_url"],
         "agent_id": response["agent_id"],
         "created_at": int(time.time()),
+        "invitation_digest": invitation_digest,
     }
     if requested_mode == "single-client":
         token = response.get("nats_token")
@@ -1510,42 +1579,50 @@ def command_join(args: argparse.Namespace) -> int:
             raise OperationalError(
                 f"Core returned an incomplete nats_leaf enrollment; invitation consumption is uncertain. {recovery}"
             )
-        local_token = secrets.token_urlsafe(32)
-        try:
-            nats_leaf.configure_and_start(
-                state_dir=state_dir,
-                node_id=str(response["agent_id"]),
-                upstream_nats_url=str(invitation["nats_url"]),
-                local_token=local_token,
-                leaf_username=leaf_username,
-                leaf_password=leaf_password,
-                binary=binary,
-            )
-            node = {
-                **common,
-                "plugin_nats_url": nats_leaf.plugin_url(),
-                "plugin_nats_token": local_token,
-                "jetstream_domain": nats_leaf.domain_for(str(response["agent_id"])),
-                "nats_url": nats_leaf.plugin_url(),
-                "nats_token": local_token,
-            }
-            _private_directory(state_dir)
-            _write_json(state_path, node)
-        except (nats_leaf.NatsLeafError, OSError) as error:
-            nats_leaf.cleanup_failed_join(state_dir)
-            raise UserError(
-                "nats_leaf enrollment was redeemed but local setup failed; no node state "
-                "was committed. On the Core, create a new invitation with "
-                f"'{_command_name()} invite --node-id {invitation['agent_id']}', then rerun join"
-            ) from error
-    if requested_mode == "single-client":
-        try:
-            _private_directory(state_dir)
-            _write_json(state_path, node)
-        except OSError as error:
-            raise OperationalError(
-                "Redemption succeeded but saving local state failed. Inspect the state directory before continuing; do not redeem again blindly. If credentials are missing, request a new invitation on the Core."
-            ) from error
+    with _replace_join_state(state_dir, existing):
+        if requested_mode == "nats_leaf":
+            local_token = secrets.token_urlsafe(32)
+            try:
+                if binary is None:
+                    binary = nats_leaf.preflight(
+                        state_dir=state_dir,
+                        node_id=str(response["agent_id"]),
+                        upstream_nats_url=str(invitation["nats_url"]),
+                    )
+                nats_leaf.configure_and_start(
+                    state_dir=state_dir,
+                    node_id=str(response["agent_id"]),
+                    upstream_nats_url=str(invitation["nats_url"]),
+                    local_token=local_token,
+                    leaf_username=leaf_username,
+                    leaf_password=leaf_password,
+                    binary=binary,
+                )
+                node = {
+                    **common,
+                    "plugin_nats_url": nats_leaf.plugin_url(),
+                    "plugin_nats_token": local_token,
+                    "jetstream_domain": nats_leaf.domain_for(str(response["agent_id"])),
+                    "nats_url": nats_leaf.plugin_url(),
+                    "nats_token": local_token,
+                }
+                _private_directory(state_dir)
+                _write_json(state_path, node)
+            except (nats_leaf.NatsLeafError, OSError) as error:
+                nats_leaf.cleanup_failed_join(state_dir)
+                raise UserError(
+                    "nats_leaf enrollment was redeemed but local setup failed; new enrollment "
+                    "was not committed. On the Core, create a new invitation with "
+                    f"'{_command_name()} invite --node-id {invitation['agent_id']}', then rerun join"
+                ) from error
+        if requested_mode == "single-client":
+            try:
+                _private_directory(state_dir)
+                _write_json(state_path, node)
+            except OSError as error:
+                raise OperationalError(
+                    "Redemption succeeded but saving local state failed. Inspect the state directory before continuing; do not redeem again blindly. If credentials are missing, request a new invitation on the Core."
+                ) from error
     print(f"This host enrolled in EdgeCitadel as {node['agent_id']}.")
     print(f"Messaging mode: {requested_mode}")
     print(f"Next: {_command_name()} agent install <managed-agent-path-or-name>")
@@ -3827,6 +3904,11 @@ def command_install(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     try:
         node = _load_node(state_dir)
+    except UserError:
+        if (state_dir / NODE_STATE_NAME).exists():
+            raise  # Never overwrite corrupt or unsupported state.
+        node = None
+    if node is not None and not args.invitation:
         if args.create:
             if node["mode"] != "core":
                 raise UserError("An enrolled Edge cannot also become Core")
@@ -3862,9 +3944,7 @@ def command_install(args: argparse.Namespace) -> int:
                 {"mode": node["mode"]},
             )
         )
-    except UserError:
-        if (state_dir / NODE_STATE_NAME).exists():
-            raise
+    else:
         if not args.create and not args.invitation:
             if args.json or args.yes or not sys.stdin.isatty():
                 raise UserError(

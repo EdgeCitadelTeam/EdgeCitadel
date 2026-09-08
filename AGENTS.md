@@ -28,7 +28,7 @@
 ## Commands
 - Newcomer setup (guided create/join, messaging, and Plugins): `./scripts/edgecitadel install`
 - Create a Core: `./scripts/edgecitadel create` (shared local/Tailscale/custom guide); automation uses `--network`, custom `--bind-address`, and `--yes` for explicit access changes
-- Enroll a host: `./scripts/edgecitadel invite --node-id <node-id>` reuses saved remote endpoints, then `./scripts/edgecitadel join '<invitation>'`
+- Enroll or replace a host enrollment: `./scripts/edgecitadel invite --node-id <node-id>` reuses saved remote endpoints, then `./scripts/edgecitadel join '<invitation>'`; replacement and Plugin reconnection details: `docs/onboarding.md`.
 - Install a Managed Agent: `./scripts/edgecitadel agent install <package-path>`
 - Inspect the local service: `./scripts/edgecitadel service status`
 - Homebrew formula style: `brew style deploy/homebrew/Formula/edgecitadel.rb`
