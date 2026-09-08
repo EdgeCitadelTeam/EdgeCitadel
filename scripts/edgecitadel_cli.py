@@ -55,7 +55,7 @@ except ImportError:  # Executed by the installed scripts/edgecitadel wrapper.
     )
 
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_ROOT = Path(os.environ.get("EDGECITADEL_INSTALL_ROOT", REPO_ROOT)).resolve()
 INSTALL_DISTRIBUTION = os.environ.get("EDGECITADEL_DISTRIBUTION", "source")
