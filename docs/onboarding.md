@@ -174,8 +174,31 @@ edgecitadel install --join 'ecjoin://...' --messaging-mode nats_leaf --plugin co
 
 Both unified commands enroll the Edge, start its services, install the selected
 Plugin, and report Plugin and Connector state. `edgecitadel join` remains
-available as the enrollment-only command when service and Plugin setup are
-intentionally managed separately.
+available for enrollment without installing Plugins. When replacing an existing
+enrollment, it also restarts agentd so the new connection takes effect.
+
+An explicit new invitation replaces the previous enrollment, including a local
+Core enrollment. This applies to both `join` and `install --join`, even when the
+Plugin is already installed. The CLI validates the redemption response before
+stopping the old local service, then saves the previous enrollment, agentd task
+history, connector credentials, and local Leaf data in a private directory under
+`~/.edgecitadel/enrollment-backups/` (or the selected state directory). The new
+connection gets fresh task and connector state; previously revoked native
+connectors can register when their host sessions restart. Installed Plugins and
+Managed Agent packages are retained, and enabled Managed Agents are restarted.
+Existing Core containers and their data are retained; replacing enrollment does
+not shut down the old Core deployment.
+
+Restart Codex, Claude Code, or Pi sessions after replacement to activate their
+Plugins against the new enrollment. Reusing the exact invitation that created
+the current enrollment checks connectivity without redeeming it again; changing
+Core, credentials, or messaging mode requires a new invitation. An invalid
+redemption leaves the old configuration untouched. If local setup fails after
+redemption, the CLI restores the previous local enrollment, but the invitation
+may already be consumed and must not be blindly retried. If activation fails
+after saving the new enrollment, use the reported service/Managed Agent recovery
+commands instead of redeeming again. `install --join --dry-run` only reports the
+planned replacement.
 
 `single-client` does not use a local NATS process. `nats_leaf` runs one local
 NATS server and connects it outbound to the Core through an authenticated Leaf
