@@ -569,6 +569,34 @@ def test_transport_rejects_wrong_actor_and_conflicting_late_result(
     assert store.get_task(task_id)["result"] == {"body": "done"}
 
 
+@pytest.mark.parametrize("state", ["completed", "failed", "rejected", "canceled"])
+def test_remote_result_preserves_payload_and_rejects_changed_redelivery(
+    store: AgentdStore,
+    state: str,
+) -> None:
+    task = store.create_task(
+        sender_id="edge-one-pi", recipient_id="remote-agent", payload={"body": "work"}
+    )
+    envelope = {
+        "v": 1,
+        "id": "20000000-0000-4000-8000-000000000002",
+        "type": "result",
+        "sender_id": "remote-agent",
+        "recipient_id": "edge-one-pi",
+        "task_id": task["task_id"],
+        "task_state": state,
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "payload": {"body": "HERMES_ACK", "upstream": "hermes-agent"},
+    }
+    result = store.ingest_transport_envelope(envelope)
+    assert result["result"] == envelope["payload"]
+    assert result["state"] == ("cancelled" if state == "canceled" else state)
+    assert store.ingest_transport_envelope(envelope)["result"] == envelope["payload"]
+    with pytest.raises(StoreError, match="conflicting terminal task result"):
+        store.ingest_transport_envelope({**envelope, "payload": {"body": "changed"}})
+    assert store.get_task(str(task["task_id"]))["result"] == envelope["payload"]
+
+
 def test_transport_redelivery_does_not_duplicate_logical_task(
     store: AgentdStore,
 ) -> None:

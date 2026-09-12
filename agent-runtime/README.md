@@ -121,6 +121,30 @@ The SDK ships a PEP 561 `py.typed` marker. Its `runtime_checkable` Protocols onl
 support presence checks at runtime; static type checking owns method signatures
 and return types.
 
+## Managed Agent delegation over MCP
+
+A Managed Agent can expose the existing `edgecitadel_delegate` and
+`edgecitadel_task_status` tools to its upstream model using a local stdio MCP
+server. Use the installed supervisor Python and the existing Managed Agent
+connector; this mode opens no execution session and exposes no inbox or task
+transition tools. The adapter remains the sole executor.
+
+```bash
+/absolute/state/supervisor/bin/python -m edgecitadel_agentd.mcp \
+  --state-dir /absolute/state --host-type managed-agent \
+  --connector-id managed-your-agent --agent-id your-agent
+```
+
+Before use, add each recipient to the package manifest's
+`permissions.messaging.outboundAgents`, regenerate its lock, and reinstall
+the package through the normal permission approval flow. agentd checks the
+administrator-reconciled installed package grant on each delegation; missing
+grants, stopped packages, and unlisted recipients are denied. Task status is
+limited to work involving the authenticated Agent. Older installed summaries
+without a recipient grant fail closed until reinstalled. Hermes supports this
+stdio command under `mcp_servers` in its local `config.yaml`; restart its gateway
+after adding it. No NATS credentials belong in the Hermes MCP configuration.
+
 ## Non-goals
 
 agentd owns Managed Agent process lifecycle, broker connectivity, local identity,

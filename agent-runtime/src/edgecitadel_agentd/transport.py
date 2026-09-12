@@ -308,6 +308,10 @@ class AgentdNatsTransport:
                         envelope,
                         headers={"Nats-Msg-Id": message_id},
                     )
+                    await nc.publish(
+                        f"agents.{pending['envelope']['sender_id']}.outbox",
+                        envelope,
+                    )
                     self.store.mark_transport_published(message_id)
                 await asyncio.sleep(1)
         finally:

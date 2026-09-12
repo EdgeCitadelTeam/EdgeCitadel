@@ -192,6 +192,8 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
     capabilities = set(json.loads(connector["capabilities_json"])["items"])
     common = {"connector.update", "session.open", "session.renew", "session.close"}
     managed = {
+        "task.create",
+        "task.get",
         "task.claim",
         "task.progress",
         "task.transition",
@@ -344,6 +346,12 @@ def dispatch(
     if operation == "agent.list":
         return store.list_agents()
     if operation == "task.create":
+        if connector["host_type"] == "managed-agent":
+            store.authorize_managed_recipient(
+                connector_id,
+                str(connector["agent_id"]),
+                str(params.get("recipient_id", "")),
+            )
         payload = params.get("payload", {})
         if not isinstance(payload, Mapping):
             raise StoreError("task payload must be an object")

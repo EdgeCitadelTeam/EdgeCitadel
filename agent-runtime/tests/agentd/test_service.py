@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from edgecitadel_agentd.client import AgentdClient, AgentdClientError
 from edgecitadel_agentd.service import serve, socket_path_for
+from edgecitadel_agentd.mcp import NativeMcpServer
 
 
 @pytest.fixture
@@ -26,6 +28,72 @@ def service(tmp_path: Path) -> tuple[Path, Path, threading.Event]:
     stop.set()
     thread.join(timeout=5)
     assert not thread.is_alive()
+
+
+def test_managed_mcp_delegation_obeys_package_grant_without_execution_session(
+    service: tuple[Path, Path, threading.Event],
+) -> None:
+    socket_path, service_dir, _ = service
+    admin = AgentdClient(
+        socket_path, admin_token=(service_dir / "admin.token").read_text().strip()
+    )
+    registration = admin.call(
+        "connector.register",
+        connector_id="managed-hermes",
+        host_type="managed-agent",
+        agent_id="hermes",
+        capabilities=["hermes-reasoner"],
+    )
+    token_path = service_dir.parent / "connectors/managed-hermes.token"
+    token_path.parent.mkdir()
+    token_path.write_text(registration["token"])
+    # This fixture puts the service directly under state; the MCP expects agentd/.
+    with patch("edgecitadel_agentd.mcp.socket_path_for", return_value=socket_path):
+        server = NativeMcpServer(
+            state_dir=service_dir.parent,
+            connector_id="managed-hermes",
+            host_type="managed-agent",
+            agent_id="hermes",
+        )
+    try:
+        assert {tool["name"] for tool in server.tools} == {
+            "edgecitadel_delegate",
+            "edgecitadel_task_status",
+        }
+        assert admin.call("health")["active_sessions"] == 0
+        with pytest.raises(ValueError, match="unknown"):
+            server._call_tool("edgecitadel_inbox", {})
+        request = {"recipient_id": "codex", "request": "ping"}
+        with pytest.raises(AgentdClientError, match="not authorized by its package"):
+            server._call_tool("edgecitadel_delegate", request)
+        record = {
+            "package_id": "edgecitadel.hermes",
+            "desired_state": "running",
+            "agent_ids": ["hermes"],
+            "outbound_agents": ["codex"],
+        }
+        admin.call("managed.reconcile", records=[record])
+        task = server._call_tool("edgecitadel_delegate", request)
+        assert task["sender_id"] == "hermes"
+        assert (
+            server._call_tool("edgecitadel_task_status", {"task_id": task["task_id"]})
+            == task
+        )
+        with pytest.raises(AgentdClientError, match="not authorized by its package"):
+            server._call_tool(
+                "edgecitadel_delegate", {**request, "recipient_id": "other"}
+            )
+        admin.call("managed.reconcile", records=[{**record, "outbound_agents": []}])
+        with pytest.raises(AgentdClientError, match="not authorized by its package"):
+            server._call_tool("edgecitadel_delegate", request)
+        admin.call(
+            "managed.reconcile", records=[{**record, "desired_state": "stopped"}]
+        )
+        with pytest.raises(AgentdClientError, match="not authorized by its package"):
+            server._call_tool("edgecitadel_delegate", request)
+    finally:
+        server.close()
+    assert admin.call("health")["active_sessions"] == 0
 
 
 def test_deep_state_directory_uses_private_bounded_socket_path(

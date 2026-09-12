@@ -2920,6 +2920,9 @@ def _managed_agent_summary(plugin_id: str, record: dict[str, Any]) -> dict[str, 
         "runtime_kind": runtime.get("kind", "legacy"),
         "desired_state": "running" if record.get("enabled") else "stopped",
         "agent_ids": [agent["id"] for agent in inventory["agents"]],
+        "outbound_agents": inventory.get("permissions", {})
+        .get("messaging", {})
+        .get("outboundAgents", []),
         "install_path": record["path"],
         "installed_at": record["installed_at"],
     }

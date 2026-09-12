@@ -837,6 +837,23 @@ class AgentdStore:
             ).fetchall()
         return [cast(dict[str, object], json.loads(row["record_json"])) for row in rows]
 
+    def authorize_managed_recipient(
+        self, connector_id: str, agent_id: str, recipient_id: str
+    ) -> None:
+        """Use the administrator-reconciled package grant, never the Agent card."""
+        owners = [
+            record
+            for record in self.list_managed_agents()
+            if agent_id in record.get("agent_ids", [])
+        ]
+        if (
+            connector_id != f"managed-{agent_id}"
+            or len(owners) != 1
+            or owners[0].get("desired_state") != "running"
+            or recipient_id not in owners[0].get("outbound_agents", [])
+        ):
+            raise StoreError("Managed Agent recipient is not authorized by its package")
+
     def open_session(
         self, *, connector_id: str, token: str, lease_seconds: int = 45
     ) -> dict[str, object]:
@@ -1356,6 +1373,7 @@ class AgentdStore:
                     state=state,
                     actor_id=actor_id,
                     reason="remote_result",
+                    result=payload if isinstance(payload, Mapping) else None,
                     evidence={"transport": "nats"},
                     queue_transport=False,
                 )

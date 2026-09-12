@@ -13,6 +13,47 @@ from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.transport import AgentdNatsTransport
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mirror_fails", [False, True])
+async def test_transport_mirrors_durable_command_before_retiring_outbox(
+    tmp_path: Path,
+    mirror_fails: bool,
+) -> None:
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    store.create_task(
+        sender_id="caller", recipient_id="remote", payload={"body": "work"}
+    )
+    transport = AgentdNatsTransport(tmp_path, store)
+    calls = []
+
+    class JetStream:
+        async def publish(self, subject, payload, *, headers):
+            calls.append((subject, payload, headers))
+
+    class Connection:
+        async def publish(self, subject, payload):
+            calls.append((subject, payload, None))
+            transport._stop.set()
+            if mirror_fails:
+                raise RuntimeError("mirror unavailable")
+
+    try:
+        if mirror_fails:
+            with pytest.raises(RuntimeError, match="mirror unavailable"):
+                await transport._connected_loop(Connection(), JetStream())
+        else:
+            await transport._connected_loop(Connection(), JetStream())
+        assert [call[0] for call in calls] == [
+            "agents.remote.inbox",
+            "agents.caller.outbox",
+        ]
+        assert calls[0][1] == calls[1][1]
+        assert calls[0][2] == {"Nats-Msg-Id": json.loads(calls[0][1])["id"]}
+        assert bool(store.pending_transport()) is mirror_fails
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("explicit", [False, True])
 def test_core_node_supplies_transport_endpoint(tmp_path: Path, explicit: bool) -> None:
     node = {

@@ -135,6 +135,17 @@ class NativeMcpServer:
             connector_id=connector_id,
             token=token,
         )
+        # A Managed Agent's adapter owns the execution session. Its upstream
+        # model gets delegation/status only and must not compete for inbox work.
+        self.managed = host_type == "managed-agent"
+        self.tools = [
+            tool
+            for tool in TOOLS
+            if not self.managed
+            or tool["name"] in {"edgecitadel_delegate", "edgecitadel_task_status"}
+        ]
+        if self.managed:
+            return
         self.client.call(
             "connector.update",
             host_type=host_type,
@@ -149,6 +160,8 @@ class NativeMcpServer:
         self._lease_thread.start()
 
     def close(self) -> None:
+        if self.managed:
+            return
         self._stop.set()
         self._lease_thread.join(timeout=2)
         with self._session_lock:
@@ -195,7 +208,7 @@ class NativeMcpServer:
                 },
             )
         if method == "tools/list":
-            return self._result(request_id, {"tools": TOOLS})
+            return self._result(request_id, {"tools": self.tools})
         if method == "tools/call":
             params = cast(Mapping[str, object], request.get("params", {}))
             name = params.get("name")
@@ -229,6 +242,8 @@ class NativeMcpServer:
         }
 
     def _call_tool(self, name: str, arguments: dict[str, Any]) -> object:
+        if name not in {tool["name"] for tool in self.tools}:
+            raise ValueError("unknown EdgeCitadel tool")
         if name == "edgecitadel_agents":
             return self.client.call("agent.list")
         if name == "edgecitadel_delegate":
@@ -305,11 +320,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="edgecitadel-native-mcp")
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument(
-        "--host-type", choices=("pi", "claude-code", "codex"), required=True
+        "--host-type",
+        choices=("pi", "claude-code", "codex", "managed-agent"),
+        required=True,
     )
     parser.add_argument("--connector-id")
     parser.add_argument("--agent-id")
     args = parser.parse_args(argv)
+    if args.host_type == "managed-agent" and (
+        not args.connector_id or not args.agent_id
+    ):
+        parser.error("Managed MCP requires the installed connector-id and agent-id")
     connector_id = args.connector_id or f"{args.host_type}-local"
     agent_id = args.agent_id or _default_agent_id(args.state_dir, args.host_type)
     try:

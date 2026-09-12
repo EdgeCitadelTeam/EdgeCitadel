@@ -1,0 +1,42 @@
+[
+  {
+    "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+    "sender_id": "us-mac-pro-codex",
+    "recipient_id": "jim-eq-hermes",
+    "skill_id": null,
+    "state": "completed",
+    "payload": {
+      "body": "DOGFOOD_20260912_RECORDED: Use the actual EdgeCitadel MCP delegate tool to ask us-mac-pro-codex to return exactly DOGFOOD_20260912_RECORDED_CODEX_ACK. Poll task status every few seconds for up to 90 seconds. Return DOGFOOD_20260912_RECORDED_HERMES_ACK, the child's task ID, and its completed result. This is real messaging proof; do not simulate tools."
+    },
+    "trace_id": "ec08520515bb4fdbab361a0491373653",
+    "context_id": null,
+    "deadline_at_ms": null,
+    "created_at_ms": 1789198455880,
+    "updated_at_ms": 1789198487666,
+    "terminal_reason": "remote_result",
+    "result": {
+      "body": "\n\nDOGFOOD_20260912_RECORDED_HERMES_ACK\nTask ID: a8648db2-6881-47ca-a231-ce3d19ea8b79\nCompleted result: DOGFOOD_20260912_RECORDED_CODEX_ACK",
+      "upstream": "hermes-agent"
+    }
+  },
+  {
+    "task_id": "a8648db2-6881-47ca-a231-ce3d19ea8b79",
+    "sender_id": "jim-eq-hermes",
+    "recipient_id": "us-mac-pro-codex",
+    "skill_id": null,
+    "state": "completed",
+    "payload": {
+      "body": "Return exactly DOGFOOD_20260912_RECORDED_CODEX_ACK",
+      "trace_id": "42dbee62d57a45a595b0b47dceac7ffd"
+    },
+    "trace_id": "42dbee62d57a45a595b0b47dceac7ffd",
+    "context_id": null,
+    "deadline_at_ms": null,
+    "created_at_ms": 1789198480462,
+    "updated_at_ms": 1789198480769,
+    "terminal_reason": null,
+    "result": {
+      "body": "DOGFOOD_20260912_RECORDED_CODEX_ACK"
+    }
+  }
+]
