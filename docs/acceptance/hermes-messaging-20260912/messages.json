@@ -1,0 +1,265 @@
+{
+  "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83": [
+    {
+      "observation_index": 61,
+      "id": "62dd1014-4262-4244-96ed-3b1469ef8749",
+      "v": 1,
+      "type": "result",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": "us-mac-pro-codex",
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "completed",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:47.134Z",
+      "payload": {
+        "body": "\n\nDOGFOOD_20260912_RECORDED_HERMES_ACK\nTask ID: a8648db2-6881-47ca-a231-ce3d19ea8b79\nCompleted result: DOGFOOD_20260912_RECORDED_CODEX_ACK",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 60,
+      "id": "38e7d07f-3f4e-46d9-94be-f434ccceefd6",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:47.012Z",
+      "payload": {
+        "message": "DED_CODEX_ACK",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 59,
+      "id": "932dbbcd-e72c-4cb4-ad0a-6ebbfd1b712a",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:46.444Z",
+      "payload": {
+        "message": "OD_20260912_RECOR",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 58,
+      "id": "94359bf0-9a24-4d5b-9651-c6c94cd35a6e",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:46.319Z",
+      "payload": {
+        "message": "b79\nCompleted result: DOGFO",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 57,
+      "id": "6459aeba-b1e1-4e38-9638-4a9401c77ccc",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:46.266Z",
+      "payload": {
+        "message": "231-ce3d19ea8",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 56,
+      "id": "60b64017-421d-44cd-95e0-aa14a8f44cf9",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:46.111Z",
+      "payload": {
+        "message": "2-6881-47ca-a",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 55,
+      "id": "b5874135-1b51-4a7d-b337-f3fd0cb742bf",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:46.096Z",
+      "payload": {
+        "message": "\nTask ID: a8648db",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 54,
+      "id": "4b9b61f7-666c-4b2b-ac7f-dd76f3386522",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:46.057Z",
+      "payload": {
+        "message": "DED_HERMES_ACK",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 53,
+      "id": "4ec921c9-986a-4de9-9d2f-d501e9af731c",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:45.906Z",
+      "payload": {
+        "message": "FOOD_20260912_RECOR",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 52,
+      "id": "02b822f4-d70f-4ce9-a0d5-f74cd4acf954",
+      "v": 1,
+      "type": "task.progress",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": null,
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": "working",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:45.857Z",
+      "payload": {
+        "message": "\n\nDOG",
+        "upstream": "hermes-agent"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 37,
+      "id": "32b5576e-5079-4a75-bb12-635f9e1593f4",
+      "v": 1,
+      "type": "command",
+      "sender_id": "us-mac-pro-codex",
+      "recipient_id": "jim-eq-hermes",
+      "task_id": "e6e20c32-dbdb-4ea3-bcb3-e82e1e9a7d83",
+      "context_id": null,
+      "task_state": null,
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:15.880Z",
+      "payload": {
+        "body": "DOGFOOD_20260912_RECORDED: Use the actual EdgeCitadel MCP delegate tool to ask us-mac-pro-codex to return exactly DOGFOOD_20260912_RECORDED_CODEX_ACK. Poll task status every few seconds for up to 90 seconds. Return DOGFOOD_20260912_RECORDED_HERMES_ACK, the child's task ID, and its completed result. This is real messaging proof; do not simulate tools.",
+        "trace_id": "ec08520515bb4fdbab361a0491373653"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    }
+  ],
+  "a8648db2-6881-47ca-a231-ce3d19ea8b79": [
+    {
+      "observation_index": 51,
+      "id": "5227c0aa-6646-40f0-a99a-449be18e7c97",
+      "v": 1,
+      "type": "result",
+      "sender_id": "us-mac-pro-codex",
+      "recipient_id": "jim-eq-hermes",
+      "task_id": "a8648db2-6881-47ca-a231-ce3d19ea8b79",
+      "context_id": null,
+      "task_state": "completed",
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:40.769Z",
+      "payload": {
+        "body": "DOGFOOD_20260912_RECORDED_CODEX_ACK"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    },
+    {
+      "observation_index": 50,
+      "id": "7fbaddd9-ca59-4451-bdad-b0b204a2a132",
+      "v": 1,
+      "type": "command",
+      "sender_id": "jim-eq-hermes",
+      "recipient_id": "us-mac-pro-codex",
+      "task_id": "a8648db2-6881-47ca-a231-ce3d19ea8b79",
+      "context_id": null,
+      "task_state": null,
+      "agent_state": null,
+      "hop_count": null,
+      "timestamp": "2026-09-12T07:34:39.916Z",
+      "payload": {
+        "body": "Return exactly DOGFOOD_20260912_RECORDED_CODEX_ACK",
+        "trace_id": "42dbee62d57a45a595b0b47dceac7ffd"
+      },
+      "deployment": "default",
+      "duplicate_count": 0
+    }
+  ]
+}

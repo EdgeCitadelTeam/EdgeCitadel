@@ -46,6 +46,7 @@
 - Frontend tests: `cd frontend && npm test`
 - Deterministic E2E tests: `cd e2e && npm test`; external Managed Agent suites require a prepared stack and run with `APP_URL=... AGG_URL=... npm run test:external-plugins`
 - Agent Package checks (smoke): `cd agent-runtime && python -m pytest -q && python -m edgecitadel_supervisor validate ../agent-packages/examples/echo`; see `agent-runtime/README.md` for the full contributor gate.
+- Managed model delegation: configure the scoped MCP mode described in `agent-runtime/README.md`; recipient grants come from the installed package manifest.
 
 ## Working rules
 - Inspect any nested `AGENTS.md` before editing in a subdirectory.
