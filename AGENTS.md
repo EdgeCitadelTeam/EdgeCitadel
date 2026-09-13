@@ -22,6 +22,7 @@
 - `agent-packages/` - Installable Agent Packages and developer examples
 - `plugins/` - Native Plugins for Pi, Claude Code, and Codex
 - `edgecitadel/` - Python distribution entrypoint; packaged runtime assets are assembled at build time
+- `tests/validation/tree/` - Copyable, standalone Core/Leaf broker contract tests; owns loopback processes, no application imports
 - `docs/` - Tracked project guides and stable architecture/wiki documentation
 - `local-docs/` - Ignored local implementation plans, acceptance transcripts, and research notes
 
@@ -35,6 +36,7 @@
 - Python package: `python -m build` then install the wheel in a clean virtual environment
 - Python release: publish a GitHub Release whose `v<version>` tag matches `pyproject.toml`; `.github/workflows/publish-pypi.yml` owns trusted PyPI publication
 - Root Python setup: `python3.12 -m venv .venv && .venv/bin/pip install -r scripts/requirements-test.txt`
+- Standalone tree validation: follow `tests/validation/tree/README.md`; invoke its `run.py` explicitly (not part of default pytest discovery)
 - Root Python tests: `.venv/bin/python -m pytest -q tests scripts/tests deploy/tests schemas/tests`
 - Managed Compose model gate: `RUN_CORE_COMPOSE_MODEL=1 .venv/bin/python -m pytest -q scripts/tests/test_core_network.py` (local Engine 28+ / Compose 2.24.4+; skips are not proof)
 - Full stack: `docker compose up --build -d`

@@ -1,0 +1,1500 @@
+{
+  "scope": "loopback Core + two Leaves; synthetic broker messages only",
+  "time_utc": "2026-09-13T17:46:13.378397+00:00",
+  "platform": "Darwin",
+  "architecture": "arm64",
+  "python": "3.12.14",
+  "all_passed": true,
+  "sources_sha256": {
+    "bootstrap.py": "8670ecee39422c141b05563b7db43ba476942a7a04d9f64469a5de6196367fff",
+    "brokers.py": "6310b9a910ba7bd22ef191599d87248e265a27de51133645a07b299838c4a9b5",
+    "check_topology.py": "993cd628437cadca01073c3bbb07925b35e6cdbbd2a0acda9b84438ccb73b76d",
+    "run.py": "a62d22caf873acdf62ec3f6dbd954aca5176873679debe5a3c70960ae8c2c2f5"
+  },
+  "nats_server": "nats-server: v2.14.6",
+  "nats_py": "2.15.0",
+  "binary_sha256": "5f61877766c7927a0222d6b4ae48e237ab8ca7d2d336ef7e4b9fb6735184771c",
+  "tests": [
+    {
+      "test": "check_topology.TreeContracts.test_both_leaves_remain_locally_writable_without_core",
+      "seconds": 0.10937145800562575,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "stored": {
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "offline-a",
+              "message_id": "offline-a"
+            }
+          ],
+          "b": [
+            {
+              "subject": "agents.b1.inbox",
+              "body": "offline-b",
+              "message_id": "offline-b"
+            }
+          ]
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          },
+          {
+            "broker": "core",
+            "error": "UnexpectedEOF"
+          }
+        ]
+      }
+    },
+    {
+      "test": "check_topology.TreeContracts.test_core_to_leaf_destination_owns_records",
+      "seconds": 0.09362204100762028,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "stored": {
+          "core": [],
+          "a": [
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-0",
+              "message_id": "core-a-0"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-1",
+              "message_id": "core-a-1"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-2",
+              "message_id": "core-a-2"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-3",
+              "message_id": "core-a-3"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-4",
+              "message_id": "core-a-4"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-5",
+              "message_id": "core-a-5"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-6",
+              "message_id": "core-a-6"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-7",
+              "message_id": "core-a-7"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-8",
+              "message_id": "core-a-8"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-9",
+              "message_id": "core-a-9"
+            }
+          ],
+          "b": []
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          }
+        ]
+      }
+    },
+    {
+      "test": "check_topology.TreeContracts.test_leaf_restart_preserves_exact_records_and_accepts_new_writes",
+      "seconds": 0.14859770798648242,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "after_restart": {
+          "core": [],
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "before-restart",
+              "message_id": "before-restart"
+            }
+          ],
+          "b": []
+        },
+        "new_write": {
+          "core": [],
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "before-restart",
+              "message_id": "before-restart"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "after-restart",
+              "message_id": "after-restart"
+            }
+          ],
+          "b": []
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          },
+          {
+            "broker": "a",
+            "error": "UnexpectedEOF"
+          },
+          {
+            "broker": "a",
+            "error": "ConnectionRefusedError"
+          }
+        ]
+      }
+    },
+    {
+      "test": "check_topology.TreeContracts.test_leaf_to_core_destination_owns_records",
+      "seconds": 0.09476212500885595,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "stored": {
+          "core": [
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-0",
+              "message_id": "a-core-0"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-1",
+              "message_id": "a-core-1"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-2",
+              "message_id": "a-core-2"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-3",
+              "message_id": "a-core-3"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-4",
+              "message_id": "a-core-4"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-5",
+              "message_id": "a-core-5"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-6",
+              "message_id": "a-core-6"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-7",
+              "message_id": "a-core-7"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-8",
+              "message_id": "a-core-8"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-9",
+              "message_id": "a-core-9"
+            }
+          ],
+          "a": [],
+          "b": []
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          }
+        ]
+      }
+    },
+    {
+      "test": "check_topology.TreeContracts.test_leaf_to_leaf_destination_owns_records",
+      "seconds": 0.09253554099996109,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "stored": {
+          "core": [],
+          "a": [],
+          "b": [
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-0",
+              "message_id": "a-b-0"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-1",
+              "message_id": "a-b-1"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-2",
+              "message_id": "a-b-2"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-3",
+              "message_id": "a-b-3"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-4",
+              "message_id": "a-b-4"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-5",
+              "message_id": "a-b-5"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-6",
+              "message_id": "a-b-6"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-7",
+              "message_id": "a-b-7"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-8",
+              "message_id": "a-b-8"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-9",
+              "message_id": "a-b-9"
+            }
+          ]
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          }
+        ]
+      }
+    },
+    {
+      "test": "check_topology.TreeContracts.test_local_destination_owns_records",
+      "seconds": 0.09147975000087172,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "stored": {
+          "core": [],
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-0",
+              "message_id": "a-a-0"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-1",
+              "message_id": "a-a-1"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-2",
+              "message_id": "a-a-2"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-3",
+              "message_id": "a-a-3"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-4",
+              "message_id": "a-a-4"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-5",
+              "message_id": "a-a-5"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-6",
+              "message_id": "a-a-6"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-7",
+              "message_id": "a-a-7"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-8",
+              "message_id": "a-a-8"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "a-a-9",
+              "message_id": "a-a-9"
+            }
+          ],
+          "b": []
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          }
+        ]
+      }
+    },
+    {
+      "test": "check_topology.TreeContracts.test_original_audit_sequence",
+      "seconds": 0.37220820899528917,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "connected": {
+          "core": [
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-0",
+              "message_id": "a-core-0"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-1",
+              "message_id": "a-core-1"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-2",
+              "message_id": "a-core-2"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-3",
+              "message_id": "a-core-3"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-4",
+              "message_id": "a-core-4"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-5",
+              "message_id": "a-core-5"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-6",
+              "message_id": "a-core-6"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-7",
+              "message_id": "a-core-7"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-8",
+              "message_id": "a-core-8"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-9",
+              "message_id": "a-core-9"
+            }
+          ],
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-0",
+              "message_id": "local-0"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-0",
+              "message_id": "core-a-0"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-1",
+              "message_id": "local-1"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-1",
+              "message_id": "core-a-1"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-2",
+              "message_id": "local-2"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-2",
+              "message_id": "core-a-2"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-3",
+              "message_id": "local-3"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-3",
+              "message_id": "core-a-3"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-4",
+              "message_id": "local-4"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-4",
+              "message_id": "core-a-4"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-5",
+              "message_id": "local-5"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-5",
+              "message_id": "core-a-5"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-6",
+              "message_id": "local-6"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-6",
+              "message_id": "core-a-6"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-7",
+              "message_id": "local-7"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-7",
+              "message_id": "core-a-7"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-8",
+              "message_id": "local-8"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-8",
+              "message_id": "core-a-8"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-9",
+              "message_id": "local-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-9",
+              "message_id": "core-a-9"
+            }
+          ],
+          "b": [
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-0",
+              "message_id": "a-b-0"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-1",
+              "message_id": "a-b-1"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-2",
+              "message_id": "a-b-2"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-3",
+              "message_id": "a-b-3"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-4",
+              "message_id": "a-b-4"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-5",
+              "message_id": "a-b-5"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-6",
+              "message_id": "a-b-6"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-7",
+              "message_id": "a-b-7"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-8",
+              "message_id": "a-b-8"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-9",
+              "message_id": "a-b-9"
+            }
+          ]
+        },
+        "partitioned": {
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-0",
+              "message_id": "local-0"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-0",
+              "message_id": "core-a-0"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-1",
+              "message_id": "local-1"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-1",
+              "message_id": "core-a-1"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-2",
+              "message_id": "local-2"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-2",
+              "message_id": "core-a-2"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-3",
+              "message_id": "local-3"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-3",
+              "message_id": "core-a-3"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-4",
+              "message_id": "local-4"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-4",
+              "message_id": "core-a-4"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-5",
+              "message_id": "local-5"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-5",
+              "message_id": "core-a-5"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-6",
+              "message_id": "local-6"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-6",
+              "message_id": "core-a-6"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-7",
+              "message_id": "local-7"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-7",
+              "message_id": "core-a-7"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-8",
+              "message_id": "local-8"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-8",
+              "message_id": "core-a-8"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-9",
+              "message_id": "local-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-9",
+              "message_id": "core-a-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "offline-local",
+              "message_id": "offline-local"
+            }
+          ],
+          "b": [
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-0",
+              "message_id": "a-b-0"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-1",
+              "message_id": "a-b-1"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-2",
+              "message_id": "a-b-2"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-3",
+              "message_id": "a-b-3"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-4",
+              "message_id": "a-b-4"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-5",
+              "message_id": "a-b-5"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-6",
+              "message_id": "a-b-6"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-7",
+              "message_id": "a-b-7"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-8",
+              "message_id": "a-b-8"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-9",
+              "message_id": "a-b-9"
+            }
+          ]
+        },
+        "before_retry": {
+          "core": [
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-0",
+              "message_id": "a-core-0"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-1",
+              "message_id": "a-core-1"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-2",
+              "message_id": "a-core-2"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-3",
+              "message_id": "a-core-3"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-4",
+              "message_id": "a-core-4"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-5",
+              "message_id": "a-core-5"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-6",
+              "message_id": "a-core-6"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-7",
+              "message_id": "a-core-7"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-8",
+              "message_id": "a-core-8"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-9",
+              "message_id": "a-core-9"
+            }
+          ],
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-0",
+              "message_id": "local-0"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-0",
+              "message_id": "core-a-0"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-1",
+              "message_id": "local-1"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-1",
+              "message_id": "core-a-1"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-2",
+              "message_id": "local-2"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-2",
+              "message_id": "core-a-2"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-3",
+              "message_id": "local-3"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-3",
+              "message_id": "core-a-3"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-4",
+              "message_id": "local-4"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-4",
+              "message_id": "core-a-4"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-5",
+              "message_id": "local-5"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-5",
+              "message_id": "core-a-5"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-6",
+              "message_id": "local-6"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-6",
+              "message_id": "core-a-6"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-7",
+              "message_id": "local-7"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-7",
+              "message_id": "core-a-7"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-8",
+              "message_id": "local-8"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-8",
+              "message_id": "core-a-8"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-9",
+              "message_id": "local-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-9",
+              "message_id": "core-a-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "offline-local",
+              "message_id": "offline-local"
+            }
+          ],
+          "b": [
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-0",
+              "message_id": "a-b-0"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-1",
+              "message_id": "a-b-1"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-2",
+              "message_id": "a-b-2"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-3",
+              "message_id": "a-b-3"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-4",
+              "message_id": "a-b-4"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-5",
+              "message_id": "a-b-5"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-6",
+              "message_id": "a-b-6"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-7",
+              "message_id": "a-b-7"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-8",
+              "message_id": "a-b-8"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-9",
+              "message_id": "a-b-9"
+            }
+          ]
+        },
+        "recovered": {
+          "core": [
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-0",
+              "message_id": "a-core-0"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-1",
+              "message_id": "a-core-1"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-2",
+              "message_id": "a-core-2"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-3",
+              "message_id": "a-core-3"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-4",
+              "message_id": "a-core-4"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-5",
+              "message_id": "a-core-5"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-6",
+              "message_id": "a-core-6"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-7",
+              "message_id": "a-core-7"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-8",
+              "message_id": "a-core-8"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-9",
+              "message_id": "a-core-9"
+            }
+          ],
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-0",
+              "message_id": "local-0"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-0",
+              "message_id": "core-a-0"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-1",
+              "message_id": "local-1"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-1",
+              "message_id": "core-a-1"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-2",
+              "message_id": "local-2"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-2",
+              "message_id": "core-a-2"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-3",
+              "message_id": "local-3"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-3",
+              "message_id": "core-a-3"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-4",
+              "message_id": "local-4"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-4",
+              "message_id": "core-a-4"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-5",
+              "message_id": "local-5"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-5",
+              "message_id": "core-a-5"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-6",
+              "message_id": "local-6"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-6",
+              "message_id": "core-a-6"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-7",
+              "message_id": "local-7"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-7",
+              "message_id": "core-a-7"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-8",
+              "message_id": "local-8"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-8",
+              "message_id": "core-a-8"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-9",
+              "message_id": "local-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-9",
+              "message_id": "core-a-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "offline-local",
+              "message_id": "offline-local"
+            }
+          ],
+          "b": [
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-0",
+              "message_id": "a-b-0"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-1",
+              "message_id": "a-b-1"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-2",
+              "message_id": "a-b-2"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-3",
+              "message_id": "a-b-3"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-4",
+              "message_id": "a-b-4"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-5",
+              "message_id": "a-b-5"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-6",
+              "message_id": "a-b-6"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-7",
+              "message_id": "a-b-7"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-8",
+              "message_id": "a-b-8"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-9",
+              "message_id": "a-b-9"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "offline-remote",
+              "message_id": "offline-remote"
+            }
+          ]
+        },
+        "persisted": {
+          "core": [
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-0",
+              "message_id": "a-core-0"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-1",
+              "message_id": "a-core-1"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-2",
+              "message_id": "a-core-2"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-3",
+              "message_id": "a-core-3"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-4",
+              "message_id": "a-core-4"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-5",
+              "message_id": "a-core-5"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-6",
+              "message_id": "a-core-6"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-7",
+              "message_id": "a-core-7"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-8",
+              "message_id": "a-core-8"
+            },
+            {
+              "subject": "agents.core.inbox",
+              "body": "a-core-9",
+              "message_id": "a-core-9"
+            }
+          ],
+          "a": [
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-0",
+              "message_id": "local-0"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-0",
+              "message_id": "core-a-0"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-1",
+              "message_id": "local-1"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-1",
+              "message_id": "core-a-1"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-2",
+              "message_id": "local-2"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-2",
+              "message_id": "core-a-2"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-3",
+              "message_id": "local-3"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-3",
+              "message_id": "core-a-3"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-4",
+              "message_id": "local-4"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-4",
+              "message_id": "core-a-4"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-5",
+              "message_id": "local-5"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-5",
+              "message_id": "core-a-5"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-6",
+              "message_id": "local-6"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-6",
+              "message_id": "core-a-6"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-7",
+              "message_id": "local-7"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-7",
+              "message_id": "core-a-7"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-8",
+              "message_id": "local-8"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-8",
+              "message_id": "core-a-8"
+            },
+            {
+              "subject": "agents.a2.inbox",
+              "body": "local-9",
+              "message_id": "local-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "core-a-9",
+              "message_id": "core-a-9"
+            },
+            {
+              "subject": "agents.a1.inbox",
+              "body": "offline-local",
+              "message_id": "offline-local"
+            }
+          ],
+          "b": [
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-0",
+              "message_id": "a-b-0"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-1",
+              "message_id": "a-b-1"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-2",
+              "message_id": "a-b-2"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-3",
+              "message_id": "a-b-3"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-4",
+              "message_id": "a-b-4"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-5",
+              "message_id": "a-b-5"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-6",
+              "message_id": "a-b-6"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-7",
+              "message_id": "a-b-7"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-8",
+              "message_id": "a-b-8"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "a-b-9",
+              "message_id": "a-b-9"
+            },
+            {
+              "subject": "agents.b1.inbox",
+              "body": "offline-remote",
+              "message_id": "offline-remote"
+            }
+          ]
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          },
+          {
+            "broker": "core",
+            "error": "UnexpectedEOF"
+          },
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          },
+          {
+            "broker": "a",
+            "error": "UnexpectedEOF"
+          },
+          {
+            "broker": "a",
+            "error": "ConnectionRefusedError"
+          }
+        ]
+      }
+    },
+    {
+      "test": "check_topology.TreeContracts.test_reconnect_requires_retry_and_deduplicates_message_id",
+      "seconds": 0.7627077499928419,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "before_retry": {
+          "core": [],
+          "a": [],
+          "b": []
+        },
+        "publish_ack": {
+          "first_seq": 1,
+          "retry_seq": 1,
+          "duplicate": true
+        },
+        "stored": {
+          "core": [],
+          "a": [],
+          "b": [
+            {
+              "subject": "agents.b1.inbox",
+              "body": "retry-me",
+              "message_id": "retry-me"
+            }
+          ]
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          },
+          {
+            "broker": "core",
+            "error": "UnexpectedEOF"
+          },
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          }
+        ]
+      }
+    },
+    {
+      "test": "check_topology.TreeContracts.test_remote_publish_fails_without_destination_route",
+      "seconds": 0.09771829200326465,
+      "status": "passed",
+      "problems": [],
+      "evidence": {
+        "expected_error": "NoStreamResponseError",
+        "stored": {
+          "a": [],
+          "b": []
+        },
+        "client_errors": [
+          {
+            "broker": "core",
+            "error": "ConnectionRefusedError"
+          },
+          {
+            "broker": "core",
+            "error": "UnexpectedEOF"
+          }
+        ]
+      }
+    }
+  ],
+  "tests_run": 9,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0
+}
