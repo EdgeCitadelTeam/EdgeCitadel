@@ -2,7 +2,7 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "48237b0c5e7f0e5492c64075f85ef9eac29719e75960f164c39050b50dfe7703"
+      "sha256": "9fe6e69710d26f9cc34f670d8aab2df002f9b37b14d98a03f2d758c3d9fb43a4"
     },
     {
       "path": "edgecitadel_hermes_plugin/__init__.py",
@@ -14,19 +14,35 @@
     },
     {
       "path": "edgecitadel_hermes_plugin/adapter.py",
-      "sha256": "bd4fa35764abe8266108250cd39037d3e9ce8633d26c04956d01718e811f2242"
+      "sha256": "f376533645ffb6c02976effe2b60ab35a4417ff41d0f4c32a1144980105cc10d"
     },
     {
       "path": "edgecitadel_hermes_plugin/config.yaml",
       "sha256": "39db6267173b4d94c42e3e47570389681591aea66d7649b3de1d3e3e7141f0d1"
     },
     {
+      "path": "edgecitadel_hermes_plugin/delegation.py",
+      "sha256": "74fcafda54c8e77948d62248ed96e598f15b38529155dbf1f3aa4abcc67520d7"
+    },
+    {
       "path": "edgecitadel_hermes_plugin/hermes_client.py",
-      "sha256": "6e26739e28790bb1bd73c64a8878a6427ed39a28c9bf659dad4510eb6ced833e"
+      "sha256": "288ad41b49dd44143fd4487b4d4701888129a26e7fb74fcaedb176ade1f54ba1"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/http_bridge.py",
+      "sha256": "52e439930bbe233775227ade723d73c81d022bd624ae72cd5f8879da0443f503"
     },
     {
       "path": "edgecitadel_hermes_plugin/requirements.txt",
       "sha256": "5e001466b9dac8aea97b90a9fe6a13d696c875ceca9aae7a5722c2f9665e2404"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/server.py",
+      "sha256": "ab23b4ad6e0593d13b21479b7de16494c170679f84e9cf1adabc6ac7fd0f14e9"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/trace_hooks.py",
+      "sha256": "22049ad6bb3a5c595319df49c398e95123d16d5845c2674a9732b1fac0d66c63"
     },
     {
       "path": "plugin.yaml",

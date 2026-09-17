@@ -235,7 +235,7 @@ def _load_worker() -> HomeAssistantWorker:
 
 
 async def handle(env: dict, ctx: ManagedContext) -> tuple[dict, str]:
-    if env["type"] != "command":
+    if env["type"] not in {"command", "delegation"}:
         return ({"error": "unsupported_type"}, "rejected")
     args = env["payload"].get("args") or {}
     operation = args.get("operation")

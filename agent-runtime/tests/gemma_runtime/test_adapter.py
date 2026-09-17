@@ -27,11 +27,15 @@ def test_chat_calls_basic_non_streaming_ollama_api(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_handle_returns_model_response(monkeypatch):
+@pytest.mark.parametrize("envelope_type", ["command", "delegation"])
+async def test_handle_returns_model_response(monkeypatch, envelope_type):
     monkeypatch.setattr(adapter, "_chat", lambda prompt: (prompt.upper(), "gemma3:1b"))
 
     result, state = await adapter.handle(
-        {"type": "command", "payload": {"body": "hello", "skill_id": "reasoning.chat"}},
+        {
+            "type": envelope_type,
+            "payload": {"body": "hello", "skill_id": "reasoning.chat"},
+        },
         MagicMock(),
     )
 

@@ -14,7 +14,7 @@
     },
     {
       "path": "runtime/__main__.py",
-      "sha256": "97c2de1fb2c48b238b42ac43ccffda3337da30e25bd78aa6929b0b9cccf0b2b5"
+      "sha256": "4d10d2c42a42b604686cecbfc5b0dfd43e0b8ac944800051a5744bdb86090239"
     },
     {
       "path": "runtime/config.yaml",

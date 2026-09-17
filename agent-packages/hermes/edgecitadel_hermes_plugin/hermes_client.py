@@ -52,7 +52,11 @@ ProgressFn = Callable[[str], Awaitable[None]]
 
 
 async def call_hermes_streaming(
-    *, prompt: str, session_id: str | None, publish_progress: ProgressFn
+    *,
+    prompt: str,
+    session_id: str | None,
+    publish_progress: ProgressFn,
+    execution_binding: dict[str, str] | None = None,
 ) -> str:
     """POST /v1/chat/completions with stream=true. Aggregate SSE deltas,
     flush to publish_progress on hybrid 8-token / 100ms cadence, return
@@ -65,6 +69,15 @@ async def call_hermes_streaming(
     }
     if session_id:
         headers["X-Hermes-Session-Id"] = session_id
+
+    if execution_binding is not None:
+        headers.update(
+            {
+                "X-EdgeCitadel-Run-Binding": execution_binding["binding_id"],
+                "X-EdgeCitadel-Session-Id": execution_binding["session_id"],
+                "X-EdgeCitadel-Task-Id": execution_binding["task_id"],
+            }
+        )
 
     body = {
         "model": HERMES_MODEL,

@@ -60,7 +60,7 @@ async def handle(env: dict, ctx: ManagedContext) -> tuple[dict, str]:
     """Translate a `command` envelope into a Hermes Chat Completions call.
     Stream SSE deltas as `task.progress` envelopes; return the joined text
     in a `result`-shaped payload."""
-    if env.get("type") != "command":
+    if env.get("type") not in {"command", "delegation"}:
         return ({"error": "unsupported_type"}, "rejected")
 
     payload = env.get("payload") or {}
@@ -77,11 +77,20 @@ async def handle(env: dict, ctx: ManagedContext) -> tuple[dict, str]:
                 task_id, body=delta, extra={"upstream": "hermes-agent"}
             )
 
+    trace = getattr(ctx, "trace", None)
+    binding_options = {}
+    if trace is not None and trace.binding_id is not None:
+        binding_options["execution_binding"] = {
+            "binding_id": trace.binding_id,
+            "session_id": trace.session_id,
+            "task_id": trace.task_id,
+        }
     try:
         full_text = await call_hermes_streaming(
             prompt=body,
             session_id=context_id or None,
             publish_progress=publish_delta,
+            **binding_options,
         )
     except HermesError as e:
         log.warning("hermes call failed (%s)", e)

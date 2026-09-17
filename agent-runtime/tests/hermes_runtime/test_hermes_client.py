@@ -334,10 +334,20 @@ async def test_session_id_header_set_when_context_id_present():
         pass
 
     await call_hermes_streaming(
-        prompt="x", session_id="ctx-abc-123", publish_progress=publish
+        prompt="x",
+        session_id="ctx-abc-123",
+        publish_progress=publish,
+        execution_binding={
+            "binding_id": "owned-binding",
+            "session_id": "owned-session",
+            "task_id": "owned-task",
+        },
     )
 
     assert captured_request["headers"].get("x-hermes-session-id") == "ctx-abc-123"
+    assert captured_request["headers"]["x-edgecitadel-run-binding"] == "owned-binding"
+    assert captured_request["headers"]["x-edgecitadel-session-id"] == "owned-session"
+    assert captured_request["headers"]["x-edgecitadel-task-id"] == "owned-task"
 
 
 @pytest.mark.asyncio
