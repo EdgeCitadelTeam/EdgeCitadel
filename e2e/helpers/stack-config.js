@@ -142,6 +142,7 @@ async function writeRunFiles(config, randomBytes) {
         E2E_CONTROL_DIR: config.controlDir,
         NATS_IMAGE: config.natsImage,
         NATS_TOKEN: token,
+        EDGECITADEL_ADMIN_TOKEN: token,
       },
     }
   } catch (error) {

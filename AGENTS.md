@@ -31,22 +31,31 @@
 - Enroll or replace a host enrollment: `./scripts/edgecitadel invite --node-id <node-id>` reuses saved remote endpoints, then `./scripts/edgecitadel join '<invitation>'`; replacement and Plugin reconnection details: `docs/onboarding.md`.
 - Install a Managed Agent: `./scripts/edgecitadel agent install <package-path>`
 - Inspect the local service: `./scripts/edgecitadel service status`
+- Experimental Core collector: `EDGECITADEL_TRACE_COLLECTOR=1` in the Aggregator environment (raw Compose forwards it); default off. Contract and limits: `docs/architecture/execution-trace-contract.md`.
+- Core collector control: administrator-authenticated `POST /api/system/telemetry/control`; lifecycle and credential semantics: `docs/architecture/execution-trace-contract.md`.
+- Read-only Core telemetry inspection: `python -m aggregator.trace_inspect <core.db>`; views, epoch-fenced pagination and limits: `docs/architecture/execution-trace-contract.md`.
+- Source telemetry control: `python -m edgecitadel_agentd.trace_control --state-dir <agentd-dir> stop|start|retry`; scope retry, authorization and lifecycle semantics: `agent-runtime/README.md`.
+- Read-only source telemetry inspection: `python -m edgecitadel_agentd.trace_inspect <agentd.sqlite3>`; environment, pagination and evidence limits: `agent-runtime/README.md`.
+- Experimental source sync: `EDGECITADEL_TRACE_SYNC=1` in the agentd process environment; default off. Lifecycle/status and qualification limits: `agent-runtime/README.md`.
 - Homebrew formula style: `brew style deploy/homebrew/Formula/edgecitadel.rb`
 - Python package: `python -m build` then install the wheel in a clean virtual environment
 - Python release: publish a GitHub Release whose `v<version>` tag matches `pyproject.toml`; `.github/workflows/publish-pypi.yml` owns trusted PyPI publication
 - Root Python setup: `python3.12 -m venv .venv && .venv/bin/pip install -r scripts/requirements-test.txt`
 - Root Python tests: `.venv/bin/python -m pytest -q tests scripts/tests deploy/tests schemas/tests`
 - Managed Compose model gate: `RUN_CORE_COMPOSE_MODEL=1 .venv/bin/python -m pytest -q scripts/tests/test_core_network.py` (local Engine 28+ / Compose 2.24.4+; skips are not proof)
+- Render NATS config before raw Compose: `./scripts/render-nats-conf.sh` (MQTT off unless `EC_ENABLE_MQTT=1`); managed Core renders from the same template.
 - Full stack: `docker compose up --build -d`
 - Restart: `docker compose down && docker compose up --build -d`
 - Backend setup: `cd aggregator && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
+- Prepare an offline Core restore: `aggregator/.venv/bin/python -m aggregator.trace_restore <snapshot.db> <new-output.db>`; epoch rotation and activation limits: `docs/architecture/execution-trace-contract.md`.
 - Backend dev: `aggregator/.venv/bin/uvicorn aggregator.main:app --host 0.0.0.0 --port 8000 --reload`
 - Frontend dev: `cd frontend && npm run dev`
 - Frontend build: `cd frontend && npm run build`
 - Frontend tests: `cd frontend && npm test`
 - Deterministic E2E tests: `cd e2e && npm test`; external Managed Agent suites require a prepared stack and run with `APP_URL=... AGG_URL=... npm run test:external-plugins`
-- Agent Package checks (smoke): `cd agent-runtime && python -m pytest -q && python -m edgecitadel_supervisor validate ../agent-packages/examples/echo`; see `agent-runtime/README.md` for the full contributor gate.
+- Agent Package checks (smoke): `cd agent-runtime && python -m pytest -q && python -m edgecitadel_supervisor validate ../agent-packages/examples/echo`; see `agent-runtime/README.md` for the full contributor gate and opt-in macOS filesystem-exhaustion check.
 - Managed model delegation: configure the scoped MCP mode described in `agent-runtime/README.md`; recipient grants come from the installed package manifest.
+- Bound Hermes server: `python -m edgecitadel_hermes_plugin.server`; Python 3.12 environment, profile/toolset and schema setup are documented in `agent-packages/hermes/README.md`.
 
 ## Working rules
 - Inspect any nested `AGENTS.md` before editing in a subdirectory.

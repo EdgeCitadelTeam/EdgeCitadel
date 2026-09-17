@@ -26,6 +26,8 @@ services:
       - NATS_URL=nats://nats:4222
       - NATS_TOKEN=${NATS_TOKEN:?required}
       - DB_PATH=/data/openclaw.db
+      - EDGECITADEL_TRACE_COLLECTOR=${EDGECITADEL_TRACE_COLLECTOR:-0}
+      - EDGECITADEL_ADMIN_TOKEN=${EDGECITADEL_ADMIN_TOKEN:-}
     volumes:
       - test-data:/data
     depends_on:
