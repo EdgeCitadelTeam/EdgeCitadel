@@ -1,0 +1,845 @@
+{
+  "schema_version": 1,
+  "scope": "M2 logical reference model, not durable runtime proof",
+  "input_events": {
+    "root": {
+      "schema_version": 1,
+      "event_id": "00000000-0000-4000-8000-000000000002",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000100",
+      "source_seq": 2,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": "00000000-0000-4000-8000-000000000300",
+      "parent_task_id": null,
+      "parent_run_id": null,
+      "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "task",
+      "phase": "completed",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "source_role": "recipient"
+      },
+      "supersedes_event_id": null
+    },
+    "child": {
+      "schema_version": 1,
+      "event_id": "00000000-0000-4000-8000-000000000021",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000100",
+      "source_seq": 21,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": "00000000-0000-4000-8000-000000000301",
+      "parent_task_id": "00000000-0000-4000-8000-000000000300",
+      "parent_run_id": null,
+      "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "task",
+      "phase": "completed",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "source_role": "recipient"
+      },
+      "supersedes_event_id": null
+    },
+    "unsupported": {
+      "schema_version": 2,
+      "event_id": "00000000-0000-4000-8000-000000000099",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000100",
+      "source_seq": 21,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": "00000000-0000-4000-8000-000000000301",
+      "parent_task_id": "00000000-0000-4000-8000-000000000300",
+      "parent_run_id": null,
+      "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "task",
+      "phase": "completed",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "source_role": "recipient"
+      },
+      "supersedes_event_id": null
+    },
+    "conflict": {
+      "schema_version": 1,
+      "event_id": "00000000-0000-4000-8000-000000000002",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000100",
+      "source_seq": 2,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": "00000000-0000-4000-8000-000000000300",
+      "parent_task_id": null,
+      "parent_run_id": null,
+      "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "task",
+      "phase": "failed",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "source_role": "recipient"
+      },
+      "supersedes_event_id": null
+    },
+    "root_after_restore": {
+      "schema_version": 1,
+      "event_id": "00000000-0000-4000-8000-000000000102",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000101",
+      "source_seq": 1,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": "00000000-0000-4000-8000-000000000300",
+      "parent_task_id": null,
+      "parent_run_id": null,
+      "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "task",
+      "phase": "completed",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "source_role": "recipient"
+      },
+      "supersedes_event_id": null
+    }
+  },
+  "cases": [
+    {
+      "id": "unsettled-hole",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 2,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 0
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": true,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "hole-filled-out-of-order",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "child",
+          "seq": 2,
+          "generation": "g1"
+        },
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 2
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300",
+          "00000000-0000-4000-8000-000000000301"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 2,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed",
+          "00000000-0000-4000-8000-000000000301": "completed"
+        },
+        "graph_edges": [
+          {
+            "from": "00000000-0000-4000-8000-000000000300",
+            "to": "00000000-0000-4000-8000-000000000301",
+            "kind": "parent_task",
+            "status": "resolved"
+          }
+        ]
+      }
+    },
+    {
+      "id": "durable-rejection",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "receive",
+          "event": "unsupported",
+          "seq": 2,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 2
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": true,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [
+          2
+        ],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "loss-marker-closes-hole",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 2,
+          "generation": "g1"
+        },
+        {
+          "op": "durable_loss",
+          "first": 1,
+          "last": 1
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 2
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": true,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [
+          1
+        ],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "broker-expiry-retained-local-copy",
+      "actions": [
+        {
+          "op": "broker_ack",
+          "seq": 1
+        },
+        {
+          "op": "broker_expire"
+        },
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "broker-ack-is-not-settlement",
+      "actions": [
+        {
+          "op": "broker_ack",
+          "seq": 1
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 0
+        },
+        "graph_tasks": [],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": true,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 0,
+        "rejected": [],
+        "lost": [],
+        "task_states": {},
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "same-record-replay",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "changed-content-same-id",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "receive",
+          "event": "conflict",
+          "seq": 2,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 2
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": true,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [
+          2
+        ],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "new-export-generation-same-event",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g2"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1,
+          "g2": 1
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "collector-restore-retained-replay",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        },
+        {
+          "op": "collector_restore"
+        },
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "collector-restore-expired-local-copy",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        },
+        {
+          "op": "collector_restore"
+        },
+        {
+          "op": "durable_loss",
+          "first": 1,
+          "last": 1
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1
+        },
+        "graph_tasks": [],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": true,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 0,
+        "rejected": [],
+        "lost": [
+          1
+        ],
+        "task_states": {},
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "lost-loss-evidence",
+      "actions": [
+        {
+          "op": "coverage_unknown"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 0
+        },
+        "graph_tasks": [],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": true,
+          "partial": false
+        },
+        "unique_events": 0,
+        "rejected": [],
+        "lost": [],
+        "task_states": {},
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "projection-lags-ingestion",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1
+        },
+        "graph_tasks": [],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": true,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [],
+        "task_states": {},
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "parent-not-yet-observed",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "child",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000301"
+        ],
+        "unresolved_parent": true,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": true
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000301": "completed"
+        },
+        "graph_edges": [
+          {
+            "from": "00000000-0000-4000-8000-000000000300",
+            "to": "00000000-0000-4000-8000-000000000301",
+            "kind": "parent_task",
+            "status": "unresolved"
+          }
+        ]
+      }
+    },
+    {
+      "id": "late-parent-resolves-link",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "child",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        },
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 2,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 2
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300",
+          "00000000-0000-4000-8000-000000000301"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 2,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed",
+          "00000000-0000-4000-8000-000000000301": "completed"
+        },
+        "graph_edges": [
+          {
+            "from": "00000000-0000-4000-8000-000000000300",
+            "to": "00000000-0000-4000-8000-000000000301",
+            "kind": "parent_task",
+            "status": "resolved"
+          }
+        ]
+      }
+    },
+    {
+      "id": "local-only-source-sequence-not-export-hole",
+      "actions": [
+        {
+          "op": "local_only",
+          "event": "child"
+        },
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 1,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    },
+    {
+      "id": "source-restore-fresh-epoch-old-record-replay",
+      "actions": [
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "receive",
+          "event": "root_after_restore",
+          "seq": 1,
+          "generation": "g2"
+        },
+        {
+          "op": "receive",
+          "event": "root",
+          "seq": 1,
+          "generation": "g1"
+        },
+        {
+          "op": "project"
+        }
+      ],
+      "expected": {
+        "settled": {
+          "g1": 1,
+          "g2": 1
+        },
+        "graph_tasks": [
+          "00000000-0000-4000-8000-000000000300"
+        ],
+        "unresolved_parent": false,
+        "coverage": {
+          "gap": false,
+          "catching_up": false,
+          "unknown_sources": false,
+          "partial": false
+        },
+        "unique_events": 2,
+        "rejected": [],
+        "lost": [],
+        "task_states": {
+          "00000000-0000-4000-8000-000000000300": "completed"
+        },
+        "graph_edges": []
+      }
+    }
+  ]
+}

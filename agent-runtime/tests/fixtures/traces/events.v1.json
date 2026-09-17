@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "name": "run",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000001",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 1,
+        "agent_id": "worker-a",
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_id": "00000000-0000-4000-8000-000000000200",
+        "task_id": null,
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": null,
+        "span_id": null,
+        "parent_span_id": null,
+        "kind": "run",
+        "phase": "started",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {},
+        "supersedes_event_id": null
+      },
+      "sha256": "8e3f4360a612b97f3c5b63a7e540a48409f18ec89587cbac6e36a2e28b71705f"
+    },
+    {
+      "name": "task",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000002",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 2,
+        "agent_id": "worker-a",
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_id": "00000000-0000-4000-8000-000000000200",
+        "task_id": "00000000-0000-4000-8000-000000000300",
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+        "span_id": null,
+        "parent_span_id": null,
+        "kind": "task",
+        "phase": "running",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "source_role": "recipient"
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "b80cdaaca58704c6ae177842c179e0f5e811a7b99e6f627f912a3eeb6d9ed01c"
+    },
+    {
+      "name": "dispatch",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000003",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 3,
+        "agent_id": "worker-a",
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_id": "00000000-0000-4000-8000-000000000200",
+        "task_id": null,
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": null,
+        "span_id": null,
+        "parent_span_id": null,
+        "kind": "dispatch",
+        "phase": "denied",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "dispatch_id": "00000000-0000-4000-8000-000000000500",
+          "recipient_id": "worker-b",
+          "reason": "permission_denied"
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "c24242b72cc23360ff51e17ddaff57e964c6dad37b5f0e1c8fe57d8e8f0c56fc"
+    },
+    {
+      "name": "permission",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000004",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 4,
+        "agent_id": "worker-a",
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_id": "00000000-0000-4000-8000-000000000200",
+        "task_id": null,
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": null,
+        "span_id": null,
+        "parent_span_id": null,
+        "kind": "permission",
+        "phase": "denied",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "dispatch_id": "00000000-0000-4000-8000-000000000500",
+          "policy": "package.outboundAgents",
+          "reason": "permission_denied"
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "c1fc6b68230b3b684023221829e84eeaf5b41606cdd48339d09564f104f7e1dd"
+    },
+    {
+      "name": "model",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000005",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 5,
+        "agent_id": "worker-a",
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_id": "00000000-0000-4000-8000-000000000200",
+        "task_id": "00000000-0000-4000-8000-000000000300",
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+        "span_id": "00000000-0000-4000-8000-000000000705",
+        "parent_span_id": null,
+        "kind": "model",
+        "phase": "finished",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "name": "owned-model",
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "usage_unavailable_reason": null
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "677de005b0c61ae47b0549357ade4a5b75af2736b65d3ca8e29c737fb03fd012"
+    },
+    {
+      "name": "tool",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000006",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 6,
+        "agent_id": "worker-a",
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_id": "00000000-0000-4000-8000-000000000200",
+        "task_id": "00000000-0000-4000-8000-000000000300",
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+        "span_id": "00000000-0000-4000-8000-000000000706",
+        "parent_span_id": null,
+        "kind": "tool",
+        "phase": "started",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "name": "edgecitadel_delegate",
+          "content_available": false
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "f991b6dab06eb3d4d97517dfb28b039999bf86da21f8465627bbf30a23044cb5"
+    },
+    {
+      "name": "coverage",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000007",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 7,
+        "agent_id": null,
+        "trace_id": null,
+        "context_id": null,
+        "task_id": null,
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": null,
+        "span_id": null,
+        "parent_span_id": null,
+        "kind": "coverage",
+        "phase": "lost",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "export_generation": "00000000-0000-4000-8000-000000000600",
+          "through_export_seq": 4,
+          "lost_ranges": [
+            {
+              "first": 2,
+              "last": 3
+            }
+          ],
+          "reason": "quota_exceeded"
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "f3a0240ec237427b3f260f759fb96b15ffa60c21c8cf480543d23940813f4a47"
+    },
+    {
+      "name": "source",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000008",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 8,
+        "agent_id": null,
+        "trace_id": null,
+        "context_id": null,
+        "task_id": null,
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": null,
+        "span_id": null,
+        "parent_span_id": null,
+        "kind": "source",
+        "phase": "started",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "export_generation": "00000000-0000-4000-8000-000000000600"
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "b2342f018e7fe9efab2905e14528f33f4f04d75940adec9d0c6e68deb6edea21"
+    },
+    {
+      "name": "link",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000029",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 29,
+        "agent_id": "worker-a",
+        "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_id": "00000000-0000-4000-8000-000000000200",
+        "task_id": null,
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": null,
+        "span_id": null,
+        "parent_span_id": null,
+        "kind": "link",
+        "phase": "observed",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "relation": "join",
+          "from_task_id": "00000000-0000-4000-8000-000000000302",
+          "to_task_id": "00000000-0000-4000-8000-000000000300"
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "b11709df9da54fab70460a877742ef49e444dfd5bb4428d08b8e615ac5a93174"
+    },
+    {
+      "name": "security",
+      "event": {
+        "schema_version": 1,
+        "event_id": "00000000-0000-4000-8000-000000000010",
+        "node_id": "edge-a",
+        "source_epoch": "00000000-0000-4000-8000-000000000100",
+        "source_seq": 10,
+        "agent_id": null,
+        "trace_id": null,
+        "context_id": null,
+        "task_id": null,
+        "parent_task_id": null,
+        "parent_run_id": null,
+        "execution_attempt_id": null,
+        "span_id": null,
+        "parent_span_id": null,
+        "kind": "security",
+        "phase": "authentication_rejected",
+        "occurred_at": "2026-09-16T12:00:00.000Z",
+        "duration_ms": null,
+        "evidence_kind": "source_observed",
+        "causes": [],
+        "attributes": {
+          "reason": "authentication_failed",
+          "count": 1
+        },
+        "supersedes_event_id": null
+      },
+      "sha256": "419b73233518151e1fd5eb34327c28c495ce623529034bb73661b428a633b1d2"
+    }
+  ]
+}

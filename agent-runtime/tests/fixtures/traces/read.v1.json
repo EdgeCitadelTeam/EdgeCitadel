@@ -1,0 +1,538 @@
+{
+  "schema_version": 1,
+  "fixture_seed": "root-two-children-and-join-v1",
+  "input_events": [
+    {
+      "schema_version": 1,
+      "event_id": "00000000-0000-4000-8000-000000000002",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000100",
+      "source_seq": 2,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": "00000000-0000-4000-8000-000000000300",
+      "parent_task_id": null,
+      "parent_run_id": null,
+      "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "task",
+      "phase": "running",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "source_role": "recipient"
+      },
+      "supersedes_event_id": null
+    },
+    {
+      "schema_version": 1,
+      "event_id": "00000000-0000-4000-8000-000000000021",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000100",
+      "source_seq": 21,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": "00000000-0000-4000-8000-000000000301",
+      "parent_task_id": "00000000-0000-4000-8000-000000000300",
+      "parent_run_id": null,
+      "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "task",
+      "phase": "completed",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "source_role": "recipient"
+      },
+      "supersedes_event_id": null
+    },
+    {
+      "schema_version": 1,
+      "event_id": "00000000-0000-4000-8000-000000000022",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000100",
+      "source_seq": 22,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": "00000000-0000-4000-8000-000000000302",
+      "parent_task_id": "00000000-0000-4000-8000-000000000300",
+      "parent_run_id": null,
+      "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "task",
+      "phase": "completed",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "source_role": "recipient"
+      },
+      "supersedes_event_id": null
+    },
+    {
+      "schema_version": 1,
+      "event_id": "00000000-0000-4000-8000-000000000029",
+      "node_id": "edge-a",
+      "source_epoch": "00000000-0000-4000-8000-000000000100",
+      "source_seq": 29,
+      "agent_id": "worker-a",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "context_id": "00000000-0000-4000-8000-000000000200",
+      "task_id": null,
+      "parent_task_id": null,
+      "parent_run_id": null,
+      "execution_attempt_id": null,
+      "span_id": null,
+      "parent_span_id": null,
+      "kind": "link",
+      "phase": "observed",
+      "occurred_at": "2026-09-16T12:00:00.000Z",
+      "duration_ms": null,
+      "evidence_kind": "source_observed",
+      "causes": [],
+      "attributes": {
+        "relation": "join",
+        "from_task_id": "00000000-0000-4000-8000-000000000302",
+        "to_task_id": "00000000-0000-4000-8000-000000000300"
+      },
+      "supersedes_event_id": null
+    }
+  ],
+  "expected_graph": {
+    "schema_version": 1,
+    "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "projection_generation": "00000000-0000-4000-8000-000000000900",
+    "kind": "trace_graph",
+    "at": "eyJrZXkiOm51bGwsImtpbmQiOiJncmFwaCIsInBvc2l0aW9uIjo4LCJwcm9qZWN0aW9uX2dlbmVyYXRpb24iOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDA5MDAiLCJzY2hlbWFfdmVyc2lvbiI6MSwic2NvcGVfaGFzaCI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJzbmFwc2hvdCI6OCwidHJhY2VfaWQiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInVwcGVyIjoyMH0.hrAAPYiie_H3mTOi4XO81DmtNQGB5g60iskOIwGCR0A",
+    "ingest_high_watermark": 20,
+    "nodes": [
+      {
+        "id": "task:00000000-0000-4000-8000-000000000300",
+        "kind": "task",
+        "task_id": "00000000-0000-4000-8000-000000000300",
+        "agent_id": "worker-a",
+        "state": "running",
+        "original_state": "running",
+        "operation": null,
+        "evidence_kind": "source_observed",
+        "conflict": false,
+        "outcome_candidate_count": 0
+      },
+      {
+        "id": "task:00000000-0000-4000-8000-000000000301",
+        "kind": "task",
+        "task_id": "00000000-0000-4000-8000-000000000301",
+        "agent_id": "worker-a",
+        "state": "completed",
+        "original_state": "completed",
+        "operation": null,
+        "evidence_kind": "source_observed",
+        "conflict": false,
+        "outcome_candidate_count": 1
+      },
+      {
+        "id": "task:00000000-0000-4000-8000-000000000302",
+        "kind": "task",
+        "task_id": "00000000-0000-4000-8000-000000000302",
+        "agent_id": "worker-a",
+        "state": "completed",
+        "original_state": "completed",
+        "operation": null,
+        "evidence_kind": "source_observed",
+        "conflict": false,
+        "outcome_candidate_count": 1
+      }
+    ],
+    "edges": [
+      {
+        "id": "parent-1",
+        "kind": "parent_task",
+        "from": "task:00000000-0000-4000-8000-000000000300",
+        "to": "task:00000000-0000-4000-8000-000000000301",
+        "status": "resolved"
+      },
+      {
+        "id": "parent-2",
+        "kind": "parent_task",
+        "from": "task:00000000-0000-4000-8000-000000000300",
+        "to": "task:00000000-0000-4000-8000-000000000302",
+        "status": "resolved"
+      },
+      {
+        "id": "join-c-to-root",
+        "kind": "join",
+        "from": "task:00000000-0000-4000-8000-000000000302",
+        "to": "task:00000000-0000-4000-8000-000000000300",
+        "status": "resolved"
+      }
+    ],
+    "coverage": {
+      "partial": true,
+      "catching_up": false,
+      "gap": false,
+      "unknown_sources": true,
+      "unsupported_families": [
+        "model",
+        "tool"
+      ],
+      "reconciled_through": []
+    },
+    "total_nodes": 3,
+    "expansions": [],
+    "freshness": {
+      "ingest_cursor": 20,
+      "projection_cursor": 8,
+      "oldest_unsettled_age_ms": null
+    },
+    "resume_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec"
+  },
+  "responses": [
+    {
+      "schema_version": 1,
+      "kind": "trace_list",
+      "projection_generation": "00000000-0000-4000-8000-000000000900",
+      "snapshot_cursor": "eyJrZXkiOiJjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYyIsImtpbmQiOiJsaXN0IiwicG9zaXRpb24iOjUsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6bnVsbCwidXBwZXIiOjh9.yfU9REB524hp9EOf3j0cVgvWLffgUuzoZrskqgki2k8",
+      "items": [
+        {
+          "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "root_task_id": "00000000-0000-4000-8000-000000000300",
+          "root_agent_id": "worker-a",
+          "outcome": null,
+          "created_projection_cursor": 1,
+          "coverage": {
+            "partial": true,
+            "catching_up": false,
+            "gap": false,
+            "unknown_sources": true,
+            "unsupported_families": [
+              "model",
+              "tool"
+            ],
+            "reconciled_through": []
+          }
+        }
+      ],
+      "next_cursor": null,
+      "freshness": {
+        "ingest_cursor": 20,
+        "projection_cursor": 8,
+        "oldest_unsettled_age_ms": null
+      }
+    },
+    {
+      "schema_version": 1,
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "projection_generation": "00000000-0000-4000-8000-000000000900",
+      "kind": "trace_graph",
+      "at": "eyJrZXkiOm51bGwsImtpbmQiOiJncmFwaCIsInBvc2l0aW9uIjo4LCJwcm9qZWN0aW9uX2dlbmVyYXRpb24iOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDA5MDAiLCJzY2hlbWFfdmVyc2lvbiI6MSwic2NvcGVfaGFzaCI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJzbmFwc2hvdCI6OCwidHJhY2VfaWQiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInVwcGVyIjoyMH0.hrAAPYiie_H3mTOi4XO81DmtNQGB5g60iskOIwGCR0A",
+      "ingest_high_watermark": 20,
+      "nodes": [
+        {
+          "id": "task:00000000-0000-4000-8000-000000000300",
+          "kind": "task",
+          "task_id": "00000000-0000-4000-8000-000000000300",
+          "agent_id": "worker-a",
+          "state": "running",
+          "original_state": "running",
+          "operation": null,
+          "evidence_kind": "source_observed",
+          "conflict": false,
+          "outcome_candidate_count": 0
+        },
+        {
+          "id": "task:00000000-0000-4000-8000-000000000301",
+          "kind": "task",
+          "task_id": "00000000-0000-4000-8000-000000000301",
+          "agent_id": "worker-a",
+          "state": "completed",
+          "original_state": "completed",
+          "operation": null,
+          "evidence_kind": "source_observed",
+          "conflict": false,
+          "outcome_candidate_count": 1
+        },
+        {
+          "id": "task:00000000-0000-4000-8000-000000000302",
+          "kind": "task",
+          "task_id": "00000000-0000-4000-8000-000000000302",
+          "agent_id": "worker-a",
+          "state": "completed",
+          "original_state": "completed",
+          "operation": null,
+          "evidence_kind": "source_observed",
+          "conflict": false,
+          "outcome_candidate_count": 1
+        }
+      ],
+      "edges": [
+        {
+          "id": "parent-1",
+          "kind": "parent_task",
+          "from": "task:00000000-0000-4000-8000-000000000300",
+          "to": "task:00000000-0000-4000-8000-000000000301",
+          "status": "resolved"
+        },
+        {
+          "id": "parent-2",
+          "kind": "parent_task",
+          "from": "task:00000000-0000-4000-8000-000000000300",
+          "to": "task:00000000-0000-4000-8000-000000000302",
+          "status": "resolved"
+        },
+        {
+          "id": "join-c-to-root",
+          "kind": "join",
+          "from": "task:00000000-0000-4000-8000-000000000302",
+          "to": "task:00000000-0000-4000-8000-000000000300",
+          "status": "resolved"
+        }
+      ],
+      "coverage": {
+        "partial": true,
+        "catching_up": false,
+        "gap": false,
+        "unknown_sources": true,
+        "unsupported_families": [
+          "model",
+          "tool"
+        ],
+        "reconciled_through": []
+      },
+      "total_nodes": 3,
+      "expansions": [],
+      "freshness": {
+        "ingest_cursor": 20,
+        "projection_cursor": 8,
+        "oldest_unsettled_age_ms": null
+      },
+      "resume_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec"
+    },
+    {
+      "schema_version": 1,
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "projection_generation": "00000000-0000-4000-8000-000000000900",
+      "kind": "trace_events",
+      "as_of": "eyJrZXkiOm51bGwsImtpbmQiOiJncmFwaCIsInBvc2l0aW9uIjo4LCJwcm9qZWN0aW9uX2dlbmVyYXRpb24iOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDA5MDAiLCJzY2hlbWFfdmVyc2lvbiI6MSwic2NvcGVfaGFzaCI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJzbmFwc2hvdCI6OCwidHJhY2VfaWQiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInVwcGVyIjoyMH0.hrAAPYiie_H3mTOi4XO81DmtNQGB5g60iskOIwGCR0A",
+      "events": [
+        {
+          "schema_version": 1,
+          "event_id": "00000000-0000-4000-8000-000000000002",
+          "node_id": "edge-a",
+          "source_epoch": "00000000-0000-4000-8000-000000000100",
+          "source_seq": 2,
+          "agent_id": "worker-a",
+          "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "context_id": "00000000-0000-4000-8000-000000000200",
+          "task_id": "00000000-0000-4000-8000-000000000300",
+          "parent_task_id": null,
+          "parent_run_id": null,
+          "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+          "span_id": null,
+          "parent_span_id": null,
+          "kind": "task",
+          "phase": "running",
+          "occurred_at": "2026-09-16T12:00:00.000Z",
+          "duration_ms": null,
+          "evidence_kind": "source_observed",
+          "causes": [],
+          "attributes": {
+            "source_role": "recipient"
+          },
+          "supersedes_event_id": null
+        },
+        {
+          "schema_version": 1,
+          "event_id": "00000000-0000-4000-8000-000000000021",
+          "node_id": "edge-a",
+          "source_epoch": "00000000-0000-4000-8000-000000000100",
+          "source_seq": 21,
+          "agent_id": "worker-a",
+          "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "context_id": "00000000-0000-4000-8000-000000000200",
+          "task_id": "00000000-0000-4000-8000-000000000301",
+          "parent_task_id": "00000000-0000-4000-8000-000000000300",
+          "parent_run_id": null,
+          "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+          "span_id": null,
+          "parent_span_id": null,
+          "kind": "task",
+          "phase": "completed",
+          "occurred_at": "2026-09-16T12:00:00.000Z",
+          "duration_ms": null,
+          "evidence_kind": "source_observed",
+          "causes": [],
+          "attributes": {
+            "source_role": "recipient"
+          },
+          "supersedes_event_id": null
+        },
+        {
+          "schema_version": 1,
+          "event_id": "00000000-0000-4000-8000-000000000022",
+          "node_id": "edge-a",
+          "source_epoch": "00000000-0000-4000-8000-000000000100",
+          "source_seq": 22,
+          "agent_id": "worker-a",
+          "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "context_id": "00000000-0000-4000-8000-000000000200",
+          "task_id": "00000000-0000-4000-8000-000000000302",
+          "parent_task_id": "00000000-0000-4000-8000-000000000300",
+          "parent_run_id": null,
+          "execution_attempt_id": "00000000-0000-4000-8000-000000000400",
+          "span_id": null,
+          "parent_span_id": null,
+          "kind": "task",
+          "phase": "completed",
+          "occurred_at": "2026-09-16T12:00:00.000Z",
+          "duration_ms": null,
+          "evidence_kind": "source_observed",
+          "causes": [],
+          "attributes": {
+            "source_role": "recipient"
+          },
+          "supersedes_event_id": null
+        },
+        {
+          "schema_version": 1,
+          "event_id": "00000000-0000-4000-8000-000000000029",
+          "node_id": "edge-a",
+          "source_epoch": "00000000-0000-4000-8000-000000000100",
+          "source_seq": 29,
+          "agent_id": "worker-a",
+          "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "context_id": "00000000-0000-4000-8000-000000000200",
+          "task_id": null,
+          "parent_task_id": null,
+          "parent_run_id": null,
+          "execution_attempt_id": null,
+          "span_id": null,
+          "parent_span_id": null,
+          "kind": "link",
+          "phase": "observed",
+          "occurred_at": "2026-09-16T12:00:00.000Z",
+          "duration_ms": null,
+          "evidence_kind": "source_observed",
+          "causes": [],
+          "attributes": {
+            "relation": "join",
+            "from_task_id": "00000000-0000-4000-8000-000000000302",
+            "to_task_id": "00000000-0000-4000-8000-000000000300"
+          },
+          "supersedes_event_id": null
+        }
+      ],
+      "next_cursor": null
+    },
+    {
+      "schema_version": 1,
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "projection_generation": "00000000-0000-4000-8000-000000000900",
+      "kind": "trace_changes",
+      "changes": [
+        {
+          "cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec",
+          "ingest_high_watermark": 20,
+          "upsert_nodes": [
+            {
+              "id": "task:00000000-0000-4000-8000-000000000300",
+              "kind": "task",
+              "task_id": "00000000-0000-4000-8000-000000000300",
+              "agent_id": "worker-a",
+              "state": "completed",
+              "original_state": "completed",
+              "operation": null,
+              "evidence_kind": "source_observed",
+              "conflict": false,
+              "outcome_candidate_count": 1
+            }
+          ],
+          "remove_node_ids": [],
+          "upsert_edges": [],
+          "remove_edge_ids": [],
+          "coverage": {
+            "partial": true,
+            "catching_up": false,
+            "gap": false,
+            "unknown_sources": true,
+            "unsupported_families": [
+              "model",
+              "tool"
+            ],
+            "reconciled_through": []
+          }
+        }
+      ],
+      "next_cursor": null,
+      "through_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec"
+    },
+    {
+      "schema_version": 1,
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "projection_generation": "00000000-0000-4000-8000-000000000900",
+      "kind": "trace_change",
+      "change": {
+        "cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec",
+        "ingest_high_watermark": 20,
+        "upsert_nodes": [
+          {
+            "id": "task:00000000-0000-4000-8000-000000000300",
+            "kind": "task",
+            "task_id": "00000000-0000-4000-8000-000000000300",
+            "agent_id": "worker-a",
+            "state": "completed",
+            "original_state": "completed",
+            "operation": null,
+            "evidence_kind": "source_observed",
+            "conflict": false,
+            "outcome_candidate_count": 1
+          }
+        ],
+        "remove_node_ids": [],
+        "upsert_edges": [],
+        "remove_edge_ids": [],
+        "coverage": {
+          "partial": true,
+          "catching_up": false,
+          "gap": false,
+          "unknown_sources": true,
+          "unsupported_families": [
+            "model",
+            "tool"
+          ],
+          "reconciled_through": []
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "projection_generation": "00000000-0000-4000-8000-000000000900",
+      "kind": "trace_heartbeat",
+      "through_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec",
+      "freshness": {
+        "ingest_cursor": 20,
+        "projection_cursor": 8,
+        "oldest_unsettled_age_ms": null
+      }
+    },
+    {
+      "schema_version": 1,
+      "kind": "trace_error",
+      "code": "history_expired",
+      "resnapshot_required": true,
+      "retained_from": 7,
+      "retryable": false
+    }
+  ]
+}

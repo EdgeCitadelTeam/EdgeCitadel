@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "task_transitions": {
+    "accepted": [
+      "cancelled",
+      "expired",
+      "failed",
+      "rejected",
+      "running"
+    ],
+    "cancelled": [],
+    "completed": [],
+    "created": [
+      "cancelled",
+      "expired",
+      "queued",
+      "rejected",
+      "undeliverable"
+    ],
+    "expired": [],
+    "failed": [],
+    "offered": [
+      "accepted",
+      "cancelled",
+      "expired",
+      "queued",
+      "rejected",
+      "undeliverable"
+    ],
+    "queued": [
+      "cancelled",
+      "expired",
+      "offered",
+      "rejected",
+      "undeliverable"
+    ],
+    "rejected": [],
+    "running": [
+      "cancelled",
+      "completed",
+      "expired",
+      "failed",
+      "rejected"
+    ],
+    "undeliverable": []
+  },
+  "display_states": {
+    "accepted": "accepted",
+    "cancelled": "canceled",
+    "completed": "completed",
+    "created": "created",
+    "expired": "expired",
+    "failed": "failed",
+    "offered": "offered",
+    "queued": "queued",
+    "rejected": "rejected",
+    "running": "running",
+    "undeliverable": "undeliverable"
+  },
+  "operation_transitions": {
+    "started": [
+      "finished",
+      "failed",
+      "interrupted"
+    ],
+    "finished": [],
+    "failed": [],
+    "interrupted": []
+  },
+  "export_transitions": {
+    "pending": [
+      "broker_acked",
+      "core_settled",
+      "lost_with_marker"
+    ],
+    "broker_acked": [
+      "core_settled",
+      "lost_with_marker"
+    ],
+    "core_settled": [],
+    "lost_with_marker": [
+      "core_settled"
+    ]
+  },
+  "export_transition_scope": "One collector epoch; restored Core invalidates prior settlement.",
+  "collector_epoch_change": {
+    "retained_core_settled": "pending",
+    "unretained": "lost_with_marker_or_unknown_coverage"
+  }
+}

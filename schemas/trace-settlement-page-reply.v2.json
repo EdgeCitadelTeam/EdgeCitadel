@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/trace-settlement-page-reply.v2.json",
+  "title": "Settlement page reply v2",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "status": {
+          "const": "ok"
+        },
+        "page": {
+          "title": "Settlement interval page v2",
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "const": 2
+            },
+            "node_id": {
+              "type": "string",
+              "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            "source_epoch": {
+              "type": "string",
+              "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "export_generation": {
+              "type": "string",
+              "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "collector_epoch": {
+              "type": "string",
+              "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "settled_export_seq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "rejected_ranges": {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "first": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "last": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "first",
+                  "last"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "lost_ranges": {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "first": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "last": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "first",
+                  "last"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "after_export_seq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "more": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "schema_version",
+            "node_id",
+            "source_epoch",
+            "export_generation",
+            "collector_epoch",
+            "settled_export_seq",
+            "rejected_ranges",
+            "lost_ranges",
+            "after_export_seq",
+            "more"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "status",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "status": {
+          "const": "error"
+        },
+        "code": {
+          "enum": [
+            "unknown_source",
+            "unsupported_version",
+            "invalid_request",
+            "temporarily_unavailable",
+            "rate_limited",
+            "collector_changed"
+          ]
+        },
+        "retry_after_ms": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 30000
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "status",
+        "code",
+        "retry_after_ms"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

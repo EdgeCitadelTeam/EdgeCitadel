@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/trace-cursor.v1.json",
+  "title": "Signed opaque trace cursor claims v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "trace_id",
+    "scope_hash",
+    "projection_generation",
+    "snapshot",
+    "position",
+    "upper",
+    "key"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "enum": [
+        "list",
+        "graph",
+        "events",
+        "changes",
+        "expansion"
+      ]
+    },
+    "trace_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "projection_generation": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+    },
+    "snapshot": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "position": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "upper": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "key": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "list"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "trace_id": {
+            "type": "null"
+          },
+          "key": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "trace_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "graph",
+              "events",
+              "changes"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "key": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "expansion"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}

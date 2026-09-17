@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/execution-context.v1.json",
+  "title": "Optional v1 payload execution context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "context_origin",
+    "parent_run_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "context_origin": {
+      "enum": [
+        "source_explicit",
+        "legacy_default"
+      ]
+    },
+    "parent_run_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$(?![\\s\\S])"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}
