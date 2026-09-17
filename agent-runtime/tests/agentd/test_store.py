@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import edgecitadel_agentd.store as store_module
-from edgecitadel_agentd.store import AgentdStore, StoreError
+from edgecitadel_agentd.store import SCHEMA_VERSION, AgentdStore, StoreError
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def test_store_initializes_private_wal_database(store: AgentdStore) -> None:
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.path.parent.stat().st_mode & 0o777 == 0o700
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
@@ -40,14 +40,30 @@ def test_version_five_database_migrates_context_id_atomically(tmp_path: Path) ->
     original = AgentdStore(path)
     original.close()
     with sqlite3.connect(path) as connection:
+        for table in (
+            "trace_task_contexts",
+            "trace_operations",
+            "trace_requests",
+            "trace_bindings",
+            "trace_spool",
+            "trace_journal",
+            "trace_export_generations",
+            "trace_sources",
+        ):
+            connection.execute(f"DROP TABLE {table}")
         connection.execute("ALTER TABLE tasks DROP COLUMN context_id")
+        connection.execute("DROP TABLE IF EXISTS trace_import_records")
+        connection.execute("DROP TABLE IF EXISTS trace_import_grants")
         connection.execute("PRAGMA user_version=5")
 
     migrated = AgentdStore(path)
     try:
         with sqlite3.connect(path) as connection:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+            assert (
+                connection.execute("PRAGMA user_version").fetchone()[0]
+                == SCHEMA_VERSION
+            )
         assert "context_id" in columns
     finally:
         migrated.close()
@@ -437,6 +453,8 @@ def test_schema_migration_rolls_back_all_statements_on_failure(tmp_path: Path) -
     path.parent.mkdir(parents=True)
     with sqlite3.connect(path) as connection:
         connection.execute("CREATE TABLE connectors (connector_id TEXT PRIMARY KEY)")
+        connection.execute("DROP TABLE IF EXISTS trace_import_records")
+        connection.execute("DROP TABLE IF EXISTS trace_import_grants")
         connection.execute("PRAGMA user_version=1")
 
     with pytest.raises(sqlite3.OperationalError):
