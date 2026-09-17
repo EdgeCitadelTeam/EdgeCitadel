@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ from .models import (
     EnrollmentRedeemRequest,
     EnrollmentRedeemResponse,
     RegistryEntry,
+    TelemetryControlRequest,
 )
 from .websocket_hub import WebSocketHub
 
@@ -128,13 +130,21 @@ def make_app(for_testing: bool = False) -> FastAPI:
         await mem_svc.start()
         state["memory"] = mem_svc
         state["app"] = agg
+        if os.environ.get("EDGECITADEL_TRACE_COLLECTOR") == "1":
+            from .trace_collector import TraceCollectorService
+
+            collector = TraceCollectorService(Path(db_path), nats_url, nats_token)
+            state["trace_collector"] = collector
+            collector.start()
 
     @app.on_event("shutdown")
     async def _shutdown():
+        if state.get("trace_collector"):
+            await asyncio.to_thread(state["trace_collector"].close)
         if state.get("memory"):
             await state["memory"].stop()
         if state["app"] and state["app"].router.nc:
-            await state["app"].router.nc.drain()
+            await state["app"].stop()
 
     @app.get("/api/system/status")
     async def system_status():
@@ -151,7 +161,32 @@ def make_app(for_testing: bool = False) -> FastAPI:
             "nats_connected": nats_connected,
             "jetstream_stream_ok": jetstream_ok,
             "version": "0.1.0",
+            "telemetry": state["trace_collector"].status()
+            if state.get("trace_collector")
+            else {"enabled": False, "state": "disabled"},
         }
+
+    @app.post("/api/system/telemetry/control")
+    async def telemetry_control(
+        request: TelemetryControlRequest,
+        x_edgecitadel_admin_token: Annotated[str | None, Header()] = None,
+    ):
+        expected = os.environ.get("EDGECITADEL_ADMIN_TOKEN", "")
+        if (
+            not expected
+            or not x_edgecitadel_admin_token
+            or not expected.isascii()
+            or not x_edgecitadel_admin_token.isascii()
+            or not secrets.compare_digest(expected, x_edgecitadel_admin_token)
+        ):
+            raise HTTPException(401, "invalid administrator credential")
+        collector = state.get("trace_collector")
+        if collector is None:
+            raise HTTPException(409, "collector disabled by process configuration")
+        try:
+            return await asyncio.to_thread(collector.control, request.action)
+        except RuntimeError:
+            raise HTTPException(503, "collector control unavailable") from None
 
     @app.post("/api/enrollment/invitations", status_code=201)
     async def create_enrollment_invitation(
