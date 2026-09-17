@@ -6,12 +6,11 @@ import asyncio
 import json
 import threading
 import uuid
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from collections.abc import Mapping
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
 
 from nats.aio.client import Client as NATS
 from nats.aio.msg import Msg
@@ -20,7 +19,9 @@ from nats.js import JetStreamContext
 from edgecitadel_plugin_runtime.jetstream import ensure_consumer, ensure_stream
 from edgecitadel_plugin_runtime.validator import ValidationError, default_validator
 
+from .node_state import read_node
 from .store import AgentdStore, StoreError
+from .trace_contract import TraceContractError
 
 
 def _timestamp() -> str:
@@ -128,62 +129,7 @@ class AgentdNatsTransport:
             )
 
     def _node(self) -> dict[str, Any] | None:
-        path = self.state_dir / "node.json"
-        if not path.is_file():
-            return None
-        try:
-            value = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(value, dict) or type(value.get("version")) is not int:
-            return None
-        role = value.get("mode")
-        if role not in {"core", "edge"} or value["version"] not in (
-            {1} if role == "core" else {1, 2}
-        ):
-            return None
-        mode = value.get("messaging_mode", "single-client")
-        if mode not in {"single-client", "nats_leaf"}:
-            return None
-        if mode == "nats_leaf" and (
-            role != "edge"
-            or not isinstance(value.get("jetstream_domain"), str)
-            or not value["jetstream_domain"]
-        ):
-            return None
-        # Only validated legacy Core records may supply the old endpoint pair.
-        # Never fill half an explicit pair, or turn malformed Edge state valid.
-        if (
-            role == "core"
-            and "plugin_nats_url" not in value
-            and "plugin_nats_token" not in value
-        ):
-            value = {
-                **value,
-                "plugin_nats_url": value.get("nats_url"),
-                "plugin_nats_token": value.get("nats_token"),
-            }
-        url, token = value.get("plugin_nats_url"), value.get("plugin_nats_token")
-        if not isinstance(url, str) or not isinstance(token, str) or not token:
-            return None
-        try:
-            endpoint = urlsplit(url)
-            valid = (
-                endpoint.scheme in {"nats", "tls"}
-                and bool(endpoint.hostname)
-                and endpoint.port != 0
-                and endpoint.username is None
-                and endpoint.password is None
-                and endpoint.path in {"", "/"}
-                and not endpoint.query
-                and not endpoint.fragment
-                and not any(
-                    character.isspace() or ord(character) < 32 for character in url
-                )
-            )
-        except ValueError:
-            return None
-        return cast(dict[str, Any], value) if valid else None
+        return read_node(self.state_dir)
 
     async def _run(self) -> None:
         with self._lock:
@@ -348,7 +294,15 @@ class AgentdNatsTransport:
             if envelope.get("recipient_id") != agent_id:
                 raise StoreError("transport recipient does not match consumer")
             self.store.ingest_transport_envelope(envelope)
-        except (UnicodeDecodeError, json.JSONDecodeError, StoreError):
+        except (UnicodeDecodeError, json.JSONDecodeError, StoreError) as error:
+            cause = error.__cause__
+            if isinstance(cause, TraceContractError) and cause.code in {
+                "quota_exceeded",
+                "storage_unavailable",
+            }:
+                # A valid message was not persisted. Preserve broker redelivery
+                # just as for SQLite failures, rather than terminating it as poison.
+                raise
             await message.term()
             return
         await message.ack()

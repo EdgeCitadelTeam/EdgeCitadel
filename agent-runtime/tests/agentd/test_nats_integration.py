@@ -58,7 +58,7 @@ async def test_connector_round_trip_through_owned_real_nats(
     server_dir.mkdir()
     config = server_dir / "nats.conf"
     config.write_text(
-        f"port: {port}\nhttp_port: {monitor_port}\nauthorization {{ token: {token} }}\n"
+        f"port: {port}\nhttp_port: {monitor_port}\nauthorization {{ token: {json.dumps(token)} }}\n"
         f"jetstream {{ store_dir: {server_dir / 'js'} }}\n"
     )
     process = subprocess.Popen(
@@ -69,6 +69,7 @@ async def test_connector_round_trip_through_owned_real_nats(
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     node = {
+        "agent_id": "owned-edge" if node_mode == "edge" else "core",
         "version": 2 if node_mode == "edge" else 1,
         "mode": "edge" if node_mode == "edge" else "core",
         "messaging_mode": "single-client",
@@ -91,11 +92,15 @@ async def test_connector_round_trip_through_owned_real_nats(
             if process.poll() is not None:
                 pytest.fail("owned nats-server exited during startup")
             try:
-                await nc.connect(
-                    servers=[f"nats://127.0.0.1:{port}"],
-                    token=token,
-                    connect_timeout=0.2,
-                    allow_reconnect=False,
+                await asyncio.wait_for(
+                    nc.connect(
+                        servers=[f"nats://127.0.0.1:{port}"],
+                        token=token,
+                        connect_timeout=0.2,
+                        allow_reconnect=False,
+                        max_reconnect_attempts=0,
+                    ),
+                    timeout=1,
                 )
             except Exception:  # noqa: BLE001
                 return False
@@ -224,3 +229,116 @@ async def test_connector_round_trip_through_owned_real_nats(
         process.terminate()
         process.wait(timeout=5)
     assert not service_thread.is_alive()
+
+
+@pytest.mark.asyncio
+async def test_trace_storage_failure_retains_result_for_broker_redelivery(
+    tmp_path, monkeypatch
+):
+    from test_trace_crash import snapshot
+
+    from edgecitadel_agentd import trace_capacity
+    from edgecitadel_agentd.store import AgentdStore, StoreError
+    from edgecitadel_agentd.transport import AgentdNatsTransport
+
+    executable = shutil.which("nats-server")
+    assert executable is not None, "explicit NATS qualification requires nats-server"
+    port = _unused_port()
+    token = secrets.token_urlsafe(32)
+    config = tmp_path / "owned-nats.conf"
+    config.write_text(
+        f'host: "127.0.0.1"\nport: {port}\nauthorization {{ token: {json.dumps(token)} }}\njetstream {{ store_dir: {json.dumps(str(tmp_path / "js"))} }}\n'
+    )
+    config.chmod(0o600)
+    process = await asyncio.to_thread(
+        subprocess.Popen,
+        [executable, "-c", str(config)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    nc = NATS()
+    store = None
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                    break
+            except OSError:
+                assert process.poll() is None and time.monotonic() < deadline
+                await asyncio.sleep(0.01)
+        await nc.connect(
+            servers=[f"nats://127.0.0.1:{port}"], token=token, allow_reconnect=False
+        )
+        js = nc.jetstream()
+        await ensure_stream(js, "worker")
+        # Shorten only this owned fixture's retry wait; production remains 300s.
+        await ensure_consumer(js, "worker", ack_wait_sec=1)
+        subscription = await js.pull_subscribe(
+            "agents.worker.inbox", durable="worker_inbox"
+        )
+        state = tmp_path / "state"
+        state.mkdir()
+        (state / "node.json").write_text('{"agent_id":"owned-edge"}')
+        store = AgentdStore(state / "agentd" / "agentd.sqlite3")
+        transport = AgentdNatsTransport(state, store)
+        task = store.create_task(
+            sender_id="worker", recipient_id="remote", payload={}, queue_transport=False
+        )
+        envelope = {
+            "v": 1,
+            "id": str(uuid.uuid4()),
+            "type": "result",
+            "task_id": task["task_id"],
+            "sender_id": "remote",
+            "recipient_id": "worker",
+            "task_state": "completed",
+            "timestamp": "2026-09-16T12:00:00.000Z",
+            "payload": {"body": "done"},
+        }
+        await js.publish(
+            "agents.worker.inbox",
+            json.dumps(envelope).encode(),
+            headers={"Nats-Msg-Id": envelope["id"]},
+        )
+        (first,) = await subscription.fetch(1, timeout=3)
+        assert first.metadata.num_delivered == 1
+        before = snapshot(store)
+        with monkeypatch.context() as pressure:
+            pressure.setattr(trace_capacity, "NORMAL_LIMIT_BYTES", 0)
+            pressure.setattr(trace_capacity, "CONTROL_RESERVE_BYTES", 0)
+            with pytest.raises(StoreError, match="quota_exceeded"):
+                await transport._ingest_message(first, "worker")
+        await nc.flush()
+        assert snapshot(store) == before
+        assert (
+            await js.consumer_info("AGENT_INBOX", "worker_inbox")
+        ).num_ack_pending == 1
+        assert (await js.stream_info("AGENT_INBOX")).state.messages == 1
+        (redelivered,) = await subscription.fetch(1, timeout=3)
+        assert redelivered.metadata.num_delivered == 2
+        assert redelivered.metadata.sequence.stream == first.metadata.sequence.stream
+        assert redelivered.data == first.data
+        await transport._ingest_message(redelivered, "worker")
+        await nc.flush()
+        assert store.get_task(task["task_id"])["state"] == "completed"
+        assert store.get_task(task["task_id"])["result"] == {"body": "done"}
+        assert (
+            await js.consumer_info("AGENT_INBOX", "worker_inbox")
+        ).num_ack_pending == 0
+        assert (await js.stream_info("AGENT_INBOX")).state.messages == 0
+        phases = [
+            json.loads(row[0])["phase"]
+            for row in store._connection.execute(
+                "SELECT event_json FROM trace_journal ORDER BY source_seq"
+            )
+        ]
+        assert phases == ["queued", "offered", "accepted", "running", "completed"]
+        assert store._connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        if store is not None:
+            store.close()
+        if not nc.is_closed:
+            await nc.close()
+        process.terminate()
+        await asyncio.to_thread(process.wait, timeout=5)

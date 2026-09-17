@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID, uuid4
 
 from .client import AgentdClient, AgentdClientError
 from .service import socket_path_for
@@ -92,10 +94,19 @@ TOOLS = [
     },
     {
         "name": "edgecitadel_trace",
-        "description": "Read local metadata-only trace information.",
+        "description": (
+            "Read durable local trace metadata for this Agent; coverage is partial. "
+            "For the next page, pass the returned source_epoch and next_source_seq "
+            "as after_source_seq."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"trace_id": {"type": "string"}},
+            "properties": {
+                "trace_id": {"type": "string"},
+                "source_epoch": {"type": "string"},
+                "after_source_seq": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 32},
+            },
             "additionalProperties": False,
         },
     },
@@ -154,6 +165,7 @@ class NativeMcpServer:
         )
         opened = cast(Mapping[str, object], self.client.call("session.open"))
         self.session_id = str(opened["session_id"])
+        self._root_binding: tuple[str, str] | None = None
         self._session_lock = threading.Lock()
         self._stop = threading.Event()
         self._lease_thread = threading.Thread(target=self._renew_lease, daemon=True)
@@ -166,6 +178,18 @@ class NativeMcpServer:
         self._lease_thread.join(timeout=2)
         with self._session_lock:
             session_id = self.session_id
+        try:
+            if self._root_binding is not None and self._root_binding[0] == session_id:
+                self.client.call(
+                    "trace.finish",
+                    schema_version=1,
+                    request_id=str(uuid4()),
+                    binding_id=self._root_binding[1],
+                    outcome="unknown",
+                    reason="unknown",
+                )
+        except AgentdClientError:
+            pass
         try:
             self.client.call("session.close", session_id=session_id)
         except AgentdClientError:
@@ -214,7 +238,19 @@ class NativeMcpServer:
             name = params.get("name")
             arguments = cast(dict[str, Any], params.get("arguments", {}))
             try:
-                result = self._call_tool(str(name), arguments)
+                metadata = params.get("_meta", {})
+                if not isinstance(metadata, Mapping):
+                    raise TypeError("invalid MCP metadata")
+                if "edgecitadel_execution" in metadata:
+                    if name != "edgecitadel_delegate":
+                        raise ValueError("execution metadata requires delegation")
+                    result = self._call_bound_delegate(
+                        arguments, metadata["edgecitadel_execution"]
+                    )
+                elif name == "edgecitadel_delegate" and not self.managed:
+                    result = self._native_delegate(arguments, request_id)
+                else:
+                    result = self._call_tool(str(name), arguments)
             except (AgentdClientError, KeyError, TypeError, ValueError) as error:
                 return self._result(
                     request_id,
@@ -240,6 +276,83 @@ class NativeMcpServer:
             "id": request_id,
             "error": {"code": -32601, "message": "method not found"},
         }
+
+    def _native_delegate(self, arguments: dict[str, Any], request_id: object) -> object:
+        # JSON-RPC IDs are unique within the MCP connection. A repeated call
+        # retains its receipt ID without an unbounded in-memory request cache.
+        if type(request_id) not in (str, int):
+            raise ValueError("delegation requires a JSON-RPC request ID")
+        with self._session_lock:
+            session_id = self.session_id
+
+            def identity(value: object) -> str:
+                digest = hashlib.sha256(
+                    json.dumps([session_id, value]).encode()
+                ).digest()
+                return str(UUID(bytes=digest[:16], version=4))
+
+            reply = self.client.call(
+                "trace.bind",
+                schema_version=1,
+                request_id=identity("native-root"),
+                session_id=session_id,
+                task_id=None,
+                context_id=None,
+            )
+            if not isinstance(reply, dict) or reply.get("status") != "ok":
+                raise AgentdClientError("native_execution_binding_unavailable")
+            binding_id = reply["result"]["binding_id"]
+            self._root_binding = (session_id, binding_id)
+            return self._call_bound_delegate(
+                arguments,
+                {
+                    "schema_version": 1,
+                    "binding_id": binding_id,
+                    "request_id": identity(["dispatch", request_id]),
+                },
+            )
+
+    def _call_bound_delegate(
+        self, arguments: dict[str, Any], metadata: object
+    ) -> object:
+        if "edgecitadel_delegate" not in {tool["name"] for tool in self.tools}:
+            raise ValueError("unknown EdgeCitadel tool")
+        if not isinstance(metadata, Mapping) or set(metadata) != {
+            "schema_version",
+            "binding_id",
+            "request_id",
+        }:
+            raise ValueError("invalid execution metadata")
+        if (
+            type(metadata["schema_version"]) is not int
+            or metadata["schema_version"] != 1
+        ):
+            raise ValueError("unsupported execution metadata")
+        if not isinstance(arguments, dict) or set(arguments) - {
+            "recipient_id",
+            "request",
+            "skill_id",
+            "deadline_at_ms",
+        }:
+            raise ValueError("invalid delegation arguments")
+        reply = self.client.call(
+            "trace.dispatch",
+            schema_version=1,
+            request_id=metadata["request_id"],
+            binding_id=metadata["binding_id"],
+            recipient_id=arguments["recipient_id"],
+            request=arguments["request"],
+            skill_id=arguments.get("skill_id"),
+            deadline_at_ms=arguments.get("deadline_at_ms"),
+        )
+        if not isinstance(reply, dict) or reply.get("status") != "ok":
+            code = (
+                reply.get("code", "dispatch_unavailable")
+                if isinstance(reply, dict)
+                else "dispatch_unavailable"
+            )
+            raise AgentdClientError(str(code))
+        return reply["result"]
 
     def _call_tool(self, name: str, arguments: dict[str, Any]) -> object:
         if name not in {tool["name"] for tool in self.tools}:
@@ -287,10 +400,7 @@ class NativeMcpServer:
                 result=result,
             )
         if name == "edgecitadel_trace":
-            trace_id = arguments.get("trace_id")
-            if trace_id:
-                return self.client.call("trace.get", trace_id=trace_id)
-            return self.client.call("trace.list")
+            return self.client.call("trace.history", **arguments)
         if name == "edgecitadel_diagnose":
             return AgentdClient(socket_path_for(self.state_dir / "agentd")).call(
                 "health"
