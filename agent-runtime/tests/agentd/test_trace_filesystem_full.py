@@ -13,6 +13,7 @@ import pytest
 from test_trace_crash import append_request, prepare, snapshot
 
 from edgecitadel_agentd.service import PROTOCOL_VERSION, dispatch
+from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.trace_producer import RuntimeTrace
 from edgecitadel_agentd.trace_retention import maintain_capacity
 
@@ -108,19 +109,22 @@ def test_filesystem_full_dispatch_rolls_back_then_retries_once(owned_volume):
         }
         before = snapshot(store)
         filler = exhaust(owned_volume)
-        with pytest.raises(sqlite3.Error):
+        with pytest.raises(sqlite3.Error) as failed:
             store.dispatch_trace(
                 node_id="owned-edge", connector_id="owner", token=token, params=params
             )
+        assert failed.value.sqlite_errorcode == sqlite3.SQLITE_FULL
         assert snapshot(store) == before
-        # Expiration must not detach payloads if its mandatory loss marker cannot
-        # be committed to the genuinely full filesystem.
-        with pytest.raises(sqlite3.Error), store._connection:
+        # Open execution evidence is protected even when old enough to expire.
+        with store._connection:
             store._connection.execute("BEGIN IMMEDIATE")
-            maintain_capacity(
-                store._connection,
-                now_ms=int(time.time() * 1000),
-                expire_before_ms=int(time.time() * 1000) + 1,
+            assert (
+                maintain_capacity(
+                    store._connection,
+                    now_ms=int(time.time() * 1000),
+                    expire_before_ms=int(time.time() * 1000) + 1,
+                )
+                == 0
             )
         assert snapshot(store) == before
         filler.unlink()
@@ -144,6 +148,90 @@ def test_filesystem_full_dispatch_rolls_back_then_retries_once(owned_volume):
         )
         assert store._connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert store._connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        store.close()
+
+
+def test_filesystem_full_cleanup_preserves_payload_until_loss_can_commit(owned_volume):
+    store, token, session, binding = prepare(
+        owned_volume / "state/agentd/agentd.sqlite3"
+    )
+    try:
+        store.append_trace(
+            node_id="owned-edge",
+            connector_id="owner",
+            token=token,
+            params=append_request(binding),
+        )
+        store.close_session(
+            connector_id="owner", token=token, session_id=session["session_id"]
+        )
+        db = store._connection
+        optional = db.execute(
+            "SELECT j.event_id,p.export_seq,json_extract(j.event_json,'$.phase') "
+            "FROM trace_journal j JOIN trace_spool p "
+            "ON p.node_id=j.node_id AND p.source_epoch=j.source_epoch "
+            "AND p.journal_event_id=j.event_id "
+            "WHERE json_extract(j.event_json,'$.kind')='tool' ORDER BY p.export_seq"
+        ).fetchall()
+        assert [row[2] for row in optional] == ["started", "interrupted"]
+        assert optional[1][1] == optional[0][1] + 1
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        before = snapshot(store)
+        filler = exhaust(owned_volume)
+        # A closed optional event is eligible, but payload deletion must roll back
+        # if its durable loss marker/export intent cannot reach the filesystem.
+        with pytest.raises(sqlite3.Error) as failed, db:
+            db.execute("BEGIN IMMEDIATE")
+            maintain_capacity(
+                db,
+                now_ms=int(time.time() * 1000),
+                expire_before_ms=int(time.time() * 1000) + 1,
+            )
+        assert failed.value.sqlite_errorcode == sqlite3.SQLITE_FULL
+        assert snapshot(store) == before
+        filler.unlink()
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            assert (
+                maintain_capacity(
+                    db,
+                    now_ms=int(time.time() * 1000),
+                    expire_before_ms=int(time.time() * 1000) + 1,
+                )
+                == 2
+            )
+        for row in optional:
+            assert (
+                db.execute(
+                    "SELECT 1 FROM trace_journal WHERE event_id=?", (row[0],)
+                ).fetchone()
+                is None
+            )
+        markers = [
+            json.loads(row[0])
+            for row in db.execute(
+                "SELECT event_json FROM trace_journal WHERE json_extract(event_json,'$.kind')='coverage'"
+            )
+        ]
+        assert len(markers) == 1
+        assert markers[0]["attributes"]["lost_ranges"] == [
+            {"first": optional[0][1], "last": optional[1][1]}
+        ]
+        assert (
+            db.execute(
+                "SELECT state FROM trace_spool WHERE journal_event_id=?",
+                (markers[0]["event_id"],),
+            ).fetchone()[0]
+            == "pending"
+        )
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        committed = snapshot(store)
+        path = store.path
+        store.close()
+        store = AgentdStore(path)
+        assert snapshot(store) == committed
     finally:
         store.close()
 

@@ -87,8 +87,11 @@ RUN_AGENTD_FILESYSTEM_FULL=1 python -m pytest -q tests/agentd/test_trace_filesys
 It creates owned 64 MiB HFS+ disk images with system `hdiutil`, checks mount/device
 and capacity before filling them to ENOSPC, and detaches them on completion. It
 never fills the host filesystem. This gate must pass explicitly; its default skip
-is not exhaustion evidence. It checks dispatch and retention rollback, stable
-retry, one optional effect and durable loss reporting after capacity returns.
+is not exhaustion evidence. It checks dispatch and retention rollback on actual
+`SQLITE_FULL`, stable retry, protected active evidence, and closed optional
+evidence whose loss marker/export intent must commit before deletion. Reopening
+preserves the committed cleanup. A separate case verifies one optional effect
+and durable loss reporting after capacity returns.
 
 
 The runtime suite includes owned child-process SIGKILL tests at journal commit
