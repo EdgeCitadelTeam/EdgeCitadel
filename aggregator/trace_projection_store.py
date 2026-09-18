@@ -1,6 +1,6 @@
 """Durable graph projection, separate from ingestion and execution authority.
 
-The v4 graph projector is not enabled by Aggregator startup. Retention scheduling,
+The v5 graph projector is not enabled by Aggregator startup. Retention scheduling,
 physical storage qualification and public interfaces remain required for rollout.
 Projection/checkpoint changes use one Core SQLite transaction; ingestion never
 waits for a projector acknowledgment and is not undone by projection failure.
@@ -27,7 +27,7 @@ from .trace_task_projection import (
     task_node,
 )
 
-VERSION = 4
+VERSION = 5
 MAX_BATCH = 64
 
 SCHEMA = (
@@ -359,24 +359,24 @@ def project_batch(
         high = db.execute("SELECT ingest_seq FROM trace_collector").fetchone()[0]
         # Each indexed stream yields at most limit rows. Sorting their bounded
         # union avoids scanning/sorting the full backlog before a small batch.
-        positions = set()
+        receipt_times: dict[int, int] = {}
         for table in (
             "trace_raw_events",
             "trace_ingest_positions",
             "trace_rejected_positions",
             "trace_ingest_conflicts",
         ):
-            positions.update(
-                row[0]
-                for row in db.execute(
-                    f"SELECT ingest_seq FROM {table} WHERE ingest_seq>? ORDER BY ingest_seq LIMIT ?",
-                    (state.ingest_cursor, limit),
+            for seq, received_at_ms in db.execute(
+                f"SELECT ingest_seq,received_at_ms FROM {table} WHERE ingest_seq>? ORDER BY ingest_seq LIMIT ?",
+                (state.ingest_cursor, limit),
+            ):
+                receipt_times[seq] = max(
+                    receipt_times.get(seq, received_at_ms), received_at_ms
                 )
-            )
-        positions = sorted(positions)[:limit]
+        positions = sorted(receipt_times)[:limit]
         cursor = state.change_cursor
         for seq in positions:
-            history.start_change(db, cursor + 1, seq)
+            history.start_change(db, cursor + 1, seq, received_at_ms=receipt_times[seq])
             raw = db.execute(
                 "SELECT node_id,source_epoch,event_id,source_seq,event_sha256 FROM trace_raw_events WHERE ingest_seq=?",
                 (seq,),

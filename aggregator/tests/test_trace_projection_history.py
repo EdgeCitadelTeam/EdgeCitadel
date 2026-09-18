@@ -262,7 +262,9 @@ def test_row_deletion_is_a_tombstone_and_base_cleanup_never_resurrects_it(core):
     with core:
         core.execute("BEGIN IMMEDIATE")
         tables = select_tables(core)
-        history.start_change(tables, old.change_cursor + 1, old.ingest_cursor)
+        history.start_change(
+            tables, old.change_cursor + 1, old.ingest_cursor, received_at_ms=2
+        )
         tables.execute("DELETE FROM {trace_projected_entities}")
         tables.execute(
             "UPDATE {trace_projection_state} SET change_cursor=?",

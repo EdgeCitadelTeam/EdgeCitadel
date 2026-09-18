@@ -22,7 +22,7 @@ def event(*args, **kwargs):
     return make_event(*args, **kwargs)
 
 
-def put(db, value, generation, position):
+def put(db, value, generation, position, *, received_at_ms=1):
     wrapper = dict(
         schema_version=1,
         node_id=value["node_id"],
@@ -36,7 +36,7 @@ def put(db, value, generation, position):
         db,
         f"edgecitadel.telemetry.v1.{value['node_id']}",
         canonical_bytes(wrapper),
-        received_at_ms=1,
+        received_at_ms=received_at_ms,
     )
 
 

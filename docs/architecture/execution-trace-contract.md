@@ -2619,3 +2619,33 @@ completed expiry scheduler. Current derived evidence and raw payload expiry rema
 separate until that policy is wired. Additional history storage, historical query
 cost, public list/expansion/event/change/live interfaces and jim-eq E2E still
 require qualification before enabling the projector or accepting M5.
+
+### Version 5 history receipt-age policy
+
+Projection cursor mappings now preserve the Core receipt timestamp of each
+consumed ingestion commit, including duplicate, rejected and conflict-only
+receipts. The projector reads these timestamps with the bounded ingestion streams;
+producer occurrence times and rebuild wall time do not replace them. Version 4
+and earlier require shadow rebuild to recover this evidence from durable Core
+receipts, including when raw payloads have expired.
+
+The history maintenance pass uses the existing Core seven-day retention period.
+It examines at most 256 cursor mappings beyond the retained floor and advances
+only through a contiguous prefix strictly older than the cutoff. A cursor exactly
+at the cutoff stays retained. The first fresh cursor prevents advancing past it,
+even when subsequent Core receipt timestamps are older because the clock moved
+backwards. An already-advanced floor never moves backwards or revives expired
+cursors.
+
+The age decision, floor update and bounded pruning share one writer transaction.
+Pruning uses the existing retained-base rules and shared deletion limit. A fresh,
+already-compacted pass does not rewrite projection rows. Results distinguish the
+cursor-scan boundary from remaining pruning work. Current-state base rows can be
+older than seven days: this policy retires playback ranges, not active graph
+identities, and does not claim erasure of every older observation.
+
+The maintenance entry point remains a disabled component awaiting the production
+projector/maintenance loop. Graph-expiry policy, public tombstones, scheduling,
+retained-volume query/maintenance cost and physical storage qualification remain
+required before rollout. Bounded candidate and deletion counts are not a claim
+of worst-case SQL latency or byte-level enforcement.

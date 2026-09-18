@@ -13,6 +13,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from .trace_projection_tables import ProjectionTables, select_tables
+from .trace_retention import RETENTION_MS, SCAN_ROWS
 
 if TYPE_CHECKING:
     from .trace_projection_store import ProjectionState
@@ -35,7 +36,7 @@ SCHEMA = (
         floor_cursor INTEGER NOT NULL, clock_cursor INTEGER
     )""",
     """CREATE TABLE IF NOT EXISTS {trace_projection_history_cursors} (
-        cursor INTEGER PRIMARY KEY, ingest_seq INTEGER NOT NULL
+        cursor INTEGER PRIMARY KEY, ingest_seq INTEGER NOT NULL, received_at_ms INTEGER NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS {trace_projection_history_rows} (
         table_name TEXT NOT NULL, row_key TEXT NOT NULL, cursor INTEGER NOT NULL,
@@ -60,7 +61,7 @@ def _columns(tables: ProjectionTables, name: str) -> list:
 
 def install_capture(tables: ProjectionTables) -> None:
     tables.execute("INSERT INTO {trace_projection_history_state} VALUES(1,0,NULL)")
-    tables.execute("INSERT INTO {trace_projection_history_cursors} VALUES(0,0)")
+    tables.execute("INSERT INTO {trace_projection_history_cursors} VALUES(0,0,0)")
     for name in READ_TABLES:
         columns = _columns(tables, name)
         keys = [row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5]]
@@ -97,14 +98,16 @@ def disable_capture(tables: ProjectionTables) -> None:
             )
 
 
-def start_change(tables: ProjectionTables, cursor: int, ingest_seq: int) -> None:
+def start_change(
+    tables: ProjectionTables, cursor: int, ingest_seq: int, *, received_at_ms: int
+) -> None:
     tables.execute(
         "UPDATE {trace_projection_history_state} SET clock_cursor=? WHERE singleton=1",
         (cursor,),
     )
     tables.execute(
-        "INSERT INTO {trace_projection_history_cursors} VALUES(?,?)",
-        (cursor, ingest_seq),
+        "INSERT INTO {trace_projection_history_cursors} VALUES(?,?,?)",
+        (cursor, ingest_seq, received_at_ms),
     )
 
 
@@ -203,61 +206,67 @@ def compact_batch(
         state = _state(tables)
         if generation != state.generation:
             raise ValueError("projection_generation_mismatch")
-        if through_cursor < floor(tables) or through_cursor > state.change_cursor:
-            raise ValueError("invalid_projection_compaction_cursor")
-        tables.execute(
-            "UPDATE {trace_projection_history_state} SET floor_cursor=? WHERE singleton=1",
-            (through_cursor,),
-        )
-        deleted = tables.execute(
-            "DELETE FROM {trace_projection_history_rows} WHERE rowid IN ("
-            "SELECT h.rowid FROM {trace_projection_history_rows} h WHERE "
-            + _OBSOLETE
+        return _compact(tables, state, through_cursor=through_cursor, limit=limit)
+
+
+def _compact(
+    tables: ProjectionTables, state: ProjectionState, *, through_cursor: int, limit: int
+) -> dict:
+    if through_cursor < floor(tables) or through_cursor > state.change_cursor:
+        raise ValueError("invalid_projection_compaction_cursor")
+    tables.execute(
+        "UPDATE {trace_projection_history_state} SET floor_cursor=? WHERE singleton=1 AND floor_cursor<>?",
+        (through_cursor, through_cursor),
+    )
+    deleted = tables.execute(
+        "DELETE FROM {trace_projection_history_rows} WHERE rowid IN ("
+        "SELECT h.rowid FROM {trace_projection_history_rows} h WHERE "
+        + _OBSOLETE
+        + " LIMIT ?)",
+        (through_cursor, through_cursor, limit),
+    ).rowcount
+    for table, boundary in (
+        ("trace_projection_history_cursors", "cursor<?"),
+        ("trace_projection_changes", "cursor<=?"),
+    ):
+        remaining = limit - deleted
+        if not remaining:
+            break
+        deleted += tables.execute(
+            "DELETE FROM {"
+            + table
+            + "} WHERE rowid IN (SELECT rowid FROM {"
+            + table
+            + "} WHERE "
+            + boundary
             + " LIMIT ?)",
-            (through_cursor, through_cursor, limit),
+            (through_cursor, remaining),
         ).rowcount
-        for table, boundary in (
-            ("trace_projection_history_cursors", "cursor<?"),
-            ("trace_projection_changes", "cursor<=?"),
-        ):
-            remaining = limit - deleted
-            if not remaining:
-                break
-            deleted += tables.execute(
-                "DELETE FROM {"
-                + table
-                + "} WHERE rowid IN (SELECT rowid FROM {"
-                + table
-                + "} WHERE "
-                + boundary
-                + " LIMIT ?)",
-                (through_cursor, remaining),
-            ).rowcount
-        pending = tables.execute(
-            "SELECT 1 FROM {trace_projection_history_rows} h WHERE "
-            + _OBSOLETE
-            + " LIMIT 1",
-            (through_cursor, through_cursor),
+    pending = tables.execute(
+        "SELECT 1 FROM {trace_projection_history_rows} h WHERE "
+        + _OBSOLETE
+        + " LIMIT 1",
+        (through_cursor, through_cursor),
+    ).fetchone()
+    pending = (
+        pending
+        or tables.execute(
+            "SELECT 1 FROM {trace_projection_history_cursors} WHERE cursor<? LIMIT 1",
+            (through_cursor,),
         ).fetchone()
-        pending = (
-            pending
-            or tables.execute(
-                "SELECT 1 FROM {trace_projection_history_cursors} WHERE cursor<? LIMIT 1",
-                (through_cursor,),
-            ).fetchone()
-        )
-        pending = (
-            pending
-            or tables.execute(
-                "SELECT 1 FROM {trace_projection_changes} WHERE cursor<=? LIMIT 1",
-                (through_cursor,),
-            ).fetchone()
-        )
-        return {
-            "floor_cursor": through_cursor,
-            "deleted_rows": deleted,
-            "complete": not bool(pending),
-        }
+    )
+    pending = (
+        pending
+        or tables.execute(
+            "SELECT 1 FROM {trace_projection_changes} WHERE cursor<=? LIMIT 1",
+            (through_cursor,),
+        ).fetchone()
+    )
+    return {
+        "floor_cursor": through_cursor,
+        "deleted_rows": deleted,
+        "complete": not bool(pending),
+    }
 
 
 def retained_range(db: sqlite3.Connection) -> dict:
@@ -281,4 +290,48 @@ def retained_range(db: sqlite3.Connection) -> dict:
             "from_cursor": lower,
             "from_ingest_seq": position[0],
             "through_cursor": state.change_cursor,
+        }
+
+
+def expire_history_batch(
+    db: sqlite3.Connection, *, now_ms: int, limit: int = 256
+) -> dict:
+    """Apply Core receipt-age policy to a bounded contiguous history prefix.
+
+    Receipt clocks can move backwards. Stop at the first fresh cursor instead of
+    advancing across it to an older timestamp later in the log. The retained base
+    remains necessary for current state even when all input history is old.
+    """
+    from .trace_projection_store import _idle, _state
+
+    _idle(db)
+    if type(now_ms) is not int or not 0 <= now_ms <= 2**53 - 1:
+        raise ValueError("invalid_retention_time")
+    if type(limit) is not int or not 1 <= limit <= 1000:
+        raise ValueError("invalid_projection_compaction")
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        tables = select_tables(db)
+        state = _state(tables)
+        through = floor(tables)
+        rows = tables.execute(
+            "SELECT cursor,received_at_ms FROM {trace_projection_history_cursors} "
+            "WHERE cursor>? ORDER BY cursor LIMIT ?",
+            (through, SCAN_ROWS),
+        ).fetchall()
+        cutoff = now_ms - RETENTION_MS
+        reached_fresh = False
+        for cursor, received_at in rows:
+            if received_at >= cutoff:
+                reached_fresh = True
+                break
+            through = cursor
+        result = _compact(tables, state, through_cursor=through, limit=limit)
+        return {
+            **result,
+            "scanned_rows": len(rows),
+            "eligible_prefix_complete": reached_fresh or len(rows) < SCAN_ROWS,
+            "observed_at_ms": now_ms,
+            "retention_ms": RETENTION_MS,
+            "cutoff_ms": cutoff,
         }
