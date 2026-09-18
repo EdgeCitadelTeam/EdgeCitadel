@@ -2649,3 +2649,50 @@ projector/maintenance loop. Graph-expiry policy, public tombstones, scheduling,
 retained-volume query/maintenance cost and physical storage qualification remain
 required before rollout. Bounded candidate and deletion counts are not a claim
 of worst-case SQL latency or byte-level enforcement.
+
+### Version 6 graph retirement and maintenance cycle
+
+Current graph lifetime uses the latest Core receipt time of a new accepted,
+trace-correlated observation. Exact duplicate exports, conflicts and rejected
+bodies do not renew it. Once that time is strictly older than the Core seven-day
+period, the graph is eligible for retirement. Entirely test-provenanced traces
+are considered first within the eligible set; any accepted normal observation
+makes the trace normal. Source-wide facts do not keep unrelated graphs alive.
+This is graph-view retention, not execution cancellation or proof of completion.
+
+Retirement requires the projection to have consumed the current raw watermark.
+It hides one eligible trace with a durable `trace_expired` change, historical
+header and checkpoint in one transaction. While that trace is retiring, current
+reads report expiry and projection pauses. Raw ingestion continues independently.
+Bounded cleanup removes current trace-owned graph/reducer/membership rows and
+publishes `trace_cleanup` progress, then removes the current header. Shared source
+reconciliation, Core identities, raw payloads and task state are not deleted.
+
+Maintenance changes advance the projection cursor without inventing an ingestion
+record: their internal change-log `ingest_seq` is null, while their historical
+cursor maps to the unchanged consumed raw watermark. Historical task outcomes
+and entity candidates are captured alongside graph rows. Explicitly cursor-bound
+graph/candidate reads retain the prior snapshot during and after cleanup. Public
+conversion must map the retirement changes to its authenticated graph/tombstone
+protocol rather than exposing internal records directly.
+
+After cleanup, an exact duplicate cannot resurrect the graph because it has no
+new accepted observation. New accepted evidence may create a new current view;
+previously expired nodes and candidates cannot leak into that view. Its coverage
+remains qualified by the retained range and available correlations. This is not
+a distributed erase guarantee across older Core restore/replay domains.
+
+Rebuild and compatible rollback must catch up to the predecessor's recorded
+retirement policy, finish pending trace cleanup and remove eligible candidate
+views before activation. Thus replaying still-retained raw bytes cannot silently
+restore a graph already retired by the active policy. Missing current policy
+metadata is an error; pre-retirement versions require a real shadow rebuild.
+
+The bounded maintenance-cycle entry point performs pending cleanup first, then
+projects an input batch, evaluates retirement and applies history compaction.
+It starts no thread/task and remains disabled in service startup. Cleanup can
+increase global projector lag; ingestion remains independently committed, and
+cleanup latency plus additional retained-history/storage cost must be measured
+at the full dataset before rollout. Background task ownership/shutdown, public
+APIs/live conversion, frontend integration and jim-eq E2E remain pending. Shared
+source/identity retirement and physical bounds are not closed by graph cleanup.

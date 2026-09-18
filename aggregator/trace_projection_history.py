@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from .trace_projection_store import ProjectionState
 
 READ_TABLES = (
+    "trace_projection_runs",
+    "trace_task_outcomes",
+    "trace_entity_observations",
     "trace_projected_tasks",
     "trace_projected_entities",
     "trace_relationship_claims",

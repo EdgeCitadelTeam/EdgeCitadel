@@ -1,6 +1,6 @@
 """Durable graph projection, separate from ingestion and execution authority.
 
-The v5 graph projector is not enabled by Aggregator startup. Retention scheduling,
+The v6 graph projector is not enabled by Aggregator startup. Retention scheduling,
 physical storage qualification and public interfaces remain required for rollout.
 Projection/checkpoint changes use one Core SQLite transaction; ingestion never
 waits for a projector acknowledgment and is not undone by projection failure.
@@ -17,6 +17,7 @@ from edgecitadel_agentd.trace_contract import event_sha256
 
 from . import trace_projection_coverage as coverage
 from . import trace_projection_history as history
+from . import trace_projection_retention as retention
 from .trace_projection_tables import ProjectionTables, select_tables
 from .trace_payload_read import read_payload
 from .trace_graph_projection import entity_claims, relationship_claims, resolve_graph
@@ -27,7 +28,7 @@ from .trace_task_projection import (
     task_node,
 )
 
-VERSION = 5
+VERSION = 6
 MAX_BATCH = 64
 
 SCHEMA = (
@@ -63,9 +64,9 @@ SCHEMA = (
         ON {trace_task_outcomes}(trace_id,task_id,source_role,ingest_seq)""",
         """CREATE TABLE IF NOT EXISTS {trace_projection_changes} (
         cursor INTEGER PRIMARY KEY,
-        ingest_seq INTEGER NOT NULL UNIQUE,
+        ingest_seq INTEGER UNIQUE,
         trace_id TEXT,
-        kind TEXT NOT NULL CHECK(kind IN ('task_upsert','entity_upsert','relationships','payload_expired','source_fact','receipt')),
+        kind TEXT NOT NULL CHECK(kind IN ('task_upsert','entity_upsert','relationships','payload_expired','source_fact','receipt','trace_expired','trace_cleanup')),
         change_json TEXT NOT NULL
     )""",
         """CREATE INDEX IF NOT EXISTS {trace_projection_trace_changes}
@@ -90,6 +91,7 @@ SCHEMA = (
     )
     + coverage.SCHEMA
     + history.SCHEMA
+    + retention.SCHEMA
 )
 
 
@@ -147,6 +149,7 @@ def create_tables(tables: ProjectionTables, generation: str) -> ProjectionState:
         "INSERT INTO {trace_projection_state}(singleton,version,generation,collector_epoch) VALUES(1,?,?,?)",
         (VERSION, generation, epoch[0]),
     )
+    retention.initialize(tables)
     history.install_capture(tables)
     return _state(tables)
 
@@ -356,6 +359,8 @@ def project_batch(
         db.execute("BEGIN IMMEDIATE")
         db = select_tables(db, build_generation)
         state = _state(db)
+        if retention.pending(db):
+            raise ValueError("projection_retirement_pending")
         high = db.execute("SELECT ingest_seq FROM trace_collector").fetchone()[0]
         # Each indexed stream yields at most limit rows. Sorting their bounded
         # union avoids scanning/sorting the full backlog before a small batch.
@@ -408,6 +413,7 @@ def project_batch(
                         event["source_seq"],
                     ) != (node, epoch, event_id, source_seq):
                         raise ValueError("projection_raw_identity_mismatch")
+                    retention.touch(db, event, receipt_times[seq])
                     entities = entity_claims(event)
                     if event["kind"] == "task":
                         kind = "task_upsert"
@@ -459,6 +465,7 @@ def read_task(db: sqlite3.Connection, *, trace_id: str, task_id: str) -> dict:
         db.execute("BEGIN")
         db = select_tables(db)
         state = _state(db)
+        retention.require_live(db, trace_id)
         row = db.execute(
             "SELECT node_json,ambiguous_live_state FROM {trace_projected_tasks} "
             "WHERE trace_id=? AND task_id=?",
@@ -493,6 +500,7 @@ def read_graph(
         with history.at_cursor(
             db, state, generation=generation, cursor=at_cursor
         ) as state:
+            retention.require_live(db, trace_id)
             task_rows = db.execute(
                 "SELECT node_json FROM {trace_projected_tasks} WHERE trace_id=? LIMIT 501",
                 (trace_id,),
@@ -570,6 +578,7 @@ def read_outcomes(
     trace_id: str,
     task_id: str,
     as_of: int,
+    at_cursor: int | None = None,
     after: int = 0,
     limit: int = 200,
 ) -> dict:
@@ -588,21 +597,23 @@ def read_outcomes(
         db.execute("BEGIN")
         db = select_tables(db)
         state = _state(db)
-        if generation != state.generation:
-            raise ValueError("projection_generation_mismatch")
-        lower = db.execute(
-            "SELECT ingest_seq FROM {trace_projection_history_cursors} WHERE cursor=?",
-            (history.floor(db),),
-        ).fetchone()
-        if lower is None:
-            raise ValueError("projection_history_unavailable")
-        if as_of < lower[0]:
-            raise ValueError("projection_cursor_expired")
-        if as_of > state.ingest_cursor:
-            raise ValueError("projection_cursor_ahead")
-        rows = db.execute(
-            "SELECT evidence_json FROM {trace_task_outcomes} WHERE trace_id=? AND task_id=? "
-            "AND ingest_seq>? AND ingest_seq<=? ORDER BY ingest_seq LIMIT ?",
-            (trace_id, task_id, after, as_of, limit),
-        ).fetchall()
+        with history.at_cursor(
+            db, state, generation=generation, cursor=at_cursor
+        ) as state:
+            retention.require_live(db, trace_id)
+            lower = db.execute(
+                "SELECT ingest_seq FROM {trace_projection_history_cursors} WHERE cursor=?",
+                (history.floor(db),),
+            ).fetchone()
+            if lower is None:
+                raise ValueError("projection_history_unavailable")
+            if as_of < lower[0]:
+                raise ValueError("projection_cursor_expired")
+            if as_of > state.ingest_cursor:
+                raise ValueError("projection_cursor_ahead")
+            rows = db.execute(
+                "SELECT evidence_json FROM {trace_task_outcomes} WHERE trace_id=? AND task_id=? "
+                "AND ingest_seq>? AND ingest_seq<=? ORDER BY ingest_seq LIMIT ?",
+                (trace_id, task_id, after, as_of, limit),
+            ).fetchall()
     return {"state": state, "outcomes": [json.loads(row[0]) for row in rows]}

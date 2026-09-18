@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from . import trace_projection_store as projection
 from . import trace_projection_history as history
+from . import trace_projection_retention as retention
 from .trace_projection_tables import ProjectionTables, select_tables
 
 CATALOG = """CREATE TABLE IF NOT EXISTS trace_projection_generations (
@@ -107,6 +108,9 @@ def activate(db: sqlite3.Connection, *, generation: str) -> projection.Projectio
         ).fetchone()
         if active is None or active[0] != base:
             raise ValueError("projection_rebuild_base_changed")
+        retention.require_activation_ready(
+            tables, retention.policy_cutoff(select_tables(db))
+        )
         db.execute(
             "UPDATE trace_projection_generations SET status='retired' WHERE generation=?",
             (base,),
