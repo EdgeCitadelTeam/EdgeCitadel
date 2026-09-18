@@ -1,6 +1,6 @@
 """Durable graph projection, separate from ingestion and execution authority.
 
-The v3 graph projector is not enabled by Aggregator startup. Retained playback,
+The v4 graph projector is not enabled by Aggregator startup. Retention scheduling,
 physical storage qualification and public interfaces remain required for rollout.
 Projection/checkpoint changes use one Core SQLite transaction; ingestion never
 waits for a projector acknowledgment and is not undone by projection failure.
@@ -16,6 +16,7 @@ from typing import Any
 from edgecitadel_agentd.trace_contract import event_sha256
 
 from . import trace_projection_coverage as coverage
+from . import trace_projection_history as history
 from .trace_projection_tables import ProjectionTables, select_tables
 from .trace_payload_read import read_payload
 from .trace_graph_projection import entity_claims, relationship_claims, resolve_graph
@@ -26,11 +27,12 @@ from .trace_task_projection import (
     task_node,
 )
 
-VERSION = 3
+VERSION = 4
 MAX_BATCH = 64
 
 SCHEMA = (
-    """CREATE TABLE IF NOT EXISTS {trace_projection_state} (
+    (
+        """CREATE TABLE IF NOT EXISTS {trace_projection_state} (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
         version INTEGER NOT NULL,
         generation TEXT NOT NULL,
@@ -38,12 +40,12 @@ SCHEMA = (
         ingest_cursor INTEGER NOT NULL DEFAULT 0,
         change_cursor INTEGER NOT NULL DEFAULT 0
     )""",
-    """CREATE TABLE IF NOT EXISTS {trace_projected_tasks} (
+        """CREATE TABLE IF NOT EXISTS {trace_projected_tasks} (
         trace_id TEXT NOT NULL, task_id TEXT NOT NULL,
         node_json TEXT NOT NULL, ambiguous_live_state INTEGER NOT NULL,
         PRIMARY KEY(trace_id,task_id)
     )""",
-    """CREATE TABLE IF NOT EXISTS {trace_task_perspectives} (
+        """CREATE TABLE IF NOT EXISTS {trace_task_perspectives} (
         trace_id TEXT NOT NULL, task_id TEXT NOT NULL,
         node_id TEXT NOT NULL, source_epoch TEXT NOT NULL,
         agent_key TEXT NOT NULL, source_role TEXT NOT NULL,
@@ -51,41 +53,44 @@ SCHEMA = (
         phase TEXT NOT NULL, evidence_json TEXT NOT NULL,
         PRIMARY KEY(trace_id,task_id,node_id,source_epoch,agent_key,source_role)
     )""",
-    """CREATE TABLE IF NOT EXISTS {trace_task_outcomes} (
+        """CREATE TABLE IF NOT EXISTS {trace_task_outcomes} (
         ingest_seq INTEGER PRIMARY KEY,
         trace_id TEXT NOT NULL, task_id TEXT NOT NULL,
         source_role TEXT NOT NULL, phase TEXT NOT NULL,
         evidence_json TEXT NOT NULL
     )""",
-    """CREATE INDEX IF NOT EXISTS {trace_task_outcome_scope}
+        """CREATE INDEX IF NOT EXISTS {trace_task_outcome_scope}
         ON {trace_task_outcomes}(trace_id,task_id,source_role,ingest_seq)""",
-    """CREATE TABLE IF NOT EXISTS {trace_projection_changes} (
+        """CREATE TABLE IF NOT EXISTS {trace_projection_changes} (
         cursor INTEGER PRIMARY KEY,
         ingest_seq INTEGER NOT NULL UNIQUE,
         trace_id TEXT,
         kind TEXT NOT NULL CHECK(kind IN ('task_upsert','entity_upsert','relationships','payload_expired','source_fact','receipt')),
         change_json TEXT NOT NULL
     )""",
-    """CREATE INDEX IF NOT EXISTS {trace_projection_trace_changes}
+        """CREATE INDEX IF NOT EXISTS {trace_projection_trace_changes}
         ON {trace_projection_changes}(trace_id,cursor)""",
-    """CREATE TABLE IF NOT EXISTS {trace_entity_observations} (
+        """CREATE TABLE IF NOT EXISTS {trace_entity_observations} (
         trace_id TEXT NOT NULL,entity_id TEXT NOT NULL,ingest_seq INTEGER NOT NULL,
         node_id TEXT NOT NULL,source_epoch TEXT NOT NULL,agent_key TEXT NOT NULL,
         source_seq INTEGER NOT NULL,terminal INTEGER NOT NULL,phase TEXT NOT NULL,
         node_json TEXT NOT NULL,evidence_json TEXT NOT NULL,
         PRIMARY KEY(trace_id,entity_id,ingest_seq)
     )""",
-    """CREATE TABLE IF NOT EXISTS {trace_projected_entities} (
+        """CREATE TABLE IF NOT EXISTS {trace_projected_entities} (
         trace_id TEXT NOT NULL,entity_id TEXT NOT NULL,node_json TEXT NOT NULL,
         ambiguous_live_state INTEGER NOT NULL,identity_conflict INTEGER NOT NULL,
         PRIMARY KEY(trace_id,entity_id)
     )""",
-    """CREATE TABLE IF NOT EXISTS {trace_relationship_claims} (
+        """CREATE TABLE IF NOT EXISTS {trace_relationship_claims} (
         trace_id TEXT NOT NULL,edge_id TEXT NOT NULL,kind TEXT NOT NULL,
         parent_id TEXT NOT NULL,child_id TEXT NOT NULL,first_ingest_seq INTEGER NOT NULL,
         PRIMARY KEY(trace_id,edge_id)
     )""",
-) + coverage.SCHEMA
+    )
+    + coverage.SCHEMA
+    + history.SCHEMA
+)
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,7 @@ def create_tables(tables: ProjectionTables, generation: str) -> ProjectionState:
         "INSERT INTO {trace_projection_state}(singleton,version,generation,collector_epoch) VALUES(1,?,?,?)",
         (VERSION, generation, epoch[0]),
     )
+    history.install_capture(tables)
     return _state(tables)
 
 
@@ -370,6 +376,7 @@ def project_batch(
         positions = sorted(positions)[:limit]
         cursor = state.change_cursor
         for seq in positions:
+            history.start_change(db, cursor + 1, seq)
             raw = db.execute(
                 "SELECT node_id,source_epoch,event_id,source_seq,event_sha256 FROM trace_raw_events WHERE ingest_seq=?",
                 (seq,),
@@ -434,6 +441,7 @@ def project_batch(
                 "INSERT INTO {trace_projection_changes} VALUES(?,?,?,?,?)",
                 (cursor, seq, trace_id, kind, _json(change)),
             )
+        history.finish_changes(db)
         # Under this writer transaction, no ingestion can cross our snapshot.
         through = positions[-1] if len(positions) == limit else high
         if through != state.ingest_cursor or cursor != state.change_cursor:
@@ -464,7 +472,12 @@ def read_task(db: sqlite3.Connection, *, trace_id: str, task_id: str) -> dict:
 
 
 def read_graph(
-    db: sqlite3.Connection, *, trace_id: str, build_generation: str | None = None
+    db: sqlite3.Connection,
+    *,
+    trace_id: str,
+    build_generation: str | None = None,
+    generation: str | None = None,
+    at_cursor: int | None = None,
 ) -> dict:
     """Materialize a small internal graph; oversize needs the future expansion API.
 
@@ -477,19 +490,22 @@ def read_graph(
         db.execute("BEGIN")
         db = select_tables(db, build_generation)
         state = _state(db)
-        task_rows = db.execute(
-            "SELECT node_json FROM {trace_projected_tasks} WHERE trace_id=? LIMIT 501",
-            (trace_id,),
-        ).fetchall()
-        entity_rows = db.execute(
-            "SELECT node_json FROM {trace_projected_entities} WHERE trace_id=? LIMIT 501",
-            (trace_id,),
-        ).fetchall()
-        relations = db.execute(
-            "SELECT edge_id,kind,parent_id,child_id FROM {trace_relationship_claims} WHERE trace_id=? LIMIT 1001",
-            (trace_id,),
-        ).fetchall()
-        completeness = coverage.run_coverage(db, trace_id, unresolved=False)
+        with history.at_cursor(
+            db, state, generation=generation, cursor=at_cursor
+        ) as state:
+            task_rows = db.execute(
+                "SELECT node_json FROM {trace_projected_tasks} WHERE trace_id=? LIMIT 501",
+                (trace_id,),
+            ).fetchall()
+            entity_rows = db.execute(
+                "SELECT node_json FROM {trace_projected_entities} WHERE trace_id=? LIMIT 501",
+                (trace_id,),
+            ).fetchall()
+            relations = db.execute(
+                "SELECT edge_id,kind,parent_id,child_id FROM {trace_relationship_claims} WHERE trace_id=? LIMIT 1001",
+                (trace_id,),
+            ).fetchall()
+            completeness = coverage.run_coverage(db, trace_id, unresolved=False)
     if len(task_rows) + len(entity_rows) > 500 or len(relations) > 1000:
         raise ValueError("projection_graph_expansion_required")
     graph = resolve_graph(
@@ -523,6 +539,8 @@ def read_changes(
         state = _state(db)
         if generation != state.generation:
             raise ValueError("projection_generation_mismatch")
+        if after < history.floor(db):
+            raise ValueError("projection_cursor_expired")
         if after > state.change_cursor:
             raise ValueError("projection_cursor_ahead")
         rows = db.execute(
@@ -572,6 +590,14 @@ def read_outcomes(
         state = _state(db)
         if generation != state.generation:
             raise ValueError("projection_generation_mismatch")
+        lower = db.execute(
+            "SELECT ingest_seq FROM {trace_projection_history_cursors} WHERE cursor=?",
+            (history.floor(db),),
+        ).fetchone()
+        if lower is None:
+            raise ValueError("projection_history_unavailable")
+        if as_of < lower[0]:
+            raise ValueError("projection_cursor_expired")
         if as_of > state.ingest_cursor:
             raise ValueError("projection_cursor_ahead")
         rows = db.execute(

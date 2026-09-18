@@ -12,6 +12,7 @@ import sqlite3
 from uuid import uuid4
 
 from . import trace_projection_store as projection
+from . import trace_projection_history as history
 from .trace_projection_tables import ProjectionTables, select_tables
 
 CATALOG = """CREATE TABLE IF NOT EXISTS trace_projection_generations (
@@ -142,7 +143,7 @@ def cleanup_batch(db: sqlite3.Connection, *, generation: str, limit: int = 256) 
     with db:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
-            "SELECT namespace FROM trace_projection_generations WHERE generation=? AND status='retired'",
+            "SELECT namespace,cleanup_started FROM trace_projection_generations WHERE generation=? AND status='retired'",
             (generation,),
         ).fetchone()
         if row is None:
@@ -152,6 +153,8 @@ def cleanup_batch(db: sqlite3.Connection, *, generation: str, limit: int = 256) 
             (generation,),
         )
         tables = ProjectionTables(db, row[0])
+        if not row[1]:
+            history.disable_capture(tables)
         names = [
             re.match(
                 r"CREATE TABLE IF NOT EXISTS \{(trace_[a-z_]+)\}", statement

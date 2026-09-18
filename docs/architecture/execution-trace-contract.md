@@ -2578,3 +2578,44 @@ This is a disabled database lifecycle component. It is not retained-cursor
 playback compaction, history/base-snapshot retention, deployment orchestration,
 or physical storage qualification. Those and public APIs/live conversion remain
 required before production rollout and full M5 acceptance.
+
+### Version 4 retained playback and compaction
+
+Version 4 captures graph and coverage row versions at each projection change
+cursor. SQLite triggers use a transaction-local projection clock; row images,
+deletions, the cursor-to-ingestion mapping, the change record and checkpoint all
+commit or roll back together. A batch records intermediate cursors separately.
+Versions through 3 cannot claim historical capture and require a shadow rebuild.
+
+A historical graph request must identify its generation and change cursor.
+Connection-local views select the last row version at or before that cursor,
+then run the existing graph/coverage queries over that snapshot. Late ancestry,
+conflicting outcomes, source-wide uncertainty and repaired coverage gaps therefore
+appear when observed. Neither current raw input nor current graph state can leak
+into the earlier view. Views are removed before returning, including query-error
+paths. Current and historical readers retain the existing graph/scope bounds;
+public expansion and cursor signing remain separate pending API work.
+
+Compaction advances an explicit retained cursor floor atomically. The latest
+version of each key at/before that floor forms a consistent base; all later
+versions remain. Incremental cleanup removes superseded row versions, prior
+cursor mappings and change-log records through the floor under one shared row
+limit. A base deletion marker disappears only after its older versions have been
+removed, preventing resurrection. Cleanup preserves the floor's ingestion
+watermark. Retained cursors remain readable throughout cleanup, while a reader
+already holding an older SQLite snapshot can finish that snapshot.
+
+New graph/change reads before the floor return `projection_cursor_expired`;
+observation pages reject ingestion snapshots older than the retained floor's
+watermark. Older terminal candidates can still support a retained current graph.
+The internal retained-range interface reports the generation/state, lower cursor
+and ingestion watermark, and latest available cursor. A late branch projected
+after compaction does not alter the retained base.
+
+This component does not select the production age/size retention cutoff, schedule
+compaction, or implement policy-driven graph expiry and its public tombstones.
+The deletion-capture test exercises that storage boundary synthetically, not a
+completed expiry scheduler. Current derived evidence and raw payload expiry remain
+separate until that policy is wired. Additional history storage, historical query
+cost, public list/expansion/event/change/live interfaces and jim-eq E2E still
+require qualification before enabling the projector or accepting M5.
