@@ -87,9 +87,9 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
             return _response(TraceReadError("not_authorized").response, 403)
         try:
             allowed = {
-                "list": {"cursor", "agent_id", "outcome", "limit"},
+                "list": {"cursor", "agent_id", "outcome", "task_id", "limit"},
                 "graph": {"at", "expand"},
-                "events": {"as_of", "after", "limit"},
+                "events": {"as_of", "after", "node_id", "limit"},
                 "changes": {"after", "limit"},
             }[kind]
             required = (

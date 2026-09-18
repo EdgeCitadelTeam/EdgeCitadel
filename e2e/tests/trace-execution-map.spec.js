@@ -1,0 +1,180 @@
+const { test, expect } = require('@playwright/test');
+const { execFileSync, spawn } = require('node:child_process');
+const path = require('node:path');
+const { readFileSync, writeFileSync, mkdirSync } = require('node:fs');
+const { createInterface } = require('node:readline');
+
+// Explicitly opt in to the existing authorized server; never start a local stack.
+test.skip(process.env.EDGECITADEL_TRACE_UI_E2E !== '1', 'Requires the jim-eq trace deployment');
+let run, task;
+const evidence = path.resolve(__dirname, '../../local-docs/architecture-reviews/end-to-end-flow/execution');
+let credential;
+test.beforeAll(async () => {
+  expect(new URL(process.env.APP_URL).hostname).toBe('jim-eq');
+  mkdirSync(evidence, { recursive: true });
+  credential = execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `python3 -c 'from pathlib import Path; print(next(line.split("=",1)[1] for line in Path("/root/.edgecitadel/core/.env").read_text().splitlines() if line.startswith("EDGECITADEL_TRACE_READ_TOKEN=")))'`], { encoding: 'utf8' }).trim();
+  // Discover an existing completed Hermes run rather than pinning an expiring ID.
+  const read = async suffix => {
+    const response = await fetch(`${process.env.APP_URL}/api/traces${suffix}`, { headers: { Authorization: `Bearer ${credential}` } });
+    if (!response.ok) throw new Error('jim-eq trace fixture read unavailable');
+    return response.json();
+  };
+  const list = await read('?agent_id=jim-eq-hermes&limit=100');
+  for (const item of list.items) {
+    const graph = await read('/' + item.trace_id);
+    const match = graph.nodes.find(node => node.kind === 'task' && node.agent_id === 'jim-eq-hermes' && node.state === 'completed');
+    if (match) { run = item.trace_id; task = match.task_id; break; }
+  }
+  if (!run) throw new Error('The jim-eq fixture needs a retained completed Hermes trace');
+});
+test.afterAll(() => { credential = null; });
+async function connect(page) {
+  await page.getByLabel('Fleet read credential').fill(credential);
+  await page.getByRole('button', { name: 'Connect read access', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Disconnect read access' })).toBeVisible();
+}
+async function openRun(page) {
+  await page.goto(`/#execution?run=${run}`);
+  await connect(page);
+  await expect(page.getByRole('button', { name: 'Pause live' })).toBeEnabled();
+  await expect(page.locator('[data-node-id]').first()).toBeVisible();
+}
+
+test('real retained run: selection, exact observation URL, history reload, themes and narrow panning', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await openRun(page);
+  const selected = page.locator(`[data-node-id="task:${task}"]`);
+  await selected.click();
+  await expect(page.getByLabel('Selected step details')).toBeVisible();
+  await expect(page.locator('.trace-observations button').first()).toBeVisible();
+  await page.locator('.trace-observations button').first().click();
+  await expect(page.getByLabel('Observation details')).toBeVisible();
+  const selectedEvent = new URLSearchParams(new URL(page.url()).hash.slice(11)).get('event');
+  expect(selectedEvent).toMatch(/^[a-z0-9_-]+\/[0-9a-f-]+\/[0-9a-f-]+$/);
+  await page.getByRole('button', { name: 'Pause live' }).click();
+  await expect(page.getByRole('button', { name: 'Resume live' })).toBeVisible();
+  const frozen = page.url();
+  expect(new URLSearchParams(new URL(frozen).hash.slice(11)).get('at')).toBeTruthy();
+  await page.reload();
+  await expect(page.getByLabel('Fleet read credential')).toBeVisible();
+  await connect(page);
+  await expect(page.getByLabel('Selected step details')).toBeVisible();
+  expect(page.url()).toBe(frozen);
+  await page.getByRole('button', { name: 'Resume live' }).click();
+  await expect(page.getByRole('button', { name: 'Pause live' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Text view', exact: true }).click();
+  await expect(page.getByRole('list', { name: 'Execution step list' })).toBeVisible();
+  await page.getByRole('button', { name: 'Map view', exact: true }).click();
+  await selected.focus();
+  await page.keyboard.press('Home');
+  await expect(page.locator('[data-map-index="0"]')).toBeFocused();
+  for (const width of [1440, 768, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const theme of ['dark', 'light']) {
+      const current = await page.locator('.trace-explorer').getAttribute('data-theme');
+      if (current !== theme) await page.getByRole('button', { name: /map theme/ }).click();
+      await page.locator('.trace-explorer').evaluate(element => { element.scrollTop = 0; });
+      const bounds = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
+      expect(bounds.document).toBeLessThanOrEqual(bounds.viewport);
+      await page.screenshot({ path: path.join(evidence, `m6-ui-${theme}-${width}.png`) });
+    }
+    await selected.scrollIntoViewIfNeeded();
+    const size = await selected.boundingBox();
+    expect(size.width).toBe(204);
+    await selected.click();
+    await page.screenshot({ path: path.join(evidence, `m6-ui-map-${width}.png`) });
+    await page.getByLabel('Selected step details').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, `m6-ui-inspector-${width}.png`) });
+  }
+  const storage = await page.evaluate(() => [...Object.values(localStorage), ...Object.values(sessionStorage)].join(''));
+  expect(storage.includes(credential)).toBe(false);
+  expect(page.url().includes(credential)).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+test('task lookup, Flow entry, tab shortcuts and browser back preserve navigation and memory access', async ({ page }) => {
+  await page.goto('/#flow');
+  await page.getByRole('button', { name: 'Open execution map' }).click();
+  await connect(page);
+  await page.evaluate(({ task }) => { location.hash = `execution?task=${task}&step=task%3A${task}`; }, { task });
+  const runButton = page.locator('.trace-run-list button').filter({ hasText: run.slice(0, 12) });
+  await expect(runButton).toBeVisible();
+  await runButton.click();
+  await expect(page.getByLabel('Selected step details')).toBeVisible();
+  await page.locator('.trace-heading h1').click();
+  await page.keyboard.press('2');
+  await expect(page.getByText('Communication topology')).toBeVisible();
+  await page.goBack();
+  await expect(page.getByLabel('Selected step details')).toBeVisible();
+  await expect(page.getByLabel('Fleet read credential')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Disconnect read access' }).click();
+  await expect(page.getByLabel('Fleet read credential')).toBeVisible();
+  await expect(page.getByLabel('Selected step details')).toHaveCount(0);
+});
+
+test('fresh Hermes execution updates the real browser, reconnects and preserves exact frozen history', async ({ page }) => {
+  test.setTimeout(180_000);
+  const directory = `/root/edgecitadel-m6-ui-20260918/run-${Date.now()}`;
+  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
+  ssh(`install -d -m 700 ${directory}`);
+  const source = readFileSync(path.resolve(__dirname, '../helpers/trace-live-task.py'), 'utf8');
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-task.py`], { input: source });
+  const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-task.py ${directory}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let trace, settled, processError = false;
+  child.stderr.on('data', () => { processError = true; });
+  const finished = new Promise(resolve => child.on('exit', resolve));
+  const lines = createInterface({ input: child.stdout });
+  lines.on('line', line => {
+    const value = JSON.parse(line);
+    if (value.stage === 'bound') trace = value.trace_id;
+    if (value.acknowledgment_exact) settled = value;
+  });
+  try {
+    await expect.poll(() => trace, { timeout: 20_000 }).toBeTruthy();
+    await page.addInitScript(() => {
+      const NativeSocket = window.WebSocket;
+      window.traceTestSockets = [];
+      window.WebSocket = class extends NativeSocket {
+        constructor(url, protocols) {
+          super(url, protocols);
+          if (new URL(url).pathname.startsWith('/ws/traces/')) window.traceTestSockets.push(this);
+        }
+      };
+    });
+    await page.goto(`/#execution?run=${trace}`);
+    await connect(page);
+    await expect(page.getByRole('button', { name: 'Pause live' })).toBeEnabled();
+    const original = await page.locator('[data-node-id]').evaluateAll(nodes => nodes.map(node => ({ id: node.dataset.nodeId, left: node.style.left, top: node.style.top })));
+    await page.getByRole('button', { name: 'Pause live' }).click();
+    const frozen = page.url();
+    await expect(page.locator('.trace-run-heading > strong')).toHaveText('historical');
+    await page.getByRole('button', { name: 'Resume live' }).click();
+    await expect(page.locator('.trace-run-heading > strong')).toHaveText('live');
+    ssh(`touch ${directory}/client-ready`);
+    await expect.poll(() => settled, { timeout: 140_000 }).toBeTruthy();
+    expect(await finished).toBe(0);
+    expect(processError).toBe(false);
+    expect(settled.all_core_settled).toBe(true);
+    const completed = page.locator(`[data-node-id="task:${settled.task_id}"]`);
+    await expect(completed).toHaveClass(/state-completed/);
+    for (const node of original) {
+      const current = await page.locator(`[data-node-id="${node.id}"]`).evaluate(element => ({ left: element.style.left, top: element.style.top }));
+      expect(current).toEqual({ left: node.left, top: node.top });
+    }
+    const beforeReconnect = await page.evaluate(() => {
+      const count = window.traceTestSockets.length;
+      window.traceTestSockets.at(-1).close();
+      return count;
+    });
+    await expect.poll(() => page.evaluate(() => window.traceTestSockets.length)).toBeGreaterThan(beforeReconnect);
+    await expect(page.locator('.trace-run-heading > strong')).toHaveText('live', { timeout: 30_000 });
+    await page.evaluate(url => { location.hash = new URL(url).hash; }, frozen);
+    await expect(page.locator('.trace-run-heading > strong')).toHaveText('historical');
+    await expect(page.getByText('Newer evidence available', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-node-id]')).toHaveCount(original.length);
+    await page.getByRole('button', { name: 'Resume live' }).click();
+    await expect(completed).toHaveClass(/state-completed/);
+    writeFileSync(path.join(evidence, 'm6-ui-live-jim-eq.json'), JSON.stringify({ target: 'jim-eq', trace_id: trace, task_id: settled.task_id, event_count: settled.event_count, exact_source_core_settlement: true, browser_live_completed: true, existing_positions_stable: true, frozen_history: true, newer_indicator: true, explicit_resume: true, closed_socket_reconnected_live: true }, null, 2) + '\n');
+  } finally { lines.close(); }
+});

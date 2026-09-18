@@ -785,8 +785,21 @@ HTTP clients send `Authorization: Bearer TOKEN`. WebSocket clients send
 `{"type":"authenticate","token":"TOKEN"}` as their first text frame within
 five seconds; put the durable replay cursor in `after`, never the credential.
 Use the trusted private/encrypted deployment perimeter: this credential grants
-fleet-wide trace access, and does not isolate individual users. Frontend trace
-support is still being implemented.
+fleet-wide trace access, and does not isolate individual users. The dashboard's
+Execution tab accepts this credential in memory, and Flow/Tasks link into the
+explorer. Reloading the page requires entering it again. Saved run/step/event
+and historical snapshot links contain no credential. The visited-snapshot menu
+covers snapshots seen in the current visit; full retained-history discovery and
+M6 acceptance remain incomplete.
+
+`GET /api/traces` accepts an optional UUIDv4 `task_id` filter matching any
+observed task in the run, not only its root task. The normalized filter is part
+of the list cursor scope. `GET /api/traces/{id}/events` accepts an optional
+canonical graph `node_id`; the server derives matching observation identities
+with the projector's rules. Supply the displayed graph's `as_of` on every page.
+Filtered scans are bounded and can return an empty page with a continuation;
+continue until `next_cursor` is null. Event cursors are bound to the node filter
+and cannot be reused for another step or an unfiltered request.
 
 The Core creates `trace-cursor.key` beside its database, owned by the process
 with mode 0600. Preserve it in private backups to retain cursor validity across

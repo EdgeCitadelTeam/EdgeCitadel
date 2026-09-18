@@ -197,7 +197,11 @@ const useAppStore = create((set, get) => ({
     ),
   })),
 
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  setActiveTab: (tab) => {
+    const current = window.location.hash.slice(1).split('?')[0]
+    if (tab !== 'detail' && current !== tab) window.location.hash = tab
+    set({ activeTab: tab })
+  },
   setMessageTypeFilter: (filter) => set({ messageTypeFilter: filter }),
   setLogLevelFilter: (filter) => set({ logLevelFilter: filter }),
   setTaskStatusFilter: (filter) => set({ taskStatusFilter: filter }),

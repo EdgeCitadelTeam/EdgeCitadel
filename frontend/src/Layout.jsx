@@ -1,3 +1,4 @@
+import { lazy, Suspense, useState } from 'react'
 import { MessageSquare, GitBranch, FileText, ListTodo, Server } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from './stores/appStore'
@@ -10,15 +11,19 @@ import TaskBoard from './components/TaskBoard'
 import AgentDetail from './components/AgentDetail'
 import AgentRegistry from './components/AgentRegistry'
 
+const TraceExplorer = lazy(() => import('./traces/TraceExplorer'))
+
 const TABS = [
   { key: 'chat', label: 'Chat', icon: MessageSquare, shortcut: '1' },
   { key: 'flow', label: 'Flow', icon: GitBranch, shortcut: '2' },
   { key: 'logs', label: 'Logs', icon: FileText, shortcut: '3' },
   { key: 'tasks', label: 'Tasks', icon: ListTodo, shortcut: '4' },
   { key: 'registry', label: 'Registry', icon: Server, shortcut: '5' },
+  { key: 'execution', label: 'Execution', icon: GitBranch, shortcut: '6' },
 ]
 
 export default function Layout() {
+  const [traceCredential, setTraceCredential] = useState(null)
   const activeTab = useAppStore((s) => s.activeTab)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
   const selectedAgent = useAppStore((s) => s.selectedAgent)
@@ -41,11 +46,13 @@ export default function Layout() {
       case 'chat':
         return <ChatHistory />
       case 'flow':
-        return <CommFlow />
+        return <><div className="flex items-center justify-between gap-3 px-4 py-2 text-xs text-gray-400"><span>Communication topology</span><button className="text-accent-light" onClick={() => setActiveTab('execution')}>Open execution map</button></div><CommFlow /></>
       case 'logs':
         return <LogViewer />
       case 'tasks':
         return <TaskBoard />
+      case 'execution':
+        return <Suspense fallback={<p role="status" className="p-4">Loading execution map…</p>}><TraceExplorer credential={traceCredential} onCredential={setTraceCredential} /></Suspense>
       case 'registry':
         return <AgentRegistry />
       default:

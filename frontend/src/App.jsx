@@ -13,10 +13,25 @@ export default function App() {
   // WebSocket connection
   useWebSocket()
 
+  useEffect(() => {
+    const followAddress = () => {
+      const tab = window.location.hash.slice(1).split('?')[0]
+      if (['chat', 'flow', 'logs', 'tasks', 'registry', 'execution'].includes(tab)) useAppStore.setState({ activeTab: tab })
+      else if (!tab) useAppStore.setState({ activeTab: 'chat' })
+    }
+    followAddress()
+    window.addEventListener('hashchange', followAddress)
+    window.addEventListener('popstate', followAddress)
+    return () => {
+      window.removeEventListener('hashchange', followAddress)
+      window.removeEventListener('popstate', followAddress)
+    }
+  }, [setActiveTab])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Tab switching with 1-5
+      // Tab switching with 1-6
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         const target = e.target
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
@@ -34,6 +49,9 @@ export default function App() {
             break
           case '4':
             setActiveTab('tasks')
+            break
+          case '6':
+            setActiveTab('execution')
             break
           case '5':
             setActiveTab('registry')

@@ -18,11 +18,17 @@ from edgecitadel_agentd.trace_contract import (
     event_sha256,
     validate_read_response,
 )
-from edgecitadel_agentd.trace_cursor import CursorScope, decode_cursor, encode_cursor
+from edgecitadel_agentd.trace_cursor import (
+    CursorScope,
+    cursor_scope_hash,
+    decode_cursor,
+    encode_cursor,
+)
 
 from . import trace_projection_history as history
 from . import trace_projection_store as projection
 from .trace_payload_read import read_payload
+from .trace_graph_projection import entity_claims
 from .trace_projection_tables import select_tables
 
 ERROR_STATUS = {
@@ -60,6 +66,7 @@ def read_events(
     signing_key: bytes,
     scope_hash: str,
     after: str | None = None,
+    node_id: str | None = None,
     limit: int = 200,
 ) -> dict:
     """Read accepted observations in ingest order, never beyond the graph snapshot.
@@ -72,6 +79,13 @@ def read_events(
     if (
         not isinstance(trace_id, str)
         or re.fullmatch(r"[0-9a-f]{32}", trace_id) is None
+        or (
+            node_id is not None
+            and (
+                not isinstance(node_id, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}", node_id) is None
+            )
+        )
         or type(limit) is not int
         or not 1 <= limit <= 500
     ):
@@ -83,6 +97,11 @@ def read_events(
         or re.fullmatch(r"[0-9a-f]{64}", scope_hash) is None
     ):
         raise ValueError("trace_read_configuration_unavailable")
+    event_scope = (
+        scope_hash
+        if node_id is None
+        else cursor_scope_hash({"node_id": node_id}, {"access_scope": scope_hash})
+    )
     retained_from = None
     try:
         with connection:
@@ -95,7 +114,12 @@ def read_events(
                 return decode_cursor(
                     token,
                     signing_key,
-                    CursorScope(kind, trace_id, scope_hash, state.generation),
+                    CursorScope(
+                        kind,
+                        trace_id,
+                        event_scope if kind == "events" else scope_hash,
+                        state.generation,
+                    ),
                     retained_from=retained_from,
                 )
 
@@ -144,7 +168,13 @@ def read_events(
 
                 def continuation(last: int) -> str:
                     return encode_cursor(
-                        {**snapshot, "kind": "events", "position": last}, signing_key
+                        {
+                            **snapshot,
+                            "kind": "events",
+                            "position": last,
+                            "scope_hash": event_scope,
+                        },
+                        signing_key,
                     )
 
                 # Reserve the largest possible continuation for this snapshot.
@@ -180,6 +210,13 @@ def read_events(
                         event["trace_id"],
                     ) != (node, epoch, identity, raw[4], trace_id):
                         raise TraceReadError("unavailable")
+                    if node_id is not None:
+                        identities = {claim["id"] for claim in entity_claims(event)}
+                        if event["kind"] == "task":
+                            identities.add("task:" + event["task_id"])
+                        if node_id not in identities:
+                            last = seq
+                            continue
                     additional = len(canonical_bytes(event)) + bool(response["events"])
                     if size + additional > MAX_RESPONSE_BYTES:
                         if not response["events"]:

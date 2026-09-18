@@ -5,6 +5,7 @@ import useAppStore from '../stores/appStore'
 import { api } from '../api/client'
 import TaskCard from './TaskCard'
 import { relativeTime, fullTimestamp } from '../utils/formatTime'
+import { navigateTrace } from '../traces/navigation'
 import { deriveTasks } from '../utils/taskReducer'
 
 // A2A task-state enum from the v0.1 envelope schema. Items without task_state
@@ -143,6 +144,10 @@ export default function TaskBoard() {
                 <X size={16} className="text-gray-500" />
               </button>
             </div>
+            <button className="mb-3 text-xs text-accent-light" onClick={() => {
+              navigateTrace({ task: selectedTask.task_id, step: 'task:' + selectedTask.task_id })
+              setSelectedTask(null)
+            }}>Open task in execution map</button>
             <div className="space-y-2 text-xs">
               <div className="flex flex-wrap gap-3">
                 <div>

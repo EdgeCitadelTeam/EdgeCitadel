@@ -1,7 +1,7 @@
 # Trace read client
 
-This directory supplies the read-only client for the planned execution map. It is
-not yet mounted in the dashboard. The canonical response and event schemas live
+This directory supplies the read-only execution explorer mounted in the dashboard
+Execution tab, with entry points from Flow and Tasks. The canonical response and event schemas live
 in the repository's `schemas/` directory; Ajv validates those same files rather
 than a separately maintained frontend schema. Dashboard Docker builds therefore
 use the repository root as context (`frontend/Dockerfile`).
@@ -48,10 +48,32 @@ requests must use the displayed graph's `at`, replace their page cache when it
 changes, and cancel stale requests. They must not reconstruct history by hiding
 nodes based on timestamps.
 
-Current verification covers canonical fixtures, response and queue bounds,
-replacement races, reconnect ownership, generation/retention denial, frozen
-history and stale-run cancellation. The bundled client has also exercised a
-fresh Hermes task through the existing jim-eq Core. This is client protocol
-verification, not browser UI, accessibility, layout or M6 acceptance. The next
-step is the approved complete map, run navigation and inspector, followed by
-browser scenarios and measurements on jim-eq.
+The map retains positions by canonical ID, renders at most 100 steps per page,
+and exposes all loaded steps through owner grouping, search, page navigation and
+an equivalent text view. Arrow direction defines causality; late parents can
+appear above or beside already positioned steps. Map labels retain a readable
+size on narrow screens with internal panning and details below. Status is text
+as well as color. Permission decisions are not execution outcomes.
+
+Selection uses `#execution?run=...&task=...&step=...&at=...&event=...`.
+The event key is its exact source/epoch/event tuple. Invalid saved parameters
+stop the run view instead of silently switching an invalid historical link to
+live. The task filter finds runs containing a task, including child tasks.
+Inspector requests bind `node_id` to the displayed graph's `at`; membership uses
+the backend projector's identity rules and sparse continuation pages are followed
+when restoring an exact event link. An event cursor cannot move between node
+filters. Arbitrary references are displayed as text and never auto-opened.
+
+React effect ownership recreates API/session resources under StrictMode replay.
+The credential belongs to Layout so tab changes preserve it in memory; page
+reload, disconnect and authorization denial remove access. A view change aborts
+its inspector and clears page state. The graph remains frozen while historical
+mode indicates newer evidence. The visited-snapshot menu contains at most the
+last 100 snapshots encountered in this view, not every retained server version;
+full retained-history discovery remains required for M6 acceptance.
+
+Verification includes component/protocol fixtures and real jim-eq browser
+checks; see the milestone evidence for exact revision and scope. Full multi-branch
+S1/S4/S6, retained-history discovery, large-run render/memory measurements and
+full deterministic regression remain open. A 501-step component fixture proves
+reachability, not production stress performance or a completed M6 gate.

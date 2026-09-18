@@ -323,3 +323,23 @@ def test_sender_can_identify_root_without_proving_recipient_outcome(core):
     item = read(core)["items"][0]
     assert item["root_task_id"] == root["task_id"]
     assert item["root_agent_id"] is None and item["outcome"] is None
+
+
+def test_task_lookup_includes_child_observation_and_binds_list_scope(core):
+    parent = add(core, 1)
+    child = add(
+        core,
+        2,
+        trace=parent["trace_id"],
+        task_id=str(uuid4()),
+        parent_task_id=parent["task_id"],
+    )
+    other = add(core, 3, task_id=str(uuid4()))
+    project_all(core)
+    result = read(core, task_id=child["task_id"])
+    assert [item["trace_id"] for item in result["items"]] == [parent["trace_id"]]
+    assert_error(
+        "cursor_scope_mismatch",
+        lambda: read(core, cursor=result["snapshot_cursor"], task_id=other["task_id"]),
+    )
+    assert read(core, task_id=str(uuid4()))["items"] == []

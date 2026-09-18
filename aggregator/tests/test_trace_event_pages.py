@@ -311,3 +311,47 @@ def test_real_two_mib_page_boundary_preserves_all_accepted_observations(core):
     second = read(core, values, snapshot, limit=500, after=first["next_cursor"])
     assert second["next_cursor"] is None
     assert first["events"] + second["events"] == values
+
+
+def test_node_filter_has_snapshot_bound_sparse_continuations_and_distinct_scope(core):
+    values, state, snapshot = seed(core, 3)
+    selected = "task:" + values[0]["task_id"]
+    first = read(core, values, snapshot, node_id=selected, limit=1)
+    assert first["events"] == values[:1]
+    assert_error(
+        "cursor_scope_mismatch",
+        lambda: read(core, values, snapshot, after=first["next_cursor"]),
+    )
+    assert_error(
+        "cursor_scope_mismatch",
+        lambda: read(
+            core, values, snapshot, node_id="task:other", after=first["next_cursor"]
+        ),
+    )
+    sparse = read(core, values, snapshot, node_id="run:unrelated", limit=1)
+    assert sparse["events"] == [] and sparse["next_cursor"]
+    while sparse["next_cursor"]:
+        sparse = read(
+            core,
+            values,
+            snapshot,
+            node_id="run:unrelated",
+            limit=1,
+            after=sparse["next_cursor"],
+        )
+        assert sparse["events"] == []
+
+
+def test_step_filter_uses_projector_identity_for_native_attempt_and_logical_root(core):
+    from aggregator.trace_graph_projection import entity_claims
+
+    value = event(
+        "started", kind="run", task_id=None, parent_task_id=None, parent_run_id=None
+    )
+    assert put(core, value, str(uuid4()), 1).outcome == "accepted"
+    state = projection.project_batch(core)
+    for claim in entity_claims(value):
+        result = read(
+            core, [value], token(state, value["trace_id"]), node_id=claim["id"]
+        )
+        assert result["events"] == [value]

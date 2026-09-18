@@ -36,6 +36,7 @@ def read_list(
     cursor: str | None = None,
     agent_id: str | None = None,
     outcome: str | None = None,
+    task_id: str | None = None,
     limit: int = 100,
 ) -> dict:
     """Freeze membership and filter evaluation; continue even after sparse scans.
@@ -48,6 +49,17 @@ def read_list(
     if (
         type(limit) is not int
         or not 1 <= limit <= 100
+        or (
+            task_id is not None
+            and (
+                not isinstance(task_id, str)
+                or re.fullmatch(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+                    task_id,
+                )
+                is None
+            )
+        )
         or (
             agent_id is not None
             and (
@@ -63,7 +75,9 @@ def read_list(
         raise TraceReadError("invalid_request")
     if not isinstance(signing_key, bytes) or len(signing_key) < 32:
         raise ValueError("trace_read_configuration_unavailable")
-    scope = cursor_scope_hash({"agent_id": agent_id, "outcome": outcome}, access_policy)
+    scope = cursor_scope_hash(
+        {"agent_id": agent_id, "outcome": outcome, "task_id": task_id}, access_policy
+    )
     floor = None
     try:
         with connection:
@@ -152,6 +166,15 @@ def read_list(
                         and not tables.execute(
                             "SELECT 1 FROM {trace_projection_run_events} WHERE trace_id=? AND agent_id=? LIMIT 1",
                             (trace_id, agent_id),
+                        ).fetchone()
+                    ):
+                        last = (created, trace_id)
+                        continue
+                    if (
+                        task_id is not None
+                        and not tables.execute(
+                            "SELECT 1 FROM {trace_task_perspectives} WHERE trace_id=? AND task_id=? LIMIT 1",
+                            (trace_id, task_id),
                         ).fetchone()
                     ):
                         last = (created, trace_id)
