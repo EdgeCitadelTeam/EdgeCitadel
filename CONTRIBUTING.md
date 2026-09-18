@@ -1,107 +1,78 @@
 # Contributing to EdgeCitadel
 
-## Quick Start
+Engineering guidance lives in [AGENTS.md](AGENTS.md). This guide covers setup,
+where code lives, and how to verify a change.
+
+## Setup
 
 ```bash
-git clone <repo-url> && cd EdgeCitadel
-cp .env.example .env          # configure generated credentials before startup
-docker compose up --build     # start full stack
+git clone https://github.com/EdgeCitadelTeam/EdgeCitadel.git
+cd EdgeCitadel
 ```
 
-Dashboard: http://localhost (via nginx)
-API status: http://localhost/api/system/status
-NATS monitoring: http://localhost:8222
+Follow [onboarding](docs/onboarding.md) for a working Core/Edge environment.
+Start only the services needed for the task. Runtime and Agent Package setup is
+in [agent-runtime/README.md](agent-runtime/README.md); it includes the editable
+Python environment and package lock/validation commands.
 
-## Development Workflow
-
-### 1. Branch from main
+For root Python tooling:
 
 ```bash
-git checkout -b <type>/<short-description>
-# Examples:
-#   feat/jetstream-consumers
-#   fix/mqtt-reconnection
+python3.12 -m venv .venv
+.venv/bin/pip install -r scripts/requirements-test.txt
 ```
 
-### 2. Make changes
+For backend tests, install `aggregator/requirements-dev.txt` in the backend Python
+environment. For frontend development, run `npm ci` in `frontend/`, then
+`npm run dev`. Browser tests use the dependencies in `e2e/` (`npm ci` there).
 
-Repository policy and quality gates are in `AGENTS.md`; repeatable verification
-procedures live in `.agents/skills/`. Tool-specific configuration must defer to
-those shared sources.
+## Find the implementation
 
-### 3. Verify quality
+| Directory | Responsibility |
+|---|---|
+| `aggregator/` | FastAPI backend, NATS subscriptions, SQLite persistence |
+| `frontend/` | React/Vite dashboard |
+| `e2e/` | Browser tests and disposable test stacks |
+| `agent-runtime/` | agentd, Agent Package runtime, SDK and validation |
+| `agent-packages/`, `plugins/` | Installable Agents and native host integrations |
+| `edgecitadel/` | Python distribution entrypoint |
+| `scripts/`, `deploy/`, `nats/`, `nginx/` | CLI, deployment and service configuration |
+| `docs/`, `local-docs/` | Maintained guides and ignored local working notes |
 
-Choose checks for the changed behavior using
-[commit-check](.agents/skills/commit-check/SKILL.md). Start with affected tests and
-callers; broaden for shared contracts or failures. Reuse passing results when
-the tested code and dependencies are unchanged. Documentation-only edits need
-content/link review, not application suites.
+## Verify the change
 
-Examples below select one check, not a sequence to run for every change. Use the
-Python environment configured for the relevant subsystem; see `agent-runtime/README.md`
-for its source/editable setup.
+Choose checks for the behavior and callers you changed. These are alternatives,
+not a checklist to run in sequence. Python commands use the configured environment
+for that subsystem; see the runtime README for its source/editable setup.
 
 | Area | Focused command | Working directory |
 |---|---|---|
-| Python | `python -m pytest -q tests/test_api.py` | `aggregator/` |
+| Backend API | `python -m pytest -q tests/test_api.py` | `aggregator/` |
+| Runtime | `python -m pytest -q tests/agentd/test_store.py` | `agent-runtime/` |
 | Frontend unit test | `npm test -- src/components/StatusBadge.test.jsx` | `frontend/` |
 | E2E helper | `node --test helpers/stack-config.spec.js` | `e2e/` |
 | Browser workflow | `npm run test:playwright -- tests/operator-journey.spec.js` | `e2e/` |
 
-`e2e`'s `npm test` runs both helper tests and the full browser suite; use it when
-both are relevant. The focused browser command above owns a disposable stack;
-there is no need to restart a shared stack first. External model-dependent
-Managed Agent suites require a prepared stack and use `npm run test:external-plugins`.
-CI and release workflows keep their broader checks.
+Use the pinned Ruff in `scripts/requirements-test.txt` for changed Python files.
+Frontend lint/build commands are `npm run lint` and `npm run build`. The
+[verification recipe](.agents/skills/commit-check/SKILL.md) covers typing, package
+locks and when broader checks help.
 
-### 4. Commit with Conventional Commits
+Browser tests build and clean up their own stack; do not restart a shared stack
+first. `e2e`'s `npm test` runs helper tests and the full browser suite. External
+Agent suites use `npm run test:external-plugins` against a prepared environment.
 
-```
-<type>(<scope>): <description>
+CI runs root Python, runtime and frontend checks plus the Python build. It does
+not currently run Aggregator tests or opt-in broker/E2E suites; run those when
+the affected behavior calls for them. Reuse valid results for unchanged code.
 
-Types: feat | fix | docs | style | refactor | perf | test | chore | ci | build
-Scopes: aggregator | frontend | nats | mqtt | dashboard | e2e | client | infra
-```
+## Explain the result
 
-Examples:
-```
-feat(aggregator): add JetStream consumer group support
-fix(mqtt): resolve race condition in topic translation
-docs(nats): add ADR for subject naming conventions
-test(e2e): add agent offline detection tests
-```
+Use clear commit and PR descriptions: what problem was solved, why this approach,
+and how it was verified. There is no required branch-name or commit-message format.
+Call out changed interfaces or behavior so reviewers can assess the impact;
+backward-compatible implementations are not required.
 
-### 5. Open a PR
-
-PRs must include:
-- Clear description of what changed and why
-- Relevant verification and any material limitations
-
-## Code Review Standards
-
-Reviewers check for:
-
-1. **Correctness** — Does it work? Edge cases handled?
-2. **NATS contract** — Are all publishers/subscribers consistent?
-3. **Database** — Parameterized queries? No concurrent thread access?
-4. **Security** — No secrets in code? Input validated?
-5. **Tests** — New behavior covered? Existing tests pass?
-6. **Simplicity** — Is there a simpler way?
-
-Verdicts: **SHIP** / **FIX-THEN-SHIP** / **RETHINK**
-
-## Project Structure
-
-```
-aggregator/      Python FastAPI aggregator
-frontend/        React 18 dashboard
-nats/            NATS server config
-nginx/           Reverse proxy config
-e2e/             Playwright tests
-scripts/         Utility scripts
-agent-runtime/   agentd, Agent Package runtime, SDK, validation, and tests
-agent-packages/  Installable Agent Packages and examples
-plugins/         Native host Plugins for Codex, Claude Code, and Pi
-.agents/         Canonical shared verification skills
-.claude/         Claude-specific settings, commands, and shared-skill links
-```
+Review correctness, ownership/data flow, failure behavior, readability and useful
+test coverage. Prefer a simpler complete solution over speculative generalization;
+style preferences alone should not block a sound change.

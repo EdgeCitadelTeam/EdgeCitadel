@@ -10,7 +10,7 @@ contracts or stored state it affects. Explain material uncertainty and the
 smallest viable change in a short update; routine work needs no separate plan.
 
 For NATS changes, check affected publishers/subscribers. For persistence, check
-transaction boundaries and existing-data compatibility. For deployment, check
+transaction boundaries and the intended resulting state. For deployment, check
 the actual entrypoint/configuration. Only investigate surfaces the change touches.
 
 Use the existing focused tests to establish behavior where practical, then verify

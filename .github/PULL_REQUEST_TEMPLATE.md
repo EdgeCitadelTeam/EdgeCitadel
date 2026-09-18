@@ -1,7 +1,7 @@
 ## Change
 
-<!-- Explain the problem and resulting behavior. Include migration/compatibility
-     details only when relevant. -->
+<!-- Explain the problem and resulting behavior. Mention changed interfaces or
+     behavior that reviewers need to understand. -->
 
 ## Verification
 

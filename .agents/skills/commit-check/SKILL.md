@@ -6,9 +6,9 @@ description: Select relevant pre-commit checks and reuse valid results; do not r
 # Check the change before committing
 
 Inspect the staged diff, including deletions, and run `git diff --cached --check`.
-Check for accidental credentials/local files and confirm a Conventional Commit
-subject (see `CONTRIBUTING.md`). Select verification by behavior, not extension
-alone. A deleted file may require checking callers instead of testing that file.
+Check for accidental credentials/local files and use a clear description of the
+change. Select verification by behavior, not extension alone. A deleted file may
+require checking callers instead of testing that file.
 
 | Change | Local verification |
 |---|---|
