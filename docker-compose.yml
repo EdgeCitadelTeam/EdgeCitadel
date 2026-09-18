@@ -54,7 +54,9 @@ services:
         condition: service_healthy
 
   dashboard:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     restart: unless-stopped
     expose:
       - "80"

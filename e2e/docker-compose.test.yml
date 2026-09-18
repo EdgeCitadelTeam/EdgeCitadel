@@ -43,7 +43,8 @@ services:
 
   frontend:
     build:
-      context: ../frontend
+      context: ..
+      dockerfile: frontend/Dockerfile
     ports:
       - "127.0.0.1::80"
     volumes:
