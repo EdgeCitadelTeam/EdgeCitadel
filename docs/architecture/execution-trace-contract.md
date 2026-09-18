@@ -2905,3 +2905,63 @@ read-only access, byte-bounded continuation and commits arriving during replay.
 These are not authenticated HTTP/WS or frontend acceptance tests. Replacement
 loading/backpressure, actual origin/proxy access, slow clients, retained-volume
 SQL/storage costs and jim-eq E2E remain integration/qualification work.
+
+### Explicit fleet-authenticated HTTP and WebSocket router
+
+`make_trace_router(TraceReadService(...))` mounts list, graph/expansion, event and
+change GET routes plus `/ws/traces/{trace_id}`. Default Aggregator startup does
+not construct or mount it yet. Explicit construction owns the Core cursor key,
+read workers and shutdown; no read request initializes or migrates a database.
+
+The selected deployment remains one trusted operator fleet, not per-user
+isolation. A separate read-only fleet credential strengthens the application
+boundary while the actual private/encrypted network perimeter is qualified.
+HTTP uses `Authorization: Bearer <credential>`; forwarded IP/admin headers cannot
+substitute for it. Missing/bad credentials fail before trace lookup with the fixed
+`not_authorized` error. Authenticated HTTP Origin, when present, must exactly
+match a configured frontend origin. Responses use canonical bounded JSON,
+`Cache-Control: no-store` and `X-EdgeCitadel-Access-Mode: trusted-fleet`.
+
+Browser WebSockets authenticate in one opening JSON frame:
+`{"type":"authenticate","token":"<credential>"}`. Never put credentials in
+URLs, cursor claims or content references. Origin is checked before acceptance;
+non-browser clients may omit it but still must authenticate. Opening authentication
+has a five-second deadline and accepts at most 512 text characters after transport
+reassembly. Actual transport-frame limits remain part of startup qualification.
+At most eight sockets, including unauthenticated ones, are admitted. Query parsing
+rejects unknown/repeated/oversized parameters and emits fixed errors without
+reflecting caller input.
+
+The socket tails the same durable change reader and sends ordered `trace_change`
+messages, with periodic `trace_heartbeat` availability/freshness messages. It keeps
+no unbounded application broadcast queue. Each send has a two-second timeout;
+slow clients close with 1013 and reconnect from their own last fully applied
+cursor. A heartbeat is not an application ACK. Generation changes between replay
+and heartbeat require resnapshot instead of mixing generations. Disconnect and
+shutdown cancel in-flight waits and reads; clients cannot inject task controls.
+
+The service admits at most four read jobs without an unbounded pending queue.
+Each owns and closes a `mode=ro` SQLite connection in its worker thread. A five-
+second SQLite progress deadline, request cancellation and service shutdown
+interrupt SQL. Canceling the awaiting request does not release admission until
+the actual worker has finished. Database contention/absence and query failures
+surface as fixed unavailable responses; SQL deadlines are not an operating-system
+I/O or retained-volume latency guarantee.
+
+The caller supplies an existing Core-owned directory for a separate 32-byte
+cursor key. First creation writes/fsyncs a private temporary file and atomically
+links it into place without replacing a concurrent creator's key, then fsyncs the
+directory. Existing keys must be regular, owned by the service UID and mode 0600;
+symlinks, FIFOs, public or malformed keys fail closed and are never regenerated.
+Back up this secret as private Core configuration, never as research evidence.
+Service restart preserves cursor signatures. Fleet credential rotation changes
+access scope and invalidates old cursors; configuration changes require service
+replacement/shutdown, not implicit environment hot reload.
+
+ASGI HTTP/WS and SQLite component tests verify the direct route boundary,
+credential/origin rejection before lookup, restart/rotation, replay/reconnect,
+auth timeout, socket admission, stalled sends, rebuild races, actual worker-slot
+ownership/cancellation, SQL deadlines and concurrent key creation. Default app,
+proxy routing, deployment secret provisioning, transport-frame limits and live
+jim-eq verification remain next. These local tests do not accept M4/M5–M7 rollout,
+full access-perimeter security, fleet-scale performance or frontend behavior.

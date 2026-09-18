@@ -810,7 +810,8 @@
             "not_found",
             "unavailable",
             "invalid_request",
-            "oversize_response"
+            "oversize_response",
+            "not_authorized"
           ]
         },
         "resnapshot_required": {

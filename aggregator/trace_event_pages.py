@@ -26,6 +26,7 @@ from .trace_payload_read import read_payload
 from .trace_projection_tables import select_tables
 
 ERROR_STATUS = {
+    "not_authorized": 401,
     "invalid_request": 400,
     "invalid_cursor": 400,
     "cursor_scope_mismatch": 400,
