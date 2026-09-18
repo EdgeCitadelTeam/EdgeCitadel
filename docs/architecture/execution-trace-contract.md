@@ -2402,3 +2402,32 @@ Source reconciliation commits lifecycle recovery before its separate bounded
 maintenance transaction. Cleanup failure cannot undo that recovery. Cleanup
 responds to both encoded-byte and observed physical pressure, but these controls
 are not physical quota enforcement or preallocated completion reservations.
+
+## M5 task-observation reduction foundation
+
+`aggregator/trace_task_projection.py` reduces accepted immutable task events with
+their persisted Core ingestion positions. It is a component of the forthcoming
+projector, not an enabled read API or a completed M5 implementation. It does not
+consume rejected/conflicting raw payloads or acquire task execution authority.
+
+Within each node/epoch/agent/role perspective, source sequence selects the latest
+live observation; wall-clock time and delivery order do not determine progress.
+Requeue can therefore move offered work back to queued. Distinct epochs remain
+independent perspectives. If equally eligible live perspectives disagree, the
+node displays unknown and retains the ambiguity rather than comparing their
+unrelated source sequences.
+
+Terminal evidence is retained in persisted ingestion order. Recipient terminal
+evidence controls the displayed task outcome ahead of a sender's deadline or
+delivery view. Conflicting terminals within that role display the first observed
+candidate; all source-attributed candidates remain available, including original
+state, evidence kind, execution attempt and supersession reference. A correction
+reference alone does not erase previous evidence. `cancelled` displays as
+`canceled` while preserving the original value. Exact event retries do not add
+candidates; changed immutable identities fail explicitly.
+
+This component does not infer a root run outcome from children, model/tool ends,
+or the absence of active tasks. The full projector still needs transactional
+checkpoints and change history, all event families and ancestry, bounded storage
+and queries, retention/rebuild handling, coverage and access-controlled APIs.
+M4 acceptance and the M5–M7 release gates remain open.
