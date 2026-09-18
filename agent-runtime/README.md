@@ -93,6 +93,22 @@ evidence whose loss marker/export intent must commit before deletion. Reopening
 preserves the committed cleanup. A separate case verifies one optional effect
 and durable loss reporting after capacity returns.
 
+The opt-in `tests/agentd/test_trace_linux_quota.py` qualification runs only as
+root on jim-eq (`RUN_AGENTD_USER_QUOTA=1` for pytest, or execute the file
+directly with Python). It creates an owned ext4 user-quota fixture, drops the
+writer to UID 65534 with no effective capabilities, and verifies allocation
+refusal, charging of unlinked open files across writers, atomic task/slot
+rollback, reserved-slot completion, pinned-reader refusal and SIGKILL recovery.
+The fixture unmounts and detaches its own loop device before deleting scratch.
+
+This establishes a Linux enforcement mechanism for UID-charged allocations,
+including file/directory blocks and SQLite journals. Shared filesystem metadata
+and the test backing image are separate infrastructure, explicitly outside that
+user quota. Its synthetic slots complete at the fixture's database admission
+ceiling; this does not prove completion at arbitrary filesystem exhaustion or
+implement production reservations, migration, restore, or cross-platform support.
+The existing deployed stores remain unchanged by this qualification.
+
 
 The runtime suite includes owned child-process SIGKILL tests at journal commit
 and side-effect boundaries, plus restore staging/activation boundaries. They use temporary stores and do not stop a running
