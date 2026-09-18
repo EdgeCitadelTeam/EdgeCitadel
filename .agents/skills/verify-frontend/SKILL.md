@@ -1,28 +1,18 @@
 ---
 name: verify-frontend
-description: Use when verifying changes that touch frontend/ — runs production build and targeted Playwright spec, with explicit fallbacks if the e2e environment is unavailable.
+description: Verify frontend changes with scoped tests and build; exercise changed interactions in the browser when needed.
 ---
 
-# Verify a frontend change
+# Frontend verification
 
-## Steps
+For frontend code changes, run `npm run lint`, the affected unit tests, and
+`npm run build` from `frontend/`. Documentation-only changes need none of these.
 
-1. Run the production build:
-   ```bash
-   cd frontend && npm run build
-   ```
-   Build must succeed with zero errors.
+For changed user interactions or page composition, run the relevant Playwright
+spec from `e2e/` (`npm test -- <spec>`). Inspect visible layout changes in a browser.
+Broaden to the full suite for shared navigation or application-wide behavior.
+A unit-only internal change does not automatically need browser testing.
 
-2. Run targeted Playwright coverage for the affected feature:
-   ```bash
-   cd e2e && npm test -- <relevant spec or feature pattern>
-   ```
-   For broader changes (multiple components, routing, layout), run the full suite: `cd e2e && npm test`.
-
-3. If the change is visible in the UI, open the affected page in a browser and confirm visually. Test the golden path and one edge case.
-
-## Rules
-
-- Curl-only checks are NOT sufficient for UI changes. Playwright is the gate.
-- If the e2e environment is not available (test stack not running, network unavailable), say so explicitly. Do not claim success based on build alone.
-- If you cannot run a browser, say so explicitly. Type checking and build success do not verify feature correctness.
+Reuse checks for unchanged frontend code. If browser/integration testing is
+unavailable, state the unverified behavior; a build or curl response is not proof
+of UI correctness.

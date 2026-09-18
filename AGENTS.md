@@ -1,83 +1,45 @@
-# edge-research Codex Instructions
+# Working in EdgeCitadel
 
-## How this file is maintained
-- Treat this file as code. PRs that change repo workflow, commands, directories, or quality gates must update it.
-- Keep it under 200 lines. Move long workflow detail into `.agents/skills/<name>/SKILL.md`.
-- Keep one source of truth. Do not duplicate facts across this file, tool-specific instruction files, or `.agents/skills/`.
-- Add "Do Not" entries only for real mistakes that should be prevented next time.
+## Approach
+- Make the smallest complete change that solves the request. Reuse existing code;
+  avoid speculative abstractions, compatibility layers, and configuration.
+- Inspect relevant code and nested instructions before editing. Ask only when a
+  material ambiguity cannot be resolved from the request or repository.
+- Preserve unrelated user changes. Remove code/tests made obsolete by the change;
+  broader cleanup should have evidence that the behavior is unused or superseded.
+- Use a feature branch and focused Conventional Commits. Keep PR descriptions
+  about the problem, resulting behavior, and relevant verification.
+- Plans and design documents are useful for substantial uncertainty, not required
+  artifacts for routine fixes. Keep temporary work in `local-docs/`.
 
-## Engineering behavior
-- Think before coding. State assumptions, surface ambiguity, and ask when the request has materially different interpretations.
-- Prefer the simplest working design. Do not add features, abstractions, configurability, or speculative error handling that the task does not need.
-- Make surgical changes. Touch only what the request requires, match local style, and leave unrelated cleanup for a separate task.
-- Clean up only your own mess. Remove imports, variables, functions, or files made obsolete by your change; do not delete pre-existing dead code unless asked.
-- Define success criteria for non-trivial work. For fixes, reproduce the failure first when practical; for refactors, verify behavior before and after.
-- Every changed line should trace back to the user's request.
+## Verification
+- Choose checks for the changed behavior and its callers. Start with focused
+  tests; broaden for shared contracts, cross-component changes, or failures.
+- Documentation-only changes need content/link review, not builds or a stack.
+- Reuse passing results when the tested code and dependencies have not changed.
+  Do not repeat suites solely because another commit is being created.
+- Use `.agents/skills/commit-check/SKILL.md` to select checks. The `verify-*`
+  recipes explain subsystem checks when needed; they are not cumulative gates.
+- Report what ran and any relevant limitations. Skips are not passing evidence.
+- CI and release workflows retain their broader checks. Never bypass hooks.
 
-## Repo map
-- `aggregator/` - Python FastAPI backend, NATS subscriptions, SQLite persistence
-- `frontend/` - React/Vite dashboard; the only UI source root
-- `e2e/` - Playwright end-to-end tests
-- `agent-runtime/` - agentd, Agent Package runtime, schemas, SDK protocols, validation, and tests
-- `agent-packages/` - Installable Agent Packages and developer examples
-- `plugins/` - Native Plugins for Pi, Claude Code, and Codex
-- `edgecitadel/` - Python distribution entrypoint; packaged runtime assets are assembled at build time
-- `docs/` - Tracked project guides and stable architecture/wiki documentation
-- `local-docs/` - Ignored local implementation plans, acceptance transcripts, and research notes
+## Repository map
+- `aggregator/`: FastAPI backend, NATS subscriptions, SQLite persistence.
+- `frontend/`: React/Vite dashboard; `e2e/`: Playwright and owned test stacks.
+- `agent-runtime/`: agentd, package runtime, SDK, validation and tests.
+- `agent-packages/`: installable Agents; `plugins/`: native host integrations.
+- `edgecitadel/`: Python distribution; `scripts/` and `deploy/`: CLI/deployment.
+- `docs/`: maintained guides; `local-docs/`: ignored plans and local evidence.
 
-## Commands
-- Newcomer setup (guided create/join, messaging, and Plugins): `./scripts/edgecitadel install`
-- Create a Core: `./scripts/edgecitadel create` (shared local/Tailscale/custom guide); automation uses `--network`, custom `--bind-address`, and `--yes` for explicit access changes
-- Enroll or replace a host enrollment: `./scripts/edgecitadel invite --node-id <node-id>` reuses saved remote endpoints, then `./scripts/edgecitadel join '<invitation>'`; replacement and Plugin reconnection details: `docs/onboarding.md`.
-- Install a Managed Agent: `./scripts/edgecitadel agent install <package-path>`
-- Inspect the local service: `./scripts/edgecitadel service status`
-- Experimental Core collector: `EDGECITADEL_TRACE_COLLECTOR=1` in the Aggregator environment (raw Compose forwards it); default off. Contract and limits: `docs/architecture/execution-trace-contract.md`.
-- Core collector control: administrator-authenticated `POST /api/system/telemetry/control`; lifecycle and credential semantics: `docs/architecture/execution-trace-contract.md`.
-- Read-only Core telemetry inspection: `python -m aggregator.trace_inspect <core.db>`; views, epoch-fenced pagination and limits: `docs/architecture/execution-trace-contract.md`.
-- Source telemetry control: `python -m edgecitadel_agentd.trace_control --state-dir <agentd-dir> stop|start|retry`; scope retry, authorization and lifecycle semantics: `agent-runtime/README.md`.
-- Read-only source telemetry inspection: `python -m edgecitadel_agentd.trace_inspect <agentd.sqlite3>`; environment, pagination and evidence limits: `agent-runtime/README.md`.
-- Experimental source sync: `EDGECITADEL_TRACE_SYNC=1` in the agentd process environment; default off. Lifecycle/status and qualification limits: `agent-runtime/README.md`.
-- Homebrew formula style: `brew style deploy/homebrew/Formula/edgecitadel.rb`
-- Python package: `python -m build` then install the wheel in a clean virtual environment
-- Python release: publish a GitHub Release whose `v<version>` tag matches `pyproject.toml`; `.github/workflows/publish-pypi.yml` owns trusted PyPI publication
-- Root Python setup: `python3.12 -m venv .venv && .venv/bin/pip install -r scripts/requirements-test.txt`
-- Root Python tests: `.venv/bin/python -m pytest -q tests scripts/tests deploy/tests schemas/tests`
-- Managed Compose model gate: `RUN_CORE_COMPOSE_MODEL=1 .venv/bin/python -m pytest -q scripts/tests/test_core_network.py` (local Engine 28+ / Compose 2.24.4+; skips are not proof)
-- Render NATS config before raw Compose: `./scripts/render-nats-conf.sh` (MQTT off unless `EC_ENABLE_MQTT=1`); managed Core renders from the same template.
-- Full stack: `docker compose up --build -d`
-- Restart: `docker compose down && docker compose up --build -d`
-- Backend setup: `cd aggregator && python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
-- Prepare an offline Core restore: `aggregator/.venv/bin/python -m aggregator.trace_restore <snapshot.db> <new-output.db>`; epoch rotation and activation limits: `docs/architecture/execution-trace-contract.md`.
-- Backend dev: `aggregator/.venv/bin/uvicorn aggregator.main:app --host 0.0.0.0 --port 8000 --reload`
-- Frontend dev: `cd frontend && npm run dev`
-- Frontend build: `cd frontend && npm run build`
-- Frontend tests: `cd frontend && npm test`
-- Deterministic E2E tests: `cd e2e && npm test`; external Managed Agent suites require a prepared stack and run with `APP_URL=... AGG_URL=... npm run test:external-plugins`
-- Agent Package checks (smoke): `cd agent-runtime && python -m pytest -q && python -m edgecitadel_supervisor validate ../agent-packages/examples/echo`; see `agent-runtime/README.md` for the full contributor gate and opt-in macOS filesystem-exhaustion check.
-- Managed model delegation: configure the scoped MCP mode described in `agent-runtime/README.md`; recipient grants come from the installed package manifest.
-- Bound Hermes server: `python -m edgecitadel_hermes_plugin.server`; Python 3.12 environment, profile/toolset and schema setup are documented in `agent-packages/hermes/README.md`.
+## References
+- Development and commit conventions: `CONTRIBUTING.md`.
+- Setup/enrollment: `docs/onboarding.md`; runtime/packages: `agent-runtime/README.md`.
+- Experimental tracing: `docs/architecture/execution-trace-contract.md`.
+- Build/release checks: `.github/workflows/`; host dependencies: `deploy/manifest.toml`.
 
-## Working rules
-- Inspect any nested `AGENTS.md` before editing in a subdirectory.
-- Keep changes narrow on `main`; prefer feature branches and PRs.
-- Conventional Commits: `feat|fix|docs|refactor|perf|test|chore|ci|build(<scope>): <desc>`. Scopes: `aggregator`, `frontend`, `nats`, `mqtt`, `dashboard`, `e2e`, `client`, `infra`.
-- Cross-subsystem changes: leave all touched areas consistent in one pass; document verification per touched subsystem.
-- Use `--force-with-lease`, never plain `--force`.
-
-## Quality gates
-- No secrets, tokens, or local config in committed files.
-- Config changes update `.env.example`.
-- New host-level dependency (Phase 5+): edit `deploy/manifest.toml` only; deployment automation consumes it.
-- PyPI releases must pass the tag/version check, Twine validation, and clean installed-wheel smoke in `publish-pypi.yml`.
-- Verification: invoke the relevant `verify-*` skill (`verify-frontend`, `verify-backend`, `verify-infra`). Default smoke: `curl http://localhost:8222/healthz` and `curl http://localhost/api/system/status`.
-- Curl-only checks are not sufficient for UI or workflow changes. Playwright via `cd e2e && npm test` is the gate.
-
-## Do Not
-- Don't add new files at repo root; top-level config only.
-- Don't commit `.Codex/settings.local.json`, `.env`, or anything in `data/`.
-- Don't treat curl checks as sufficient for UI/workflow changes; Playwright is the gate.
-- New entries: see "How this file is maintained" above. Format: `- YYYY-MM-DD Don't <thing>. (incident: <one-line context>)`
-
-## Where to look
-- Operational workflows: `.agents/skills/` (verify-*, release, smoke-check, etc.)
-- Hook/permission config: `.claude/settings.json`
+## Boundaries
+- Keep credentials, `.env`, local settings and runtime data out of commits.
+- Update `.env.example` when changing environment configuration, and update the
+  relevant guide when changing a user-facing workflow.
+- Preserve authorization for publishing and destructive operations; task scope
+  and user instructions determine approval, not an extra repository checklist.

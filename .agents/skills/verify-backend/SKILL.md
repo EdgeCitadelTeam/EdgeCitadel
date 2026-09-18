@@ -1,28 +1,17 @@
 ---
 name: verify-backend
-description: Use when verifying changes to aggregator/ — Python syntax check plus runtime smoke when the stack is available.
+description: Verify changed backend behavior with focused tests; use integration checks when the affected boundary requires them.
 ---
 
-# Verify a backend change
+# Backend verification
 
-## Steps
-
-1. Syntax check all Python in aggregator:
-   ```bash
-   cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m compileall -q .
-   ```
-   Must complete with no errors.
-
-2. If the change touches API behavior, NATS subscriptions, or persistence, run the runtime smoke when the stack is available:
-   ```bash
-   curl http://localhost:8222/healthz
-   curl http://localhost/api/system/status
-   ```
-   Both must return 2xx.
-
-3. If the change touches messaging contracts (subjects, payloads), confirm schemas, publishers, subscribers, and contract tests were updated together.
-
-## Rules
-
-- If the stack is not running, syntax check is the minimum. Say so explicitly — do not claim runtime correctness without runtime evidence.
-- For changes that only affect internal helpers (no API, no messaging, no persistence), syntax check is sufficient.
+- Run the relevant tests in `aggregator/tests`; expand to the suite when shared
+  backend behavior changes. Tests that import the changed modules cover syntax.
+- For API changes, use the affected API tests. For NATS or persistence changes,
+  include the relevant broker or database integration test.
+- Use a live smoke check only when service wiring/startup is part of the change.
+  Prefer an owned fixture; do not restart a shared stack for an internal edit.
+- Documentation-only edits need no runtime checks. Removing unused modules needs
+  reference/caller inspection and appropriate regression tests, not a deployment.
+- Report unavailable integration evidence without claiming it passed. Curl alone
+  does not verify application behavior.

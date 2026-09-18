@@ -1,77 +1,48 @@
 ---
 name: commit-check
-description: Pre-commit quality gate. Run before every commit to verify lint, types, tests, and commit message format. Use proactively before git commit.
+description: Select relevant pre-commit checks and reuse valid results; do not run every subsystem for every commit.
 ---
 
-# Pre-Commit Quality Check
+# Check the change before committing
 
-Before committing, verify ALL of the following:
+Inspect the staged diff, including deletions, and run `git diff --cached --check`.
+Check for accidental credentials/local files and confirm a Conventional Commit
+subject (see `CONTRIBUTING.md`). Select verification by behavior, not extension
+alone. A deleted file may require checking callers instead of testing that file.
 
-## 1. Identify Changed Files
+| Change | Local verification |
+|---|---|
+| Documentation or agent instructions | Review content, links and consistency; no application suite or stack restart |
+| Python behavior | Pinned Ruff lint/format on changed files, plus focused pytest tests and affected callers |
+| Typed SDK or shared validators | Relevant maintained mypy command below, plus contract tests |
+| Frontend behavior | Frontend lint, affected unit tests and build; browser/E2E coverage for changed user interactions |
+| E2E helper or fixture | Its tests and the affected Playwright spec; frontend build only if frontend/build inputs changed |
+| Deployment, NATS or shared configuration | Validate rendered config and affected integration path; see `verify-infra` |
+| Packaging or dependencies | Package/build or installed-artifact checks for the affected distribution |
+
+Reuse the existing project environment when dependencies are adequate. Python
+lint/format uses the Ruff version in `scripts/requirements-test.txt` and target
+`py312`; do not upgrade tooling as part of an unrelated task. Pytest locations:
+`aggregator/tests`, `agent-runtime/tests`, `scripts/tests`, `tests`, `deploy/tests`,
+and `schemas/tests`. Select applicable files or test names first. Running the
+root suite already includes `scripts/tests`; do not run it twice.
+
+Maintained typing commands, from `agent-runtime/`:
+
 ```bash
-git diff --name-only --cached  # staged files
-git diff --name-only           # unstaged changes
+python -m mypy --strict src/edgecitadel_plugin_sdk tests/typecheck_sdk_consumer.py
+python -m mypy --strict src/edgecitadel_plugin_runtime/validator.py src/edgecitadel_plugin_runtime/jetstream.py ../aggregator/validator.py ../aggregator/jetstream_bootstrap.py
 ```
 
-## 2. Python Quality (if .py files changed)
-```bash
-uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ agent-runtime/ agent-packages/ tests/ deploy/tests/ e2e/fixture_agent/
-uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ agent-runtime/ agent-packages/ tests/ deploy/tests/ e2e/fixture_agent/ --check
-cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m compileall -q .
-cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m pytest -q
-uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest -q scripts/tests
-uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest tests scripts/tests deploy/tests schemas/tests -x --tb=short
-```
-All must pass with zero errors.
+Run the command for the changed typed surface. Aggregator has no passing global
+strict-type baseline; do not add broad suppressions or claim otherwise.
 
-The Aggregator predates strict typing and does not currently have a passing
-repository-wide mypy baseline. Do not claim that it does. Changes to the typed
-Agent Runtime must run its maintained strict type gate:
+Broaden testing when the dependency surface or a failure warrants it. Reuse
+passing checks if their source, dependencies and relevant configuration are
+unchanged; commit boundaries alone do not invalidate results. Do not create
+validation worktrees or rebuild environments for routine commits.
 
-```bash
-cd agent-runtime
-uv run --isolated --with-editable '.[type]' python -m mypy --strict src/edgecitadel_plugin_sdk tests/typecheck_sdk_consumer.py
-uv run --isolated --with-editable '.[type]' python -m mypy --strict src/edgecitadel_plugin_runtime/validator.py src/edgecitadel_plugin_runtime/jetstream.py ../aggregator/validator.py ../aggregator/jetstream_bootstrap.py
-```
-
-Do not add broad suppressions to make a changed module pass. If a change begins
-typing an Aggregator module, run strict mypy on that module and its typed
-dependencies and document the narrowed scope.
-
-## 3. Frontend Quality (if .js/.jsx files changed)
-```bash
-cd frontend && npm run lint
-cd frontend && npm test
-cd frontend && npm run build
-```
-Lint, unit tests, and build must succeed with zero errors.
-
-## 4. Commit Message Validation
-Verify the commit message follows Conventional Commits:
-```
-<type>(<scope>): <description>
-```
-- type: feat|fix|docs|style|refactor|perf|test|chore|ci|build
-- scope: aggregator|frontend|nats|mqtt|dashboard|e2e|client|infra
-- description: imperative mood, lowercase, no period at end
-
-## 5. Security Check
-```bash
-grep -rn "password\|secret\|token\|api.key" --include="*.py" --include="*.js" --include="*.jsx" $(git diff --name-only --cached) 2>/dev/null
-```
-Flag any matches for manual review.
-
-## 6. Maintainer Check
-If the change introduces new features, API endpoints, or NATS subjects:
-- Are user-facing instructions updated where the repository currently maintains them?
-
-## Report
-Output a pass/fail checklist:
-- [ ] Lint clean
-- [ ] Applicable maintained types check
-- [ ] Tests pass
-- [ ] Commit message valid
-- [ ] No secrets detected
-- [ ] User-facing instructions updated (if applicable)
-
-Block the commit if any required check fails.
+Before committing, resolve failures relevant to the change. Report the checks
+run, their results, and relevant checks unavailable or deferred. No fixed
+checklist or separate verification document is required. CI/release workflows
+remain the authority for their own full gates; do not skip hooks.

@@ -1,35 +1,24 @@
 ---
 name: verify-infra
-description: Use when verifying shared infrastructure or workflow changes (Docker compose, nginx, agent setup, root-level config) — full stack restart plus Playwright.
+description: Verify deployment and shared configuration changes at their affected boundary; documentation and instruction edits need no stack.
 ---
 
-# Verify a shared/infra change
+# Infrastructure verification
 
-Use this when the change affects multiple subsystems, Docker wiring, nginx config, repo-shared config, or anything that touches the operator/agent workflow.
+Choose the check for the actual change:
 
-## Steps
+- Instructions, plans and workflow documentation: review content and referenced
+  commands/paths. Do not start Docker or run application suites.
+- Config renderers or deployment helpers: run their focused tests and validate
+  the rendered configuration.
+- Compose, nginx, NATS or service-startup behavior: exercise the affected path in
+  an owned stack. Use `e2e`'s disposable runner when a Playwright workflow applies;
+  it builds, waits for health and cleans up its own resources.
+- Shared end-to-end behavior: broaden to the relevant integration suites. Use the
+  full Playwright suite when the change affects the whole application.
 
-1. Restart the full stack:
-   ```bash
-   docker compose down && docker compose up --build -d
-   ```
-   All services must come up healthy (`docker compose ps` shows running, no restart loops).
-
-2. Smoke check the core endpoints:
-   ```bash
-   curl http://localhost:8222/healthz
-   curl http://localhost/api/system/status
-   ```
-   Both must return 2xx.
-
-3. Run at least one Playwright spec that exercises the affected workflow:
-   ```bash
-   cd e2e && npm test -- <relevant spec>
-   ```
-   For broad changes, run the full suite: `cd e2e && npm test`.
-
-## Rules
-
-- Curl alone is NOT sufficient for shared workflow or UI delivery changes. Playwright is the gate.
-- If the docker environment is unavailable, say so explicitly — do not claim infra correctness without runtime evidence.
-- If verification cannot run end-to-end, state which steps were skipped and why.
+Do not run `docker compose down` against a shared stack just to verify an edit.
+A separate restart is unnecessary when the owned runner already rebuilt and
+started the affected services. Health endpoints are useful diagnostics, not a
+replacement for testing the changed behavior. State any environment limitation
+and the behavior left unverified.

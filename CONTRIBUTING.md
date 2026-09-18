@@ -31,22 +31,16 @@ those shared sources.
 
 ### 3. Verify quality
 
-```bash
-# Python gates are defined in .agents/skills/commit-check/SKILL.md.
-uv run --isolated --with-requirements scripts/requirements-test.txt ruff check --target-version py312 aggregator/ scripts/ agent-runtime/ agent-packages/ tests/ deploy/tests/ e2e/fixture_agent/
-uv run --isolated --with-requirements scripts/requirements-test.txt ruff format --target-version py312 aggregator/ scripts/ agent-runtime/ agent-packages/ tests/ deploy/tests/ e2e/fixture_agent/ --check
-cd aggregator && uv run --isolated --with-requirements requirements-dev.txt python -m pytest -q
-cd .. && uv run --isolated --with-requirements scripts/requirements-test.txt python -m pytest -q tests scripts/tests deploy/tests schemas/tests
+Choose checks for the changed behavior using
+[commit-check](.agents/skills/commit-check/SKILL.md). Start with affected tests and
+callers; broaden for shared contracts or failures. Reuse passing results when
+the tested code and dependencies are unchanged. Documentation-only edits need
+content/link review, not application suites.
 
-# Frontend
-cd frontend && npm run lint && npm test && npm run build
-
-# Deterministic E2E owns and cleans up a disposable stack.
-cd e2e && npm test
-
-# Optional upstream/model-dependent Managed Agent suites use a prepared external stack.
-APP_URL=http://localhost AGG_URL=http://localhost:8000 npm run test:external-plugins
-```
+For browser workflows, `cd e2e && npm test -- <spec>` owns a disposable stack;
+there is no need to restart a shared stack first. External model-dependent
+Managed Agent suites require a prepared stack and use `npm run test:external-plugins`.
+CI and release workflows keep their broader checks.
 
 ### 4. Commit with Conventional Commits
 
@@ -69,7 +63,7 @@ test(e2e): add agent offline detection tests
 
 PRs must include:
 - Clear description of what changed and why
-- Test coverage for new behavior
+- Relevant verification and any material limitations
 
 ## Code Review Standards
 
