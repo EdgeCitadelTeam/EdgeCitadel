@@ -161,3 +161,61 @@ async def _register_shell(router):
         "payload": card,
     }
     await router.on_register(_fake_msg("agents.shell-1.register", _bytes(env)))
+
+
+@pytest.mark.asyncio
+async def test_stop_releases_canceled_pull_inbox_before_connection_drain(
+    tmp_path, envelope_schema_path, card_schema_path
+):
+    import asyncio
+    from nats.aio.subscription import Subscription
+    from nats.js.client import JetStreamContext
+
+    app = AggregatorApp(
+        nats_url="nats://unused",
+        nats_token="unused",
+        db_path=str(tmp_path / "t.db"),
+        envelope_schema=envelope_schema_path,
+        card_schema=card_schema_path,
+    )
+    # Real nats-py queue/drain behavior, without a live broker. An unread pull
+    # response remains after fetch cancellation; callback subscriptions still
+    # need connection drain, but this inbox has no remaining reader.
+    nc = MagicMock(is_closed=False, is_draining=False, is_reconnecting=False)
+    nc.flush = AsyncMock()
+    nc._send_unsubscribe = AsyncMock()
+    subscription = Subscription(nc, id=7, subject="_INBOX.owned-test")
+    subscription._pending_queue.put_nowait(object())
+    active = {7: subscription}
+    nc._remove_sub.side_effect = active.pop
+
+    async def drain():
+        for pending in tuple(active.values()):
+            await pending._drain()
+        nc.is_closed = True
+
+    nc.drain = AsyncMock(side_effect=drain)
+    app.router.nc = nc
+    js = MagicMock()
+    app._inbox_subscription = JetStreamContext.PullSubscription(
+        js, subscription, "AGENT_INBOX", "aggregator_inbox", b"_INBOX.owned-test"
+    )
+    canceled = asyncio.Event()
+    started = asyncio.Event()
+
+    async def reader():
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            canceled.set()
+
+    app._inbox_task = asyncio.create_task(reader())
+    await started.wait()
+    await asyncio.wait_for(app.stop(), timeout=1)
+    assert canceled.is_set()
+    assert not active
+    nc.drain.assert_awaited_once()
+    js.delete_consumer.assert_not_called()
+    await app.stop()
+    nc.drain.assert_awaited_once()

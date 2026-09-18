@@ -353,6 +353,7 @@ class AggregatorApp:
     ):
         self._stopping = False
         self._inbox_task = None
+        self._inbox_subscription = None
         self.nats_url = nats_url
         self.nats_token = nats_token
         self.router = MessageRouter(
@@ -389,6 +390,7 @@ class AggregatorApp:
         psub = await self.router.js.pull_subscribe(
             "agents.aggregator.inbox", durable="aggregator_inbox"
         )
+        self._inbox_subscription = psub
         self._inbox_task = asyncio.create_task(self._drain_own_inbox(psub))
 
         await self._publish_self_register()
@@ -400,8 +402,17 @@ class AggregatorApp:
             self._inbox_task.cancel()
             await asyncio.gather(self._inbox_task, return_exceptions=True)
             self._inbox_task = None
+        subscription, self._inbox_subscription = self._inbox_subscription, None
         if self.router.nc is not None and not self.router.nc.is_closed:
-            await self.router.nc.drain()
+            try:
+                # A canceled pull reader cannot consume queued deliveries/status
+                # frames. Connection drain would wait for that queue forever.
+                # Unsubscribe only the local inbox, keeping the durable consumer
+                # and its unacknowledged messages available for redelivery.
+                if subscription is not None:
+                    await subscription.unsubscribe()
+            finally:
+                await self.router.nc.drain()
 
     async def _publish_self_register(self) -> None:
         card = {
