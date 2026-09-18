@@ -214,7 +214,7 @@ def test_read_snapshot_cannot_mix_old_cursor_with_new_node(core):
     errors, writes = [], []
 
     def write_between_state_and_node(sql):
-        if "FROM trace_projected_tasks" not in sql or writes:
+        if 'FROM "trace_projected_tasks"' not in sql or writes:
             return
         writes.append(True)
         try:

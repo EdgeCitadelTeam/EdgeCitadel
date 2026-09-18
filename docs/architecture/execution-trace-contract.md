@@ -2540,3 +2540,41 @@ than 1,000 scopes instead of silently truncating. This is not total storage or
 worst-case transaction-cost qualification: interval/history growth, bounded
 retention, generation rebuild, public expansion and access-controlled API/live
 conversion remain required before jim-eq rollout and M5 acceptance.
+
+### Shadow rebuild and generation lifecycle
+
+Projection reads and writes resolve a generation catalog inside their SQLite
+transaction. Each generation owns separate derived tables and indexes in the
+same Core file; raw ingestion tables remain shared. SQL uses explicit, validated
+identifier bindings for derived objects only. Rebuild creates a fresh candidate
+and replays retained raw/receipt inputs in the usual bounded batches, preserving
+its own checkpoint across restart. Normal readers keep the active generation.
+Internal inspection can compare candidate graphs before activation.
+
+Activation takes one writer transaction, verifies the candidate version and
+collector epoch, and requires its ingestion cursor to equal the current Core
+high-watermark. A late ingestion commit requires another catch-up pass. The
+candidate must still name the same active predecessor. Switching the catalog
+retires the predecessor atomically; an existing read snapshot remains on its
+old generation. New requests reject old generation cursors and must resnapshot.
+Neither activation nor cancellation rolls back task state or raw ingestion.
+
+At most two derived generations may exist through this lifecycle. Another build
+requires resuming/cancelling the candidate or cleaning the retired predecessor.
+A compatible predecessor can be prepared for rollback before cleanup starts:
+it receives a fresh generation, catches up through the same projector, and uses
+the same activation fence. Thus rollback never makes an earlier cursor valid
+again. Collector-epoch or version incompatibility refuses that path.
+
+Retired cleanup explicitly ends rollback eligibility and removes at most the
+requested rows from one owned table per transaction, dropping only empty tables.
+It does not delete raw inputs, VACUUM, or claim filesystem quota reclamation.
+A cancelled candidate uses the same cleanup path. Expired raw payloads replay
+as unattributed gaps; unavailable graph identities are never resurrected from
+the predecessor. Logical equality is qualified against the same retained inputs
+and commit order, not against data that has since expired.
+
+This is a disabled database lifecycle component. It is not retained-cursor
+playback compaction, history/base-snapshot retention, deployment orchestration,
+or physical storage qualification. Those and public APIs/live conversion remain
+required before production rollout and full M5 acceptance.
