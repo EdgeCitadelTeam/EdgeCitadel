@@ -6,6 +6,7 @@ import os
 import secrets
 import time
 import uuid
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
@@ -82,7 +83,15 @@ async def _publish_direct_command(router, envelope: dict) -> None:
 
 
 def make_app(for_testing: bool = False) -> FastAPI:
-    app = FastAPI(title="EdgeCitadel Aggregator", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            await _startup()
+            yield
+        finally:
+            await _shutdown()
+
+    app = FastAPI(title="EdgeCitadel Aggregator", version="0.1.0", lifespan=lifespan)
     state: dict = {"app": None}
 
     # Keep the historical filename to avoid an unsafe implicit state migration.
@@ -102,8 +111,36 @@ def make_app(for_testing: bool = False) -> FastAPI:
 
     db.init_db(db_path)
 
-    @app.on_event("startup")
-    async def _startup():
+    trace_router = None
+    read_mode = os.environ.get("EDGECITADEL_TRACE_READS", "0")
+    if read_mode not in {"0", "1"}:
+        raise ValueError("trace_read_configuration_unavailable")
+    if read_mode == "1":
+        from .trace_read_routes import make_trace_router
+        from .trace_read_service import TraceReadService
+
+        if os.environ.get("EDGECITADEL_TRACE_COLLECTOR") != "1":
+            raise ValueError("trace_read_collector_required")
+        try:
+            origins = json.loads(os.environ.get("EDGECITADEL_TRACE_ORIGINS", "[]"))
+        except json.JSONDecodeError:
+            raise ValueError("trace_read_configuration_unavailable") from None
+        if not isinstance(origins, list) or any(
+            not isinstance(origin, str) for origin in origins
+        ):
+            raise ValueError("trace_read_configuration_unavailable")
+        reads = TraceReadService(
+            Path(db_path),
+            Path(db_path).parent / "trace-cursor.key",
+            read_token=os.environ.get("EDGECITADEL_TRACE_READ_TOKEN", ""),
+            allowed_origins=set(origins),
+        )
+        trace_router = make_trace_router(reads)
+        # The nested router lifespan drains reads/sockets before this app's
+        # writers. The signing key survives ordinary process restart.
+        app.include_router(trace_router)
+
+    async def _start_services():
         if for_testing:
             state["app"] = None
             state["hub"] = WebSocketHub()
@@ -123,13 +160,13 @@ def make_app(for_testing: bool = False) -> FastAPI:
         hub = WebSocketHub()
         agg.router.hub = hub
         state["hub"] = hub
+        state["app"] = agg
         await agg.start()
         from .memory import MemoryService
 
         mem_svc = MemoryService(nc=agg.router.nc)
-        await mem_svc.start()
         state["memory"] = mem_svc
-        state["app"] = agg
+        await mem_svc.start()
         if os.environ.get("EDGECITADEL_TRACE_COLLECTOR") == "1":
             from .trace_collector import TraceCollectorService
 
@@ -137,14 +174,37 @@ def make_app(for_testing: bool = False) -> FastAPI:
             state["trace_collector"] = collector
             collector.start()
 
-    @app.on_event("shutdown")
+    async def _startup():
+        try:
+            await _start_services()
+            if trace_router is not None:
+                from .trace_projector import TraceProjectorService
+
+                projector = TraceProjectorService(Path(db_path))
+                state["trace_projector"] = projector
+                projector.start()
+        except BaseException:
+            # ASGI servers do not run shutdown after failed startup. Close even
+            # partially started services here, including preconstructed readers.
+            if trace_router is not None:
+                await asyncio.to_thread(reads.close)
+            raise
+
     async def _shutdown():
-        if state.get("trace_collector"):
-            await asyncio.to_thread(state["trace_collector"].close)
-        if state.get("memory"):
-            await state["memory"].stop()
-        if state["app"] and state["app"].router.nc:
-            await state["app"].stop()
+        # ExitStack continues unwinding if one owner reports a close failure.
+        async with AsyncExitStack() as cleanup:
+            if state["app"]:
+                cleanup.push_async_callback(state["app"].stop)
+            if state.get("memory"):
+                cleanup.push_async_callback(state["memory"].stop)
+            if state.get("trace_collector"):
+                cleanup.push_async_callback(
+                    asyncio.to_thread, state["trace_collector"].close
+                )
+            if state.get("trace_projector"):
+                cleanup.push_async_callback(
+                    asyncio.to_thread, state["trace_projector"].close
+                )
 
     @app.get("/api/system/status")
     async def system_status():
@@ -161,6 +221,10 @@ def make_app(for_testing: bool = False) -> FastAPI:
             "nats_connected": nats_connected,
             "jetstream_stream_ok": jetstream_ok,
             "version": "0.1.0",
+            "trace_reads": {"enabled": trace_router is not None},
+            "trace_projection": state["trace_projector"].status()
+            if state.get("trace_projector")
+            else {"state": "disabled"},
             "telemetry": state["trace_collector"].status()
             if state.get("trace_collector")
             else {"enabled": False, "state": "disabled"},

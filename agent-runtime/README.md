@@ -769,3 +769,39 @@ RUN_AGENTD_NATS_INTEGRATION=1 PYTHONPATH=.:agent-runtime/src \
   agent-runtime/.venv/bin/python -m pytest -q \
   agent-runtime/tests/runtime/test_telemetry_test_retention.py
 ```
+
+### Experimental Core trace reads
+
+Set `EDGECITADEL_TRACE_READS=1` alongside `EDGECITADEL_TRACE_COLLECTOR=1`
+in the Core Compose environment to start the projector and mount `/api/traces`
+and `/ws/traces/{trace_id}`. Set a separate `EDGECITADEL_TRACE_READ_TOKEN` to
+32–256 URL-safe characters (generate with `secrets.token_urlsafe(32)`); do not
+reuse the NATS or administrator credential. Set `EDGECITADEL_TRACE_ORIGINS` to a
+JSON array of exact dashboard origins, such as `["https://core.example.com"]`.
+The empty array allows native clients without Origin, but no browser origin.
+Invalid enabled configuration fails startup before connecting services.
+
+HTTP clients send `Authorization: Bearer TOKEN`. WebSocket clients send
+`{"type":"authenticate","token":"TOKEN"}` as their first text frame within
+five seconds; put the durable replay cursor in `after`, never the credential.
+Use the trusted private/encrypted deployment perimeter: this credential grants
+fleet-wide trace access, and does not isolate individual users. Frontend trace
+support is still being implemented.
+
+The Core creates `trace-cursor.key` beside its database, owned by the process
+with mode 0600. Preserve it in private backups to retain cursor validity across
+restart; invalid existing keys fail closed. Rotating the read credential changes
+cursor scope and requires a fresh snapshot. `/api/system/status` reports
+`trace_reads.enabled` and sanitized `trace_projection` worker health. A worker
+waiting for collector initialization or requiring a rebuild does not imply
+readiness; read requests return explicit unavailable errors until ready.
+
+The packaged server uses the websockets transport with a 64 KiB incoming-message
+limit, four queued incoming messages per connection and compression disabled.
+This transport bound applies to all WebSocket routes (including terminal input);
+clients must split larger input. Trace authentication has a stricter 512-character
+application bound, eight admitted sockets and four concurrent read workers.
+The nginx trace path preserves the URI and disables buffering. Shutdown drains
+readers before stopping projector, collector, memory and command services.
+These opt-in interfaces do not establish full M4–M7 acceptance or hard storage
+limits; retained-volume, network-perimeter and full scenario qualification remain.

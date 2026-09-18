@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import time
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
@@ -60,7 +60,14 @@ async def _send(socket: WebSocket, body: dict) -> None:
 
 
 def make_trace_router(service: TraceReadService) -> APIRouter:
-    router = APIRouter()
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            await shutdown()
+
+    router = APIRouter(lifespan=lifespan)
     sockets = asyncio.Semaphore(MAX_SOCKETS)
     stopping = asyncio.Event()
     sessions: set[asyncio.Task] = set()
@@ -248,5 +255,4 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
 
-    router.add_event_handler("shutdown", shutdown)
     return router

@@ -2965,3 +2965,32 @@ ownership/cancellation, SQL deadlines and concurrent key creation. Default app,
 proxy routing, deployment secret provisioning, transport-frame limits and live
 jim-eq verification remain next. These local tests do not accept M4/M5–M7 rollout,
 full access-perimeter security, fleet-scale performance or frontend behavior.
+
+### Opt-in Core startup and transport ownership
+
+`EDGECITADEL_TRACE_READS=1` requires the collector flag and a separate URL-safe
+32–256-character `EDGECITADEL_TRACE_READ_TOKEN`. `EDGECITADEL_TRACE_ORIGINS` is a
+JSON array of exact HTTP(S) origins; the empty array permits native clients with
+no Origin only. Disabled reads create no key, projector or read routes. Enabled
+invalid configuration fails before service connections. The Core persists the
+private cursor key beside its database as `trace-cursor.key` and preserves it
+across restart; a malformed existing key is never silently replaced.
+
+The application lifespan owns command, memory, collector and projector startup;
+partial startup closes acquired owners. The nested read-router lifespan drains
+queries and sockets before the main lifespan stops projector, collector, memory
+and command services. Cleanup continues through a writer close failure. Status
+reports read enablement separately from sanitized projector health and lag.
+Collector/projector readiness remains asynchronous and unavailable reads fail
+explicitly; process startup alone is not readiness.
+
+The packaged Uvicorn websockets transport bounds incoming messages to 64 KiB and
+queues to four messages, with compression disabled. This bound applies to every
+WebSocket route; terminal clients must split larger input. Trace authentication
+still enforces its 512-character frame after transport reassembly. The dedicated
+nginx `/ws/traces/` location preserves URI, disables buffering, and uses 60-second
+read and 10-second send timeouts. Credentials travel in the HTTP authorization
+header or first WS authentication frame, never query strings. Deployment still
+requires its private/encrypted network perimeter; a fleet credential is not
+individual user authorization. These opt-in routes do not close the storage,
+retained-volume, frontend or full M4–M7 qualification gates.
