@@ -91,12 +91,12 @@ def test_batch_checkpoint_replay_conflicts_and_reopen(core):
     assert ingest(core, changed).outcome == "conflict"
     caught_up = projection.project_batch(core)
     assert caught_up.ingest_cursor == 6
-    assert caught_up.change_cursor == 4
+    assert caught_up.change_cursor == 6
     assert projection.project_batch(core) == caught_up
     changes = projection.read_changes(core, generation=state.generation, after=0)[
         "changes"
     ]
-    assert [change["ingest_seq"] for change in changes] == [1, 2, 3, 4]
+    assert [change["ingest_seq"] for change in changes] == [1, 2, 3, 4, 5, 6]
     assert changes[2]["change"]["node"] == expected.node
     assert changes[3]["change"]["node_updates"][0]["node"]["kind"] == "model"
     path = core.execute("PRAGMA database_list").fetchone()[2]

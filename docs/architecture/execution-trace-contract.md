@@ -2506,3 +2506,37 @@ cursors under the public bounds. The internal small-graph reader refuses graphs
 over 500 nodes/1,000 edges rather than silently omitting persisted data. Source-wide
 coverage, public expansion, rebuild/activation, retention and access-controlled
 API/live integration remain required before rollout or M5 acceptance.
+
+### Version 3 snapshot coverage projection
+
+The disabled projector now consumes raw observations and receipt-only ingestion
+commits in the same atomic batch. Duplicate exports update known run/source
+membership and reconciliation without adding graph observations. Rejected or
+conflicting bodies cannot establish run identity; their durable receipt records
+source-level uncertainty. Security observations remain diagnostics and never
+fabricate graph nodes. Versions 1 and 2 require rebuild, not checkpoint reuse.
+
+Coverage reads share the graph/checkpoint snapshot. Coalesced intervals contain
+only consumed receipt positions and durable loss ranges; future Core ingestion
+cannot advance an earlier projection view. Loss markers target their declared
+source epoch/export generation, including restored older epochs. Expired marker
+payloads can still contribute durable Core loss receipts, but cannot recover
+missing run identity. Large loss ranges are stored as intervals, not expanded
+into individual positions. Internal changes retain the receipt, loss ranges,
+source fact and changed scope frontiers.
+
+A run-specific loss marker or producer drop reports a run gap. Source-wide loss,
+rejection, restore or expired evidence reports uncertainty for independently
+known member sources, without guessing which run lost observations. Later
+accepted positions can repair a positioned run loss; unpositioned producer drops
+have no such proof. Historical source uncertainty remains visible. Unsupported
+families come only from explicit run-correlated evidence, never from current
+registry capabilities. Task/run outcome remains independent of these flags.
+
+Event v1 has no authoritative participant-set closure. Consequently even a
+successful, reconciled run remains partial with unknown sources; reconciliation
+is explicitly limited to known source scopes. The internal reader refuses more
+than 1,000 scopes instead of silently truncating. This is not total storage or
+worst-case transaction-cost qualification: interval/history growth, bounded
+retention, generation rebuild, public expansion and access-controlled API/live
+conversion remain required before jim-eq rollout and M5 acceptance.

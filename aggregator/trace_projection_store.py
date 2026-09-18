@@ -1,7 +1,7 @@
 """Durable graph projection, separate from ingestion and execution authority.
 
-The v2 graph projector is not enabled by Aggregator startup. Coverage, retention
-and generation rebuild must be completed before rollout.
+The v3 graph projector is not enabled by Aggregator startup. Retention, public
+interfaces and generation rebuild must be completed before rollout.
 Projection/checkpoint changes use one Core SQLite transaction; ingestion never
 waits for a projector acknowledgment and is not undone by projection failure.
 """
@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from edgecitadel_agentd.trace_contract import event_sha256
 
+from . import trace_projection_coverage as coverage
 from .trace_payload_read import read_payload
 from .trace_graph_projection import entity_claims, relationship_claims, resolve_graph
 from .trace_task_projection import (
@@ -25,7 +26,7 @@ from .trace_task_projection import (
     task_node,
 )
 
-VERSION = 2
+VERSION = 3
 MAX_BATCH = 64
 
 SCHEMA = (
@@ -62,7 +63,7 @@ SCHEMA = (
         cursor INTEGER PRIMARY KEY,
         ingest_seq INTEGER NOT NULL UNIQUE,
         trace_id TEXT,
-        kind TEXT NOT NULL CHECK(kind IN ('task_upsert','entity_upsert','relationships','payload_expired')),
+        kind TEXT NOT NULL CHECK(kind IN ('task_upsert','entity_upsert','relationships','payload_expired','source_fact','receipt')),
         change_json TEXT NOT NULL
     )""",
     """CREATE INDEX IF NOT EXISTS trace_projection_trace_changes
@@ -84,7 +85,7 @@ SCHEMA = (
         parent_id TEXT NOT NULL,child_id TEXT NOT NULL,first_ingest_seq INTEGER NOT NULL,
         PRIMARY KEY(trace_id,edge_id)
     )""",
-)
+) + coverage.SCHEMA
 
 
 @dataclass(frozen=True)
@@ -322,11 +323,11 @@ def _record_relationships(
 
 
 def project_batch(db: sqlite3.Connection, *, limit: int = MAX_BATCH) -> ProjectionState:
-    """Consume at most limit raw events; checkpoint, evidence and changes are atomic.
+    """Consume at most limit ingestion commits; checkpoint, evidence and changes are atomic.
 
-    Source-wide coverage/security are not yet projected. An expired payload gets an
-    explicit unattributed history-gap record; its task/trace is never guessed.
-    Duplicate/conflict receipts do not create additional accepted observations.
+    Raw events and receipt-only commits share the ingestion ordering. Replays
+    advance coverage without duplicating graph observations. Expired/rejected
+    payloads never manufacture a run identity from untrusted or missing data.
     """
     _idle(db)
     if type(limit) is not int or not 1 <= limit <= MAX_BATCH:
@@ -335,64 +336,91 @@ def project_batch(db: sqlite3.Connection, *, limit: int = MAX_BATCH) -> Projecti
         db.execute("BEGIN IMMEDIATE")
         state = _state(db)
         high = db.execute("SELECT ingest_seq FROM trace_collector").fetchone()[0]
-        rows = db.execute(
-            "SELECT ingest_seq,node_id,source_epoch,event_id,source_seq,event_sha256 "
-            "FROM trace_raw_events WHERE ingest_seq>? ORDER BY ingest_seq LIMIT ?",
-            (state.ingest_cursor, limit),
-        ).fetchall()
+        # Each indexed stream yields at most limit rows. Sorting their bounded
+        # union avoids scanning/sorting the full backlog before a small batch.
+        positions = set()
+        for table in (
+            "trace_raw_events",
+            "trace_ingest_positions",
+            "trace_rejected_positions",
+            "trace_ingest_conflicts",
+        ):
+            positions.update(
+                row[0]
+                for row in db.execute(
+                    f"SELECT ingest_seq FROM {table} WHERE ingest_seq>? ORDER BY ingest_seq LIMIT ?",
+                    (state.ingest_cursor, limit),
+                )
+            )
+        positions = sorted(positions)[:limit]
         cursor = state.change_cursor
-        for seq, node, epoch, event_id, source_seq, digest in rows:
-            payload = read_payload(db, seq)
-            if payload is None:
-                raise ValueError("projection_payload_unavailable")
-            event = payload["event"]
-            if event is None:
-                kind, trace_id = "payload_expired", None
-                change = {
-                    "node_id": node,
-                    "source_epoch": epoch,
-                    "event_id": event_id,
-                    "source_seq": source_seq,
-                    "payload_expired_at_ms": payload["payload_expired_at_ms"],
-                }
-            else:
-                if event_sha256(event) != digest or (
-                    event["node_id"],
-                    event["source_epoch"],
-                    event["event_id"],
-                    event["source_seq"],
-                ) != (node, epoch, event_id, source_seq):
-                    raise ValueError("projection_raw_identity_mismatch")
-                entities = entity_claims(event)
-                if event["kind"] == "task":
-                    kind = "task_upsert"
-                    change = _project_task(db, seq, event)
-                elif entities:
-                    kind = "entity_upsert"
-                    change = _project_entities(db, seq, event, entities)
-                elif event["kind"] == "link":
-                    kind = "relationships"
+        for seq in positions:
+            raw = db.execute(
+                "SELECT node_id,source_epoch,event_id,source_seq,event_sha256 FROM trace_raw_events WHERE ingest_seq=?",
+                (seq,),
+            ).fetchone()
+            event = None
+            expired = False
+            kind, trace_id, change = "receipt", None, {}
+            if raw is not None:
+                node, epoch, event_id, source_seq, digest = raw
+                payload = read_payload(db, seq)
+                if payload is None:
+                    raise ValueError("projection_payload_unavailable")
+                event = payload["event"]
+                if event is None:
+                    expired = True
+                    kind = "payload_expired"
                     change = {
                         "node_id": node,
                         "source_epoch": epoch,
                         "event_id": event_id,
                         "source_seq": source_seq,
-                        "evidence_kind": event["evidence_kind"],
-                        "supersedes_event_id": event["supersedes_event_id"],
+                        "payload_expired_at_ms": payload["payload_expired_at_ms"],
                     }
                 else:
-                    continue
-                trace_id = event["trace_id"]
-                change["edge_claims"] = _record_relationships(db, seq, event, entities)
+                    if event_sha256(event) != digest or (
+                        event["node_id"],
+                        event["source_epoch"],
+                        event["event_id"],
+                        event["source_seq"],
+                    ) != (node, epoch, event_id, source_seq):
+                        raise ValueError("projection_raw_identity_mismatch")
+                    entities = entity_claims(event)
+                    if event["kind"] == "task":
+                        kind = "task_upsert"
+                        change = _project_task(db, seq, event)
+                    elif entities:
+                        kind = "entity_upsert"
+                        change = _project_entities(db, seq, event, entities)
+                    elif event["kind"] == "link":
+                        kind = "relationships"
+                        change = {
+                            "node_id": node,
+                            "source_epoch": epoch,
+                            "event_id": event_id,
+                            "source_seq": source_seq,
+                            "evidence_kind": event["evidence_kind"],
+                            "supersedes_event_id": event["supersedes_event_id"],
+                        }
+                    else:
+                        kind = "source_fact"
+                    trace_id = event["trace_id"]
+                    change["edge_claims"] = _record_relationships(
+                        db, seq, event, entities
+                    )
+            facts = coverage.project_facts(db, seq, event, expired=expired)
+            receipt_trace = facts.pop("receipt_trace_id")
+            if raw is None:
+                trace_id = receipt_trace
+            change.update(facts)
             cursor += 1
             db.execute(
                 "INSERT INTO trace_projection_changes VALUES(?,?,?,?,?)",
                 (cursor, seq, trace_id, kind, _json(change)),
             )
         # Under this writer transaction, no ingestion can cross our snapshot.
-        # Exhausting raw rows permits crossing intervening duplicate/conflict
-        # positions without pretending those receipts were additional events.
-        through = rows[-1][0] if len(rows) == limit else high
+        through = positions[-1] if len(positions) == limit else high
         if through != state.ingest_cursor or cursor != state.change_cursor:
             db.execute(
                 "UPDATE trace_projection_state SET ingest_cursor=?,change_cursor=? WHERE singleton=1",
@@ -442,6 +470,7 @@ def read_graph(db: sqlite3.Connection, *, trace_id: str) -> dict:
             "SELECT edge_id,kind,parent_id,child_id FROM trace_relationship_claims WHERE trace_id=? LIMIT 1001",
             (trace_id,),
         ).fetchall()
+        completeness = coverage.run_coverage(db, trace_id, unresolved=False)
     if len(task_rows) + len(entity_rows) > 500 or len(relations) > 1000:
         raise ValueError("projection_graph_expansion_required")
     graph = resolve_graph(
@@ -451,7 +480,10 @@ def read_graph(db: sqlite3.Connection, *, trace_id: str) -> dict:
             for identity, kind, parent, child in relations
         ],
     )
-    return {"state": state, **graph}
+    completeness["coverage_reasons"]["unresolved_ancestry"] = graph[
+        "unresolved_ancestry"
+    ]
+    return {"state": state, **graph, **completeness}
 
 
 def read_changes(
