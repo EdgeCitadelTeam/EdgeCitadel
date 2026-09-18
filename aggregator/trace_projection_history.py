@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 READ_TABLES = (
     "trace_projection_runs",
+    "trace_projection_run_events",
     "trace_task_outcomes",
     "trace_entity_observations",
     "trace_projected_tasks",
@@ -50,6 +51,10 @@ SCHEMA = (
         ON {trace_projection_history_rows}(cursor)""",
     """CREATE INDEX IF NOT EXISTS {trace_projection_history_trace}
         ON {trace_projection_history_rows}(table_name,json_extract(row_json,'$.trace_id'),cursor)""",
+    """CREATE INDEX IF NOT EXISTS {trace_projection_history_events}
+        ON {trace_projection_history_rows}(json_extract(row_json,'$.trace_id'),
+        json_extract(row_json,'$.ingest_seq'),cursor)
+        WHERE table_name='trace_projection_run_events'""",
     """CREATE INDEX IF NOT EXISTS {trace_projection_history_source}
         ON {trace_projection_history_rows}(table_name,json_extract(row_json,'$.node_id'),
         json_extract(row_json,'$.source_epoch'),json_extract(row_json,'$.export_generation'),cursor)""",

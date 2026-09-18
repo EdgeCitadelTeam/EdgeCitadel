@@ -2727,3 +2727,40 @@ restart, epoch/version fences, sanitized failures, SQL cancellation/rollback and
 shutdown timeout. This does not qualify live deployment, filesystem replacement
 restore, public health/authentication, retained-volume performance or M4 physical
 bounds. Startup integration and real E2E remain subject to the rollout gates.
+
+### Version 7 snapshot-bound observation pages
+
+The derived event-membership index now stores immutable raw ingestion positions
+and participates in retained row history. Current and historical membership are
+indexed by trace and position. Graph cleanup removes current membership while
+retained snapshots keep their own membership; a newly observed incarnation cannot
+inherit previously expired observations. Version 6 requires shadow replay into a
+new generation; it is not silently upgraded or reset in place.
+
+`trace_event_pages.read_events` implements the event-page response contract on a
+caller-owned SQLite read connection. The caller must authorize access before
+reading and supply the persistent signing key plus server-selected scope hash.
+This component does not install HTTP routes, provision credentials or establish
+an access boundary. It opens no paths and follows no content references.
+
+Graph and continuation tokens are verified against the active generation and
+actual history floor in one read transaction. Continuation binds to the exact
+graph snapshot and ingestion watermark. Membership, raw identity/hash and payload
+are read from that same SQLite snapshot, including during concurrent expiry.
+Pages contain only accepted observations in ingestion order; duplicate receipts
+and later arrivals cannot appear as additional historical events. Event bodies
+are revalidated before response serialization.
+
+Both the 500-event limit and encoded 2 MiB response bound produce continuation
+tokens when more observations remain. Canonical compact JSON must be used at the
+HTTP boundary to preserve the checked byte bound. Expired payloads return
+`history_expired`, never a silently shortened page. Graph row history does not
+extend raw payload lifetime: refreshing a snapshot cannot restore deleted content.
+Wrong cursor kind/scope, changed generation, expired history and temporary store
+faults use the fixed read-error contract without request/payload/exception text.
+
+Read-only SQLite, inline/separated payloads, retained-base compaction, graph
+cleanup/recreation, concurrent expiry, rebuild, corrupt content, cursor isolation
+and a real 2 MiB page split have component coverage. Fleet-scale query latency,
+additional membership-history storage, public list/graph/expansion/change/WS
+interfaces, authentication and deployment remain qualification/integration work.

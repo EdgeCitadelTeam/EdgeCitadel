@@ -31,7 +31,7 @@ SCHEMA = (
     """CREATE INDEX IF NOT EXISTS {trace_projection_retiring}
         ON {trace_projection_runs}(expired_cursor) WHERE expired_cursor IS NOT NULL""",
     """CREATE INDEX IF NOT EXISTS {trace_projection_run_event_scope}
-        ON {trace_projection_run_events}(trace_id)""",
+        ON {trace_projection_run_events}(trace_id,ingest_seq)""",
     """CREATE TABLE IF NOT EXISTS {trace_projection_retention_state} (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),cutoff_ms INTEGER NOT NULL
     )""",
