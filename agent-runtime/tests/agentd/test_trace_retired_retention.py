@@ -252,7 +252,7 @@ def test_v15_reference_index_migration_preserves_spool_and_uses_event_key(record
         store._connection.execute("PRAGMA user_version=15")
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 22
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
         assert [
             tuple(r) for r in reopened._connection.execute("SELECT * FROM trace_spool")
         ] == before

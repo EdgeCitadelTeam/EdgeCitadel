@@ -182,6 +182,11 @@ def test_sigkill_preserves_atomic_journal_and_retry_identity(
         store.append_trace(
             node_id="owned-edge", connector_id="owner", token=token, params=params
         )
+        # Only closed executions are cleanup candidates. Preserve the real
+        # deletion/crash boundary instead of pruning a live operation.
+        store.close_session(
+            connector_id="owner", token=token, session_id=_session["session_id"]
+        )
     config = {"operation": operation, "token": token, "params": params}
     before = snapshot(store)
     store.close()
@@ -206,7 +211,7 @@ def test_sigkill_preserves_atomic_journal_and_retry_identity(
                 )
         else:
             if point != "after_commit":
-                assert execute(store, config) == 1
+                assert execute(store, config) == 4
             assert execute(store, config) == 0
             markers = [
                 json.loads(r[0])
@@ -215,7 +220,7 @@ def test_sigkill_preserves_atomic_journal_and_retry_identity(
                 )
             ]
             assert len(markers) == 1
-            assert markers[0]["attributes"]["lost_ranges"] == [{"first": 2, "last": 2}]
+            assert markers[0]["attributes"]["lost_ranges"] == [{"first": 1, "last": 4}]
         assert store._connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert store._connection.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:

@@ -17,6 +17,7 @@ CREATE TABLE trace_sources (
     node_id TEXT NOT NULL,
     source_epoch TEXT NOT NULL,
     next_source_seq INTEGER NOT NULL DEFAULT 1 CHECK(next_source_seq > 0),
+    test_run_id TEXT,
     active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
     PRIMARY KEY(node_id, source_epoch)
 );
@@ -100,8 +101,9 @@ class TraceJournal:
         if row is None:
             epoch, generation = str(uuid4()), str(uuid4())
             self.connection.execute(
-                "INSERT INTO trace_sources(node_id,source_epoch) VALUES (?,?)",
-                (node_id, epoch),
+                "INSERT INTO trace_sources(node_id,source_epoch,test_run_id) "
+                "VALUES (?,?,(SELECT test_run_id FROM trace_sources WHERE node_id=? ORDER BY rowid DESC LIMIT 1))",
+                (node_id, epoch, node_id),
             )
             self.connection.execute(
                 "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation) VALUES (?,?,?)",
@@ -147,6 +149,15 @@ class TraceJournal:
             "source_epoch": epoch,
             "source_seq": sequence,
         }
+        # Caller-provided fields cannot downgrade retention. The daemon owns
+        # provenance, and the stamped value participates in the immutable hash.
+        stamped.pop("test_run_id", None)
+        test_run = self.connection.execute(
+            "SELECT test_run_id FROM trace_sources WHERE node_id=? AND source_epoch=?",
+            (node_id, epoch),
+        ).fetchone()[0]
+        if test_run is not None:
+            stamped["test_run_id"] = test_run
         encoded = validate_event(stamped)
         digest = hashlib.sha256(encoded).hexdigest()
         if previous:

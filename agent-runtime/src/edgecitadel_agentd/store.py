@@ -51,7 +51,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -498,6 +498,41 @@ class AgentdStore:
                 "WHERE state='core_settled' AND journal_event_id IS NULL"
             )
             self._connection.execute("PRAGMA user_version=22")
+
+        if version < 23:
+            columns = {
+                row[1]
+                for row in self._connection.execute("PRAGMA table_info(trace_sources)")
+            }
+            if "test_run_id" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE trace_sources ADD COLUMN test_run_id TEXT"
+                )
+            self._connection.execute("PRAGMA user_version=23")
+
+    def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
+        """Trusted harness/startup API; never exposed to connector RPC callers.
+
+        Provenance is immutable once this source epoch has emitted an event.
+        Reopening an existing test run may repeat the identical configuration.
+        """
+        from .trace_journal import TraceJournal
+
+        _require_uuid4(test_run_id, "test_run_id")
+        with self._task_transaction():
+            epoch, _ = TraceJournal(self._connection).initialize(node_id)
+            row = self._connection.execute(
+                "SELECT next_source_seq,test_run_id FROM trace_sources WHERE node_id=? AND source_epoch=?",
+                (node_id, epoch),
+            ).fetchone()
+            if row[1] == test_run_id:
+                return
+            if row[0] != 1 or row[1] is not None:
+                raise StoreError("test provenance cannot reclassify an existing source")
+            self._connection.execute(
+                "UPDATE trace_sources SET test_run_id=? WHERE node_id=? AND source_epoch=?",
+                (test_run_id, node_id, epoch),
+            )
 
     @contextmanager
     def _task_transaction(self) -> Iterator[None]:
@@ -2050,19 +2085,23 @@ class AgentdStore:
                             now=now,
                         )
                     expired_tasks += 1
-                if now - self._last_retention_ms >= RETENTION_INTERVAL_MS:
+            with self._connection:
+                self._connection.execute("BEGIN IMMEDIATE")
+                retention_ran = now - self._last_retention_ms >= RETENTION_INTERVAL_MS
+                if retention_ran:
                     cutoff = now - TELEMETRY_RETENTION_MS
                     self._connection.execute(
-                        "DELETE FROM spans WHERE started_at_ms < ?", (cutoff,)
-                    )
-                    self._connection.execute(
-                        "DELETE FROM events WHERE created_at_ms < ?", (cutoff,)
-                    )
-                    self._connection.execute(
-                        "DELETE FROM presence_history WHERE observed_at_ms < ?",
+                        "DELETE FROM spans WHERE rowid IN (SELECT rowid FROM spans WHERE started_at_ms < ? ORDER BY started_at_ms,rowid LIMIT 1000)",
                         (cutoff,),
                     )
-                    self._last_retention_ms = now
+                    self._connection.execute(
+                        "DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE created_at_ms < ? ORDER BY created_at_ms,rowid LIMIT 1000)",
+                        (cutoff,),
+                    )
+                    self._connection.execute(
+                        "DELETE FROM presence_history WHERE rowid IN (SELECT rowid FROM presence_history WHERE observed_at_ms < ? ORDER BY observed_at_ms,rowid LIMIT 1000)",
+                        (cutoff,),
+                    )
                 self._trim_telemetry_locked(
                     "events", "event_id", "created_at_ms", MAX_EVENT_RECORDS
                 )
@@ -2094,6 +2133,8 @@ class AgentdStore:
                 _, retirement_after = compact_settled_spool(
                     self._connection, after=self._settled_retirement_after
                 )
+            if retention_ran:
+                self._last_retention_ms = now
             self._settled_retirement_after = retirement_after
             reclaim_wal_pressure(self._connection)
         return {"expired_sessions": expired_sessions, "expired_tasks": expired_tasks}

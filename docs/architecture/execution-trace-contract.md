@@ -2373,3 +2373,32 @@ Unsupported layouts pause collection with a fixed diagnostic.
 Final-source throughput, complete writer ownership and physical worst-case
 qualification remain pending; collector adoption does not establish a hard bound
 on the shared database or permanent identity growth.
+
+## Disposable-test provenance and cleanup
+
+An optional event-level `test_run_id` is a UUIDv4 assigned by the source daemon.
+It participates in event canonicalization and hashing. Absence means ordinary
+retention; caller attributes and development host names never classify data.
+Agentd schema 23 stores this provenance on the source epoch. Trusted startup or
+an owned harness may configure it before the first event, but cannot reclassify
+an existing source or change an assigned run ID. Restore rotation carries it
+forward without modifying retained event identities. The authenticated export
+path transports the field unchanged to Core.
+
+`EDGECITADEL_TRACE_TEST_RUN_ID` enables this behavior for an explicitly disposable,
+isolated source. It is not a connector RPC permission. Test payloads become
+age-eligible locally after 24 hours; normal local retention stays 30 days. Source
+maintenance protects active tasks and open executions, then prioritizes safe
+settled candidates and disposable tests within that class. Durable matching
+collector settlement is required; pending mandatory lifecycle evidence survives
+pressure. Optional detail retains its explicit-loss/atomic-marker path.
+
+Core expires eligible test payloads before ordinary payloads within the existing
+seven-day history policy, using indexed selection in the separated payload
+layout. Identity/hash/export-position evidence remains after payload expiry, so
+replay cannot recreate expired content or duplicate accepted identities.
+
+Source reconciliation commits lifecycle recovery before its separate bounded
+maintenance transaction. Cleanup failure cannot undo that recovery. Cleanup
+responds to both encoded-byte and observed physical pressure, but these controls
+are not physical quota enforcement or preallocated completion reservations.

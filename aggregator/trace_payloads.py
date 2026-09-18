@@ -131,6 +131,10 @@ def prepare(connection: sqlite3.Connection) -> None:
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='trace_payload_layout'"
     ).fetchone():
         open_layout(connection)
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS trace_payload_test_expiry ON trace_payloads("
+            "(json_extract(event_json,'$.test_run_id') IS NULL),received_at_ms,ingest_seq)"
+        )
         return
     connection.execute("PRAGMA foreign_keys=ON")
     connection.create_function(FUNCTION, 0, lambda: VERSION)
@@ -153,6 +157,10 @@ def prepare(connection: sqlite3.Connection) -> None:
         )
         connection.execute(
             "CREATE INDEX trace_payload_expiry ON trace_payloads(received_at_ms,ingest_seq)"
+        )
+        connection.execute(
+            "CREATE INDEX trace_payload_test_expiry ON trace_payloads("
+            "(json_extract(event_json,'$.test_run_id') IS NULL),received_at_ms,ingest_seq)"
         )
         for sql in {**_guards(), **_payload_triggers()}.values():
             connection.execute(sql)
@@ -247,11 +255,18 @@ def expire_batch(connection: sqlite3.Connection, *, before_ms: int, now_ms: int)
         ).fetchone()[0]:
             raise TraceContractError("core_payload_migration_pending")
         trace_capacity.usage(connection)
-        rows = connection.execute(
-            "SELECT ingest_seq FROM trace_payloads WHERE received_at_ms<? "
-            "ORDER BY received_at_ms,ingest_seq LIMIT ?",
-            (before_ms, BATCH_ROWS),
-        ).fetchall()
+        rows = []
+        for normal in (0, 1):
+            rows.extend(
+                connection.execute(
+                    "SELECT ingest_seq FROM trace_payloads "
+                    "WHERE (json_extract(event_json,'$.test_run_id') IS NULL)=? "
+                    "AND received_at_ms<? ORDER BY received_at_ms,ingest_seq LIMIT ?",
+                    (normal, before_ms, BATCH_ROWS - len(rows)),
+                ).fetchall()
+            )
+            if len(rows) == BATCH_ROWS:
+                break
         if rows:
             trace_capacity.admit_write(connection)
             connection.executemany(

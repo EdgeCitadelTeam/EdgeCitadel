@@ -286,7 +286,7 @@ def test_v12_upgrade_preserves_work_and_creates_empty_holds(tmp_path):
         db.execute("PRAGMA user_version=12")
     store = AgentdStore(tmp_path / "agentd.sqlite3")
     try:
-        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 22
+        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 23
         assert (
             store._connection.execute("SELECT COUNT(*) FROM restore_holds").fetchone()[
                 0

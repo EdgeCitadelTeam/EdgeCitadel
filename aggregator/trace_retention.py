@@ -41,6 +41,25 @@ def expire_payloads(connection: sqlite3.Connection, *, now_ms: int) -> dict[str,
         after = connection.execute(
             "SELECT after_ingest_seq FROM trace_retention_state WHERE singleton=1"
         ).fetchone()[0]
+        tests = connection.execute(
+            "SELECT ingest_seq FROM trace_raw_events WHERE payload_expired_at_ms IS NULL "
+            "AND json_extract(NULLIF(event_json,''),'$.test_run_id') IS NOT NULL "
+            "AND received_at_ms<? ORDER BY received_at_ms,ingest_seq LIMIT ?",
+            (now_ms - RETENTION_MS, SCAN_ROWS),
+        ).fetchall()
+        if tests:
+            trace_capacity.admit_write(connection)
+            connection.executemany(
+                "UPDATE trace_raw_events SET event_json='',payload_expired_at_ms=? WHERE ingest_seq=?",
+                [(now_ms, row[0]) for row in tests],
+            )
+            return {
+                "scanned_rows": len(tests),
+                "expired_payloads": len(tests),
+                "after_ingest_seq": after,
+                "observed_at_ms": now_ms,
+                "retention_ms": RETENTION_MS,
+            }
         rows = connection.execute(
             "SELECT ingest_seq,received_at_ms,payload_expired_at_ms "
             "FROM trace_raw_events WHERE ingest_seq>? ORDER BY ingest_seq LIMIT ?",

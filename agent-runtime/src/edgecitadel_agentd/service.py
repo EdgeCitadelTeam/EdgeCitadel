@@ -672,6 +672,16 @@ def _serve_locked(state_dir: Path, stop_event: threading.Event | None = None) ->
     if socket_path.exists():
         socket_path.unlink()
     store = AgentdStore(state_dir / "agentd.sqlite3")
+    test_run_id = os.environ.get("EDGECITADEL_TRACE_TEST_RUN_ID")
+    if test_run_id:
+        try:
+            node_id = json.loads((state_dir.parent / "node.json").read_text())[
+                "agent_id"
+            ]
+            store.configure_test_source(node_id=node_id, test_run_id=test_run_id)
+        except BaseException:
+            store.close()
+            raise
     admin_token = _load_or_create_admin_token(state_dir)
     transport = AgentdNatsTransport(state_dir.parent, store)
     supervisor = ManagedAgentSupervisor(state_dir.parent, store)

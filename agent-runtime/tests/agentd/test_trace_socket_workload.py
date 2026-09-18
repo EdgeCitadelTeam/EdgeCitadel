@@ -190,7 +190,11 @@ async def exercise(socket, directory, recipient_services=None):
         ] != "completed":
             assert task["state"] not in {"failed", "rejected", "undeliverable"}
             assert asyncio.get_running_loop().time() < deadline, (
-                "owned result not delivered"
+                "owned result not delivered",
+                {
+                    str(endpoint): AgentdClient(endpoint).call("health")["transport"]
+                    for endpoint, _ in [(socket, directory), *endpoints.values()]
+                },
             )
             await asyncio.sleep(0.01)
         expected_result = {"body": expected["body"]}

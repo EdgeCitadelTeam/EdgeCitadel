@@ -403,7 +403,7 @@ def test_v9_migration_preserves_existing_journal(configured):
         store._connection.execute("DROP TABLE IF EXISTS trace_import_grants")
         store._connection.execute("PRAGMA user_version=9")
     with closing(AgentdStore(path)) as migrated:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 22
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 23
         assert [
             tuple(row)
             for row in migrated._connection.execute("SELECT * FROM trace_journal")

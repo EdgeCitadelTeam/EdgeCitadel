@@ -13,6 +13,8 @@ from . import trace_capacity
 from .trace_contract import TraceContractError
 from .trace_journal import TraceJournal
 
+TEST_RETENTION_MS = 24 * 60 * 60 * 1000
+
 
 def maintain_capacity(
     db: sqlite3.Connection, *, now_ms: int, expire_before_ms: int | None = None
@@ -22,45 +24,98 @@ def maintain_capacity(
         raise TraceContractError("trace_transaction_required")
     used = db.execute("SELECT event_bytes FROM trace_storage_usage").fetchone()[0]
     pressure = used >= trace_capacity.NORMAL_LIMIT_BYTES * 9 // 10
+    if not pressure:
+        try:
+            pressure = (
+                trace_capacity.physical_storage(db)["pressure_bytes"]
+                >= trace_capacity.PHYSICAL_PRESSURE_BYTES
+            )
+        except OSError as error:
+            raise TraceContractError("storage_unavailable") from error
     if not pressure and expire_before_ms is None:
         return 0
     db.execute("SAVEPOINT trace_reclamation")
     removed = 0
     try:
-        for row in db.execute(
-            "SELECT node_id FROM trace_sources WHERE active=1 ORDER BY node_id LIMIT 8"
-        ).fetchall():
-            removed += prune_retired_history(
-                db,
-                node_id=row[0],
-                now_ms=now_ms,
-                limit=64 - removed,
-                before_ms=None if pressure else expire_before_ms,
+        # Exhaust the safe settled candidates before optional explicit-loss
+        # reclamation. A broker acknowledgement alone is never settlement.
+        for settled_only in (True, False):
+            age = (
+                ""
+                if pressure
+                else (
+                    " AND (j.received_at_ms<? OR (json_extract(j.event_json,'$.test_run_id') IS NOT NULL AND j.received_at_ms<?))"
+                )
             )
+            parameters = (
+                () if pressure else (expire_before_ms, now_ms - TEST_RETENTION_MS)
+            )
+            # Do not let protected/fresh test sources hide eligible ordinary
+            # sources behind the bounded source window.
+            for row in db.execute(
+                "SELECT s.node_id FROM trace_sources s WHERE s.active=1 AND EXISTS ("
+                "SELECT 1 FROM trace_journal j WHERE j.node_id=s.node_id "
+                "AND json_extract(j.event_json,'$.kind') NOT IN ('coverage','source','security') "
+                + _eligibility(
+                    settled_only=settled_only, optional_only=not settled_only
+                )
+                + age
+                + ") ORDER BY s.test_run_id IS NULL,s.node_id LIMIT 8",
+                parameters,
+            ).fetchall():
+                for prune in (prune_retired_history, prune_active_history):
+                    removed += prune(
+                        db,
+                        node_id=row[0],
+                        now_ms=now_ms,
+                        limit=64 - removed,
+                        before_ms=None if pressure else expire_before_ms,
+                        settled_only=settled_only,
+                        optional_only=not settled_only,
+                    )
+                    if removed == 64:
+                        break
+                if removed == 64:
+                    break
             if removed == 64:
                 break
-            removed += prune_active_history(
-                db,
-                node_id=row[0],
-                now_ms=now_ms,
-                limit=64 - removed,
-                before_ms=None if pressure else expire_before_ms,
-            )
-            if removed == 64:
-                break
-        remaining_bytes = db.execute(
+        remaining = db.execute(
             "SELECT event_bytes FROM trace_storage_usage"
         ).fetchone()[0]
-        if pressure and remaining_bytes >= used:
+        if pressure and remaining >= used:
             db.execute("ROLLBACK TO trace_reclamation")
-            db.execute("RELEASE trace_reclamation")
-            return 0
+            removed = 0
         db.execute("RELEASE trace_reclamation")
     except Exception:
         db.execute("ROLLBACK TO trace_reclamation")
         db.execute("RELEASE trace_reclamation")
         raise
     return removed
+
+
+def _eligibility(*, settled_only: bool, optional_only: bool) -> str:
+    # All events belonging to active tasks or executions are protected, not only
+    # the root's start event. These predicates run inside the writer transaction.
+    sql = (
+        " AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.task_id=j.task_id "
+        "AND t.state NOT IN ('completed','failed','rejected','cancelled','expired','undeliverable')) "
+        "AND NOT EXISTS (SELECT 1 FROM trace_bindings b WHERE b.closed_at_ms IS NULL "
+        "AND b.execution_attempt_id=json_extract(j.event_json,'$.execution_attempt_id')) "
+    )
+    if settled_only:
+        sql += (
+            " AND NOT EXISTS (SELECT 1 FROM trace_spool p WHERE p.node_id=j.node_id "
+            "AND p.source_epoch=j.source_epoch AND p.journal_event_id=j.event_id "
+            "AND (p.state<>'core_settled' OR NOT EXISTS ("
+            "SELECT 1 FROM trace_source_settlements c WHERE c.node_id=p.node_id "
+            "AND c.source_epoch=p.source_epoch AND c.export_generation=p.export_generation "
+            "AND c.collector_epoch=p.collector_epoch AND c.applied_through>=p.export_seq))) "
+            "AND NOT EXISTS (SELECT 1 FROM trace_collector_recovery r WHERE r.node_id=j.node_id "
+            "AND r.source_epoch=j.source_epoch AND r.phase<>'live') "
+        )
+    if optional_only:
+        sql += " AND json_extract(j.event_json,'$.kind') IN ('model','tool') "
+    return sql
 
 
 def _ranges(positions: list[int]) -> list[dict[str, int]]:
@@ -80,6 +135,8 @@ def prune_active_history(
     now_ms: int,
     limit: int = 64,
     before_ms: int | None = None,
+    settled_only: bool = False,
+    optional_only: bool = False,
 ) -> int:
     """Caller owns the write transaction. No old generation is silently retired."""
     if not db.in_transaction:
@@ -95,11 +152,15 @@ def prune_active_history(
     if active is None:
         return 0
     epoch, generation = active["source_epoch"], active["export_generation"]
-    age_scope = " AND j.received_at_ms<?" if before_ms is not None else ""
-    order = "j.received_at_ms,j.source_seq" if before_ms is not None else "j.source_seq"
+    age_scope = (
+        " AND (j.received_at_ms<? OR (json_extract(j.event_json,'$.test_run_id') IS NOT NULL AND j.received_at_ms<?))"
+        if before_ms is not None
+        else ""
+    )
+    order = "json_extract(j.event_json,'$.test_run_id') IS NULL,j.received_at_ms,j.source_seq"
     values: list[Any] = [node_id, epoch, generation]
     if before_ms is not None:
-        values.append(before_ms)
+        values.extend((before_ms, now_ms - TEST_RETENTION_MS))
     values.append(limit)
     rows = db.execute(
         "SELECT j.* FROM trace_journal j WHERE j.node_id=? AND j.source_epoch=? "
@@ -109,7 +170,12 @@ def prune_active_history(
         "AND json_extract(j.event_json,'$.kind')='run' AND json_extract(j.event_json,'$.phase')='started') "
         "AND NOT EXISTS (SELECT 1 FROM trace_spool p WHERE p.node_id=j.node_id "
         "AND p.source_epoch=j.source_epoch AND p.journal_event_id=j.event_id "
-        "AND p.export_generation<>?)" + age_scope + " ORDER BY " + order + " LIMIT ?",
+        "AND p.export_generation<>?)"
+        + _eligibility(settled_only=settled_only, optional_only=optional_only)
+        + age_scope
+        + " ORDER BY "
+        + order
+        + " LIMIT ?",
         values,
     ).fetchall()
     groups: dict[str | None, list[Any]] = defaultdict(list)
@@ -201,6 +267,8 @@ def prune_retired_history(
     now_ms: int,
     limit: int = 64,
     before_ms: int | None = None,
+    settled_only: bool = False,
+    optional_only: bool = False,
 ) -> int:
     """Reclaim retired epochs/multi-generation rows via the current writer.
 
@@ -218,10 +286,14 @@ def prune_retired_history(
     ).fetchone()
     if active is None:
         return 0
-    age = " AND j.received_at_ms<?" if before_ms is not None else ""
+    age = (
+        " AND (j.received_at_ms<? OR (json_extract(j.event_json,'$.test_run_id') IS NOT NULL AND j.received_at_ms<?))"
+        if before_ms is not None
+        else ""
+    )
     params: list[Any] = [node_id]
     if before_ms is not None:
-        params.append(before_ms)
+        params.extend((before_ms, now_ms - TEST_RETENTION_MS))
     params.append(limit)
     rows = db.execute(
         "SELECT j.* FROM trace_journal j JOIN trace_sources s USING(node_id,source_epoch) "
@@ -232,8 +304,9 @@ def prune_retired_history(
         "AND NOT EXISTS (SELECT 1 FROM trace_bindings b WHERE b.closed_at_ms IS NULL "
         "AND b.execution_attempt_id=json_extract(j.event_json,'$.execution_attempt_id') "
         "AND json_extract(j.event_json,'$.kind')='run' AND json_extract(j.event_json,'$.phase')='started')"
+        + _eligibility(settled_only=settled_only, optional_only=optional_only)
         + age
-        + " ORDER BY j.received_at_ms,j.source_epoch,j.source_seq LIMIT ?",
+        + " ORDER BY json_extract(j.event_json,'$.test_run_id') IS NULL,j.received_at_ms,j.source_epoch,j.source_seq LIMIT ?",
         params,
     ).fetchall()
     groups: dict[tuple[str, str | None], list[Any]] = defaultdict(list)

@@ -167,6 +167,7 @@ def test_legacy_reader_does_not_require_expiry_schema(case):  # noqa: F811
     db, record = case
     ingest(db, record)
     with db:
+        db.execute("DROP INDEX trace_inline_test_expiry")
         db.execute("ALTER TABLE trace_raw_events DROP COLUMN payload_expired_at_ms")
     before = list(db.iterdump())
     assert trace_payloads.read_payload(db, 1)["event"] == record["event"]

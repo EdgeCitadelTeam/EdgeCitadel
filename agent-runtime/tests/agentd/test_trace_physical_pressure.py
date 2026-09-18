@@ -81,7 +81,19 @@ def test_pinned_wal_stops_optional_admission_preserves_retry_and_recovers(
         assert trace_capacity.physical_storage(db)["pressure_bytes"] < limit
         assert store.health()["status"] == "ready"
         assert "trace_storage" not in store.health()
-        assert write(store, tool())["source_seq"] == mandatory["source_seq"] + 1
+        # Physical-pressure cleanup now writes durable coverage before deleting
+        # optional payloads, so it legitimately consumes source positions.
+        next_sequence = db.execute(
+            "SELECT next_source_seq FROM trace_sources WHERE active=1"
+        ).fetchone()[0]
+        assert write(store, tool())["source_seq"] == next_sequence
+        assert (
+            db.execute(
+                "SELECT count(*) FROM trace_journal WHERE event_id=?",
+                (mandatory["event_id"],),
+            ).fetchone()[0]
+            == 1
+        )
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:

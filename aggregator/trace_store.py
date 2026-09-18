@@ -134,6 +134,11 @@ def initialize(connection: sqlite3.Connection, *, backfill: bool = True) -> None
             "singleton INTEGER PRIMARY KEY CHECK(singleton=1), "
             "after_ingest_seq INTEGER NOT NULL CHECK(after_ingest_seq>=0))"
         )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS trace_inline_test_expiry ON trace_raw_events("
+            "received_at_ms,ingest_seq) WHERE payload_expired_at_ms IS NULL "
+            "AND json_extract(NULLIF(event_json,''),'$.test_run_id') IS NOT NULL"
+        )
         connection.execute("INSERT OR IGNORE INTO trace_retention_state VALUES(1,0)")
         connection.execute(
             "INSERT OR IGNORE INTO trace_collector(singleton, collector_epoch) VALUES(1, ?)",

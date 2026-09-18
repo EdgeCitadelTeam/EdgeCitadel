@@ -187,7 +187,7 @@ def test_v13_migration_preserves_holds_and_adds_empty_activation_receipts(tmp_pa
         db.execute("PRAGMA user_version=13")
     store = AgentdStore(new / "agentd.sqlite3")
     try:
-        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 22
+        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 23
         assert [
             tuple(r) for r in store._connection.execute("SELECT * FROM restore_holds")
         ] == before

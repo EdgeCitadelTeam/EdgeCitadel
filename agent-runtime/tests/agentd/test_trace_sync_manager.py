@@ -253,7 +253,7 @@ def test_schema_20_migration_rolls_back_atomically(store):
     assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 20
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 22
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
         assert (
             reopened._connection.execute(
                 "SELECT sync_fault FROM trace_export_generations"

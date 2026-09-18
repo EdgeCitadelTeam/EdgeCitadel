@@ -713,3 +713,33 @@ fields now aggregate attached stores. Reusable pages and legacy task content
 remain conservatively included. This measurement does not include super-journals,
 unlinked temporary files or future transaction growth and is not a hard quota
 or an attribution of only telemetry-owned bytes.
+
+### Disposable development traces
+
+For an isolated development/test source, set `EDGECITADEL_TRACE_TEST_RUN_ID` to a
+UUIDv4 before starting agentd. The source must not have emitted events yet; a
+restart may reuse the same ID. Use a fresh isolated state directory for another
+run. The daemon persists this provenance and stamps it into authenticated trace
+exports; RPC callers cannot set or change it. Unclassified sources retain normal
+retention, even on development machines.
+
+Eligible test payloads take cleanup priority over ordinary payloads. Source test
+payloads become age-eligible after 24 hours; ordinary local history retains its
+30-day policy. Active tasks/open executions and unsettled mandatory evidence stay
+protected. Settled-first cleanup requires the current durable Core checkpoint;
+a broker ACK alone does not qualify. Core prioritizes eligible test payloads
+within its existing seven-day retention and preserves identity/settlement rows.
+Cleanup remains bounded and may leave protected test data in place.
+
+This improves reclamation, but does not establish the strict physical-storage
+limit or implement completion-space reservations. It does not delete abandoned
+state directories automatically. Owned test fixtures must stop services and clean
+up their own directories; never manually remove a live SQLite journal.
+
+Real Core/Leaf cleanup qualification:
+
+```bash
+RUN_AGENTD_NATS_INTEGRATION=1 PYTHONPATH=.:agent-runtime/src \
+  agent-runtime/.venv/bin/python -m pytest -q \
+  agent-runtime/tests/runtime/test_telemetry_test_retention.py
+```

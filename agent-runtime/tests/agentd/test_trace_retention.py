@@ -20,7 +20,7 @@ def recorded(tmp_path):
     fixtures = json.loads(
         (Path(__file__).parents[1] / "fixtures/traces/events.v1.json").read_text()
     )["fixtures"]
-    template = next(f["event"] for f in fixtures if f["name"] == "task")
+    template = next(f["event"] for f in fixtures if f["name"] == "tool")
     template["occurred_at"] = "2000-01-01T00:00:00.000Z"
     with store._connection:
         store._connection.execute("BEGIN IMMEDIATE")
@@ -175,7 +175,8 @@ def test_reconcile_reclaims_pressure_and_scoped_reads_disclose_loss(
     history = read_history(store, connector_id="reader", token=token, params={})
     assert history["coverage"]["local_history_pruned"]
     assert history["events"][0]["kind"] == "coverage"
-    assert len(history["events"]) == 1
+    assert all(event["kind"] == "coverage" for event in history["events"])
+    assert any(event["phase"] == "lost" for event in history["events"])
 
 
 def test_reserve_exhaustion_leaves_pending_content_intact(recorded, monkeypatch):
@@ -250,7 +251,7 @@ def test_v11_upgrade_preserves_event_hashes_and_starts_conservative_age(recorded
     started = int(time.time() * 1000)
     migrated = AgentdStore(store.path)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 22
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 23
         assert [
             tuple(r)
             for r in migrated._connection.execute(
@@ -314,5 +315,5 @@ def test_expiry_pins_active_root_until_session_closes(recorded):
             "SELECT count(*) FROM trace_journal WHERE trace_id=? AND json_extract(event_json,'$.phase')='started'",
             (root["trace_id"],),
         ).fetchone()[0]
-        == 0
+        == 1  # Closure does not authorize dropping unsettled mandatory evidence.
     )

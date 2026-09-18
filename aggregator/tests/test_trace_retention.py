@@ -142,6 +142,7 @@ def test_legacy_payload_column_upgrade_preserves_evidence_and_epoch(case):  # no
     ingest(db, record)
     epoch = db.execute("SELECT collector_epoch FROM trace_collector").fetchone()[0]
     with db:
+        db.execute("DROP INDEX trace_inline_test_expiry")
         db.execute("ALTER TABLE trace_raw_events DROP COLUMN payload_expired_at_ms")
         db.execute("DROP TABLE trace_retention_state")
     trace_store.initialize(db)

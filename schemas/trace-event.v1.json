@@ -207,6 +207,11 @@
           "type": "null"
         }
       ]
+    },
+    "test_run_id": {
+      "description": "Disposable test provenance assigned by the source daemon, never by an event caller. Absent means normal retention.",
+      "type": "string",
+      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     }
   },
   "required": [
