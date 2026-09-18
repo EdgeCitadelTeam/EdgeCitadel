@@ -2431,3 +2431,36 @@ or the absence of active tasks. The full projector still needs transactional
 checkpoints and change history, all event families and ancestry, bounded storage
 and queries, retention/rebuild handling, coverage and access-controlled APIs.
 M4 acceptance and the M5–M7 release gates remain open.
+
+### Durable task projection transactions
+
+`aggregator/trace_projection_store.py` now integrates the task reducer with the
+committed Core raw journal. Initialization is explicit; Aggregator startup does
+not enable this incomplete projector. Version 1 projects task observations only,
+so enabling additional families requires a projection-version rebuild rather
+than interpreting the task-only checkpoint as a complete graph checkpoint.
+
+Each batch consumes at most 64 accepted raw events in ingestion order. Latest
+source perspectives, terminal candidates, task nodes, durable change records
+and the checkpoint commit in one SQLite transaction. A failed transaction cannot
+advance the checkpoint or partially publish a task node. Exact raw duplicates
+and conflict receipts advance the scanned ingestion high-watermark without
+duplicating observations. The change cursor is separate from the ingestion
+cursor. Idle passes do not rewrite an unchanged checkpoint.
+
+Terminal candidates are stored once and inspected in bounded pages at a selected
+ingestion high-watermark. Change records contain one replacement node and the
+new observation, rather than a growing copy of every prior outcome. Single-task
+reads materialize their node and cursor in one snapshot, then close it before
+decoding. These are internal database interfaces, not the authenticated public
+API or opaque cursor format.
+
+An already-expired raw payload produces a durable unattributed history-gap
+change. Its lost task/run identity is not inferred. A collector-epoch change,
+regressing ingestion watermark or incompatible projector version refuses reads
+and writes until rebuild; projector generation remains distinct from collector
+epoch. Rebuild/activation, post-projection expiry/tombstones, bounded history/base
+snapshots, full graph/coverage, service scheduling and API access remain pending.
+The current derived tables are not yet covered by a qualified retention/physical
+budget and must not be enabled in production on the strength of these component
+tests alone.

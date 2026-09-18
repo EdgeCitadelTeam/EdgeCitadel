@@ -106,27 +106,40 @@ def reduce_task(observations: Iterable[TaskObservation]) -> TaskProjection:
     eligible = recipients or eligible
     ambiguous = not terminals and len({item.event["phase"] for item in eligible}) > 1
     selected = None if ambiguous else eligible[0]
-    exemplar = ordered[0].event
-    node = {
-        "id": f"task:{exemplar['task_id']}",
-        "kind": "task",
-        "task_id": exemplar["task_id"],
-        "agent_id": selected.event["agent_id"] if selected else None,
-        "state": TASK_DISPLAY_STATES[selected.event["phase"]]
-        if selected
-        else "unknown",
-        "original_state": selected.event["phase"] if selected else None,
-        "operation": None,
-        "evidence_kind": selected.event["evidence_kind"] if selected else None,
-        "conflict": len({item.event["phase"] for item in terminals}) > 1,
-        "outcome_candidate_count": len(terminals),
-    }
+    node = task_node(
+        ordered[0].event["task_id"],
+        _evidence(selected) if selected else None,
+        outcome_count=len(terminals),
+        conflict=len({item.event["phase"] for item in terminals}) > 1,
+    )
     return TaskProjection(
         node=node,
         outcomes=tuple(_evidence(item) for item in terminals),
         perspectives=tuple(_evidence(item) for item in current),
         ambiguous_live_state=ambiguous,
     )
+
+
+def task_node(
+    task_id: str,
+    selected: dict[str, Any] | None,
+    *,
+    outcome_count: int,
+    conflict: bool,
+) -> dict[str, Any]:
+    """Build the shared node shape from validated, source-attributed evidence."""
+    return {
+        "id": f"task:{task_id}",
+        "kind": "task",
+        "task_id": task_id,
+        "agent_id": selected["agent_id"] if selected else None,
+        "state": TASK_DISPLAY_STATES[selected["phase"]] if selected else "unknown",
+        "original_state": selected["phase"] if selected else None,
+        "operation": None,
+        "evidence_kind": selected["evidence_kind"] if selected else None,
+        "conflict": conflict,
+        "outcome_candidate_count": outcome_count,
+    }
 
 
 def _evidence(observation: TaskObservation) -> dict[str, Any]:
