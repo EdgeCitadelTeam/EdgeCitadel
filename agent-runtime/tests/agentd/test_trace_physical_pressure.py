@@ -73,6 +73,13 @@ def test_pinned_wal_stops_optional_admission_preserves_retry_and_recovers(
         assert time.monotonic() - started < 2
         assert reader.execute("SELECT COUNT(*) FROM trace_journal").fetchone()[0] == 1
         assert store.health()["trace_storage"] == "physical_pressure"
+        assert store.health()["cache_maintenance"] == "checkpoint_blocked"
+        pinned = trace_capacity.physical_storage(db)
+        retained = snapshot(store)
+        for _ in range(5):
+            store.reconcile()
+        assert trace_capacity.physical_storage(db) == pinned
+        assert snapshot(store) == retained
         assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
         reader.rollback()
         store.reconcile()
@@ -81,6 +88,7 @@ def test_pinned_wal_stops_optional_admission_preserves_retry_and_recovers(
         assert trace_capacity.physical_storage(db)["pressure_bytes"] < limit
         assert store.health()["status"] == "ready"
         assert "trace_storage" not in store.health()
+        assert "cache_maintenance" not in store.health()
         # Physical-pressure cleanup now writes durable coverage before deleting
         # optional payloads, so it legitimately consumes source positions.
         next_sequence = db.execute(
@@ -143,4 +151,36 @@ def test_checkpoint_refuses_active_transaction(tmp_path):
                 trace_capacity.reclaim_wal_pressure(store._connection)
             assert store._connection.in_transaction
     finally:
+        store.close()
+
+
+def test_pinned_checkpoint_does_not_defer_task_expiry(tmp_path, monkeypatch):
+    store = AgentdStore(tmp_path / "agentd.sqlite3")
+    reader = sqlite3.connect(store.path)
+    try:
+        deadline = int(time.time() * 1000) + 1000
+        task = store.create_task(
+            sender_id="sender",
+            recipient_id="worker",
+            payload={},
+            deadline_at_ms=deadline,
+        )
+        store._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        reader.execute("BEGIN")
+        reader.execute("SELECT state FROM tasks").fetchall()
+        monkeypatch.setattr(trace_capacity, "PHYSICAL_PRESSURE_BYTES", 1)
+        result = store.reconcile(now_ms=deadline + 1)
+        assert result["expired_tasks"] == 1
+        assert store.get_task(task["task_id"])["state"] == "expired"
+        assert store.health()["cache_maintenance"] == "checkpoint_blocked"
+        # A separate connection sees committed recovery despite deferred cleanup.
+        with sqlite3.connect(store.path) as observer:
+            assert (
+                observer.execute("SELECT state FROM tasks").fetchone()[0] == "expired"
+            )
+        reader.rollback()
+        store.reconcile(now_ms=deadline + 2)
+        assert "cache_maintenance" not in store.health()
+    finally:
+        reader.close()
         store.close()

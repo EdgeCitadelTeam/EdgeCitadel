@@ -714,6 +714,13 @@ remain conservatively included. This measurement does not include super-journals
 unlinked temporary files or future transaction growth and is not a hard quota
 or an attribution of only telemetry-owned bytes.
 
+At physical pressure, reconciliation attempts a nonblocking WAL checkpoint before
+cache maintenance. If a reader or another checkpoint blocks reclamation, health
+reports `cache_maintenance: checkpoint_blocked` and defers cache writes until a
+later pass can checkpoint. Task/session recovery still commits before this check.
+The daemon neither evicts the reader nor spends more WAL space deleting cache
+records while reclamation is blocked.
+
 ### Disposable development traces
 
 For an isolated development/test source, set `EDGECITADEL_TRACE_TEST_RUN_ID` to a

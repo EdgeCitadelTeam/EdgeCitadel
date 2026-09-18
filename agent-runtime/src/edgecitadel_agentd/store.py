@@ -170,6 +170,7 @@ class AgentdStore:
         self._settled_retirement_after: tuple[str, str, str, int] | None = None
         self._last_retention_ms = 0
         self._reconciliation_storage_unavailable = False
+        self._maintenance_checkpoint_blocked = False
         schema_version = int(
             self._connection.execute("PRAGMA user_version").fetchone()[0]
         )
@@ -2085,6 +2086,16 @@ class AgentdStore:
                             now=now,
                         )
                     expired_tasks += 1
+            # Lifecycle recovery is already committed. Do not grow an over-limit
+            # pinned WAL with cache deletion, which cannot reclaim that WAL.
+            self._maintenance_checkpoint_blocked = not reclaim_wal_pressure(
+                self._connection
+            )
+            if self._maintenance_checkpoint_blocked:
+                return {
+                    "expired_sessions": expired_sessions,
+                    "expired_tasks": expired_tasks,
+                }
             with self._connection:
                 self._connection.execute("BEGIN IMMEDIATE")
                 retention_ran = now - self._last_retention_ms >= RETENTION_INTERVAL_MS
@@ -2136,7 +2147,9 @@ class AgentdStore:
             if retention_ran:
                 self._last_retention_ms = now
             self._settled_retirement_after = retirement_after
-            reclaim_wal_pressure(self._connection)
+            self._maintenance_checkpoint_blocked = not reclaim_wal_pressure(
+                self._connection
+            )
         return {"expired_sessions": expired_sessions, "expired_tasks": expired_tasks}
 
     def _trim_telemetry_locked(
@@ -2267,6 +2280,7 @@ class AgentdStore:
                 storage["pressure_bytes"] >= storage["optional_pressure_limit_bytes"]
             )
             reconciliation_unavailable = self._reconciliation_storage_unavailable
+            checkpoint_blocked = self._maintenance_checkpoint_blocked
         return {
             "status": "failed"
             if integrity != "ok"
@@ -2285,6 +2299,11 @@ class AgentdStore:
             "active_sessions": active_sessions,
             "database_bytes": database_bytes,
             "physical_storage": storage,
+            **(
+                {"cache_maintenance": "checkpoint_blocked"}
+                if checkpoint_blocked
+                else {}
+            ),
             **({"trace_storage": "physical_pressure"} if physical_pressure else {}),
             "telemetry_records": telemetry_records,
         }

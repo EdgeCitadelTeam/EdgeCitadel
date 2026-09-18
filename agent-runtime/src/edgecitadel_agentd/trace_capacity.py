@@ -116,12 +116,14 @@ def physical_storage(db: sqlite3.Connection) -> dict[str, int]:
     return result
 
 
-def reclaim_wal_pressure(db: sqlite3.Connection) -> None:
+def reclaim_wal_pressure(db: sqlite3.Connection) -> bool:
     """Attempt WAL reclamation outside transactions, without waiting on readers.
 
     Caller holds the connection lock. A busy checkpoint leaves the WAL intact;
     optional admission remains closed until a later maintenance pass can reclaim
-    it. No reader is cancelled and no database VACUUM is performed.
+    it. Return False when a checkpoint is blocked so cache maintenance can defer
+    writes that would grow the pinned WAL. No reader is cancelled and no database
+    VACUUM is performed.
     """
     if db.in_transaction:
         raise TraceContractError("trace_checkpoint_transaction_active")
@@ -133,10 +135,11 @@ def reclaim_wal_pressure(db: sqlite3.Connection) -> None:
         storage["pressure_bytes"] < PHYSICAL_PRESSURE_BYTES
         or not storage["wal_file_bytes"]
     ):
-        return
+        return True
     timeout = int(db.execute("PRAGMA busy_timeout").fetchone()[0])
     try:
         db.execute("PRAGMA busy_timeout=0")
-        db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        return checkpoint[0] == 0
     finally:
         db.execute(f"PRAGMA busy_timeout={timeout}")
