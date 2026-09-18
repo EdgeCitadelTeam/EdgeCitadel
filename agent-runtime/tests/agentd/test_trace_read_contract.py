@@ -155,3 +155,21 @@ def test_private_attributes_and_inconsistent_retention_errors_are_rejected() -> 
     error_response["resnapshot_required"] = False
     with pytest.raises(TraceContractError, match="invalid_read"):
         validate_read_response(error_response)
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"mode": "clear"},
+        {"mode": "snapshot"},
+        {"mode": "patch", "at": None},
+        {"mode": "patch", "trace_state": "expired"},
+    ],
+)
+def test_change_modes_cannot_mix_replacement_clear_and_patch(updates):
+    response = deepcopy(
+        next(r for r in FIXTURE["responses"] if r["kind"] == "trace_change")
+    )
+    response["change"].update(updates)
+    with pytest.raises(TraceContractError, match="invalid_read"):
+        validate_read_response(response)

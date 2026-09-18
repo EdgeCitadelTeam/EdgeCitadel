@@ -399,6 +399,32 @@
         },
         "coverage": {
           "$ref": "#/$defs/coverage"
+        },
+        "mode": {
+          "enum": [
+            "patch",
+            "snapshot",
+            "clear"
+          ]
+        },
+        "trace_state": {
+          "enum": [
+            "present",
+            "expired",
+            "absent"
+          ]
+        },
+        "at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -408,7 +434,10 @@
         "remove_node_ids",
         "upsert_edges",
         "remove_edge_ids",
-        "coverage"
+        "coverage",
+        "mode",
+        "trace_state",
+        "at"
       ]
     }
   },

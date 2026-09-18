@@ -2854,3 +2854,54 @@ Missing/incompatible projection state remains an unavailable response, not an
 empty successful list. This is a read component, not installed authenticated HTTP
 routing. Signing-key ownership, public changes/WS/startup, frontend, full retained
 volume/query/storage qualification and jim-eq E2E remain pending.
+
+
+### Durable atomic change replay
+
+`trace_change_pages.read_changes` converts retained projection commits into the
+public change-response shape on a caller-owned read connection. It uses the
+graph's signed `resume_cursor`, active generation and actual history floor. All
+before/after graph states and the captured high watermark belong to one SQLite
+transaction. Commits arriving during replay remain available to the next request.
+No volatile broadcast or raw arrival is required to discover a projected update.
+
+Every change now declares `mode`, `trace_state` and a nullable graph `at` cursor:
+
+- `patch` atomically applies bounded node/edge upserts and removals plus coverage.
+  Its `at` token selects that exact resulting graph and event-inspector watermark.
+- `snapshot` carries no partial patch. Fetch its exact `at` graph and all expansion
+  pages, then replace the graph atomically before acknowledging this change.
+  This handles an update involving more than 500 nodes or 1,000 edges without
+  truncating the commit or publishing inconsistent intermediate ancestry.
+- `clear` atomically clears the live graph, with `trace_state` expired or absent.
+  It has no graph token or patch arrays. Expiry of a large graph therefore needs
+  no oversized list of individual tombstones.
+
+Snapshot references remain subject to the same history/generation checks. If
+history expires while replacement pages are loading, resnapshot instead of
+acknowledging an unapplied update. Current schema/fixtures/producers require these
+fields together; they are not an optional compatibility path. The protocol is
+also the payload of the future WebSocket optimization.
+
+Replay examines at most 64 global projection commits per call. It cannot filter
+only by a change record's trace ID: a receipt on another trace can advance shared
+source reconciliation for the selected trace. It compares selected graph/coverage
+snapshots and preserves trace-local observation-only updates so the inspector can
+advance even when visible nodes remain unchanged. Unrelated commits may produce
+an empty page with continuation; signed `through_cursor` records the scanned
+prefix, never a commit withheld by count or byte bounds.
+
+Clients apply responses in cursor order, deduplicate/reapply node and edge IDs,
+and advance resume state only after every returned change is applied. Keep one
+ordered catch-up sequence; a retry of an older request must not overwrite newer
+applied state. Only then adopt `through_cursor` to skip the scanned unrelated
+commits. Rebuild, missing retained history and wrong scope/kind use fixed errors.
+Count (500 maximum requested) and 2 MiB encoded response limits yield resumable
+pages without splitting an atomic update.
+
+Component tests cover late-parent resolution, conflicts, shared-source coverage,
+observation-only updates, sparse scans, large replacement, expiry/recreation,
+read-only access, byte-bounded continuation and commits arriving during replay.
+These are not authenticated HTTP/WS or frontend acceptance tests. Replacement
+loading/backpressure, actual origin/proxy access, slow clients, retained-volume
+SQL/storage costs and jim-eq E2E remain integration/qualification work.

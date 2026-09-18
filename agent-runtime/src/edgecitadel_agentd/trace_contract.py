@@ -398,6 +398,29 @@ def validate_cursor_claims(claims: dict[str, Any]) -> bytes:
 def validate_read_response(response: dict[str, Any]) -> bytes:
     encoded = _validate("read", response, MAX_RESPONSE_BYTES)
     kind = response["kind"]
+    changes = (
+        response["changes"]
+        if kind == "trace_changes"
+        else [response["change"]]
+        if kind == "trace_change"
+        else []
+    )
+    for change in changes:
+        if change["mode"] == "clear":
+            if change["trace_state"] == "present" or change["at"] is not None:
+                raise TraceContractError("invalid_read")
+        elif change["trace_state"] != "present" or change["at"] is None:
+            raise TraceContractError("invalid_read")
+        if change["mode"] != "patch" and any(
+            change[field]
+            for field in (
+                "upsert_nodes",
+                "remove_node_ids",
+                "upsert_edges",
+                "remove_edge_ids",
+            )
+        ):
+            raise TraceContractError("invalid_read")
     if kind == "trace_events":
         for event in response["events"]:
             validate_event(event)
