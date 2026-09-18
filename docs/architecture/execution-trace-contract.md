@@ -2464,3 +2464,45 @@ snapshots, full graph/coverage, service scheduling and API access remain pending
 The current derived tables are not yet covered by a qualified retention/physical
 budget and must not be enabled in production on the strength of these component
 tests alone.
+
+### Version 2 execution graph projection
+
+The explicitly initialized projector now also records logical native roots,
+execution attempts, model/tool spans, dispatches, permission decisions and join
+claims. The read node schema includes `permission` so a policy decision is not
+displayed as execution or as a dispatch outcome. The service remains disabled.
+Task-only projection version 1 is refused; a future generation rebuild must
+replay retained inputs rather than reuse its incomplete checkpoint.
+
+`parent_run_id` identifies the logical trace root, not an execution attempt.
+Native taskless run observations supply that root's state; task/operation terminal
+events cannot finish it. Execution-attempt nodes are separately keyed by source,
+epoch and attempt identity. Spans and dispatch requests also include trace and
+execution-attempt scope, so reuse of a caller UUID in another binding does not
+merge operations. Permission identity additionally includes policy. Missing
+attempt identity creates an observation-scoped run node, not a guessed attempt.
+First-observed conflicting operation outcomes retain every source-attributed
+candidate and remain separate from task-state authority.
+
+Task-parent/run-parent claims use explicit correlation fields. A task or logical
+run owns its observed execution attempt; an attempt/parent span owns its operation
+steps. Permission decisions attach to the explicit dispatch identity. These
+ownership relationships use the existing parent-task, parent-run and span-parent
+edge categories. Joins express dependency only and never enter ancestry.
+
+Relationship claims have deterministic IDs and are retained with their first
+ingestion position. Graph reads resolve them against the same node snapshot,
+creating explicit unresolved endpoints when needed. Late parents resolve those
+endpoints. Competing parents invalidate every competing ancestry claim; cycles
+invalidate every cycle edge independent of arrival order. Invalid claims remain
+visible and cannot become tree ancestry. Original task/run state is never changed
+by this projection.
+
+Internal change records contain node replacements plus relationship claims,
+sufficient to reconstruct the tested graph snapshots from the beginning of the
+change log. They are not yet the public graph-patch protocol: API/live conversion
+must emit affected edge resolutions, historical base retention and expansion
+cursors under the public bounds. The internal small-graph reader refuses graphs
+over 500 nodes/1,000 edges rather than silently omitting persisted data. Source-wide
+coverage, public expansion, rebuild/activation, retention and access-controlled
+API/live integration remain required before rollout or M5 acceptance.

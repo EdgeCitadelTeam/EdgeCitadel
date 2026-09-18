@@ -84,20 +84,21 @@ def test_batch_checkpoint_replay_conflicts_and_reopen(core):
         ]
     )
     assert result["node"] == expected.node
-    assert state.change_cursor == 3
+    assert state.change_cursor == 4
     assert ingest(core, values[0]).outcome == "duplicate"
     changed = deepcopy(values[0])
     changed["phase"] = "failed"
     assert ingest(core, changed).outcome == "conflict"
     caught_up = projection.project_batch(core)
     assert caught_up.ingest_cursor == 6
-    assert caught_up.change_cursor == 3
+    assert caught_up.change_cursor == 4
     assert projection.project_batch(core) == caught_up
     changes = projection.read_changes(core, generation=state.generation, after=0)[
         "changes"
     ]
-    assert [change["ingest_seq"] for change in changes] == [1, 2, 3]
-    assert changes[-1]["change"]["node"] == expected.node
+    assert [change["ingest_seq"] for change in changes] == [1, 2, 3, 4]
+    assert changes[2]["change"]["node"] == expected.node
+    assert changes[3]["change"]["node_updates"][0]["node"]["kind"] == "model"
     path = core.execute("PRAGMA database_list").fetchone()[2]
     with closing(sqlite3.connect(path)) as reopened:
         assert projection.initialize(reopened) == caught_up
@@ -321,6 +322,8 @@ def test_persisted_selection_matches_reducer_at_each_arrival(core, reverse):
 def test_owned_process_kill_at_projection_commit(core, boundary):
     value = event("completed")
     ingest(core, value)
+    ingest(core, event("finished", kind="model", seq=2))
+    ingest(core, event("observed", kind="link", seq=3))
     path = core.execute("PRAGMA database_list").fetchone()[2]
     program = """
 import sqlite3,sys,time
@@ -353,9 +356,14 @@ pause()
     if boundary == "before_commit":
         assert current["node"] is None
         assert current["state"].change_cursor == current["state"].ingest_cursor == 0
+        assert projection.read_graph(core, trace_id=value["trace_id"])["nodes"] == []
     else:
         assert current["node"]["state"] == "completed"
-        assert current["state"].change_cursor == current["state"].ingest_cursor == 1
+        assert current["state"].change_cursor == current["state"].ingest_cursor == 3
     final = projection.project_batch(core)
-    assert final.change_cursor == final.ingest_cursor == 1
+    assert final.change_cursor == final.ingest_cursor == 3
+    assert any(
+        node["kind"] == "model"
+        for node in projection.read_graph(core, trace_id=value["trace_id"])["nodes"]
+    )
     assert core.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

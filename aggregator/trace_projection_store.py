@@ -1,7 +1,7 @@
-"""Durable task projection, separate from ingestion and execution authority.
+"""Durable graph projection, separate from ingestion and execution authority.
 
-The task-only v1 projector is not enabled by Aggregator startup. Graph families,
-coverage, retention and generation rebuild must be completed before rollout.
+The v2 graph projector is not enabled by Aggregator startup. Coverage, retention
+and generation rebuild must be completed before rollout.
 Projection/checkpoint changes use one Core SQLite transaction; ingestion never
 waits for a projector acknowledgment and is not undone by projection failure.
 """
@@ -17,6 +17,7 @@ from uuid import uuid4
 from edgecitadel_agentd.trace_contract import event_sha256
 
 from .trace_payload_read import read_payload
+from .trace_graph_projection import entity_claims, relationship_claims, resolve_graph
 from .trace_task_projection import (
     TERMINAL_STATES,
     TaskObservation,
@@ -24,7 +25,7 @@ from .trace_task_projection import (
     task_node,
 )
 
-VERSION = 1
+VERSION = 2
 MAX_BATCH = 64
 
 SCHEMA = (
@@ -61,11 +62,28 @@ SCHEMA = (
         cursor INTEGER PRIMARY KEY,
         ingest_seq INTEGER NOT NULL UNIQUE,
         trace_id TEXT,
-        kind TEXT NOT NULL CHECK(kind IN ('task_upsert','payload_expired')),
+        kind TEXT NOT NULL CHECK(kind IN ('task_upsert','entity_upsert','relationships','payload_expired')),
         change_json TEXT NOT NULL
     )""",
     """CREATE INDEX IF NOT EXISTS trace_projection_trace_changes
         ON trace_projection_changes(trace_id,cursor)""",
+    """CREATE TABLE IF NOT EXISTS trace_entity_observations (
+        trace_id TEXT NOT NULL,entity_id TEXT NOT NULL,ingest_seq INTEGER NOT NULL,
+        node_id TEXT NOT NULL,source_epoch TEXT NOT NULL,agent_key TEXT NOT NULL,
+        source_seq INTEGER NOT NULL,terminal INTEGER NOT NULL,phase TEXT NOT NULL,
+        node_json TEXT NOT NULL,evidence_json TEXT NOT NULL,
+        PRIMARY KEY(trace_id,entity_id,ingest_seq)
+    )""",
+    """CREATE TABLE IF NOT EXISTS trace_projected_entities (
+        trace_id TEXT NOT NULL,entity_id TEXT NOT NULL,node_json TEXT NOT NULL,
+        ambiguous_live_state INTEGER NOT NULL,identity_conflict INTEGER NOT NULL,
+        PRIMARY KEY(trace_id,entity_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS trace_relationship_claims (
+        trace_id TEXT NOT NULL,edge_id TEXT NOT NULL,kind TEXT NOT NULL,
+        parent_id TEXT NOT NULL,child_id TEXT NOT NULL,first_ingest_seq INTEGER NOT NULL,
+        PRIMARY KEY(trace_id,edge_id)
+    )""",
 )
 
 
@@ -186,10 +204,127 @@ def _project_task(db: sqlite3.Connection, seq: int, event: dict) -> dict:
     return {"node": node, "ambiguous_live_state": ambiguous, "observation": evidence}
 
 
+def _project_entities(
+    db: sqlite3.Connection, seq: int, event: dict, claims: list[dict]
+) -> dict:
+    evidence = {
+        key: event[key]
+        for key in (
+            "node_id",
+            "source_epoch",
+            "event_id",
+            "source_seq",
+            "agent_id",
+            "task_id",
+            "execution_attempt_id",
+            "span_id",
+            "parent_span_id",
+            "parent_task_id",
+            "parent_run_id",
+            "kind",
+            "phase",
+            "evidence_kind",
+            "supersedes_event_id",
+            "occurred_at",
+            "duration_ms",
+            "attributes",
+        )
+    }
+    evidence["ingest_seq"] = seq
+    updates = []
+    for claim in claims:
+        scope = (event["trace_id"], claim["id"])
+        db.execute(
+            "INSERT INTO trace_entity_observations VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                *scope,
+                seq,
+                event["node_id"],
+                event["source_epoch"],
+                event["agent_id"] or "",
+                event["source_seq"],
+                int(claim["terminal"]),
+                event["phase"],
+                _json(claim["node"]),
+                _json(evidence),
+            ),
+        )
+        count, phases, kinds = db.execute(
+            "SELECT SUM(terminal),COUNT(DISTINCT CASE WHEN terminal=1 THEN phase END),"
+            "COUNT(DISTINCT json_extract(node_json,'$.kind')) "
+            "FROM trace_entity_observations WHERE trace_id=? AND entity_id=?",
+            scope,
+        ).fetchone()
+        if count:
+            encoded = db.execute(
+                "SELECT node_json FROM trace_entity_observations WHERE trace_id=? AND entity_id=? "
+                "AND terminal=1 ORDER BY ingest_seq LIMIT 1",
+                scope,
+            ).fetchone()[0]
+            ambiguous = False
+        else:
+            # Different source/epoch/agent perspectives are not comparable by
+            # local source sequence. Only the latest within each is eligible.
+            live = (
+                "FROM trace_entity_observations e WHERE e.trace_id=? AND e.entity_id=? "
+                "AND NOT EXISTS(SELECT 1 FROM trace_entity_observations n WHERE "
+                "n.trace_id=e.trace_id AND n.entity_id=e.entity_id AND n.node_id=e.node_id "
+                "AND n.source_epoch=e.source_epoch AND n.agent_key=e.agent_key "
+                "AND n.source_seq>e.source_seq)"
+            )
+            encoded = db.execute(
+                "SELECT node_json " + live + " ORDER BY ingest_seq LIMIT 1", scope
+            ).fetchone()[0]
+            ambiguous = (
+                db.execute("SELECT COUNT(DISTINCT phase) " + live, scope).fetchone()[0]
+                > 1
+            )
+        node = json.loads(encoded)
+        node["outcome_candidate_count"] = count
+        node["conflict"] = phases > 1
+        if ambiguous or kinds > 1:
+            node.update(state="unknown", agent_id=None, evidence_kind=None)
+        if kinds > 1:
+            node["kind"] = "unresolved"
+        db.execute(
+            "INSERT INTO trace_projected_entities VALUES(?,?,?,?,?) "
+            "ON CONFLICT(trace_id,entity_id) DO UPDATE SET node_json=excluded.node_json,"
+            "ambiguous_live_state=excluded.ambiguous_live_state,identity_conflict=excluded.identity_conflict",
+            (*scope, _json(node), int(ambiguous), int(kinds > 1)),
+        )
+        updates.append(
+            {
+                "node": node,
+                "ambiguous_live_state": ambiguous,
+                "identity_conflict": kinds > 1,
+            }
+        )
+    return {"node_updates": updates, "observation": evidence}
+
+
+def _record_relationships(
+    db: sqlite3.Connection, seq: int, event: dict, claims: list[dict]
+) -> list[dict]:
+    edges = relationship_claims(event, claims)
+    for relation in edges:
+        db.execute(
+            "INSERT OR IGNORE INTO trace_relationship_claims VALUES(?,?,?,?,?,?)",
+            (
+                event["trace_id"],
+                relation["id"],
+                relation["kind"],
+                relation["from"],
+                relation["to"],
+                seq,
+            ),
+        )
+    return edges
+
+
 def project_batch(db: sqlite3.Connection, *, limit: int = MAX_BATCH) -> ProjectionState:
     """Consume at most limit raw events; checkpoint, evidence and changes are atomic.
 
-    Non-task families are not projected by v1. An expired raw payload gets an
+    Source-wide coverage/security are not yet projected. An expired payload gets an
     explicit unattributed history-gap record; its task/trace is never guessed.
     Duplicate/conflict receipts do not create additional accepted observations.
     """
@@ -228,10 +363,27 @@ def project_batch(db: sqlite3.Connection, *, limit: int = MAX_BATCH) -> Projecti
                     event["source_seq"],
                 ) != (node, epoch, event_id, source_seq):
                     raise ValueError("projection_raw_identity_mismatch")
-                if event["kind"] != "task":
+                entities = entity_claims(event)
+                if event["kind"] == "task":
+                    kind = "task_upsert"
+                    change = _project_task(db, seq, event)
+                elif entities:
+                    kind = "entity_upsert"
+                    change = _project_entities(db, seq, event, entities)
+                elif event["kind"] == "link":
+                    kind = "relationships"
+                    change = {
+                        "node_id": node,
+                        "source_epoch": epoch,
+                        "event_id": event_id,
+                        "source_seq": source_seq,
+                        "evidence_kind": event["evidence_kind"],
+                        "supersedes_event_id": event["supersedes_event_id"],
+                    }
+                else:
                     continue
-                kind, trace_id = "task_upsert", event["trace_id"]
-                change = _project_task(db, seq, event)
+                trace_id = event["trace_id"]
+                change["edge_claims"] = _record_relationships(db, seq, event, entities)
             cursor += 1
             db.execute(
                 "INSERT INTO trace_projection_changes VALUES(?,?,?,?,?)",
@@ -265,6 +417,41 @@ def read_task(db: sqlite3.Connection, *, trace_id: str, task_id: str) -> dict:
         "node": json.loads(row[0]) if row else None,
         "ambiguous_live_state": bool(row[1]) if row else False,
     }
+
+
+def read_graph(db: sqlite3.Connection, *, trace_id: str) -> dict:
+    """Materialize a small internal graph; oversize needs the future expansion API.
+
+    No partial graph is returned as complete. Status is derived from the same
+    committed node/claim snapshot, so late parents and contradictions are visible
+    without mutating immutable relationship evidence or task authority.
+    """
+    _idle(db)
+    with db:
+        db.execute("BEGIN")
+        state = _state(db)
+        task_rows = db.execute(
+            "SELECT node_json FROM trace_projected_tasks WHERE trace_id=? LIMIT 501",
+            (trace_id,),
+        ).fetchall()
+        entity_rows = db.execute(
+            "SELECT node_json FROM trace_projected_entities WHERE trace_id=? LIMIT 501",
+            (trace_id,),
+        ).fetchall()
+        relations = db.execute(
+            "SELECT edge_id,kind,parent_id,child_id FROM trace_relationship_claims WHERE trace_id=? LIMIT 1001",
+            (trace_id,),
+        ).fetchall()
+    if len(task_rows) + len(entity_rows) > 500 or len(relations) > 1000:
+        raise ValueError("projection_graph_expansion_required")
+    graph = resolve_graph(
+        [json.loads(row[0]) for row in (*task_rows, *entity_rows)],
+        [
+            {"id": identity, "kind": kind, "from": parent, "to": child}
+            for identity, kind, parent, child in relations
+        ],
+    )
+    return {"state": state, **graph}
 
 
 def read_changes(

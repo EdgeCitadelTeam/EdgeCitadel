@@ -153,6 +153,8 @@ def _evidence(observation: TaskObservation) -> dict[str, Any]:
         "agent_id": event["agent_id"],
         "source_role": event["attributes"]["source_role"],
         "execution_attempt_id": event["execution_attempt_id"],
+        "parent_task_id": event["parent_task_id"],
+        "parent_run_id": event["parent_run_id"],
         "phase": event["phase"],
         "state": TASK_DISPLAY_STATES[event["phase"]],
         "reason": event["attributes"].get("reason"),
