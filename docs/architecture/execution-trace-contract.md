@@ -2693,6 +2693,37 @@ projects an input batch, evaluates retirement and applies history compaction.
 It starts no thread/task and remains disabled in service startup. Cleanup can
 increase global projector lag; ingestion remains independently committed, and
 cleanup latency plus additional retained-history/storage cost must be measured
-at the full dataset before rollout. Background task ownership/shutdown, public
-APIs/live conversion, frontend integration and jim-eq E2E remain pending. Shared
+at the full dataset before rollout. Startup integration, public APIs/live
+conversion, frontend integration and jim-eq E2E remain pending. Shared
 source/identity retirement and physical bounds are not closed by graph cleanup.
+
+### Standalone projector worker lifecycle
+
+`TraceProjectorService` explicitly owns a worker thread and its SQLite connection.
+It is not constructed by Aggregator startup yet. The collector remains the raw
+schema and payload migration owner: the worker waits for an existing Core file
+and collector singleton, requires WAL, and initializes only derived projection
+state. Its canonical per-database process lock is separate from the collector's
+lock. A second worker pauses without taking ownership.
+
+Each cycle runs bounded projection/retention maintenance and records a consistent
+observed checkpoint, collector watermark, lag, history floor and retirement
+status. Health snapshots are detached copies with fixed diagnostic codes and
+success timestamps; they contain no event payloads or exception text. Watermarks
+are last observed values, not a freshness guarantee. SQLite busy/locked failures
+retry with interruptible bounded backoff. Incompatible versions, changed collector
+epochs, storage errors and unexpected software failures remain visible and stop
+the worker; it never silently resets the derived store.
+
+Stop requests interrupt SQLite work and join the thread. Only the owning worker
+closes its connection, rolling back unfinished transactions; `stopped` is reported
+only after a successful join. A shutdown timeout raises while the worker remains
+visible as stopping. `stop` permits restart without resetting checkpoints;
+`close` permanently prevents restart, including after a shutdown timeout. Call
+these blocking methods off the application event loop when startup is integrated.
+
+Inline and separated-payload SQLite tests cover ownership, contention recovery,
+restart, epoch/version fences, sanitized failures, SQL cancellation/rollback and
+shutdown timeout. This does not qualify live deployment, filesystem replacement
+restore, public health/authentication, retained-volume performance or M4 physical
+bounds. Startup integration and real E2E remain subject to the rollout gates.
