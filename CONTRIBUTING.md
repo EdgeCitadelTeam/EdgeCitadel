@@ -37,7 +37,19 @@ callers; broaden for shared contracts or failures. Reuse passing results when
 the tested code and dependencies are unchanged. Documentation-only edits need
 content/link review, not application suites.
 
-For browser workflows, `cd e2e && npm test -- <spec>` owns a disposable stack;
+Examples below select one check, not a sequence to run for every change. Use the
+Python environment configured for the relevant subsystem; see `agent-runtime/README.md`
+for its source/editable setup.
+
+| Area | Focused command | Working directory |
+|---|---|---|
+| Python | `python -m pytest -q tests/test_api.py` | `aggregator/` |
+| Frontend unit test | `npm test -- src/components/StatusBadge.test.jsx` | `frontend/` |
+| E2E helper | `node --test helpers/stack-config.spec.js` | `e2e/` |
+| Browser workflow | `npm run test:playwright -- tests/operator-journey.spec.js` | `e2e/` |
+
+`e2e`'s `npm test` runs both helper tests and the full browser suite; use it when
+both are relevant. The focused browser command above owns a disposable stack;
 there is no need to restart a shared stack first. External model-dependent
 Managed Agent suites require a prepared stack and use `npm run test:external-plugins`.
 CI and release workflows keep their broader checks.

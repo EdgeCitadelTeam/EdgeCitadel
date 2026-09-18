@@ -12,12 +12,13 @@ alone. A deleted file may require checking callers instead of testing that file.
 
 | Change | Local verification |
 |---|---|
-| Documentation or agent instructions | Review content, links and consistency; no application suite or stack restart |
+| Prose or agent instructions | Review content, links and consistency; validate changed runnable examples/configuration without defaulting to an application suite |
 | Python behavior | Pinned Ruff lint/format on changed files, plus focused pytest tests and affected callers |
 | Typed SDK or shared validators | Relevant maintained mypy command below, plus contract tests |
 | Frontend behavior | Frontend lint, affected unit tests and build; browser/E2E coverage for changed user interactions |
 | E2E helper or fixture | Its tests and the affected Playwright spec; frontend build only if frontend/build inputs changed |
 | Deployment, NATS or shared configuration | Validate rendered config and affected integration path; see `verify-infra` |
+| Agent Package contents | Adapter regression tests; regenerate and validate the affected package lock as documented in `agent-runtime/README.md` |
 | Packaging or dependencies | Package/build or installed-artifact checks for the affected distribution |
 
 Reuse the existing project environment when dependencies are adequate. Python
@@ -39,10 +40,12 @@ strict-type baseline; do not add broad suppressions or claim otherwise.
 
 Broaden testing when the dependency surface or a failure warrants it. Reuse
 passing checks if their source, dependencies and relevant configuration are
-unchanged; commit boundaries alone do not invalidate results. Do not create
+unchanged, including the relevant execution environment; commit boundaries alone do not invalidate results. Do not create
 validation worktrees or rebuild environments for routine commits.
 
 Before committing, resolve failures relevant to the change. Report the checks
 run, their results, and relevant checks unavailable or deferred. No fixed
 checklist or separate verification document is required. CI/release workflows
-remain the authority for their own full gates; do not skip hooks.
+remain the authority for their own full gates; do not skip hooks. CI currently
+does not run the Aggregator suite or opt-in broker/E2E gates, so check those
+locally when affected rather than assuming CI covers them.

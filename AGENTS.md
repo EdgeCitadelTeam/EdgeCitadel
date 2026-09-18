@@ -1,45 +1,38 @@
 # Working in EdgeCitadel
 
-## Approach
-- Make the smallest complete change that solves the request. Reuse existing code;
-  avoid speculative abstractions, compatibility layers, and configuration.
-- Inspect relevant code and nested instructions before editing. Ask only when a
-  material ambiguity cannot be resolved from the request or repository.
-- Preserve unrelated user changes. Remove code/tests made obsolete by the change;
-  broader cleanup should have evidence that the behavior is unused or superseded.
-- Use a feature branch and focused Conventional Commits. Keep PR descriptions
-  about the problem, resulting behavior, and relevant verification.
-- Plans and design documents are useful for substantial uncertainty, not required
-  artifacts for routine fixes. Keep temporary work in `local-docs/`.
+## Make the change
+- Read the relevant source, tests and nested instructions. Follow local patterns
+  and make the smallest complete change; avoid speculative abstractions.
+- Preserve unrelated user changes. Before deleting code/tests, check callers,
+  entrypoints and maintained contracts; retain coverage for active behavior.
+- Resolve routine implementation choices independently. Ask when an unresolved
+  choice materially changes scope, behavior or risk.
+- Use focused Conventional Commits on a feature branch. Routine fixes need no
+  separate plan or verification report; save useful working notes in `local-docs/`.
 
-## Verification
-- Choose checks for the changed behavior and its callers. Start with focused
-  tests; broaden for shared contracts, cross-component changes, or failures.
-- Documentation-only changes need content/link review, not builds or a stack.
-- Reuse passing results when the tested code and dependencies have not changed.
-  Do not repeat suites solely because another commit is being created.
-- Use `.agents/skills/commit-check/SKILL.md` to select checks. The `verify-*`
-  recipes explain subsystem checks when needed; they are not cumulative gates.
-- Report what ran and any relevant limitations. Skips are not passing evidence.
-- CI and release workflows retain their broader checks. Never bypass hooks.
+## Verify proportionally
+- Start with tests for the changed behavior and its callers. Broaden for shared
+  contracts, cross-component effects, or failures, not simply file count.
+- For prose-only changes, review content and links. Check runnable examples or
+  configuration when those change; do not launch the application by default.
+- Reuse passing results while source, dependencies, relevant configuration and
+  environment remain unchanged. Commit boundaries alone do not require reruns.
+- Commands: `CONTRIBUTING.md`. Check selection: `.agents/skills/commit-check/SKILL.md`.
+  Consult the relevant `verify-*` recipe only when additional detail is needed.
+- Report checks and meaningful gaps; skips are not passing evidence. Keep CI,
+  release checks and hooks intact; do not assume they cover opt-in integration.
 
-## Repository map
-- `aggregator/`: FastAPI backend, NATS subscriptions, SQLite persistence.
-- `frontend/`: React/Vite dashboard; `e2e/`: Playwright and owned test stacks.
-- `agent-runtime/`: agentd, package runtime, SDK, validation and tests.
-- `agent-packages/`: installable Agents; `plugins/`: native host integrations.
-- `edgecitadel/`: Python distribution; `scripts/` and `deploy/`: CLI/deployment.
-- `docs/`: maintained guides; `local-docs/`: ignored plans and local evidence.
+## Find the code
+- `aggregator/`: backend/NATS/SQLite; `frontend/`: dashboard; `e2e/`: owned test stacks.
+- `agent-runtime/`: agentd, runtime, SDK and tests; `agent-packages/`: installable Agents.
+- `plugins/`: native host integrations; `edgecitadel/`: Python distribution.
+- `scripts/`, `deploy/`: CLI/deployment; `docs/`: maintained guides.
+- Setup: `docs/onboarding.md`; package workflow: `agent-runtime/README.md`;
+  tracing: `docs/architecture/execution-trace-contract.md`.
 
-## References
-- Development and commit conventions: `CONTRIBUTING.md`.
-- Setup/enrollment: `docs/onboarding.md`; runtime/packages: `agent-runtime/README.md`.
-- Experimental tracing: `docs/architecture/execution-trace-contract.md`.
-- Build/release checks: `.github/workflows/`; host dependencies: `deploy/manifest.toml`.
-
-## Boundaries
+## Keep changes reviewable
 - Keep credentials, `.env`, local settings and runtime data out of commits.
-- Update `.env.example` when changing environment configuration, and update the
-  relevant guide when changing a user-facing workflow.
-- Preserve authorization for publishing and destructive operations; task scope
-  and user instructions determine approval, not an extra repository checklist.
+- Update `.env.example` for environment configuration changes and the relevant
+  guide for user-facing workflow changes. Keep instructions here short; put
+  detailed procedures beside the subsystem that owns them.
+- Follow the user's authorization for publishing and destructive actions.

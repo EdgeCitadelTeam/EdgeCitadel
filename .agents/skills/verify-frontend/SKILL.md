@@ -9,7 +9,7 @@ For frontend code changes, run `npm run lint`, the affected unit tests, and
 `npm run build` from `frontend/`. Documentation-only changes need none of these.
 
 For changed user interactions or page composition, run the relevant Playwright
-spec from `e2e/` (`npm test -- <spec>`). Inspect visible layout changes in a browser.
+spec from `e2e/` (`npm run test:playwright -- <spec>`). Inspect visible layout changes in a browser.
 Broaden to the full suite for shared navigation or application-wide behavior.
 A unit-only internal change does not automatically need browser testing.
 
