@@ -23,3 +23,14 @@ def test_echo_runtime_uses_managed_agent_lifecycle() -> None:
     assert "ManagedContext" in source
     assert "await run(" in source
     assert "nats" not in source.lower()
+
+
+def test_echo_executes_delegation_without_changing_content() -> None:
+    import asyncio
+    import runpy
+
+    handler = runpy.run_path(str(PACKAGE_ROOT / "runtime/__main__.py"))["handle"]
+    result, state = asyncio.run(
+        handler({"type": "delegation", "payload": {"body": "owned echo"}}, None)
+    )
+    assert (result, state) == ({"body": "owned echo"}, "completed")

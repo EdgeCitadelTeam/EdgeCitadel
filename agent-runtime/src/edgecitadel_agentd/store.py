@@ -11,14 +11,47 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
+
 from edgecitadel_plugin_runtime.validator import ValidationError, default_validator
 
-SCHEMA_VERSION = 6
+from .trace_append import OPERATION_SCHEMA_SQL, append_trace
+from .trace_bindings import BINDING_SCHEMA_SQL, bind_trace
+from .trace_capacity import (
+    CAPACITY_SCHEMA_SQL,
+    CAPACITY_TRIGGERS,
+    physical_storage,
+    reclaim_wal_pressure,
+)
+from .trace_compaction import (
+    compact_closed_execution,
+    compact_lost_spool,
+    compact_settled_spool,
+)
+from .trace_collector_recovery import RECOVERY_SCHEMA_SQL
+from .trace_contract import TraceContractError
+from .trace_correlation import TaskTraceContext
+from .trace_dispatch import dispatch_trace
+from .trace_finish import close_session_bindings_locked, finish_trace
+from .trace_import import IMPORT_SCHEMA_SQL
+from .trace_journal import TRACE_SCHEMA_SQL
+from .trace_lifecycle import record_task_boundary
+from .trace_marker_compaction import coalesce_loss_markers
+from .trace_retention import maintain_capacity
+from .trace_settlement_apply import SETTLEMENT_SCHEMA_SQL
+
+READ_MAX_STEPS = 100_000
+READ_MAX_SECONDS = 0.05
+READ_PROGRESS_STEPS = 1000
+READ_BUSY_MS = 50
+
+SCHEMA_VERSION = 22
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -133,7 +166,10 @@ class AgentdStore:
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._connection.execute("PRAGMA busy_timeout=5000")
         self._lock = threading.RLock()
+        self._authentication_rejections = 0
+        self._settled_retirement_after: tuple[str, str, str, int] | None = None
         self._last_retention_ms = 0
+        self._reconciliation_storage_unavailable = False
         schema_version = int(
             self._connection.execute("PRAGMA user_version").fetchone()[0]
         )
@@ -321,6 +357,185 @@ class AgentdStore:
                     PRAGMA user_version=6;
                     """
             )
+            version = 6
+        if version == 6:
+            self._execute_migration_sql(TRACE_SCHEMA_SQL)
+            self._connection.execute("PRAGMA user_version=7")
+            version = 7
+        if version == 7:
+            self._execute_migration_sql(BINDING_SCHEMA_SQL)
+            self._connection.execute("PRAGMA user_version=8")
+            version = 8
+        if version == 8:
+            self._execute_migration_sql(OPERATION_SCHEMA_SQL)
+            self._connection.execute("PRAGMA user_version=9")
+            version = 9
+        if version == 9:
+            self._execute_migration_sql("""
+                CREATE TABLE trace_task_contexts (
+                    task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+                    context_json TEXT NOT NULL
+                );
+                PRAGMA user_version=10;
+            """)
+            version = 10
+        if version == 10:
+            self._execute_migration_sql(CAPACITY_SCHEMA_SQL)
+            for statement in CAPACITY_TRIGGERS:
+                self._connection.execute(statement)
+            self._connection.execute("PRAGMA user_version=11")
+            version = 11
+        if version == 11:
+            columns = {
+                row[1]
+                for row in self._connection.execute("PRAGMA table_info(trace_journal)")
+            }
+            if "received_at_ms" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE trace_journal ADD COLUMN received_at_ms INTEGER NOT NULL DEFAULT 0"
+                )
+                # Older rows have no trustworthy arrival time. Start their age
+                # at migration rather than infer it from producer timestamps.
+                self._connection.execute(
+                    "UPDATE trace_journal SET received_at_ms=?", (_now_ms(),)
+                )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS trace_journal_retention ON trace_journal(node_id,source_epoch,received_at_ms,source_seq) "
+                "WHERE json_extract(event_json,'$.kind') NOT IN ('coverage','source','security')"
+            )
+            self._connection.execute("PRAGMA user_version=12")
+            version = 12
+        if version == 12:
+            self._execute_migration_sql("""
+                CREATE TABLE IF NOT EXISTS restore_holds (
+                    kind TEXT NOT NULL CHECK(kind IN ('task', 'transport')),
+                    object_id TEXT NOT NULL,
+                    source_epoch TEXT NOT NULL,
+                    held_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(kind, object_id)
+                );
+                PRAGMA user_version=13;
+            """)
+            version = 13
+        if version == 13:
+            self._execute_migration_sql("""
+                CREATE TABLE IF NOT EXISTS restore_activations (
+                    node_id TEXT NOT NULL,
+                    source_epoch TEXT NOT NULL,
+                    inventory_sha256 TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    PRIMARY KEY(node_id, source_epoch)
+                );
+                PRAGMA user_version=14;
+            """)
+            version = 14
+        if version == 14:
+            self._execute_migration_sql("""
+                CREATE INDEX IF NOT EXISTS trace_bindings_closed ON trace_bindings(closed_at_ms,binding_id);
+                CREATE INDEX IF NOT EXISTS trace_requests_binding ON trace_requests(binding_id,operation);
+                CREATE INDEX IF NOT EXISTS trace_operations_parent ON trace_operations(parent_span_id);
+                PRAGMA user_version=15;
+            """)
+            version = 15
+        if version == 15:
+            self._execute_migration_sql("""
+                CREATE INDEX IF NOT EXISTS trace_spool_journal ON trace_spool(
+                    node_id,source_epoch,journal_event_id,export_generation,state,export_seq
+                );
+                PRAGMA user_version=16;
+            """)
+            version = 16
+        if version == 16:
+            self._execute_migration_sql("""
+                CREATE INDEX IF NOT EXISTS trace_loss_scope ON trace_journal(
+                    node_id,
+                    COALESCE(json_extract(event_json,'$.attributes.affected_source_epoch'),source_epoch),
+                    json_extract(event_json,'$.attributes.export_generation')
+                ) WHERE json_extract(event_json,'$.kind')='coverage'
+                    AND json_extract(event_json,'$.phase')='lost';
+                PRAGMA user_version=17;
+            """)
+            version = 17
+        if version == 17:
+            self._execute_migration_sql(IMPORT_SCHEMA_SQL)
+            self._connection.execute("PRAGMA user_version=18")
+            version = 18
+        if version == 18:
+            columns = {
+                row[1]
+                for row in self._connection.execute("PRAGMA table_info(trace_spool)")
+            }
+            if "core_outcome" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE trace_spool ADD COLUMN core_outcome TEXT "
+                    "CHECK(core_outcome IN ('accepted','rejected','lost'))"
+                )
+            self._execute_migration_sql(SETTLEMENT_SCHEMA_SQL)
+            self._connection.execute("PRAGMA user_version=19")
+            version = 19
+        if version == 19:
+            self._execute_migration_sql(RECOVERY_SCHEMA_SQL)
+            self._connection.execute("PRAGMA user_version=20")
+            version = 20
+        if version == 20:
+            columns = {
+                row[1]
+                for row in self._connection.execute(
+                    "PRAGMA table_info(trace_export_generations)"
+                )
+            }
+            if "sync_fault" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE trace_export_generations ADD COLUMN sync_fault TEXT "
+                    "CHECK(sync_fault IS NULL OR length(sync_fault)<=64)"
+                )
+            self._connection.execute("PRAGMA user_version=21")
+            version = 21
+        if version == 21:
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS trace_spool_settled_empty ON trace_spool("
+                "node_id,source_epoch,export_generation,export_seq) "
+                "WHERE state='core_settled' AND journal_event_id IS NULL"
+            )
+            self._connection.execute("PRAGMA user_version=22")
+
+    @contextmanager
+    def _task_transaction(self) -> Iterator[None]:
+        with self._lock:
+            if self._connection.in_transaction:
+                yield
+            else:
+                with self._connection:
+                    self._connection.execute("BEGIN IMMEDIATE")
+                    yield
+
+    def dispatch_trace(
+        self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        return dispatch_trace(
+            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
+
+    def finish_trace(
+        self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        return finish_trace(
+            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
+
+    def append_trace(
+        self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        return append_trace(
+            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
+
+    def bind_trace(
+        self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        return bind_trace(
+            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
 
     def _execute_migration_sql(self, source: str) -> None:
         """Execute simple migration statements without executescript's implicit commit."""
@@ -941,6 +1156,8 @@ class AgentdStore:
         trace_id: str | None = None,
         context_id: str | None = None,
         queue_transport: bool = True,
+        correlation: TaskTraceContext | None = None,
+        trace_node_id: str | None = None,
     ) -> dict[str, object]:
         if not sender_id or not recipient_id:
             raise StoreError("sender_id and recipient_id are required")
@@ -977,7 +1194,9 @@ class AgentdStore:
             raise StoreError(
                 "trace_id must contain exactly 32 lowercase hex characters"
             )
-        with self._lock, self._connection:
+        if correlation is not None and correlation.task_id != task_id:
+            raise StoreError("task correlation mismatch")
+        with self._task_transaction():
             try:
                 self._connection.execute(
                     """
@@ -1002,6 +1221,11 @@ class AgentdStore:
                 )
             except sqlite3.IntegrityError as error:
                 raise StoreError("task_id already exists") from error
+            if correlation is not None:
+                self._connection.execute(
+                    "INSERT INTO trace_task_contexts(task_id,context_json) VALUES (?,?)",
+                    (task_id, json.dumps(asdict(correlation), sort_keys=True)),
+                )
             self._record_event_locked(
                 event_type="task.queued",
                 agent_id=sender_id,
@@ -1009,6 +1233,8 @@ class AgentdStore:
                 trace_id=trace_id,
                 attributes={"recipient_id": recipient_id, "skill_id": skill_id},
                 now=now,
+                trace_node_id=trace_node_id,
+                trace_source_role="sender" if queue_transport else "recipient",
             )
             if queue_transport and not self._agent_is_local_locked(recipient_id):
                 message_id = str(uuid.uuid4())
@@ -1054,6 +1280,42 @@ class AgentdStore:
             raise StoreError("task is outside the connector scope")
         return task
 
+    @contextmanager
+    def _bounded_read(self) -> Iterator[None]:
+        """Bound broad API SQL work; callers materialize rows before leaving."""
+        with self._lock:
+            db = self._connection
+            previous_timeout = db.execute("PRAGMA busy_timeout").fetchone()[0]
+            started = time.monotonic()
+            steps = 0
+            expired = False
+
+            def progress() -> bool:
+                nonlocal steps, expired
+                steps += READ_PROGRESS_STEPS
+                expired = (
+                    steps >= READ_MAX_STEPS
+                    or time.monotonic() - started >= READ_MAX_SECONDS
+                )
+                return expired
+
+            try:
+                db.execute(f"PRAGMA busy_timeout={READ_BUSY_MS}")
+                db.set_progress_handler(progress, READ_PROGRESS_STEPS)
+                yield
+            except sqlite3.OperationalError as error:
+                if expired and error.sqlite_errorcode == sqlite3.SQLITE_INTERRUPT:
+                    raise StoreError("read_query_budget_exceeded") from None
+                if error.sqlite_errorcode in {
+                    sqlite3.SQLITE_BUSY,
+                    sqlite3.SQLITE_LOCKED,
+                }:
+                    raise StoreError("read_query_unavailable") from None
+                raise
+            finally:
+                db.set_progress_handler(None, 0)
+                db.execute(f"PRAGMA busy_timeout={previous_timeout}")
+
     def list_tasks(
         self,
         *,
@@ -1076,7 +1338,7 @@ class AgentdStore:
             clauses.append(f"state NOT IN ({placeholders})")
             arguments.extend(sorted(TERMINAL_STATES))
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        with self._lock:
+        with self._bounded_read():
             rows = self._connection.execute(
                 "SELECT * FROM tasks" + where + " ORDER BY created_at_ms", arguments
             ).fetchall()
@@ -1093,6 +1355,8 @@ class AgentdStore:
         evidence: Mapping[str, object] | None = None,
         result: Mapping[str, object] | None = None,
         queue_transport: bool = True,
+        trace_evidence_kind: str = "source_observed",
+        trace_source_role: str | None = None,
     ) -> dict[str, object]:
         if state not in TASK_STATES:
             raise StoreError("unsupported task state")
@@ -1126,7 +1390,9 @@ class AgentdStore:
                         )
             if conflict is not None:
                 raise StoreError("conflicting terminal task result was rejected")
-        with self._lock, self._connection:
+        with self._task_transaction():
+            if self._restore_held_locked("task", task_id):
+                raise StoreError("task requires restore reconciliation")
             row = self._connection.execute(
                 "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
             ).fetchone()
@@ -1216,6 +1482,8 @@ class AgentdStore:
                 trace_id=row["trace_id"],
                 attributes={"reason": reason} if reason else {},
                 now=now,
+                trace_evidence_kind=trace_evidence_kind,
+                trace_source_role=trace_source_role,
             )
             if state in TERMINAL_STATES and queue_transport:
                 message_id = str(uuid.uuid4())
@@ -1261,7 +1529,7 @@ class AgentdStore:
     ) -> dict[str, object] | None:
         connector = self.authenticate(connector_id, token)
         now = _now_ms()
-        with self._lock, self._connection:
+        with self._task_transaction():
             active = self._connection.execute(
                 """
                 SELECT 1 FROM sessions
@@ -1277,6 +1545,7 @@ class AgentdStore:
                 SELECT task_id, state FROM tasks
                 WHERE recipient_id = ? AND state IN ('queued', 'offered')
                   AND claimed_session_id IS NULL
+                  AND task_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='task')
                 ORDER BY created_at_ms LIMIT 1
                 """,
                 (connector["agent_id"],),
@@ -1291,13 +1560,20 @@ class AgentdStore:
                     actor_id="edgecitadel-system",
                     queue_transport=False,
                 )
-            return self.transition_task(
+            claimed = self.transition_task(
                 task_id=task_id,
                 state="accepted",
                 actor_id=str(connector["agent_id"]),
                 session_id=session_id,
                 queue_transport=False,
             )
+            saved = self._connection.execute(
+                "SELECT context_json FROM trace_task_contexts WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            if saved is not None:
+                claimed["trace_context"] = json.loads(saved[0])
+            return claimed
 
     def ingest_transport_envelope(
         self, envelope: Mapping[str, object]
@@ -1347,6 +1623,8 @@ class AgentdStore:
                         state="offered",
                         actor_id="edgecitadel-system",
                         evidence={"transport": "nats", "compatibility": "v1-result"},
+                        trace_evidence_kind="compatibility_synthesized",
+                        trace_source_role="sender",
                         queue_transport=False,
                     )
                 if current["state"] == "offered" and state not in {
@@ -1358,6 +1636,8 @@ class AgentdStore:
                         state="accepted",
                         actor_id=actor_id,
                         evidence={"transport": "nats", "compatibility": "v1-result"},
+                        trace_evidence_kind="compatibility_synthesized",
+                        trace_source_role="sender",
                         queue_transport=False,
                     )
                 if current["state"] == "accepted" and state == "completed":
@@ -1366,6 +1646,8 @@ class AgentdStore:
                         state="running",
                         actor_id=actor_id,
                         evidence={"transport": "nats", "compatibility": "v1-result"},
+                        trace_evidence_kind="compatibility_synthesized",
+                        trace_source_role="sender",
                         queue_transport=False,
                     )
                 return self.transition_task(
@@ -1373,6 +1655,8 @@ class AgentdStore:
                     state=state,
                     actor_id=actor_id,
                     reason="remote_result",
+                    trace_evidence_kind="integration_reported",
+                    trace_source_role="sender",
                     result=payload if isinstance(payload, Mapping) else None,
                     evidence={"transport": "nats"},
                     queue_transport=False,
@@ -1442,6 +1726,15 @@ class AgentdStore:
                 )
                 if actual != expected
             ]
+            with self._lock:
+                saved_context = self._connection.execute(
+                    "SELECT context_json FROM trace_task_contexts WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()
+            if saved_context is not None and json.loads(saved_context[0]) != asdict(
+                TaskTraceContext.from_envelope(envelope)
+            ):
+                conflicts.append("execution_context")
             if conflicts:
                 self.append_event(
                     event_type="task.duplicate_conflict",
@@ -1467,6 +1760,7 @@ class AgentdStore:
             payload=payload,
             deadline_at_ms=(int(deadline) if deadline is not None else None),
             queue_transport=False,
+            correlation=TaskTraceContext.from_envelope(envelope),
         )
         return self.transition_task(
             task_id=str(task["task_id"]),
@@ -1483,6 +1777,7 @@ class AgentdStore:
                 """
                 SELECT message_id, task_id, subject, envelope_json, created_at_ms
                 FROM transport_outbox WHERE published_at_ms IS NULL
+                  AND message_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='transport')
                 ORDER BY created_at_ms LIMIT ?
                 """,
                 (limit,),
@@ -1504,6 +1799,7 @@ class AgentdStore:
                 """
                 UPDATE transport_outbox SET published_at_ms = ?
                 WHERE message_id = ? AND published_at_ms IS NULL
+                  AND message_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='transport')
                 """,
                 (_now_ms(), message_id),
             ).rowcount
@@ -1528,6 +1824,7 @@ class AgentdStore:
                 trace_id=trace_id,
                 attributes=attributes,
                 now=now,
+                record_lifecycle=False,
             )
 
     def observe_presence(self, *, agent_id: str, state: str, reason: str) -> None:
@@ -1596,7 +1893,7 @@ class AgentdStore:
     ) -> list[dict[str, object]]:
         if not 1 <= limit <= 1000:
             raise StoreError("trace limit must be between 1 and 1000")
-        with self._lock:
+        with self._bounded_read():
             where = "WHERE agent_id = ?" if agent_id else ""
             arguments: tuple[object, ...] = (agent_id, limit) if agent_id else (limit,)
             rows = self._connection.execute(
@@ -1614,7 +1911,7 @@ class AgentdStore:
     def get_trace(
         self, trace_id: str, *, agent_id: str | None = None
     ) -> dict[str, object]:
-        with self._lock:
+        with self._bounded_read():
             scope = " AND agent_id = ?" if agent_id else ""
             arguments: tuple[object, ...] = (
                 (trace_id, agent_id) if agent_id else (trace_id,)
@@ -1680,101 +1977,125 @@ class AgentdStore:
         now = now_ms if now_ms is not None else _now_ms()
         expired_sessions = 0
         expired_tasks = 0
-        with self._lock, self._connection:
-            rows = self._connection.execute(
-                """
-                SELECT s.session_id, s.connector_id, c.agent_id
-                FROM sessions s JOIN connectors c USING(connector_id)
-                WHERE s.closed_at_ms IS NULL AND s.lease_expires_at_ms <= ?
-                """,
-                (now,),
-            ).fetchall()
-            for row in rows:
-                self._connection.execute(
-                    "UPDATE sessions SET closed_at_ms = ? WHERE session_id = ?",
-                    (now, row["session_id"]),
-                )
-                self._recover_session_tasks_locked(str(row["session_id"]), now)
-                expired_sessions += 1
-                if not self._has_active_session_locked(row["connector_id"], now):
-                    self._record_presence_locked(
-                        row["agent_id"], "unavailable", "session_lease_expired", now
-                    )
-            tasks = self._connection.execute(
-                """
-                SELECT task_id, trace_id, sender_id FROM tasks
-                WHERE deadline_at_ms IS NOT NULL AND deadline_at_ms <= ?
-                  AND state NOT IN (
-                      'completed', 'failed', 'rejected', 'cancelled',
-                      'expired', 'undeliverable'
-                  )
-                """,
-                (now,),
-            ).fetchall()
-            for row in tasks:
-                self._connection.execute(
+        with self._lock:
+            with self._connection:
+                rows = self._connection.execute(
                     """
-                    UPDATE tasks SET state = 'expired', updated_at_ms = ?,
-                                     terminal_reason = 'deadline_exceeded'
-                    WHERE task_id = ?
+                    SELECT s.session_id, s.connector_id, c.agent_id
+                    FROM sessions s JOIN connectors c USING(connector_id)
+                    WHERE s.closed_at_ms IS NULL AND s.lease_expires_at_ms <= ?
                     """,
-                    (now, row["task_id"]),
-                )
-                self._record_event_locked(
-                    event_type="task.expired",
-                    agent_id="edgecitadel-system",
-                    task_id=row["task_id"],
-                    trace_id=row["trace_id"],
-                    attributes={"reason": "deadline_exceeded"},
-                    now=now,
-                )
-                if not self._agent_is_local_locked(str(row["sender_id"])):
-                    message_id = str(uuid.uuid4())
-                    self._queue_transport_locked(
-                        message_id=message_id,
-                        task_id=str(row["task_id"]),
-                        subject=f"agents.{row['sender_id']}.inbox",
-                        envelope={
-                            "v": 1,
-                            "id": message_id,
-                            "type": "result",
-                            "sender_id": "edgecitadel-system",
-                            "recipient_id": row["sender_id"],
-                            "task_id": row["task_id"],
-                            "task_state": "failed",
-                            "timestamp": self._iso_timestamp(now),
-                            "payload": {
-                                "error": "deadline_exceeded",
-                                "terminal_state": "expired",
-                            },
-                        },
+                    (now,),
+                ).fetchall()
+                for row in rows:
+                    self._connection.execute(
+                        "UPDATE sessions SET closed_at_ms = ? WHERE session_id = ?",
+                        (now, row["session_id"]),
+                    )
+                    self._recover_session_tasks_locked(str(row["session_id"]), now)
+                    expired_sessions += 1
+                    if not self._has_active_session_locked(row["connector_id"], now):
+                        self._record_presence_locked(
+                            row["agent_id"], "unavailable", "session_lease_expired", now
+                        )
+                tasks = self._connection.execute(
+                    """
+                    SELECT task_id, trace_id, sender_id FROM tasks
+                    WHERE deadline_at_ms IS NOT NULL AND deadline_at_ms <= ?
+                      AND task_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='task')
+                      AND state NOT IN (
+                          'completed', 'failed', 'rejected', 'cancelled',
+                          'expired', 'undeliverable'
+                      )
+                    """,
+                    (now,),
+                ).fetchall()
+                for row in tasks:
+                    self._connection.execute(
+                        """
+                        UPDATE tasks SET state = 'expired', updated_at_ms = ?,
+                                         terminal_reason = 'deadline_exceeded'
+                        WHERE task_id = ?
+                        """,
+                        (now, row["task_id"]),
+                    )
+                    self._record_event_locked(
+                        event_type="task.expired",
+                        agent_id="edgecitadel-system",
+                        task_id=row["task_id"],
+                        trace_id=row["trace_id"],
+                        attributes={"reason": "deadline_exceeded"},
                         now=now,
                     )
-                expired_tasks += 1
-            if now - self._last_retention_ms >= RETENTION_INTERVAL_MS:
-                cutoff = now - TELEMETRY_RETENTION_MS
-                self._connection.execute(
-                    "DELETE FROM spans WHERE started_at_ms < ?", (cutoff,)
+                    if not self._agent_is_local_locked(str(row["sender_id"])):
+                        message_id = str(uuid.uuid4())
+                        self._queue_transport_locked(
+                            message_id=message_id,
+                            task_id=str(row["task_id"]),
+                            subject=f"agents.{row['sender_id']}.inbox",
+                            envelope={
+                                "v": 1,
+                                "id": message_id,
+                                "type": "result",
+                                "sender_id": "edgecitadel-system",
+                                "recipient_id": row["sender_id"],
+                                "task_id": row["task_id"],
+                                "task_state": "failed",
+                                "timestamp": self._iso_timestamp(now),
+                                "payload": {
+                                    "error": "deadline_exceeded",
+                                    "terminal_state": "expired",
+                                },
+                            },
+                            now=now,
+                        )
+                    expired_tasks += 1
+                if now - self._last_retention_ms >= RETENTION_INTERVAL_MS:
+                    cutoff = now - TELEMETRY_RETENTION_MS
+                    self._connection.execute(
+                        "DELETE FROM spans WHERE started_at_ms < ?", (cutoff,)
+                    )
+                    self._connection.execute(
+                        "DELETE FROM events WHERE created_at_ms < ?", (cutoff,)
+                    )
+                    self._connection.execute(
+                        "DELETE FROM presence_history WHERE observed_at_ms < ?",
+                        (cutoff,),
+                    )
+                    self._last_retention_ms = now
+                self._trim_telemetry_locked(
+                    "events", "event_id", "created_at_ms", MAX_EVENT_RECORDS
                 )
-                self._connection.execute(
-                    "DELETE FROM events WHERE created_at_ms < ?", (cutoff,)
+                self._trim_telemetry_locked(
+                    "spans", "span_id", "started_at_ms", MAX_SPAN_RECORDS
                 )
-                self._connection.execute(
-                    "DELETE FROM presence_history WHERE observed_at_ms < ?", (cutoff,)
+                self._trim_telemetry_locked(
+                    "presence_history",
+                    "presence_id",
+                    "observed_at_ms",
+                    MAX_PRESENCE_RECORDS,
                 )
-                self._last_retention_ms = now
-            self._trim_telemetry_locked(
-                "events", "event_id", "created_at_ms", MAX_EVENT_RECORDS
-            )
-            self._trim_telemetry_locked(
-                "spans", "span_id", "started_at_ms", MAX_SPAN_RECORDS
-            )
-            self._trim_telemetry_locked(
-                "presence_history",
-                "presence_id",
-                "observed_at_ms",
-                MAX_PRESENCE_RECORDS,
-            )
+                try:
+                    coalesce_loss_markers(self._connection, now_ms=now)
+                    maintain_capacity(
+                        self._connection,
+                        now_ms=now,
+                        expire_before_ms=now - TELEMETRY_RETENTION_MS,
+                    )
+                except TraceContractError as error:
+                    if error.code != "quota_exceeded":
+                        raise
+                    # No marker fitted the reserve. Keep the replayable payloads;
+                    # admission continues to expose quota_exceeded to producers.
+                compact_closed_execution(
+                    self._connection, before_ms=now - TELEMETRY_RETENTION_MS
+                )
+                compact_lost_spool(self._connection)
+                _, retirement_after = compact_settled_spool(
+                    self._connection, after=self._settled_retirement_after
+                )
+            self._settled_retirement_after = retirement_after
+            reclaim_wal_pressure(self._connection)
         return {"expired_sessions": expired_sessions, "expired_tasks": expired_tasks}
 
     def _trim_telemetry_locked(
@@ -1801,6 +2122,7 @@ class AgentdStore:
             SELECT task_id, sender_id, trace_id, state
             FROM tasks
             WHERE claimed_session_id = ? AND state IN ('accepted', 'running')
+              AND task_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='task')
             """,
             (session_id,),
         ).fetchall()
@@ -1861,6 +2183,14 @@ class AgentdStore:
                     now=now,
                 )
 
+        close_session_bindings_locked(self, session_id, now)
+
+    def set_reconciliation_storage_unavailable(self, value: bool) -> bool:
+        with self._lock:
+            changed = self._reconciliation_storage_unavailable != value
+            self._reconciliation_storage_unavailable = value
+            return changed
+
     def health(self) -> dict[str, object]:
         with self._lock:
             integrity = self._connection.execute("PRAGMA quick_check").fetchone()[0]
@@ -1891,12 +2221,30 @@ class AgentdStore:
                 )
                 if candidate.is_file()
             )
+            storage = physical_storage(self._connection)
+            physical_pressure = (
+                storage["pressure_bytes"] >= storage["optional_pressure_limit_bytes"]
+            )
+            reconciliation_unavailable = self._reconciliation_storage_unavailable
         return {
-            "status": "ready" if integrity == "ok" else "failed",
+            "status": "failed"
+            if integrity != "ok"
+            else (
+                "degraded"
+                if reconciliation_unavailable or physical_pressure
+                else "ready"
+            ),
+            **(
+                {"reconciliation": "storage_unavailable"}
+                if reconciliation_unavailable
+                else {}
+            ),
             "database": integrity,
             "schema_version": schema,
             "active_sessions": active_sessions,
             "database_bytes": database_bytes,
+            "physical_storage": storage,
+            **({"trace_storage": "physical_pressure"} if physical_pressure else {}),
             "telemetry_records": telemetry_records,
         }
 
@@ -1934,6 +2282,11 @@ class AgentdStore:
         envelope: Mapping[str, object],
         now: int,
     ) -> None:
+        correlation = self._connection.execute(
+            "SELECT context_json FROM trace_task_contexts WHERE task_id=?", (task_id,)
+        ).fetchone()
+        if correlation is not None:
+            envelope = TaskTraceContext(**json.loads(correlation[0])).apply(envelope)
         try:
             default_validator().validate_envelope(dict(envelope))
         except ValidationError as error:
@@ -1980,6 +2333,10 @@ class AgentdStore:
         trace_id: str | None,
         attributes: Mapping[str, object] | None,
         now: int,
+        trace_node_id: str | None = None,
+        trace_source_role: str | None = None,
+        trace_evidence_kind: str = "source_observed",
+        record_lifecycle: bool = True,
     ) -> str:
         event_id = str(uuid.uuid4())
         self._connection.execute(
@@ -1999,10 +2356,36 @@ class AgentdStore:
                 now,
             ),
         )
+        if not record_lifecycle:
+            return event_id
+        try:
+            record_task_boundary(
+                self,
+                event_type=event_type,
+                event_id=event_id,
+                actor_id=agent_id,
+                task_id=task_id,
+                now=now,
+                reason=(attributes or {}).get("reason"),
+                node_id=trace_node_id,
+                source_role=trace_source_role,
+                evidence_kind=trace_evidence_kind,
+            )
+        except TraceContractError as error:
+            raise StoreError(error.code) from error
         return event_id
 
+    def _restore_held_locked(self, kind: str, object_id: str) -> bool:
+        return (
+            self._connection.execute(
+                "SELECT 1 FROM restore_holds WHERE kind=? AND object_id=?",
+                (kind, object_id),
+            ).fetchone()
+            is not None
+        )
+
     def _task_mapping(self, row: sqlite3.Row) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "task_id": row["task_id"],
             "sender_id": row["sender_id"],
             "recipient_id": row["recipient_id"],
@@ -2019,6 +2402,13 @@ class AgentdStore:
             if row["result_json"]
             else None,
         }
+
+        # Read/list callers map immutable rows after releasing the query lock.
+        # The restore lookup still shares the connection with background writers.
+        with self._lock:
+            if self._restore_held_locked("task", str(row["task_id"])):
+                value["restore_status"] = "reconciliation_required"
+        return value
 
     @staticmethod
     def _span_mapping(row: sqlite3.Row) -> dict[str, object]:

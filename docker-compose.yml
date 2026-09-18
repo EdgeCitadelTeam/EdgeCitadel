@@ -38,6 +38,7 @@ services:
     environment:
       # Historical filename retained for state compatibility.
       - DB_PATH=/data/openclaw.db
+      - EDGECITADEL_TRACE_COLLECTOR=${EDGECITADEL_TRACE_COLLECTOR:-0}
       - NATS_URL=nats://nats:4222
       - NATS_TOKEN=${NATS_TOKEN}
       - NATS_LEAF_USERNAME=${NATS_LEAF_USERNAME}

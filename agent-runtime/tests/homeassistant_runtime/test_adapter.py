@@ -90,7 +90,8 @@ def test_set_light_confirms_requested_brightness():
         )
 
 
-def test_handle_marks_restore_failure_failed():
+@pytest.mark.parametrize("envelope_type", ["command", "delegation"])
+def test_handle_marks_restore_failure_failed(envelope_type):
     w = worker()
     w.sequence = MagicMock(
         return_value={
@@ -107,7 +108,10 @@ def test_handle_marks_restore_failure_failed():
     try:
         payload, state = __import__("asyncio").run(
             handle(
-                {"type": "command", "payload": {"args": {"operation": "run_sequence"}}},
+                {
+                    "type": envelope_type,
+                    "payload": {"args": {"operation": "run_sequence"}},
+                },
                 MagicMock(spec=Context),
             )
         )
@@ -119,7 +123,7 @@ def test_handle_marks_restore_failure_failed():
 
 @pytest.mark.asyncio
 async def test_handle_rejects_non_command():
-    env = {"type": "delegation", "sender_id": "planner-1", "payload": {}}
+    env = {"type": "heartbeat", "sender_id": "planner-1", "payload": {}}
     payload, state = await handle(env, MagicMock(spec=Context))
     assert state == "rejected"
     assert payload["error"] == "unsupported_type"

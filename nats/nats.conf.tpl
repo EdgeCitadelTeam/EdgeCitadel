@@ -5,7 +5,8 @@ http_port: 8222
 jetstream {
     store_dir: "/data/jetstream"
     max_mem: 256MB
-    # AGENT_INBOX reserves 1GB; leave capacity for MQTT session/message streams.
+    # AGENT_INBOX reserves 1GB; telemetry reserves 128MiB when enabled.
+    # Remaining capacity also serves optional MQTT session/message streams.
     max_file: 2GB
 }
 

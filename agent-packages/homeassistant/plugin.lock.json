@@ -14,7 +14,7 @@
     },
     {
       "path": "edgecitadel_homeassistant_plugin/adapter.py",
-      "sha256": "1e6c9a9d819c69984e51172f4aa0e112745b4bf48ac2695ac241d9b78d8ff488"
+      "sha256": "c960b647bc65dde50cc24fe73fd3bfe24f252bdf6b9018c74bd0dc81459edbf0"
     },
     {
       "path": "edgecitadel_homeassistant_plugin/client.py",

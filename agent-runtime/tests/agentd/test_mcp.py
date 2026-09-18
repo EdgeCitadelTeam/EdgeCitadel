@@ -43,6 +43,7 @@ def test_native_mcp_session_tools_and_cleanup(tmp_path: Path) -> None:
         token_path.parent.mkdir(mode=0o700, parents=True)
         token_path.write_text(str(codex_registration["token"]) + "\n")
         token_path.chmod(0o600)
+        (state_dir / "node.json").write_text('{"agent_id":"edge-one"}')
         server = NativeMcpServer(
             state_dir=state_dir,
             connector_id="codex-local",

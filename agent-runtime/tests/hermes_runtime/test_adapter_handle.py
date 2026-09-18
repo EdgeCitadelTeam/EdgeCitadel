@@ -17,10 +17,12 @@ def _hermes_env(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_handle_command_returns_completed(fake_ctx, cmd):
+@pytest.mark.parametrize("envelope_type", ["command", "delegation"])
+async def test_handle_command_returns_completed(fake_ctx, cmd, envelope_type):
     from edgecitadel_hermes_plugin.adapter import handle
 
     env = cmd(body="hello hermes")
+    env["type"] = envelope_type
 
     async def fake_call(*, prompt, session_id, publish_progress):
         await publish_progress("delta-")

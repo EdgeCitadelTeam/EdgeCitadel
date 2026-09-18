@@ -111,16 +111,40 @@ def test_health_and_authenticated_connector_session(
     socket_path, state_dir, _ = service
     anonymous = AgentdClient(socket_path)
     health = anonymous.call("health")
+    metrics = health["telemetry"].pop("metrics")
+    keys = (
+        "publish_attempts",
+        "publish_failures",
+        "broker_acknowledgments",
+        "invalid_broker_acknowledgments",
+        "broker_ack_checkpoint_failures",
+        "settlement_requests",
+        "settlement_request_failures",
+        "settlement_page_observations",
+    )
+    assert metrics == {
+        "lifetime": "service_instance",
+        "counts": dict.fromkeys(keys, 0),
+        "last_observed_at_ms": dict.fromkeys(keys),
+    }
     assert health == {
         "status": "ready",
         "database": "ok",
-        "schema_version": 6,
+        "schema_version": 22,
         "active_sessions": 0,
         "database_bytes": health["database_bytes"],
+        "physical_storage": health["physical_storage"],
         "telemetry_records": {
             "events": 0,
             "spans": 0,
             "presence_history": 0,
+        },
+        "telemetry": {
+            "enabled": False,
+            "state": "disabled",
+            "connected": False,
+            "active_scopes": 0,
+            "fault": None,
         },
         "transport": {
             "configured": False,

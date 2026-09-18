@@ -96,3 +96,8 @@ class EnrollmentRedeemResponse(BaseModel):
     nats_token: str | None = None
     leaf_username: str | None = None
     leaf_password: str | None = None
+
+
+class TelemetryControlRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    action: Literal["stop", "start", "retry"]

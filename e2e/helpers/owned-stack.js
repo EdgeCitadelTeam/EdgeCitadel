@@ -177,6 +177,7 @@ class OwnedStack {
         E2E_RUN_ID: this.config.runId,
         E2E_TERMINAL_RELEASE_DIR: this.config.terminalReleaseDir,
         NATS_TOKEN: this.config.composeEnvironment.NATS_TOKEN,
+        EDGECITADEL_ADMIN_TOKEN: this.config.composeEnvironment.EDGECITADEL_ADMIN_TOKEN,
         ...(this.config.evidenceDir ? { EVIDENCE_DIR: this.config.evidenceDir } : {}),
       }),
       shell: false,

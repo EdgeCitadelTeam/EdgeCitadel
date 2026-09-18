@@ -17,6 +17,8 @@ from edgecitadel_plugin_runtime.agent_card import build_card
 
 from .client import AgentdClient, AgentdClientError
 from .service import socket_path_for
+from .trace_correlation import TaskTraceContext
+from .trace_producer import RuntimeTrace
 
 Handler = Callable[[dict[str, Any], Any], Awaitable[tuple[dict[str, Any], str]]]
 
@@ -54,6 +56,7 @@ class ManagedContext:
         self.nc = ManagedNatsProxy(client, agent_id)
         self.js = None
         self.msg = SimpleNamespace()
+        self.trace = RuntimeTrace(client)
 
     async def in_progress(self) -> None:
         return None
@@ -140,7 +143,6 @@ async def run(config_path: str | Path, handler: Handler) -> None:
                 )
 
     renewer = asyncio.create_task(renew())
-    context = ManagedContext(client, agent_id)
     try:
         while not stop.is_set():
             task = await asyncio.to_thread(
@@ -154,6 +156,8 @@ async def run(config_path: str | Path, handler: Handler) -> None:
                 continue
             record = cast(Mapping[str, object], task)
             task_id = str(record["task_id"])
+            context = ManagedContext(client, agent_id)
+            await context.trace.bind(session_id=session_id, task_id=task_id)
             await asyncio.to_thread(
                 client.call,
                 "task.transition",
@@ -180,6 +184,10 @@ async def run(config_path: str | Path, handler: Handler) -> None:
                     ),
                 },
             }
+            if "trace_context" in record:
+                envelope = TaskTraceContext(
+                    **cast(dict[str, Any], record["trace_context"])
+                ).apply(envelope)
             try:
                 result, state = await handler(envelope, context)
             except Exception as error:  # noqa: BLE001
@@ -195,6 +203,7 @@ async def run(config_path: str | Path, handler: Handler) -> None:
                 session_id=session_id,
                 result=result,
             )
+            await context.trace.finish(terminal)
     finally:
         stop.set()
         renewer.cancel()

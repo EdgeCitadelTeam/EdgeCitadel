@@ -57,7 +57,7 @@ def _chat(prompt: str) -> tuple[str, str]:
 async def handle(
     envelope: dict[str, Any], _context: ManagedContext
 ) -> tuple[dict[str, Any], str]:
-    if envelope.get("type") != "command":
+    if envelope.get("type") not in {"command", "delegation"}:
         return ({"error": "unsupported_type"}, "rejected")
 
     payload = envelope.get("payload") or {}

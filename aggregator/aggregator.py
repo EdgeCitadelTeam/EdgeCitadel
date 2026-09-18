@@ -351,6 +351,8 @@ class AggregatorApp:
         envelope_schema: Path,
         card_schema: Path,
     ):
+        self._stopping = False
+        self._inbox_task = None
         self.nats_url = nats_url
         self.nats_token = nats_token
         self.router = MessageRouter(
@@ -358,6 +360,7 @@ class AggregatorApp:
         )
 
     async def start(self) -> None:
+        self._stopping = False
         self.router.nc = NATS()
         await self.router.nc.connect(servers=[self.nats_url], token=self.nats_token)
         nc = self.router.nc
@@ -386,10 +389,19 @@ class AggregatorApp:
         psub = await self.router.js.pull_subscribe(
             "agents.aggregator.inbox", durable="aggregator_inbox"
         )
-        asyncio.create_task(self._drain_own_inbox(psub))
+        self._inbox_task = asyncio.create_task(self._drain_own_inbox(psub))
 
         await self._publish_self_register()
         await self._broadcast_request_register()
+
+    async def stop(self) -> None:
+        self._stopping = True
+        if self._inbox_task is not None:
+            self._inbox_task.cancel()
+            await asyncio.gather(self._inbox_task, return_exceptions=True)
+            self._inbox_task = None
+        if self.router.nc is not None and not self.router.nc.is_closed:
+            await self.router.nc.drain()
 
     async def _publish_self_register(self) -> None:
         card = {
@@ -431,7 +443,7 @@ class AggregatorApp:
         await self.router.nc.publish("system.broadcast", json.dumps(env).encode())
 
     async def _drain_own_inbox(self, psub) -> None:
-        while True:
+        while not self._stopping:
             try:
                 msgs = await psub.fetch(batch=10, timeout=30)
             except Exception:

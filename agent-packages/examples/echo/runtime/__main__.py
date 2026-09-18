@@ -9,7 +9,7 @@ from edgecitadel_agentd.managed_runtime import ManagedContext, run
 
 
 async def handle(envelope: dict, _context: ManagedContext) -> tuple[dict, str]:
-    if envelope.get("type") != "command":
+    if envelope.get("type") not in {"command", "delegation"}:
         return ({"error": "unsupported_type"}, "rejected")
     payload = envelope.get("payload") or {}
     return ({"body": payload.get("body", "")}, "completed")

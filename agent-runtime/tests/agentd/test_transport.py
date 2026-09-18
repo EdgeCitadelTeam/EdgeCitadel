@@ -237,3 +237,79 @@ async def test_malformed_max_delivery_advisory_is_ignored(tmp_path: Path) -> Non
         ).fetchone()[0]
     store.close()
     assert count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["quota_exceeded", "storage_unavailable"])
+async def test_trace_quota_failure_keeps_valid_result_unacknowledged(
+    tmp_path, monkeypatch, failure
+):
+    from uuid import uuid4
+
+    from test_trace_crash import snapshot
+
+    from edgecitadel_agentd import trace_capacity
+    from edgecitadel_agentd.store import StoreError
+
+    (tmp_path / "node.json").write_text('{"agent_id":"owned-edge"}')
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    transport = AgentdNatsTransport(tmp_path, store)
+    acknowledgments = []
+
+    class Message:
+        data = b""
+
+        async def ack(self):
+            acknowledgments.append("ack")
+
+        async def term(self):
+            acknowledgments.append("term")
+
+    try:
+        task = store.create_task(sender_id="worker", recipient_id="remote", payload={})
+        message = Message()
+        message.data = json.dumps(
+            {
+                "v": 1,
+                "id": str(uuid4()),
+                "type": "result",
+                "task_id": task["task_id"],
+                "sender_id": "remote",
+                "recipient_id": "worker",
+                "task_state": "completed",
+                "timestamp": "2026-09-16T12:00:00.000Z",
+                "payload": {"body": "done"},
+            }
+        ).encode()
+        usage = tuple(
+            store._connection.execute("SELECT * FROM trace_storage_usage").fetchone()
+        )
+        if failure == "storage_unavailable":
+            with store._connection:
+                store._connection.execute("DELETE FROM trace_storage_usage")
+        before = snapshot(store)
+        with monkeypatch.context() as pressure:
+            if failure == "quota_exceeded":
+                pressure.setattr(trace_capacity, "NORMAL_LIMIT_BYTES", 0)
+                pressure.setattr(trace_capacity, "CONTROL_RESERVE_BYTES", 0)
+            with pytest.raises(StoreError, match=failure):
+                await transport._ingest_message(message, "worker")
+        assert acknowledgments == []
+        assert snapshot(store) == before
+        if failure == "storage_unavailable":
+            with store._connection:
+                store._connection.execute(
+                    "INSERT INTO trace_storage_usage VALUES (?,?,?)", usage
+                )
+        await transport._ingest_message(message, "worker")
+        assert acknowledgments == ["ack"]
+        assert store.get_task(task["task_id"])["state"] == "completed"
+        completed = snapshot(store)
+        await transport._ingest_message(message, "worker")
+        assert acknowledgments == ["ack", "ack"]
+        assert snapshot(store) == completed
+        message.data = b"{}"
+        await transport._ingest_message(message, "worker")
+        assert acknowledgments == ["ack", "ack", "term"]
+    finally:
+        store.close()

@@ -16,14 +16,22 @@ import sys
 import tempfile
 import threading
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from .restore import RestorePendingError, require_startable
 from .store import AgentdStore, StoreError
 from .supervisor import ManagedAgentSupervisor
+from .trace_contract import TraceContractError, validate_rpc_reply
+from .trace_security import (
+    flush_authentication_rejections,
+    note_authentication_rejection,
+)
+from .trace_sync_service import TraceSyncService
 from .transport import AgentdNatsTransport
+from .writer_lock import WriterActiveError, exclusive_writer
 
 MAX_REQUEST_BYTES = 1024 * 1024
 PROTOCOL_VERSION = 1
@@ -32,6 +40,9 @@ PROCESS_STATE_NAME = "process.json"
 ADMIN_TOKEN_NAME = "admin.token"
 ADMIN_OPERATIONS = frozenset(
     {
+        "trace.import",
+        "trace.import.configure",
+        "trace.sync.control",
         "connector.register",
         "connector.configure",
         "connector.list",
@@ -120,12 +131,14 @@ class AgentdServer(socketserver.ThreadingUnixStreamServer):
         transport: AgentdNatsTransport,
         supervisor: ManagedAgentSupervisor,
         admin_token: str,
+        telemetry: TraceSyncService | None = None,
     ):
         self.socket_path = socket_path
         self.store = store
         self.transport = transport
         self.supervisor = supervisor
         self.admin_token = admin_token
+        self.telemetry = telemetry
         super().__init__(str(socket_path), AgentdRequestHandler)
 
 
@@ -145,9 +158,13 @@ class AgentdRequestHandler(socketserver.StreamRequestHandler):
                 self.server.store,
                 request,
                 transport=self.server.transport,
+                telemetry=self.server.telemetry,
                 supervisor=self.server.supervisor,
                 admin_token=self.server.admin_token,
             )
+        except TraceContractError as error:
+            self._write_error(error.code, "operation_failed")
+            return
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
             self._write_error("request is not a JSON object", "invalid_request")
             return
@@ -182,9 +199,18 @@ def _params(request: Mapping[str, object]) -> dict[str, Any]:
 def _auth(store: AgentdStore, request: Mapping[str, object]) -> sqlite3.Row:
     connector_id = request.get("connector_id")
     token = request.get("token")
-    if not isinstance(connector_id, str) or not isinstance(token, str):
+    if (
+        not isinstance(connector_id, str)
+        or not isinstance(token, str)
+        or not token.isascii()
+    ):
+        note_authentication_rejection(store)
         raise StoreError("connector authentication is required")
-    return store.authenticate(connector_id, token)
+    try:
+        return store.authenticate(connector_id, token)
+    except StoreError:
+        note_authentication_rejection(store)
+        raise
 
 
 def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> None:
@@ -201,6 +227,12 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "memory.put",
         "event.append",
         "span.record",
+        "trace.bind",
+        "trace.append",
+        "trace.finish",
+        "trace.dispatch",
+        "trace.history",
+        "trace.loss",
     }
     native_capabilities = {
         "agent.list": "edgecitadel_agents",
@@ -210,9 +242,15 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "task.transition": "edgecitadel_task_update",
         "trace.list": "edgecitadel_trace",
         "trace.get": "edgecitadel_trace",
+        "trace.history": "edgecitadel_trace",
+        "trace.loss": "edgecitadel_trace",
         "trace.purge": "edgecitadel_trace",
         "event.append": "edgecitadel_trace",
         "span.record": "edgecitadel_trace",
+        "trace.bind": "edgecitadel_trace",
+        "trace.append": "edgecitadel_trace",
+        "trace.finish": "edgecitadel_trace",
+        "trace.dispatch": "edgecitadel_trace",
     }
     if operation in common:
         return
@@ -228,13 +266,108 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
     raise StoreError("connector is not authorized for this operation")
 
 
-def _admin_auth(request: Mapping[str, object], expected_token: str | None) -> None:
+def _trace_operation(
+    store: AgentdStore,
+    connector_id: str,
+    token: str,
+    operation: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    from functools import partial
+
+    from .trace_import import import_trace
+    from .trace_loss import report_loss
+
+    request_id = params.get(
+        "request_id" if operation != "trace.append" else "observation_id"
+    )
+    try:
+        identity = uuid.UUID(request_id)
+        if identity.version != 4 or str(identity) != request_id:
+            raise ValueError
+    except (TypeError, ValueError, AttributeError) as error:
+        raise StoreError("invalid trace request identity") from error
+    # node.json is daemon-owned enrollment state. Never accept a node claim in
+    # connector params or copy its credentials into a diagnostic.
+    try:
+        with (store.path.parent.parent / "node.json").open("rb") as source:
+            node = json.loads(source.read(65537))
+        node_id = node["agent_id"]
+        if not isinstance(node_id, str):
+            raise ValueError
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise StoreError("trace node identity is unavailable") from error
+    methods: dict[str, Callable[..., dict[str, Any]]] = {
+        "trace.import": partial(import_trace, store, administrator_authenticated=True),
+        "trace.bind": store.bind_trace,
+        "trace.append": store.append_trace,
+        "trace.finish": store.finish_trace,
+        "trace.dispatch": store.dispatch_trace,
+        "trace.loss": partial(report_loss, store),
+    }
+    method = methods[operation]
+    code = "storage_unavailable"
+    try:
+        if operation == "trace.import":
+            return method(node_id=node_id, params=params)
+        return method(
+            node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
+    except TraceContractError as error:
+        if error.code in {
+            "idempotency_conflict",
+            "binding_closed",
+            "session_unavailable",
+            "quota_exceeded",
+            "storage_unavailable",
+        }:
+            code = error.code
+        elif error.code in {
+            "binding_not_owned",
+            "execution_not_owned",
+            "trace_not_authorized",
+            "import_not_authorized",
+        }:
+            code = "not_authorized"
+        elif error.code in {
+            "binding_context_mismatch",
+            "task_outcome_mismatch",
+            "span_identity_mismatch",
+            "span_parent_not_owned",
+            "span_boundary_conflict",
+        }:
+            code = "identity_mismatch"
+        elif error.code.startswith("unsupported_"):
+            code = "unsupported_version"
+        else:
+            code = "invalid_metadata"
+    except sqlite3.Error:
+        pass
+    reply = {
+        "schema_version": 1,
+        "operation": operation.removeprefix("trace."),
+        "request_id": request_id,
+        "status": "error",
+        "code": code,
+        "retryable": code == "storage_unavailable",
+    }
+    validate_rpc_reply(
+        reply, operation=operation.removeprefix("trace."), request_id=request_id
+    )
+    return reply
+
+
+def _admin_auth(
+    store: AgentdStore, request: Mapping[str, object], expected_token: str | None
+) -> None:
     token = request.get("admin_token")
     if (
         expected_token is None
         or not isinstance(token, str)
+        or not token.isascii()
         or not hmac.compare_digest(token, expected_token)
     ):
+        note_authentication_rejection(store)
         raise StoreError("agentd management authentication failed")
 
 
@@ -243,6 +376,7 @@ def dispatch(
     request: Mapping[str, object],
     *,
     transport: AgentdNatsTransport | None = None,
+    telemetry: TraceSyncService | None = None,
     supervisor: ManagedAgentSupervisor | None = None,
     admin_token: str | None = None,
 ) -> object:
@@ -254,10 +388,27 @@ def dispatch(
     params = _params(request)
 
     if operation in ADMIN_OPERATIONS:
-        _admin_auth(request, admin_token)
+        _admin_auth(store, request, admin_token)
+
+    if operation == "trace.sync.control":
+        if telemetry is None:
+            raise StoreError("telemetry lifecycle unavailable")
+        return telemetry.control(store, params)
 
     if operation == "health":
-        return {**store.health(), "transport": transport.status() if transport else {}}
+        return {
+            **store.health(),
+            "transport": transport.status() if transport else {},
+            "telemetry": telemetry.status()
+            if telemetry
+            else {
+                "enabled": False,
+                "state": "disabled",
+                "connected": False,
+                "active_scopes": 0,
+                "fault": None,
+            },
+        }
     if operation == "connector.register":
         token = store.register_connector(
             connector_id=str(params.get("connector_id", "")),
@@ -306,10 +457,25 @@ def dispatch(
         )
         return {"token": token}
 
+    if operation == "trace.import.configure":
+        from .trace_import import configure_import
+
+        return configure_import(store, administrator_authenticated=True, params=params)
+    if operation == "trace.import":
+        return _trace_operation(store, "", "", operation, dict(params))
+
     connector = _auth(store, request)
     connector_id = str(connector["connector_id"])
     token = str(request["token"])
     _authorize_connector_operation(connector, operation)
+    if operation in {
+        "trace.bind",
+        "trace.append",
+        "trace.finish",
+        "trace.dispatch",
+        "trace.loss",
+    }:
+        return _trace_operation(store, connector_id, token, operation, dict(params))
     if operation == "connector.update":
         store.update_connector(
             connector_id=connector_id,
@@ -465,6 +631,15 @@ def dispatch(
             attributes=cast(Mapping[str, object], params.get("attributes", {})),
         )
         return {"span_id": span_id}
+    if operation == "trace.history":
+        from .trace_history import read_history
+
+        return read_history(
+            store,
+            connector_id=str(request["connector_id"]),
+            token=str(request["token"]),
+            params=dict(params),
+        )
     if operation == "trace.list":
         return store.list_traces(
             limit=int(params.get("limit", 100)), agent_id=str(connector["agent_id"])
@@ -481,6 +656,16 @@ def dispatch(
 
 
 def serve(state_dir: Path, stop_event: threading.Event | None = None) -> None:
+    with exclusive_writer(state_dir):
+        require_startable(state_dir)
+        _write_process_record(state_dir, os.getpid())
+        try:
+            _serve_locked(state_dir, stop_event)
+        finally:
+            _write_process_record(state_dir, None)
+
+
+def _serve_locked(state_dir: Path, stop_event: threading.Event | None = None) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     state_dir.chmod(0o700)
     socket_path = socket_path_for(state_dir)
@@ -490,17 +675,37 @@ def serve(state_dir: Path, stop_event: threading.Event | None = None) -> None:
     admin_token = _load_or_create_admin_token(state_dir)
     transport = AgentdNatsTransport(state_dir.parent, store)
     supervisor = ManagedAgentSupervisor(state_dir.parent, store)
-    server = AgentdServer(socket_path, store, transport, supervisor, admin_token)
+    telemetry = TraceSyncService(
+        state_dir.parent,
+        store.path,
+        enabled=os.environ.get("EDGECITADEL_TRACE_SYNC") == "1",
+    )
+    server = AgentdServer(
+        socket_path, store, transport, supervisor, admin_token, telemetry
+    )
     socket_path.chmod(0o600)
     owned_stop = stop_event or threading.Event()
 
     def reconcile() -> None:
         while not owned_stop.wait(1):
-            store.reconcile()
+            try:
+                store.reconcile()
+                flush_authentication_rejections(store)
+            except (sqlite3.Error, TraceContractError) as error:
+                if isinstance(error, TraceContractError) and error.code not in {
+                    "quota_exceeded",
+                    "storage_unavailable",
+                }:
+                    raise
+                if store.set_reconciliation_storage_unavailable(True):
+                    print("agentd reconciliation storage unavailable", file=sys.stderr)
+            else:
+                store.set_reconciliation_storage_unavailable(False)
 
     reconciler = threading.Thread(target=reconcile, daemon=True)
     reconciler.start()
     transport.start()
+    telemetry.start()
     supervisor.start()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -509,7 +714,9 @@ def serve(state_dir: Path, stop_event: threading.Event | None = None) -> None:
     server.shutdown()
     server.server_close()
     thread.join(timeout=5)
+    telemetry.close()
     transport.stop()
+    reconciler.join(timeout=5)
     store.close()
     socket_path.unlink(missing_ok=True)
 
@@ -529,11 +736,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     state_dir = args.state_dir.expanduser()
     state_dir.mkdir(parents=True, exist_ok=True)
     state_dir.chmod(0o700)
-    _write_process_record(state_dir, os.getpid())
     try:
         serve(state_dir, stop)
-    finally:
-        _write_process_record(state_dir, None)
+    except (WriterActiveError, RestorePendingError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
     return 0
 
 

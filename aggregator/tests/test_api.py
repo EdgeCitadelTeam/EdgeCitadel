@@ -124,6 +124,7 @@ def test_post_command_correlation_preserves_actual_producer_shape(
         inspect.getclosurevars(route.endpoint).nonlocals["state"],
     )
     state["app"] = SimpleNamespace(
+        stop=AsyncMock(),
         router=SimpleNamespace(js=js, nc=nc, cache={}),
     )
 
@@ -172,13 +173,14 @@ def test_post_command_reports_unreachable_durable_destination_as_not_accepted(
         dict[str, Any], inspect.getclosurevars(route.endpoint).nonlocals["state"]
     )
     state["app"] = SimpleNamespace(
+        stop=AsyncMock(),
         router=SimpleNamespace(
             js=SimpleNamespace(
                 publish=AsyncMock(side_effect=ServiceUnavailableError())
             ),
             nc=SimpleNamespace(publish=AsyncMock(), drain=AsyncMock()),
             cache={},
-        )
+        ),
     )
 
     response = client.post("/api/command/remote-edge-agent", json={"body": "test"})

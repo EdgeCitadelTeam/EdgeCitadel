@@ -1,0 +1,808 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/trace-read.v1.json",
+  "title": "Trace read API and WebSocket responses v1",
+  "$defs": {
+    "event": {
+      "$ref": "https://edgecitadel.dev/schemas/trace-event.v1.json"
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "partial": {
+          "type": "boolean"
+        },
+        "catching_up": {
+          "type": "boolean"
+        },
+        "gap": {
+          "type": "boolean"
+        },
+        "unknown_sources": {
+          "type": "boolean"
+        },
+        "unsupported_families": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "enum": [
+              "run",
+              "task",
+              "dispatch",
+              "permission",
+              "model",
+              "tool",
+              "coverage",
+              "source",
+              "link",
+              "security"
+            ]
+          }
+        },
+        "reconciled_through": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "node_id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+              },
+              "source_epoch": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+              },
+              "export_generation": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+              },
+              "export_seq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "node_id",
+              "source_epoch",
+              "export_generation",
+              "export_seq"
+            ]
+          }
+        }
+      },
+      "required": [
+        "partial",
+        "catching_up",
+        "gap",
+        "unknown_sources",
+        "unsupported_families",
+        "reconciled_through"
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+        },
+        "kind": {
+          "enum": [
+            "run",
+            "task",
+            "model",
+            "tool",
+            "dispatch",
+            "unresolved"
+          ]
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "unknown",
+            "waiting",
+            "created",
+            "queued",
+            "offered",
+            "accepted",
+            "running",
+            "completed",
+            "failed",
+            "rejected",
+            "canceled",
+            "expired",
+            "undeliverable",
+            "interrupted",
+            "finished",
+            "allowed",
+            "denied"
+          ]
+        },
+        "original_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "created",
+                "queued",
+                "offered",
+                "accepted",
+                "running",
+                "completed",
+                "failed",
+                "rejected",
+                "cancelled",
+                "expired",
+                "undeliverable"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "source_observed",
+                "integration_reported",
+                "compatibility_synthesized",
+                "historical_import"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conflict": {
+          "type": "boolean"
+        },
+        "outcome_candidate_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "task_id",
+        "agent_id",
+        "state",
+        "original_state",
+        "operation",
+        "evidence_kind",
+        "conflict",
+        "outcome_candidate_count"
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+        },
+        "kind": {
+          "enum": [
+            "parent_task",
+            "parent_run",
+            "span_parent",
+            "join"
+          ]
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "unresolved",
+            "invalid"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "from",
+        "to",
+        "status"
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        "root_task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "root_agent_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "completed",
+                "failed",
+                "rejected",
+                "canceled",
+                "expired",
+                "undeliverable"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_projection_cursor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        }
+      },
+      "required": [
+        "trace_id",
+        "root_task_id",
+        "root_agent_id",
+        "outcome",
+        "created_projection_cursor",
+        "coverage"
+      ]
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ingest_cursor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "projection_cursor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "oldest_unsettled_age_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ingest_cursor",
+        "projection_cursor",
+        "oldest_unsettled_age_ms"
+      ]
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        },
+        "ingest_high_watermark": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "upsert_nodes": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        },
+        "remove_node_ids": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+          }
+        },
+        "upsert_edges": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/edge"
+          }
+        },
+        "remove_edge_ids": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+          }
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        }
+      },
+      "required": [
+        "cursor",
+        "ingest_high_watermark",
+        "upsert_nodes",
+        "remove_node_ids",
+        "upsert_edges",
+        "remove_edge_ids",
+        "coverage"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "trace_list"
+        },
+        "projection_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "snapshot_cursor": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/summary"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness": {
+          "$ref": "#/$defs/freshness"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "projection_generation",
+        "snapshot_cursor",
+        "items",
+        "next_cursor",
+        "freshness"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "trace_graph"
+        },
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        "projection_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "at": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        },
+        "ingest_high_watermark": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "nodes": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/edge"
+          }
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "total_nodes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expansions": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "node_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$(?![\\s\\S])"
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 4096,
+                "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+              },
+              "remaining_nodes": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "node_id",
+              "cursor",
+              "remaining_nodes"
+            ]
+          }
+        },
+        "freshness": {
+          "$ref": "#/$defs/freshness"
+        },
+        "resume_cursor": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "trace_id",
+        "projection_generation",
+        "at",
+        "ingest_high_watermark",
+        "nodes",
+        "edges",
+        "coverage",
+        "total_nodes",
+        "expansions",
+        "freshness",
+        "resume_cursor"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "trace_events"
+        },
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        "projection_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "as_of": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/event"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "trace_id",
+        "projection_generation",
+        "as_of",
+        "events",
+        "next_cursor"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "trace_changes"
+        },
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        "projection_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "changes": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/change"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "through_cursor": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "trace_id",
+        "projection_generation",
+        "changes",
+        "next_cursor",
+        "through_cursor"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "trace_change"
+        },
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        "projection_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "change": {
+          "$ref": "#/$defs/change"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "trace_id",
+        "projection_generation",
+        "change"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "trace_heartbeat"
+        },
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        "projection_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "through_cursor": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        },
+        "freshness": {
+          "$ref": "#/$defs/freshness"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "trace_id",
+        "projection_generation",
+        "through_cursor",
+        "freshness"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "trace_error"
+        },
+        "code": {
+          "enum": [
+            "invalid_cursor",
+            "cursor_scope_mismatch",
+            "generation_changed",
+            "history_expired",
+            "not_found",
+            "unavailable",
+            "invalid_request",
+            "oversize_response"
+          ]
+        },
+        "resnapshot_required": {
+          "type": "boolean"
+        },
+        "retained_from": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "code",
+        "resnapshot_required",
+        "retained_from",
+        "retryable"
+      ]
+    }
+  ]
+}
