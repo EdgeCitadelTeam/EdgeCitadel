@@ -151,6 +151,23 @@ def relationship_claims(event: dict, entities: list[dict]) -> list[dict]:
     return []
 
 
+def unresolved_node(identity: str) -> dict:
+    return {
+        "id": identity,
+        "kind": "unresolved",
+        "task_id": identity.removeprefix("task:")
+        if identity.startswith("task:")
+        else None,
+        "agent_id": None,
+        "state": "unknown",
+        "original_state": None,
+        "operation": None,
+        "evidence_kind": None,
+        "conflict": False,
+        "outcome_candidate_count": 0,
+    }
+
+
 def resolve_graph(nodes: list[dict], claims: list[dict]) -> dict[str, Any]:
     """Resolve a bounded materialized snapshot; never drop unknown endpoints.
 
@@ -199,20 +216,7 @@ def resolve_graph(nodes: list[dict], claims: list[dict]) -> dict[str, Any]:
         edges.append({**claim, "status": status})
         for endpoint in (claim["from"], claim["to"]):
             if endpoint not in by_id:
-                by_id[endpoint] = {
-                    "id": endpoint,
-                    "kind": "unresolved",
-                    "task_id": endpoint.removeprefix("task:")
-                    if endpoint.startswith("task:")
-                    else None,
-                    "agent_id": None,
-                    "state": "unknown",
-                    "original_state": None,
-                    "operation": None,
-                    "evidence_kind": None,
-                    "conflict": False,
-                    "outcome_candidate_count": 0,
-                }
+                by_id[endpoint] = unresolved_node(endpoint)
     if len(by_id) > 500 or len(edges) > 1000:
         raise ValueError("projection_graph_expansion_required")
     return {

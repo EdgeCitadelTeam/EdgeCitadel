@@ -418,7 +418,12 @@ def validate_read_response(response: dict[str, Any]) -> bytes:
             raise TraceContractError("missing_graph_endpoint")
         total = response["total_nodes"]
         if total is not None and (
-            total < len(nodes) or (total > len(nodes) and not response["expansions"])
+            total < len(nodes)
+            or (
+                total > len(nodes)
+                and not response["expansions"]
+                and response["page_kind"] == "snapshot"
+            )
         ):
             raise TraceContractError("unreachable_graph_expansion")
         if any(expansion["node_id"] not in ids for expansion in response["expansions"]):

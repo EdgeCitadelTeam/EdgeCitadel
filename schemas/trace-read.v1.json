@@ -565,6 +565,12 @@
           "type": "string",
           "maxLength": 4096,
           "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        },
+        "page_kind": {
+          "enum": [
+            "snapshot",
+            "expansion"
+          ]
         }
       },
       "required": [
@@ -580,7 +586,8 @@
         "total_nodes",
         "expansions",
         "freshness",
-        "resume_cursor"
+        "resume_cursor",
+        "page_kind"
       ]
     },
     {

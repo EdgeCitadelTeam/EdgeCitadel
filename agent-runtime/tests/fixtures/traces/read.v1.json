@@ -195,7 +195,8 @@
       "projection_cursor": 8,
       "oldest_unsettled_age_ms": null
     },
-    "resume_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec"
+    "resume_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec",
+    "page_kind": "snapshot"
   },
   "responses": [
     {
@@ -316,7 +317,8 @@
         "projection_cursor": 8,
         "oldest_unsettled_age_ms": null
       },
-      "resume_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec"
+      "resume_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec",
+      "page_kind": "snapshot"
     },
     {
       "schema_version": 1,

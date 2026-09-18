@@ -141,7 +141,8 @@ These fixtures specify expected behavior; a production reducer is still M5 work.
 | `/ws/traces/{trace_id}` | `after` change cursor; the same durable changes as HTTP catch-up, plus heartbeat/error. Heartbeats advertise availability and do not acknowledge unapplied changes. |
 | NATS settlement | Source/epoch/export-generation request and persisted checkpoint response; exact request/error schema remains an open M2 deliverable. |
 
-Graph responses contain both `at` (graph snapshot cursor) and `resume_cursor`
+Graph responses declare `page_kind` (`snapshot` or additive `expansion`) and
+contain both `at` (graph snapshot cursor) and `resume_cursor`
 (change cursor through the same committed projection position). They are not
 interchangeable. After a snapshot, resume HTTP/WS with `resume_cursor`. Event and
 expansion tokens remain tied to that snapshot. A `next_cursor` signals additional
@@ -2764,3 +2765,49 @@ cleanup/recreation, concurrent expiry, rebuild, corrupt content, cursor isolatio
 and a real 2 MiB page split have component coverage. Fleet-scale query latency,
 additional membership-history storage, public list/graph/expansion/change/WS
 interfaces, authentication and deployment remain qualification/integration work.
+
+
+### Graph snapshots and additive expansion
+
+`trace_graph_pages.read_graph` supplies current or retained graph response bodies
+on a caller-owned SQLite connection. It is an explicitly invoked read component,
+not an installed HTTP route or an access-control boundary. Authorization and
+persistent signing-key ownership remain required before routing is enabled.
+
+Every response carries a graph `at` token, a distinct live `resume_cursor`, the
+selected graph's ingestion high-watermark and current observed collector/projector
+freshness. The event reader accepts this graph token directly. All state, node,
+relationship, coverage, cursor and freshness reads share one SQLite transaction;
+a pending raw commit may raise freshness without entering the selected graph.
+
+A `page_kind: snapshot` response replaces the client's graph. A
+`page_kind: expansion` response merges nodes and edges by ID only into that exact
+`at` snapshot. `total_nodes` always describes the whole selected graph, including
+unresolved endpoints; a terminal expansion may contain fewer nodes than that
+total. An expansion cannot be interpreted as a complete replacement graph.
+This explicit discriminator refines the frozen response fixture/schema; current
+callers and fixtures use it together, with no legacy fallback.
+
+Small graphs return all nodes and edges immediately. Larger graphs page stable
+node identities first, then edges with both endpoints included on each page.
+Pages contain at most 500 nodes and 1,000 edges and pass the common 2 MiB response
+validator. Expansion tokens encode a node/edge traversal phase and offset, bound
+to the trace, server-selected scope, generation and historical snapshot. The
+expansion's `node_id` is a presentation anchor, not new parent evidence. Follow
+the continuation whenever present, including when `remaining_nodes` is zero:
+additional edges can remain after every node has been seen.
+
+Edge status is resolved against all claims in the snapshot. Multiple parents
+invalidate every competing ancestry claim; global cycles invalidate cycle edges
+without invalidating unrelated descendants. Joins do not create ancestry, and
+missing endpoints remain explicit unresolved nodes. Page boundaries cannot hide
+a competing parent or turn part of a cycle into valid ancestry. The SQL traversal
+deduplicates visited source/start pairs so cycles terminate.
+
+Retained expansion remains unchanged after late observations or current graph
+cleanup. Generation changes and history expiry require a fresh snapshot; tokens
+from another kind, trace or scope are rejected. Indexed projection/history reads
+bound returned data, not the full SQL work: large ancestry walks, historical
+view reconstruction, pinned-reader/storage effects and baseline latency remain
+qualification obligations. HTTP/authentication/startup, list/change/WS interfaces,
+frontend integration and jim-eq E2E are not closed by this component.
