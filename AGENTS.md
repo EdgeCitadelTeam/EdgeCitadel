@@ -42,6 +42,9 @@
   effects whose only purpose is keeping duplicate state in sync.
 
 ## Test useful behavior
+- Use the existing server on `jim-eq` (`root@jim-eq`) for real end-to-end tests.
+  Login and redeployment of the latest changes are authorized. Preserve deployment
+  state and record the tested revision; unit and component checks may run locally.
 - Check existing coverage before adding tests. Test observable behavior and failure
   boundaries; avoid tests that merely repeat constants or mirror implementation.
 - Use the smallest test that catches the regression. Exercise a real integration

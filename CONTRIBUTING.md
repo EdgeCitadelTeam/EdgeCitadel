@@ -58,9 +58,13 @@ Frontend lint/build commands are `npm run lint` and `npm run build`. The
 [verification recipe](.agents/skills/commit-check/SKILL.md) covers typing, package
 locks and when broader checks help.
 
-Browser tests build and clean up their own stack; do not restart a shared stack
-first. `e2e`'s `npm test` runs helper tests and the full browser suite. External
-Agent suites use `npm run test:external-plugins` against a prepared environment.
+Run real end-to-end checks against the existing server on `jim-eq` over
+`root@jim-eq`; updating that deployment to the latest changes is authorized.
+Preserve its state, verify the deployed revision, and record the behavior tested.
+The disposable local browser runner does not replace this live acceptance path.
+`e2e`'s `npm test` builds its own stack, so select a remote-targeted invocation for
+live checks. External Agent suites use `npm run test:external-plugins` against a
+prepared environment.
 
 CI runs root Python, runtime and frontend checks plus the Python build. It does
 not currently run Aggregator tests or opt-in broker/E2E suites; run those when
