@@ -16,7 +16,7 @@ from .trace_projection_tables import ProjectionTables
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS {trace_projection_run_events} (
         node_id TEXT NOT NULL,source_epoch TEXT NOT NULL,event_id TEXT NOT NULL,
-        event_sha256 TEXT NOT NULL,trace_id TEXT NOT NULL,ingest_seq INTEGER NOT NULL,
+        event_sha256 TEXT NOT NULL,trace_id TEXT NOT NULL,ingest_seq INTEGER NOT NULL,agent_id TEXT,
         PRIMARY KEY(node_id,source_epoch,event_id)
     )""",
     """CREATE TABLE IF NOT EXISTS {trace_projection_scope_progress} (
@@ -198,7 +198,7 @@ def project_facts(
                 "SELECT event_sha256 FROM trace_raw_events WHERE ingest_seq=?", (seq,)
             ).fetchone()[0]
             db.execute(
-                "INSERT INTO {trace_projection_run_events} VALUES(?,?,?,?,?,?)",
+                "INSERT INTO {trace_projection_run_events} VALUES(?,?,?,?,?,?,?)",
                 (
                     event["node_id"],
                     event["source_epoch"],
@@ -206,6 +206,7 @@ def project_facts(
                     raw_hash,
                     event["trace_id"],
                     seq,
+                    event["agent_id"],
                 ),
             )
         if event["kind"] in {"coverage", "source", "security"}:

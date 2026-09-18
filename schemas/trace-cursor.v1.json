@@ -89,8 +89,15 @@
             "type": "null"
           },
           "key": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+            "anyOf": [
+              {
+                "const": "start"
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+              }
+            ]
           }
         }
       },

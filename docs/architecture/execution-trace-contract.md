@@ -166,7 +166,7 @@ invalidate old tokens; projection rebuild changes generation.
 
 | Cursor kind | Position meaning |
 |---|---|
-| list | `snapshot=upper` is projection snapshot; `position` plus trace `key` is the last emitted creation-order tuple. |
+| list | `snapshot=upper` is projection snapshot; `position` plus trace `key` is the last scanned creation-order tuple. `key=start`, `position=snapshot` denotes the reusable initial boundary. |
 | graph | `position=snapshot` is the retained graph projection position; `upper` is its covered ingestion watermark. |
 | events | `snapshot` is graph projection position; `position` is last ingestion row, bounded by ingestion `upper`. |
 | changes | `position` is last delivered/scanned projection position; `snapshot=upper` is the known high watermark. New requests can catch up beyond the old high watermark. |
@@ -2811,3 +2811,46 @@ bound returned data, not the full SQL work: large ancestry walks, historical
 view reconstruction, pinned-reader/storage effects and baseline latency remain
 qualification obligations. HTTP/authentication/startup, list/change/WS interfaces,
 frontend integration and jim-eq E2E are not closed by this component.
+
+
+### Version 8 stable run-list pages
+
+The run header now retains immutable creation projection position, event
+membership retains the attributed agent, and task perspectives participate in
+historical row capture. These changes share the projection/checkpoint transaction.
+New activity does not reorder a run; accepted evidence after completed cleanup
+creates a new current incarnation with a new creation position. Version 7 must
+rebuild into a fresh generation rather than mutate derived state in place.
+
+`trace_list_pages.read_list` returns signed, snapshot-bound keyset pages ordered
+by creation position descending, then trace ID descending. The selected snapshot
+freezes live membership, participant filters and root/outcome evaluation even if
+new observations arrive or current graphs are retired. `agent_id` means any
+accepted attributed participant, not only the root; it grants no access.
+Omitted filters normalize to explicit null values in the hash along with the
+server-selected access policy. Page size can change without invalidating scope.
+
+The list snapshot token uses the explicit `start` key at its snapshot position.
+This distinguishes a reusable initial boundary from a real last-scanned trace,
+including the maximum all-f trace identity and an empty list. Continuations use
+the last scanned creation/trace tuple. At most 256 run headers are inspected per
+call; a sparse filter can return an empty page with a continuation. A client must
+follow that token before concluding there are no matching runs. Count (100) and
+canonical encoded-byte (2 MiB) limits also shorten pages with a continuation;
+an unreturned matching run is not consumed by the cursor.
+
+Root identity requires explicit null-parent observations and no contradictory
+ancestry claim, or the native logical root. A sender can establish the task
+identity without establishing its executing owner or outcome. Multiple root
+candidates remain unknown. Task root-agent metadata uses recipient evidence;
+daemon actors are not relabeled as executing agents. Root terminal outcome uses
+recipient evidence ahead of daemon recovery, never child completion or sender
+deadlines. Multiple eligible outcomes remain null in the list, with attributed
+candidates still available in graph/history. Native outcomes come only from the
+logical root; interrupted/unknown observations cannot invent a successful finish.
+
+Raw/projector freshness is reported separately from the selected list snapshot.
+Missing/incompatible projection state remains an unavailable response, not an
+empty successful list. This is a read component, not installed authenticated HTTP
+routing. Signing-key ownership, public changes/WS/startup, frontend, full retained
+volume/query/storage qualification and jim-eq E2E remain pending.

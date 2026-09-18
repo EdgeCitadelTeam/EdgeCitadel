@@ -23,7 +23,7 @@ SCHEMA = (
     """CREATE TABLE IF NOT EXISTS {trace_projection_runs} (
         trace_id TEXT PRIMARY KEY, last_received_at_ms INTEGER NOT NULL,
         test_only INTEGER NOT NULL, expired_cursor INTEGER,
-        cleanup_table INTEGER NOT NULL DEFAULT 0
+        cleanup_table INTEGER NOT NULL DEFAULT 0,created_cursor INTEGER NOT NULL
     )""",
     """CREATE INDEX IF NOT EXISTS {trace_projection_run_age}
         ON {trace_projection_runs}(test_only,last_received_at_ms,trace_id)
@@ -32,6 +32,10 @@ SCHEMA = (
         ON {trace_projection_runs}(expired_cursor) WHERE expired_cursor IS NOT NULL""",
     """CREATE INDEX IF NOT EXISTS {trace_projection_run_event_scope}
         ON {trace_projection_run_events}(trace_id,ingest_seq)""",
+    """CREATE INDEX IF NOT EXISTS {trace_projection_run_creation}
+        ON {trace_projection_runs}(created_cursor DESC,trace_id DESC)""",
+    """CREATE INDEX IF NOT EXISTS {trace_projection_run_agent}
+        ON {trace_projection_run_events}(trace_id,agent_id)""",
     """CREATE TABLE IF NOT EXISTS {trace_projection_retention_state} (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),cutoff_ms INTEGER NOT NULL
     )""",
@@ -59,7 +63,8 @@ def touch(tables: ProjectionTables, event: dict, received_at_ms: int) -> None:
     if event["trace_id"] is None:
         return
     tables.execute(
-        "INSERT INTO {trace_projection_runs}(trace_id,last_received_at_ms,test_only) VALUES(?,?,?) "
+        "INSERT INTO {trace_projection_runs}(trace_id,last_received_at_ms,test_only,created_cursor) "
+        "VALUES(?,?,?,(SELECT clock_cursor FROM {trace_projection_history_state} WHERE singleton=1)) "
         "ON CONFLICT(trace_id) DO UPDATE SET last_received_at_ms=max(last_received_at_ms,excluded.last_received_at_ms),"
         "test_only=min(test_only,excluded.test_only)",
         (event["trace_id"], received_at_ms, int(event.get("test_run_id") is not None)),

@@ -189,7 +189,7 @@ def test_non_wal_core_is_paused_without_changing_journal_mode(tmp_path):
 def test_incompatible_projection_pauses_instead_of_resetting_it(core_path):
     with closing(sqlite3.connect(core_path)) as db:
         state = projection.initialize(db)
-        db.execute("UPDATE trace_projection_state SET version=6")
+        db.execute("UPDATE trace_projection_state SET version=7")
         db.commit()
     service = worker.TraceProjectorService(core_path)
     try:
@@ -202,7 +202,7 @@ def test_incompatible_projection_pauses_instead_of_resetting_it(core_path):
         with closing(sqlite3.connect(core_path)) as db:
             assert db.execute(
                 "SELECT version,generation FROM trace_projection_state"
-            ).fetchone() == (6, state.generation)
+            ).fetchone() == (7, state.generation)
     finally:
         service.close()
 

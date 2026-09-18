@@ -28,7 +28,7 @@ from .trace_task_projection import (
     task_node,
 )
 
-VERSION = 7
+VERSION = 8
 MAX_BATCH = 64
 
 SCHEMA = (

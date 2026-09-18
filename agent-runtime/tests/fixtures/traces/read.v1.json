@@ -203,7 +203,7 @@
       "schema_version": 1,
       "kind": "trace_list",
       "projection_generation": "00000000-0000-4000-8000-000000000900",
-      "snapshot_cursor": "eyJrZXkiOiJjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYyIsImtpbmQiOiJsaXN0IiwicG9zaXRpb24iOjUsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6bnVsbCwidXBwZXIiOjh9.yfU9REB524hp9EOf3j0cVgvWLffgUuzoZrskqgki2k8",
+      "snapshot_cursor": "eyJrZXkiOiJzdGFydCIsImtpbmQiOiJsaXN0IiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6bnVsbCwidXBwZXIiOjh9.VTBIO0fm_xFY4EIKxp02A3cNabYaQhVK3mI4UeMc0Ic",
       "items": [
         {
           "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
