@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 from aggregator.trace_ingest import ingest_delivery
+from aggregator import trace_payloads
 from aggregator.trace_settlement import settlement_page_reply
 from aggregator.trace_store import initialize
 from nats.aio.client import Client as NATS
@@ -42,6 +43,17 @@ POINTS = (
 )
 
 
+def prepare_core(db):
+    """Use the collector's WAL, accounting and separated-payload startup order."""
+    assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    db.execute("PRAGMA busy_timeout=50")
+    db.execute("PRAGMA cache_spill=OFF")
+    initialize(db)
+    trace_payloads.prepare(db)
+    while not trace_payloads.migrate_batch(db):
+        pass
+
+
 def barrier():
     print("ready", flush=True)
     while True:
@@ -63,7 +75,7 @@ async def child(config):
     if config["point"] == "before_publish":
         barrier()
     nc = NATS()
-    await nc.connect(servers=[config["url"]], token=config["token"])
+    await nc.connect(servers=[config["source_url"]], token=config["source_token"])
     if config["point"] == "broker_ack_before_checkpoint":
         import edgecitadel_agentd.trace_exporter as exporter
 
@@ -71,9 +83,12 @@ async def child(config):
     await TraceExporter(store, nc.jetstream(), scope).publish_batch()
     if config["point"] == "after_checkpoint":
         barrier()
+    core_nc = NATS()
+    await core_nc.connect(servers=[config["core_url"]], token=config["core_token"])
     db = sqlite3.connect(config["core"])
-    initialize(db)
-    consumer = await nc.jetstream().pull_subscribe(
+    prepare_core(db)
+    assert trace_payloads.is_prepared(db)
+    consumer = await core_nc.jetstream().pull_subscribe(
         EVENT_SUBJECT, durable=CONSUMER_NAME, stream=STREAM_NAME
     )
     (message,) = await consumer.fetch(1, timeout=5)
@@ -120,38 +135,10 @@ def kill_child(config, config_path):
         config_path.unlink()
 
 
-@pytest.mark.skipif(
-    os.environ.get("RUN_JETSTREAM_INTEGRATION") != "1", reason="owned NATS required"
-)
-@pytest.mark.parametrize("point", POINTS)
-@pytest.mark.asyncio
-async def test_sigkill_recovers_exact_evidence_without_creating_tasks(tmp_path, point):
-    server = await asyncio.to_thread(
-        NatsServer(token=secrets.token_hex(32), jetstream=True).start
-    )
-    nc = NATS()
-    source_path, core_path = tmp_path / "source.db", tmp_path / "core.db"
+async def recover_and_assert(source_path, db, core_js, source_js, point, event_id):
+    """Shared recovery assertions for direct-Core and Leaf crash boundaries."""
     store = None
-    db = sqlite3.connect(core_path)
-    event_id = str(uuid4())
     try:
-        initialize(db)
-        await nc.connect(servers=[server.url], token=server.token)
-        js = nc.jetstream()
-        await ensure_telemetry_stream(js)
-        await ensure_telemetry_consumer(js)
-        await asyncio.to_thread(
-            kill_child,
-            {
-                "source": str(source_path),
-                "core": str(core_path),
-                "url": server.url,
-                "token": server.token,
-                "point": point,
-                "event_id": event_id,
-            },
-            tmp_path / "child.json",
-        )
         store = AgentdStore(source_path)
         scope = ExportScope(
             *store._connection.execute(
@@ -173,7 +160,7 @@ async def test_sigkill_recovers_exact_evidence_without_creating_tasks(tmp_path, 
             ][0]
             == event_id
         )
-        assert (await js.stream_info(STREAM_NAME)).state.messages == (
+        assert (await core_js.stream_info(STREAM_NAME)).state.messages == (
             0 if point == POINTS[0] else 1
         )
         assert db.execute("SELECT count(*) FROM trace_raw_events").fetchone()[0] == int(
@@ -181,10 +168,10 @@ async def test_sigkill_recovers_exact_evidence_without_creating_tasks(tmp_path, 
         )
         if point != POINTS[4]:
             assert page_request(store, scope.values())["after_export_seq"] == 0
-            await TraceExporter(store, js, scope).publish_batch(replay=True)
+            await TraceExporter(store, source_js, scope).publish_batch(replay=True)
             # Duplicate publication after a lost local checkpoint reuses the broker ID.
-            assert (await js.stream_info(STREAM_NAME)).state.messages == 1
-            consumer = await js.pull_subscribe(
+            assert (await core_js.stream_info(STREAM_NAME)).state.messages == 1
+            consumer = await core_js.pull_subscribe(
                 EVENT_SUBJECT, durable=CONSUMER_NAME, stream=STREAM_NAME
             )
             (message,) = await consumer.fetch(1, timeout=40)
@@ -194,7 +181,7 @@ async def test_sigkill_recovers_exact_evidence_without_creating_tasks(tmp_path, 
             request = page_request(store, scope.values())
             apply_page(store, request, settlement_page_reply(db, request))
         else:
-            assert await TraceExporter(store, js, scope).publish_batch() == 0
+            assert await TraceExporter(store, source_js, scope).publish_batch() == 0
         assert db.execute("SELECT event_id FROM trace_raw_events").fetchall() == [
             (event_id,)
         ]
@@ -202,7 +189,9 @@ async def test_sigkill_recovers_exact_evidence_without_creating_tasks(tmp_path, 
             db.execute("SELECT count(*) FROM trace_ingest_positions").fetchone()[0] == 1
         )
         assert db.execute("SELECT ingest_seq FROM trace_collector").fetchone()[0] == 1
-        assert (await js.consumer_info(STREAM_NAME, CONSUMER_NAME)).num_ack_pending == 0
+        assert (
+            await core_js.consumer_info(STREAM_NAME, CONSUMER_NAME)
+        ).num_ack_pending == 0
         source_record = tuple(
             store._connection.execute(
                 "SELECT event_id,event_sha256,event_json FROM trace_journal"
@@ -210,7 +199,8 @@ async def test_sigkill_recovers_exact_evidence_without_creating_tasks(tmp_path, 
         )
         assert (
             db.execute(
-                "SELECT event_id,event_sha256,event_json FROM trace_raw_events"
+                "SELECT r.event_id,r.event_sha256,p.event_json FROM trace_raw_events r "
+                "LEFT JOIN trace_payloads p USING(ingest_seq)"
             ).fetchone()
             == source_record
         )
@@ -229,9 +219,51 @@ async def test_sigkill_recovers_exact_evidence_without_creating_tasks(tmp_path, 
     finally:
         if store is not None:
             store.close()
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_JETSTREAM_INTEGRATION") != "1", reason="owned NATS required"
+)
+@pytest.mark.parametrize("point", POINTS)
+@pytest.mark.asyncio
+async def test_sigkill_recovers_exact_evidence_without_creating_tasks(tmp_path, point):
+    server = await asyncio.to_thread(
+        NatsServer(token=secrets.token_hex(32), jetstream=True).start
+    )
+    nc = NATS()
+    connected = False
+    source_path, core_path = tmp_path / "source.db", tmp_path / "core.db"
+    db = sqlite3.connect(core_path)
+    event_id = str(uuid4())
+    try:
+        prepare_core(db)
+        await nc.connect(servers=[server.url], token=server.token)
+        connected = True
+        js = nc.jetstream()
+        await ensure_telemetry_stream(js)
+        await ensure_telemetry_consumer(js)
+        await asyncio.to_thread(
+            kill_child,
+            {
+                "source": str(source_path),
+                "core": str(core_path),
+                "source_url": server.url,
+                "source_token": server.token,
+                "core_url": server.url,
+                "core_token": server.token,
+                "point": point,
+                "event_id": event_id,
+            },
+            tmp_path / "child.json",
+        )
+        await recover_and_assert(source_path, db, js, js, point, event_id)
+    finally:
         db.close()
-        await nc.close()
-        await asyncio.to_thread(server.close)
+        try:
+            if connected:
+                await nc.close()
+        finally:
+            await asyncio.to_thread(server.close)
 
 
 if __name__ == "__main__":

@@ -510,6 +510,48 @@ in `docs/architecture/execution-trace-contract.md` under M4 telemetry provisioni
 Owned broker tests in `tests/runtime/test_telemetry_stream.py` use the existing
 `RUN_AGENTD_NATS_INTEGRATION=1` opt-in and do not touch shared NATS services.
 
+The collector-outage fixture uses two owned Leaves and ten local task agents,
+with 50 exported events per task at 600 tasks/hour. Its six-second rehearsal runs
+with the ordinary NATS opt-in; the ten-minute wall-clock case needs an additional
+explicit opt-in (allow roughly twelve minutes with normal settlement timers):
+
+```bash
+RUN_AGENTD_NATS_INTEGRATION=1 RUN_TRACE_OUTAGE_QUALIFICATION=1 \
+  python -m pytest -q tests/runtime/test_telemetry_collector_outage.py -k 600
+```
+
+The test checks continuing task completion, catch-up within five minutes, and
+exact source/Core event identities, hashes and payloads. Tool metadata is synthetic;
+it does not qualify live adapters, cross-Edge task routing or hard storage bounds.
+
+`tests/runtime/test_telemetry_leaf_poison.py` uses the ordinary NATS opt-in to
+exercise failed poison persistence, valid-event continuation, unsupported payload
+rejection and collector restart through real Leaves. It checks exact rejection
+identity/hash, correlated settlement, and absence of the injected private sentinel
+from Core SQL state. The injected wire payload remains broker data; this is not a
+whole-pipeline secret-disclosure or hostile-fleet isolation test.
+
+`tests/runtime/test_telemetry_leaf_saturation.py` uses the same NATS opt-in and the
+unmodified 128 MiB telemetry quota. It fills an owned stream, completes ten
+cross-Leaf command/result tasks while source telemetry is refused, then removes
+only synthetic filler and verifies exact retained-event/export replay. It samples
+combined Core/Leaf broker file allocation; source/Core SQLite hard bounds and
+sustained workload performance remain separate acceptance gates.
+
+`tests/runtime/test_telemetry_leaf_restore.py` restores an older prepared Core
+snapshot while retaining the same broker and two Leaf links. Both retained and
+missing-payload cases use normal timers, compare exact payloads/loss scope, and
+reject stale settlement pages without mutation. Replay must finish inside the
+broker duplicate window. These graceful restore cases take roughly two minutes;
+crash cutover, source restore and external effects remain separate gates.
+
+`tests/runtime/test_telemetry_leaf_crash.py` exercises five real SIGKILL boundaries
+through a Leaf using the current Core WAL/separated-payload layout. It reuses the
+backend crash harness and checks immutable replay, consumer redelivery and durable
+settlement. These are helper-level child-process kills, not a full daemon or
+remote-settlement-responder crash qualification. The backend regression uses
+RUN_JETSTREAM_INTEGRATION=1 and its owned Docker broker.
+
 
 ## Experimental source telemetry synchronization
 
