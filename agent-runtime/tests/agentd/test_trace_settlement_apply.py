@@ -190,6 +190,7 @@ def test_schema_18_upgrade_is_atomic(source):
     store, _ = source
     with store._connection:
         store._connection.execute("DROP TABLE trace_source_settlements")
+        flatten_connection(store._connection)
         store._connection.execute("ALTER TABLE trace_spool DROP COLUMN core_outcome")
         flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=18")
@@ -214,7 +215,7 @@ def test_schema_18_upgrade_is_atomic(source):
     }
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 25
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 26
         assert states(reopened) == [("pending", None, None)] * 5
     finally:
         reopened.close()

@@ -42,8 +42,8 @@ def attach_tasks(db: sqlite3.Connection, path: Path, *, existing: bool) -> None:
     db.execute("PRAGMA task_state.synchronous=EXTRA")
 
 
-def verify_pair(db: sqlite3.Connection, *, version: int = 25) -> None:
-    if version not in (24, 25):
+def verify_pair(db: sqlite3.Connection, *, version: int = 26) -> None:
+    if version not in (24, 25, 26):
         raise sqlite3.DatabaseError("unsupported storage pair schema")
     ids = []
     for schema in ("main", "task_state"):
@@ -83,6 +83,13 @@ def verify_pair(db: sqlite3.Connection, *, version: int = 25) -> None:
 
 
 def verify_references(db: sqlite3.Connection) -> None:
+    # Pair conversion also calls this before the completion schema exists.
+    if db.execute(
+        "SELECT 1 FROM main.sqlite_schema WHERE name='trace_completion_slots'"
+    ).fetchone():
+        from .trace_completed import verify_references as verify_completed
+
+        verify_completed(db)
     for child, column, parent, key in CROSS_REFERENCES:
         if db.execute(
             f'SELECT 1 FROM main."{child}" c WHERE c."{column}" IS NOT NULL '

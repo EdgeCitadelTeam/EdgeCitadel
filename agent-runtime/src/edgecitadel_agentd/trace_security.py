@@ -67,7 +67,7 @@ def flush_authentication_rejections(
             event_id = str(UUID(bytes=digest[:16], version=4))
             if (
                 db.execute(
-                    "SELECT 1 FROM trace_journal WHERE node_id=? AND source_epoch=? AND event_id=?",
+                    "SELECT 1 FROM trace_journal_all WHERE node_id=? AND source_epoch=? AND event_id=?",
                     (node_id, epoch, event_id),
                 ).fetchone()
                 is not None

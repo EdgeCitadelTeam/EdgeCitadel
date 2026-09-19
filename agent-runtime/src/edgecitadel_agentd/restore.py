@@ -209,7 +209,7 @@ def hold_restored_execution(store: AgentdStore, *, source_epoch: str) -> dict[st
         db.execute("BEGIN IMMEDIATE")
         if (
             db.execute(
-                "SELECT 1 FROM trace_sources s JOIN trace_journal j "
+                "SELECT 1 FROM trace_sources s JOIN trace_journal_all j "
                 "ON j.node_id=s.node_id AND j.source_epoch=s.source_epoch "
                 "WHERE s.source_epoch=? AND s.active=1 AND j.source_seq=1 "
                 "AND json_extract(j.event_json,'$.kind')='source' "

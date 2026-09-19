@@ -37,7 +37,7 @@ def finish_trace(
         db.execute("BEGIN IMMEDIATE")
         now = time.time_ns() // 1_000_000
         previous = db.execute(
-            "SELECT * FROM trace_requests WHERE connector_id=? AND operation='finish' AND scope=? AND request_id=?",
+            "SELECT * FROM trace_requests_all WHERE connector_id=? AND operation='finish' AND scope=? AND request_id=?",
             (connector_id, params["binding_id"], params["request_id"]),
         ).fetchone()
         binding, task = authorized_binding_locked(
@@ -112,7 +112,7 @@ def close_binding_locked(
     if not db.in_transaction:
         raise TraceContractError("trace_transaction_required")
     root = db.execute(
-        "SELECT event_json FROM trace_journal WHERE trace_id=? AND json_extract(event_json,'$.execution_attempt_id')=? "
+        "SELECT event_json FROM trace_journal_all WHERE trace_id=? AND json_extract(event_json,'$.execution_attempt_id')=? "
         "AND json_extract(event_json,'$.kind')='run' AND json_extract(event_json,'$.phase')='started'",
         (binding["trace_id"], binding["execution_attempt_id"]),
     ).fetchone()

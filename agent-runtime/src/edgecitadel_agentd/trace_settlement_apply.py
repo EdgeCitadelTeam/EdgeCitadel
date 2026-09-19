@@ -124,7 +124,7 @@ def apply_page(
             if after != (previous[1] if previous else 0):
                 raise TraceContractError("settlement_base_mismatch")
             db.execute(
-                "UPDATE trace_spool SET state='core_settled',collector_epoch=?,core_outcome='accepted' "
+                "UPDATE trace_spool_all SET state='core_settled',collector_epoch=?,core_outcome='accepted' "
                 "WHERE node_id=? AND source_epoch=? AND export_generation=? AND export_seq>? AND export_seq<=?",
                 (epoch, *scope, after, through),
             )
@@ -134,7 +134,7 @@ def apply_page(
             ):
                 for item in page[field]:
                     db.execute(
-                        "UPDATE trace_spool SET core_outcome=? "
+                        "UPDATE trace_spool_all SET core_outcome=? "
                         "WHERE node_id=? AND source_epoch=? AND export_generation=? AND export_seq BETWEEN ? AND ?",
                         (outcome, *scope, item["first"], item["last"]),
                     )

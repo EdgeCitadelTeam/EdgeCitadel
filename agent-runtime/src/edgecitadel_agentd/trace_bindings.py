@@ -115,7 +115,7 @@ def bind_trace(
             ):
                 raise TraceContractError("binding_context_mismatch")
         previous = db.execute(
-            "SELECT * FROM trace_requests WHERE connector_id=? AND operation='bind' AND scope='' AND request_id=?",
+            "SELECT * FROM trace_requests_all WHERE connector_id=? AND operation='bind' AND scope='' AND request_id=?",
             (connector_id, params["request_id"]),
         ).fetchone()
         if previous is not None:

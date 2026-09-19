@@ -60,7 +60,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -181,8 +181,13 @@ class AgentdStore:
             raise StoreError("task and trace database files must differ")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.parent.chmod(0o700)
+        from .storage_workspace import ReservedConnection
+
         self._connection = sqlite3.connect(
-            path.resolve().as_uri(), check_same_thread=False, uri=True
+            path.resolve().as_uri(),
+            check_same_thread=False,
+            uri=True,
+            factory=ReservedConnection,
         )
         try:
             self._connection.row_factory = sqlite3.Row
@@ -222,6 +227,11 @@ class AgentdStore:
             verify_pair(self._connection)
             verify_references(self._connection)
             install_reference_guards(self._connection)
+            from .trace_completed import (
+                install_reference_guards as install_completed_guards,
+            )
+
+            install_completed_guards(self._connection)
             path.chmod(0o600)
             self.task_path.chmod(0o600)
         except BaseException:
@@ -570,6 +580,17 @@ class AgentdStore:
             migrate_counters(self._connection)
             self._connection.execute("PRAGMA main.user_version=25")
             self._connection.execute("PRAGMA task_state.user_version=25")
+        if version < 26:
+            from .trace_reservations import SCHEMA_SQL
+            from .trace_completed import install_views
+
+            if not self._connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE name='trace_completion_slots'"
+            ).fetchone():
+                self._execute_migration_sql(SCHEMA_SQL)
+            install_views(self._connection)
+            self._connection.execute("PRAGMA main.user_version=26")
+            self._connection.execute("PRAGMA task_state.user_version=26")
 
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.

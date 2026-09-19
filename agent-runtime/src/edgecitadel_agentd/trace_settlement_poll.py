@@ -114,7 +114,7 @@ class SettlementPoller:
             with self.store._lock:
                 pending = (
                     self.store._connection.execute(
-                        "SELECT 1 FROM trace_spool WHERE state IN ('pending','broker_acked') "
+                        "SELECT 1 FROM trace_spool_all WHERE state IN ('pending','broker_acked') "
                         "AND node_id=? AND source_epoch=? AND export_generation=? LIMIT 1",
                         self.scope,
                     ).fetchone()

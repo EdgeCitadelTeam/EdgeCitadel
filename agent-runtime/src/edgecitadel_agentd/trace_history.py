@@ -63,7 +63,7 @@ def read_history(
         # Actor-wide warning: a compact marker can account for several traces.
         history_pruned = (
             store._connection.execute(
-                "SELECT 1 FROM trace_journal WHERE agent_id=?"
+                "SELECT 1 FROM trace_journal_all WHERE agent_id=?"
                 + retention_scope
                 + " AND json_extract(event_json,'$.kind')='coverage' "
                 "AND json_extract(event_json,'$.attributes.reason') IN ('quota_exceeded','retention_expired') LIMIT 1",
@@ -75,7 +75,7 @@ def read_history(
         source_values = [agent_id] if trace_id is None else [agent_id, trace_id]
         # Only epochs containing this actor's observations are discoverable.
         sources = store._connection.execute(
-            "SELECT DISTINCT node_id,source_epoch FROM trace_journal WHERE agent_id=?"
+            "SELECT DISTINCT node_id,source_epoch FROM trace_journal_all WHERE agent_id=?"
             + trace_scope
             + " ORDER BY node_id,source_epoch LIMIT 101",
             source_values,
@@ -84,9 +84,9 @@ def read_history(
             raise StoreError("local history source limit exceeded")
         if epoch is None and sources:
             latest = store._connection.execute(
-                "SELECT source_epoch FROM trace_journal WHERE agent_id=?"
+                "SELECT j.source_epoch FROM trace_journal_all j WHERE agent_id=?"
                 + trace_scope
-                + " ORDER BY rowid DESC LIMIT 1",
+                + " ORDER BY j.received_at_ms DESC,(SELECT s.rowid FROM trace_sources s WHERE s.node_id=j.node_id AND s.source_epoch=j.source_epoch) DESC,j.source_seq DESC LIMIT 1",
                 source_values,
             ).fetchone()
             epoch = latest[0]
@@ -102,7 +102,7 @@ def read_history(
                 loss_values.append(trace_id)
             reported_loss = (
                 store._connection.execute(
-                    "SELECT 1 FROM trace_journal WHERE agent_id=? AND source_epoch=?"
+                    "SELECT 1 FROM trace_journal_all WHERE agent_id=? AND source_epoch=?"
                     + scope
                     + " AND json_extract(event_json,'$.kind')='coverage' "
                     "AND json_extract(event_json,'$.attributes.dropped_observations')>0 LIMIT 1",
@@ -115,7 +115,7 @@ def read_history(
                 values.append(trace_id)
             values.append(limit + 1)
             rows = store._connection.execute(
-                "SELECT event_json FROM trace_journal WHERE agent_id=? AND source_epoch=? "
+                "SELECT event_json FROM trace_journal_all WHERE agent_id=? AND source_epoch=? "
                 "AND source_seq>?" + scope + " ORDER BY source_seq LIMIT ?",
                 values,
             ).fetchall()

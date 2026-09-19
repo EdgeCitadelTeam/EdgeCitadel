@@ -72,6 +72,9 @@ def test_attached_wal_growth_closes_optional_admission(tmp_path, monkeypatch):
             "CREATE TABLE trace_storage_usage(singleton INTEGER PRIMARY KEY,event_bytes INTEGER,event_count INTEGER)"
         )
         db.execute("INSERT INTO trace_storage_usage VALUES(1,0,0)")
+        db.execute(
+            "CREATE VIEW trace_storage_usage_all AS SELECT * FROM trace_storage_usage"
+        )
         db.commit()
         db.execute("ATTACH DATABASE ? AS telemetry", (str(attached),))
         assert db.execute("PRAGMA telemetry.journal_mode=WAL").fetchone()[0] == "wal"

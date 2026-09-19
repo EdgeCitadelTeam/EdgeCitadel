@@ -145,7 +145,7 @@ def test_v24_paired_snapshot_restores_then_migrates_before_rotation(tmp_path):
     )
     assert marker["source_epoch"] != original["source_epoch"]
     with sqlite3.connect(destination / "agentd.sqlite3") as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 25
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 26
         assert (
             db.execute(
                 "SELECT source_seq FROM trace_journal WHERE event_id=?",

@@ -33,7 +33,7 @@ def rotate_restored_source(
     epoch = str(current[0])
     if epoch != expected_source_epoch:
         first = connection.execute(
-            "SELECT event_json FROM trace_journal WHERE node_id=? "
+            "SELECT event_json FROM trace_journal_all WHERE node_id=? "
             "AND source_epoch=? AND source_seq=1",
             (node_id, epoch),
         ).fetchone()

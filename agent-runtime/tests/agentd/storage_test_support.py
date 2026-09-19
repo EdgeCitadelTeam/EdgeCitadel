@@ -24,6 +24,12 @@ def flatten_connection(db):
     Current runtime never writes this layout. All files belong to the test.
     Preserve rowids and rows; leave the paired destination empty for migration.
     """
+    db.execute("DROP VIEW IF EXISTS trace_export_records")
+    db.execute("DROP VIEW IF EXISTS trace_completed_export")
+    db.execute("DROP TRIGGER IF EXISTS trace_completed_spool_update")
+    for name in ("journal", "spool", "requests", "storage_usage"):
+        db.execute(f"DROP VIEW IF EXISTS trace_{name}_all")
+    db.execute("DROP TABLE IF EXISTS trace_completion_slots")
     if not db.execute(
         "SELECT 1 FROM main.sqlite_schema WHERE name='storage_pair'"
     ).fetchone():
@@ -36,7 +42,7 @@ def flatten_connection(db):
             (str(task_database_path(Path(filename))),),
         )
     for (name,) in db.execute(
-        "SELECT name FROM temp.sqlite_schema WHERE type='trigger' AND name LIKE 'pair_%'"
+        "SELECT name FROM temp.sqlite_schema WHERE type='trigger' AND (name LIKE 'pair_%' OR name LIKE 'completed_%')"
     ).fetchall():
         db.execute(f'DROP TRIGGER temp."{name}"')
     for table in TASK_TABLES:

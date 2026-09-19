@@ -10,6 +10,9 @@ from typing import Any
 from uuid import uuid4
 
 from .trace_counters import MAX_COUNTER, encode_counter
+from .trace_reservations import Obligation
+from .trace_completed import fill_completed
+from .storage_workspace import ReservedConnection
 from .trace_capacity import admit_event
 from .trace_contract import TraceContractError, validate_event, validate_export_header
 
@@ -129,11 +132,20 @@ class TraceJournal:
         *,
         selected: bool,
         reserve_capacity: bool = False,
+        completion: Obligation | None = None,
     ) -> dict[str, Any]:
         self._transaction()
+        if (
+            completion is not None
+            and self.connection.execute(
+                "SELECT 1 FROM trace_sources WHERE node_id=? AND active=1", (node_id,)
+            ).fetchone()
+            is None
+        ):
+            raise TraceContractError("completion_source_missing")
         epoch, generation = self.initialize(node_id)
         previous = self.connection.execute(
-            "SELECT source_seq,event_sha256 FROM trace_journal WHERE node_id=? AND source_epoch=? AND event_id=?",
+            "SELECT source_seq,event_sha256 FROM trace_journal_all WHERE node_id=? AND source_epoch=? AND event_id=?",
             (node_id, epoch, event["event_id"]),
         ).fetchone()
         sequence = (
@@ -166,6 +178,55 @@ class TraceJournal:
         if previous:
             if previous[1] != digest:
                 raise TraceContractError("idempotency_conflict")
+            return stamped
+        if completion is not None:
+            db = self.connection
+            if not isinstance(db, ReservedConnection) or db.workspace is None:
+                raise TraceContractError("reserved_completion_unavailable")
+            export_sequence = None
+            if selected:
+                export_sequence = db.execute(
+                    "SELECT next_export_seq FROM trace_export_generations WHERE node_id=? AND source_epoch=? AND export_generation=?",
+                    (node_id, epoch, generation),
+                ).fetchone()[0]
+                if export_sequence >= MAX_COUNTER:
+                    raise TraceContractError("trace_sequence_exhausted")
+                validate_export_header(
+                    {
+                        "schema_version": 1,
+                        "node_id": node_id,
+                        "source_epoch": epoch,
+                        "export_generation": generation,
+                        "export_seq": export_sequence,
+                        "event_sha256": digest,
+                        "event": stamped,
+                    }
+                )
+            db.use_completion_workspace()
+            fill_completed(
+                db,
+                completion,
+                {
+                    "event": stamped,
+                    "event_sha256": digest,
+                    "event_bytes": len(encoded),
+                    "received_at_ms": time.time_ns() // 1_000_000,
+                    "export_generation": generation if selected else None,
+                    "export_seq": export_sequence,
+                    "state": "pending",
+                    "collector_epoch": None,
+                    "core_outcome": None,
+                },
+            )
+            db.execute(
+                "UPDATE trace_sources SET next_source_seq_bytes=? WHERE node_id=? AND source_epoch=?",
+                (encode_counter(sequence + 1), node_id, epoch),
+            )
+            if export_sequence is not None:
+                db.execute(
+                    "UPDATE trace_export_generations SET next_export_seq_bytes=? WHERE node_id=? AND source_epoch=? AND export_generation=?",
+                    (encode_counter(export_sequence + 1), node_id, epoch, generation),
+                )
             return stamped
         admit_event(
             self.connection,

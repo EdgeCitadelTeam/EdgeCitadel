@@ -20,6 +20,7 @@ from nats.js.errors import APIError
 from edgecitadel_plugin_runtime.telemetry_stream import STREAM_NAME
 
 from .store import AgentdStore
+from .trace_completed import export_page
 from .trace_contract import TraceContractError, canonical_bytes, validate_export
 from .trace_metrics import SourceMetrics
 
@@ -83,29 +84,29 @@ def selected_batch(
         ).fetchone()
         blocked = json.loads(recovery[0]) if recovery else []
         recovery_epoch = blocked[-1] if blocked else None
-        rows = store._connection.execute(
-            "SELECT s.export_seq,s.event_sha256,j.event_json FROM trace_spool s "
-            "JOIN trace_journal j ON j.node_id=s.node_id AND j.source_epoch=s.source_epoch "
-            "AND j.event_id=s.journal_event_id "
-            "WHERE s.node_id=? AND s.source_epoch=? AND s.export_generation=? "
-            "AND s.export_seq>? AND (s.state='pending' OR (? AND s.state='broker_acked')) "
-            "ORDER BY s.export_seq LIMIT ?",
-            (*scope.values(), after, replay, BATCH_SIZE),
-        ).fetchall()
+        rows = export_page(
+            store._connection,
+            scope.values(),
+            after=after,
+            limit=BATCH_SIZE,
+            states=("pending", "broker_acked") if replay else ("pending",),
+            payload_required=True,
+        )
+
     return [
         ExportRecord(
             scope,
-            row[0],
-            row[1],
+            row["export_seq"],
+            row["event_sha256"],
             validate_export(
                 {
                     "schema_version": 1,
                     "node_id": scope.node_id,
                     "source_epoch": scope.source_epoch,
                     "export_generation": scope.export_generation,
-                    "export_seq": row[0],
-                    "event_sha256": row[1],
-                    "event": json.loads(row[2]),
+                    "export_seq": row["export_seq"],
+                    "event_sha256": row["event_sha256"],
+                    "event": json.loads(row["event_json"]),
                 }
             ),
             recovery_epoch=recovery_epoch,
@@ -121,7 +122,7 @@ def checkpoint_broker_ack(store: AgentdStore, record: ExportRecord) -> None:
             raise TraceContractError("export_requires_committed_spool")
         with store._connection:
             store._connection.execute(
-                "UPDATE trace_spool SET state='broker_acked' "
+                "UPDATE trace_spool_all SET state='broker_acked' "
                 "WHERE node_id=? AND source_epoch=? AND export_generation=? AND export_seq=? "
                 "AND event_sha256=? AND state='pending' AND journal_event_id IS NOT NULL",
                 (*record.scope.values(), record.export_seq, record.event_sha256),

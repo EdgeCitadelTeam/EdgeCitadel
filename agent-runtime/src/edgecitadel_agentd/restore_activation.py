@@ -113,7 +113,7 @@ def activate_restored_state(
             with store._lock, db:
                 db.execute("BEGIN IMMEDIATE")
                 source = db.execute(
-                    "SELECT j.event_json FROM trace_journal j JOIN trace_sources s "
+                    "SELECT j.event_json FROM trace_journal_all j JOIN trace_sources s "
                     "ON s.node_id=j.node_id AND s.source_epoch=j.source_epoch "
                     "WHERE s.node_id=? AND s.source_epoch=? AND s.active=1 AND j.source_seq=1",
                     (node_id, source_epoch),
@@ -153,7 +153,7 @@ def activate_restored_state(
                     if receipt[0] != inventory_sha256:
                         raise StoreError("restore review does not match activation")
                     saved = db.execute(
-                        "SELECT event_json FROM trace_journal WHERE node_id=? AND source_epoch=? AND event_id=?",
+                        "SELECT event_json FROM trace_journal_all WHERE node_id=? AND source_epoch=? AND event_id=?",
                         (node_id, source_epoch, receipt[1]),
                     ).fetchone()
                     if saved is None:

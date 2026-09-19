@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from .trace_contract import TraceContractError
 from .trace_journal import TraceJournal
+from .trace_completed import export_page
 
 if TYPE_CHECKING:
     from .store import AgentdStore
@@ -84,13 +85,15 @@ def recover_batch(store: AgentdStore, scope: tuple[str, str, str]) -> bool:
             if recovery[0] != "scanning":
                 return True
             after, through = recovery[1], recovery[2]
-            rows = db.execute(
-                "SELECT s.export_seq,j.event_id FROM trace_spool s LEFT JOIN trace_journal j "
-                "ON j.node_id=s.node_id AND j.source_epoch=s.source_epoch AND j.event_id=s.journal_event_id "
-                "WHERE s.node_id=? AND s.source_epoch=? AND s.export_generation=? AND s.export_seq>? AND s.export_seq<=? "
-                "ORDER BY s.export_seq LIMIT 64",
-                (*scope, after, through),
-            ).fetchall()
+            rows = [
+                (
+                    row["export_seq"],
+                    row["journal_event_id"] if row["event_json"] is not None else None,
+                )
+                for row in export_page(
+                    db, scope, after=after, through=through, limit=64
+                )
+            ]
             end = rows[-1][0] if len(rows) == 64 else through
             missing, next_position = [], after + 1
             for position, event_id in rows:
@@ -140,7 +143,7 @@ def recover_batch(store: AgentdStore, scope: tuple[str, str, str]) -> bool:
                 )
             for position, event_id in rows:
                 db.execute(
-                    "UPDATE trace_spool SET state=?,collector_epoch=NULL,core_outcome=NULL,journal_event_id=? "
+                    "UPDATE trace_spool_all SET state=?,collector_epoch=NULL,core_outcome=NULL,journal_event_id=? "
                     f"WHERE {_SCOPE} AND export_seq=?",
                     (
                         "pending" if event_id else "lost_with_marker",

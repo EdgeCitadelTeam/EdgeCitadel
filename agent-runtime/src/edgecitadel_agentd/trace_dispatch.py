@@ -48,7 +48,7 @@ def dispatch_trace(
             delegation_allowed=True,
         )
         previous = db.execute(
-            "SELECT * FROM trace_requests WHERE connector_id=? AND operation='dispatch' AND scope=? AND request_id=?",
+            "SELECT * FROM trace_requests_all WHERE connector_id=? AND operation='dispatch' AND scope=? AND request_id=?",
             (connector_id, binding["binding_id"], params["request_id"]),
         ).fetchone()
         if previous is not None:
@@ -92,7 +92,7 @@ def dispatch_trace(
             ).hexdigest()
             allowed = "edgecitadel_delegate" in capabilities
         root = db.execute(
-            "SELECT event_json FROM trace_journal WHERE trace_id=? AND json_extract(event_json,'$.execution_attempt_id')=? AND json_extract(event_json,'$.kind')='run' AND json_extract(event_json,'$.phase')='started'",
+            "SELECT event_json FROM trace_journal_all WHERE trace_id=? AND json_extract(event_json,'$.execution_attempt_id')=? AND json_extract(event_json,'$.kind')='run' AND json_extract(event_json,'$.phase')='started'",
             (binding["trace_id"], binding["execution_attempt_id"]),
         ).fetchone()
         if root is None:

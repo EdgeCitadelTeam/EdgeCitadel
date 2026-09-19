@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .storage_sqlite import configure_scratch
+from .trace_completed import export_page
 
 MAX_STEPS = 100_000
 MAX_SECONDS = 0.05
@@ -103,14 +104,7 @@ def inspect_source(
                 f"SELECT phase,scanned_through,assigned_through FROM trace_collector_recovery WHERE {_SCOPE}",
                 scope,
             ).fetchone()
-            rows = db.execute(
-                "SELECT s.export_seq,s.event_id,s.event_sha256,s.state,s.core_outcome,j.event_json "
-                "FROM trace_spool s LEFT JOIN trace_journal j ON "
-                "j.node_id=s.node_id AND j.source_epoch=s.source_epoch AND j.event_id=s.journal_event_id "
-                "WHERE s.node_id=? AND s.source_epoch=? AND s.export_generation=? AND s.export_seq>? "
-                "ORDER BY s.export_seq LIMIT ?",
-                (*scope, after, limit + 1),
-            ).fetchall()
+            rows = export_page(db, scope, after=after, limit=limit + 1)
             records: list[dict[str, Any]] = []
             result: dict[str, Any] = {
                 "kind": "source_trace_inspection",
@@ -129,10 +123,9 @@ def inspect_source(
             _budget(db)
             try:
                 stats = db.execute(
-                    "SELECT s.state,count(*) AS positions,coalesce(sum(j.event_bytes),0) AS retained_payload_bytes,"
-                    "min(j.received_at_ms) AS oldest_received_at_ms "
-                    "FROM trace_spool s LEFT JOIN trace_journal j ON "
-                    "j.node_id=s.node_id AND j.source_epoch=s.source_epoch AND j.event_id=s.journal_event_id "
+                    "SELECT s.state,count(*) AS positions,coalesce(sum(s.event_bytes),0) AS retained_payload_bytes,"
+                    "min(s.received_at_ms) AS oldest_received_at_ms "
+                    "FROM trace_export_records s "
                     "WHERE s.node_id=? AND s.source_epoch=? AND s.export_generation=? GROUP BY s.state",
                     scope,
                 ).fetchall()

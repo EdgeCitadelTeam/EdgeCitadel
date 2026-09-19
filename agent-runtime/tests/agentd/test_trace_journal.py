@@ -175,7 +175,7 @@ def test_populated_v6_upgrade_is_additive_and_failure_rolls_back(tmp_path):
     try:
         assert migrated.get_task(task["task_id"]) == task
         assert counts(migrated._connection) == (0, 0, 0)
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 25
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 26
         assert migrated._connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (
             migrated._connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

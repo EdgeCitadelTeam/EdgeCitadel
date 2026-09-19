@@ -167,7 +167,19 @@ space refuses new events while exact retries remain readable. Fixed counters and
 the tested completion-slot/workspace primitives are prerequisites; production
 admission and reserved lifecycle completion are not yet integrated.
 
-For a stopped, clean schema-25 DELETE pair already owned by the dedicated UID,
+Schema 26 adds private completion slots and shared journal/export/receipt read
+views. Pending slots expose no events; filled slots carry the event, assigned
+positions and optional exact retry receipt. Export settlement updates them in
+place, and ordinary materialization moves the same facts into indexed tables in
+one transaction. Parent-reference guards and startup scans cover both forms.
+Export pages bound each storage branch before merging. Maintenance protects
+completed slots until they are materialized. The reserved journal writer requires
+an explicitly installed physical workspace; normal daemon admission does not yet
+allocate obligations or install that workspace. All lifecycle and recovery paths
+must be integrated and qualified before this provides a production completion
+guarantee.
+
+For a stopped, clean schema-26 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with
 `no_new_privs` enabled and no capabilities:
 

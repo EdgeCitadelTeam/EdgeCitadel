@@ -243,6 +243,7 @@ def test_v11_upgrade_preserves_event_hashes_and_starts_conservative_age(recorded
         )
     ]
     with store._connection:
+        flatten_connection(store._connection)
         store._connection.execute("DROP INDEX trace_journal_retention")
         store._connection.execute(
             "ALTER TABLE trace_journal DROP COLUMN received_at_ms"
@@ -254,7 +255,7 @@ def test_v11_upgrade_preserves_event_hashes_and_starts_conservative_age(recorded
     started = int(time.time() * 1000)
     migrated = AgentdStore(store.path)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 25
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 26
         assert [
             tuple(r)
             for r in migrated._connection.execute(

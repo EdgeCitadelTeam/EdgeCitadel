@@ -45,7 +45,7 @@ def admit_event(
     if not db.in_transaction:
         raise TraceContractError("trace_transaction_required")
     usage = db.execute(
-        "SELECT event_bytes FROM trace_storage_usage WHERE singleton=1"
+        "SELECT event_bytes FROM trace_storage_usage_all WHERE singleton=1"
     ).fetchone()
     if usage is None:
         raise TraceContractError("storage_unavailable")
