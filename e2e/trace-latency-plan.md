@@ -214,3 +214,20 @@ run rollover, filtering and cleanup with twenty runs and 1,000 exact events. Its
 48 measured observations are insufficient for p95. Long-run evidence must come
 from a verified live process through completion/restoration; a progress artifact
 is only diagnostic.
+
+## Full-profile failure follow-up
+
+The first full jim-eq baseline on frozen harness `1cbdbbe` failed on a 20-second
+terminal-node visibility wait after 17,122 events. All emitted source/Core tuples
+match and are settled; normal Core startup and owned connector/session cleanup
+are verified. Only 1,617 of the declared 1,680 acknowledgments were obtained,
+so this run provides no complete-cohort latency acceptance. The affected node
+renders in a fresh retained-run browser session; the live failure is unresolved.
+
+Before another full run, capture bounded failure context in the browser harness:
+current sample/lane/stage, session state, and request/socket failure counts,
+without exporting credentials or raw payloads. Reproduce and correct the owning
+layer on jim-eq. Keep all predeclared samples and the original failure evidence;
+do not increase timeouts or trim the cohort to turn this run into a pass. Then
+repeat the full profile and run the completion auditor, followed by the remaining
+overhead, stress, soak and broader acceptance gates.
