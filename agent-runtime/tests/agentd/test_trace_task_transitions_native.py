@@ -1,7 +1,7 @@
-"""Owned jim-eq task admission/cancellation and paired-commit crash gate.
+"""Owned jim-eq remote-result ingestion and paired-commit crash gate.
 
-The fixture installs the workspace. Intermediate task transitions and session
-recovery are outside this test's scope; production installation stays disabled.
+The fixture installs the workspace. Session recovery and repeated-attempt admission remain outside this gate;
+production workspace installation stays disabled.
 """
 
 import ctypes
@@ -54,12 +54,19 @@ def worker(state, operation, fixture):
             for i in range(task_count)
         ]
 
-        def cancel(task_id):
-            return store.transition_task(
-                task_id=task_id,
-                state="cancelled",
-                actor_id="origin",
-                reason="owned cancellation",
+        def complete(task_id):
+            return store.ingest_transport_envelope(
+                {
+                    "v": 1,
+                    "id": task_id,
+                    "type": "result",
+                    "task_id": task_id,
+                    "sender_id": "remote",
+                    "recipient_id": "origin",
+                    "task_state": "completed",
+                    "timestamp": "2026-09-19T12:00:00.000Z",
+                    "payload": {"owned": True},
+                }
             )
 
         def snapshot():
@@ -159,7 +166,7 @@ def worker(state, operation, fixture):
                 db.execute("BEGIN IMMEDIATE")
                 pages = db.execute("PRAGMA page_count").fetchone()[0]
                 for task_id in task_ids:
-                    cancel(task_id)
+                    complete(task_id)
                 assert db.execute("PRAGMA page_count").fetchone()[0] == pages
                 if operation == "before_commit":
                     journal = trace / "agentd.sqlite3-journal"
@@ -176,7 +183,7 @@ def worker(state, operation, fixture):
                     assert sys.stdin.readline().strip() == "resume"
         else:
             result = snapshot()
-            expected = task_count if operation == "verify_complete" else 0
+            expected = MAX_SLOTS if operation == "verify_complete" else 0
             assert result["filled"] == expected
             assert result["events"] == result["legacy_events"] == task_count + expected
             assert (
@@ -185,10 +192,10 @@ def worker(state, operation, fixture):
                 == task_count
             )
             assert result["task_states"] == {
-                "cancelled" if expected else "queued": task_count
+                "completed" if expected else "queued": task_count
             }
             assert result["attempts"] == expected
-            assert result["outbox"] == task_count + expected
+            assert result["outbox"] == task_count
             assert (
                 result["next_source_seq"]
                 == result["next_export_seq"]
@@ -215,10 +222,20 @@ def worker(state, operation, fixture):
                         assert canonical_bytes(decoded) == canonical_bytes(
                             json.loads(wanted[after][0])
                         )
-                        assert decoded["phase"] == (
-                            "queued" if after < task_count else "cancelled"
-                        )
-                        assert decoded["task_id"] == task_ids[after % task_count]
+                        if after < task_count:
+                            assert decoded["phase"] == "queued"
+                            assert decoded["task_id"] == task_ids[after]
+                        else:
+                            assert (
+                                decoded["phase"]
+                                == ("offered", "accepted", "running", "completed")[
+                                    (after - task_count) % 4
+                                ]
+                            )
+                            assert (
+                                decoded["task_id"]
+                                == task_ids[(after - task_count) // 4]
+                            )
                         assert decoded["source_seq"] == after + 1
                         assert record.export_seq == after + 1
                         after += 1
@@ -226,7 +243,7 @@ def worker(state, operation, fixture):
                 with db:
                     db.execute("BEGIN IMMEDIATE")
                     for i in (0, task_count - 1):
-                        assert cancel(task_ids[i])["state"] == "cancelled"
+                        assert complete(task_ids[i])["state"] == "completed"
                 assert snapshot() == result
                 result["exact_exported_events"] = after
             for schema in ("main", "task_state"):
@@ -248,11 +265,11 @@ def main(output=None):
     from test_trace_linux_quota import owned_volume
 
     report = {
-        "scope": "Actual task admission and cancellation with canonical/legacy evidence and transport intent in one paired commit at user-quota pressure; fixture-installed workspace, no intermediate/recovery admission or live deployment."
+        "scope": "Actual remote-result ingestion consumes all four reserved first-cycle task boundaries at Linux user-quota pressure; task state, attempt history and canonical/legacy events commit atomically. Fixture-installed workspace; no session recovery/repeated-attempt admission or live deployment."
     }
     fixture = Path(__file__).resolve().parents[1] / "fixtures/traces/events.v1.json"
     with owned_volume() as (root, state, _, _):
-        script = root / "task-completion-probe.py"
+        script = root / "task-transitions-probe.py"
         shutil.copyfile(__file__, script)
         children = []
 
@@ -324,7 +341,7 @@ def main(output=None):
     print(value)
 
 
-def test_native_task_completion():
+def test_native_task_transitions():
     import pytest
 
     if os.environ.get("RUN_AGENTD_USER_QUOTA") != "1":

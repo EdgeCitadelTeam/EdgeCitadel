@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from .trace_contract import TraceContractError
 from .trace_journal import TraceJournal
-from .trace_reservations import Obligation, reserve
+from .trace_reservations import Obligation
 
 if TYPE_CHECKING:
     from .store import AgentdStore
@@ -106,9 +106,7 @@ def record_task_boundary(
     completion = None
     if db.workspace is not None:
         obligation = Obligation("task", task_id, "terminal")
-        if phase == "queued":
-            reserve(db, obligation)
-        elif phase in {
+        if phase in {
             "completed",
             "failed",
             "rejected",
@@ -117,6 +115,15 @@ def record_task_boundary(
             "undeliverable",
         }:
             completion = obligation
+        elif phase in {"offered", "accepted", "running"}:
+            candidate = Obligation("task", task_id, phase)
+            if db.execute(
+                "SELECT 1 FROM trace_completion_slots WHERE owner_kind=? AND owner_id=? AND purpose=? AND filled=0",
+                candidate.key,
+            ).fetchone():
+                completion = candidate
+            # A later attempt has no first-cycle slot left. Its ordinary
+            # admission must succeed before the caller can execute that work.
     TraceJournal(db).record(
         node_id,
         {

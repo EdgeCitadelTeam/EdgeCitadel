@@ -8,7 +8,7 @@ from typing import Any
 
 from .trace_completed import set_completed_metadata
 from .trace_contract import TraceContractError
-from .trace_reservations import Obligation
+from .trace_reservations import Obligation, release_unused
 
 EVENT_COLUMNS = (
     "event_id",
@@ -53,3 +53,20 @@ def materialize(db: sqlite3.Connection, record: dict[str, Any]) -> None:
             f"INSERT INTO events({','.join(EVENT_COLUMNS)}) VALUES ({','.join('?' for _ in EVENT_COLUMNS)})",
             tuple(record["legacy_event"][key] for key in EVENT_COLUMNS),
         )
+        if record["event"]["phase"] in {
+            "completed",
+            "failed",
+            "rejected",
+            "cancelled",
+            "expired",
+            "undeliverable",
+        }:
+            # This ordinary transaction can reclaim unused first-cycle capacity.
+            # Filled records remain authoritative until separately materialized.
+            for purpose in ("offered", "accepted", "running"):
+                obligation = Obligation("task", record["event"]["task_id"], purpose)
+                if db.execute(
+                    "SELECT 1 FROM trace_completion_slots WHERE owner_kind=? AND owner_id=? AND purpose=? AND filled=0",
+                    obligation.key,
+                ).fetchone():
+                    release_unused(db, obligation)

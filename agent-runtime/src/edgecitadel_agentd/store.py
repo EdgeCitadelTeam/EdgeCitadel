@@ -1351,6 +1351,14 @@ class AgentdStore:
                 )
             except sqlite3.IntegrityError as error:
                 raise StoreError("task_id already exists") from error
+            if self._connection.workspace is not None:
+                from .trace_reservations import Obligation, reserve
+
+                try:
+                    for purpose in ("offered", "accepted", "running", "terminal"):
+                        reserve(self._connection, Obligation("task", task_id, purpose))
+                except TraceContractError as error:
+                    raise StoreError(error.code) from error
             if correlation is not None:
                 self._connection.execute(
                     "INSERT INTO trace_task_contexts(task_id,context_json) VALUES (?,?)",
@@ -1732,71 +1740,81 @@ class AgentdStore:
                 "canceled": "cancelled",
             }.get(str(requested_state), "failed")
             try:
-                current = self.get_task(task_id)
-                actor_id = str(envelope.get("sender_id", ""))
-                payload = envelope.get("payload")
-                if (
-                    actor_id == "edgecitadel-system"
-                    and requested_state == "failed"
-                    and isinstance(payload, Mapping)
-                    and payload.get("error") == "recipient_unavailable"
-                    and payload.get("trigger") == "max_deliveries"
-                    and payload.get("recipient_id") == current["recipient_id"]
-                    and envelope.get("recipient_id") == current["sender_id"]
-                ):
+                with self._task_transaction():
+                    current = self.get_task(task_id)
+                    actor_id = str(envelope.get("sender_id", ""))
+                    payload = envelope.get("payload")
+                    if (
+                        actor_id == "edgecitadel-system"
+                        and requested_state == "failed"
+                        and isinstance(payload, Mapping)
+                        and payload.get("error") == "recipient_unavailable"
+                        and payload.get("trigger") == "max_deliveries"
+                        and payload.get("recipient_id") == current["recipient_id"]
+                        and envelope.get("recipient_id") == current["sender_id"]
+                    ):
+                        return self.transition_task(
+                            task_id=task_id,
+                            state="undeliverable",
+                            actor_id="edgecitadel-system",
+                            reason="recipient_unavailable",
+                            result=payload,
+                            evidence={"transport": "nats", "trigger": "max_deliveries"},
+                            queue_transport=False,
+                        )
+                    if current["state"] == "queued":
+                        current = self.transition_task(
+                            task_id=task_id,
+                            state="offered",
+                            actor_id="edgecitadel-system",
+                            evidence={
+                                "transport": "nats",
+                                "compatibility": "v1-result",
+                            },
+                            trace_evidence_kind="compatibility_synthesized",
+                            trace_source_role="sender",
+                            queue_transport=False,
+                        )
+                    if current["state"] == "offered" and state not in {
+                        "rejected",
+                        "cancelled",
+                    }:
+                        current = self.transition_task(
+                            task_id=task_id,
+                            state="accepted",
+                            actor_id=actor_id,
+                            evidence={
+                                "transport": "nats",
+                                "compatibility": "v1-result",
+                            },
+                            trace_evidence_kind="compatibility_synthesized",
+                            trace_source_role="sender",
+                            queue_transport=False,
+                        )
+                    if current["state"] == "accepted" and state == "completed":
+                        self.transition_task(
+                            task_id=task_id,
+                            state="running",
+                            actor_id=actor_id,
+                            evidence={
+                                "transport": "nats",
+                                "compatibility": "v1-result",
+                            },
+                            trace_evidence_kind="compatibility_synthesized",
+                            trace_source_role="sender",
+                            queue_transport=False,
+                        )
                     return self.transition_task(
                         task_id=task_id,
-                        state="undeliverable",
-                        actor_id="edgecitadel-system",
-                        reason="recipient_unavailable",
-                        result=payload,
-                        evidence={"transport": "nats", "trigger": "max_deliveries"},
-                        queue_transport=False,
-                    )
-                if current["state"] == "queued":
-                    current = self.transition_task(
-                        task_id=task_id,
-                        state="offered",
-                        actor_id="edgecitadel-system",
-                        evidence={"transport": "nats", "compatibility": "v1-result"},
-                        trace_evidence_kind="compatibility_synthesized",
-                        trace_source_role="sender",
-                        queue_transport=False,
-                    )
-                if current["state"] == "offered" and state not in {
-                    "rejected",
-                    "cancelled",
-                }:
-                    current = self.transition_task(
-                        task_id=task_id,
-                        state="accepted",
+                        state=state,
                         actor_id=actor_id,
-                        evidence={"transport": "nats", "compatibility": "v1-result"},
-                        trace_evidence_kind="compatibility_synthesized",
+                        reason="remote_result",
+                        trace_evidence_kind="integration_reported",
                         trace_source_role="sender",
+                        result=payload if isinstance(payload, Mapping) else None,
+                        evidence={"transport": "nats"},
                         queue_transport=False,
                     )
-                if current["state"] == "accepted" and state == "completed":
-                    self.transition_task(
-                        task_id=task_id,
-                        state="running",
-                        actor_id=actor_id,
-                        evidence={"transport": "nats", "compatibility": "v1-result"},
-                        trace_evidence_kind="compatibility_synthesized",
-                        trace_source_role="sender",
-                        queue_transport=False,
-                    )
-                return self.transition_task(
-                    task_id=task_id,
-                    state=state,
-                    actor_id=actor_id,
-                    reason="remote_result",
-                    trace_evidence_kind="integration_reported",
-                    trace_source_role="sender",
-                    result=payload if isinstance(payload, Mapping) else None,
-                    evidence={"transport": "nats"},
-                    queue_transport=False,
-                )
             except StoreError as error:
                 if "illegal task transition" in str(error):
                     current = self.get_task(task_id)

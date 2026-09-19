@@ -191,17 +191,24 @@ required before activation. The owned jim-eq gate in
 `tests/agentd/test_trace_terminal_native.py` tests actual bind/append/finish calls
 at user-quota pressure, including SIGKILL before/after commit and exact export.
 
-Schema 28 reserves one terminal slot when an enrolled task is created with a
-workspace installed. Terminal transitions carry the canonical event and legacy
-local event in that slot, atomically with task state, attempt history and transport
-intent in the attached task database. `events_all` provides coherent local reads;
-ordinary materialization preserves both event forms. Transition reasons are
-limited to 1,024 UTF-8 bytes before state changes so the legacy record fits.
-Intermediate transitions, remote-result synthesis, requeue and ancillary
-session/connector recovery still require capacity integration. The workspace
-remains disabled in production. The owned jim-eq
-`tests/agentd/test_trace_task_completion_native.py` gate exercises actual task
-admission/cancellation and paired rollback/commit crashes at quota pressure.
+Schema 28 reserves the first offered, accepted, running and terminal task
+boundaries at creation when a workspace is installed. Each slot carries its
+canonical and legacy local event, atomically with task state, attempt history and
+transport intent in the attached task database. `events_all` provides coherent
+local reads; ordinary materialization preserves both event forms and terminal
+materialization frees unused first-cycle slots. Transition reasons are limited
+to 1,024 UTF-8 bytes before state changes so the legacy record fits.
+
+Remote-result ingestion commits all synthesized boundaries and the reported
+terminal result together; a later validation/write failure leaves none of those
+transitions committed. The owned jim-eq
+`tests/agentd/test_trace_task_transitions_native.py` gate consumes all 512 slots
+for 128 remote results at quota pressure and tests paired rollback/commit crashes.
+`tests/agentd/test_trace_task_completion_native.py` separately covers early
+cancellation and transport intent. These fixtures install the workspace explicitly.
+Production installation, repeated-attempt/requeue admission, ancillary recovery
+and complete physical bounds remain open. Later attempts currently use ordinary
+intermediate-event admission, which can refuse before the transition commits.
 
 For a stopped, clean schema-28 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with
