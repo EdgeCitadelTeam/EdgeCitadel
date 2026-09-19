@@ -21,12 +21,16 @@ ORIGIN = "http://testserver"
 
 
 @contextmanager
-def client_for(core, tmp_path, token=TOKEN):
+def client_for(core, tmp_path, token=TOKEN, collector_status=None):
     path = core.execute("PRAGMA database_list").fetchone()[2]
     from pathlib import Path
 
     service = TraceReadService(
-        Path(path), tmp_path / "cursor.key", read_token=token, allowed_origins={ORIGIN}
+        Path(path),
+        tmp_path / "cursor.key",
+        read_token=token,
+        allowed_origins={ORIGIN},
+        collector_status=collector_status,
     )
     app = FastAPI()
     app.include_router(make_trace_router(service))
@@ -363,3 +367,36 @@ def test_history_route_discovers_graph_versions_under_same_authorization(
             ).status_code
             == 400
         )
+
+
+def test_collector_availability_changes_without_a_projection_commit(
+    core, tmp_path, monkeypatch
+):
+    seed(core)
+    status = {"state": "running", "connected": True}
+    monkeypatch.setattr(routes, "HEARTBEAT_SECONDS", 0)
+    with client_for(core, tmp_path, collector_status=lambda: status.copy()) as (
+        client,
+        _,
+    ):
+        before = graph(client)
+        assert before["freshness"]["collector_state"] == "collecting"
+        status.update(state="stopped", connected=False)
+        stopped = graph(client)
+        assert stopped["at"] == before["at"]
+        assert stopped["nodes"] == before["nodes"]
+        assert stopped["freshness"]["collector_state"] == "unavailable"
+        with client.websocket_connect(
+            f"/ws/traces/{TRACE}?after={before['resume_cursor']}",
+            headers={"Origin": ORIGIN},
+        ) as socket:
+            authenticate(socket)
+            message = socket.receive_json()
+            assert message["kind"] == "trace_heartbeat"
+            assert message["freshness"]["collector_state"] == "unavailable"
+            status.update(state="running", connected=True)
+            for _ in range(10):
+                message = socket.receive_json()
+                if message["freshness"]["collector_state"] == "collecting":
+                    break
+            assert message["freshness"]["collector_state"] == "collecting"

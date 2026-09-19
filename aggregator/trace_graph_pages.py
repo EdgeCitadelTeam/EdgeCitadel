@@ -270,6 +270,7 @@ def read_graph(
                         "ingest_cursor": collector_high,
                         "projection_cursor": current.change_cursor,
                         "oldest_unsettled_age_ms": None,
+                        "collector_state": "unknown",
                     },
                     "resume_cursor": token("changes", state.change_cursor),
                 }

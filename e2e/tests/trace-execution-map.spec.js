@@ -221,7 +221,7 @@ test('server history discovers unvisited snapshots, preserves selection on refre
     if (width < 768) await expect(page.getByText('All Agents', { exact: true })).not.toBeInViewport();
     await history.scrollIntoViewIfNeeded();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: path.join(evidence, `m6-history-${width}.png`) });
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-history-${width}.png`) });
   }
   await page.reload();
   await connect(page);
@@ -262,4 +262,69 @@ test('S4 denied dispatch has permission evidence and no child execution', async 
   await expect(page.getByLabel('Observation details')).toContainText('native_connector_capability');
   await expect(page.getByLabel('Observation details')).toContainText('permission_denied');
   await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-denial.png`) });
+});
+
+test('S6 collector outage leaves execution running and recovers retained evidence', async ({ page }) => {
+  test.setTimeout(240_000);
+  const directory = `/root/edgecitadel-s6-20260919/run-${Date.now()}`;
+  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
+  ssh(`install -d -m 700 ${directory}`);
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-task.py`], {
+    input: readFileSync(path.resolve(__dirname, '../helpers/trace-live-task.py')),
+  });
+  const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
+    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-task.py ${directory} --collector-outage`],
+  { stdio: ['ignore', 'pipe', 'pipe'] });
+  let trace, stopped, completed, settled, processError = false;
+  child.stderr.on('data', () => { processError = true; });
+  const finished = new Promise(resolve => child.on('exit', resolve));
+  const lines = createInterface({ input: child.stdout });
+  lines.on('line', line => {
+    const value = JSON.parse(line);
+    if (value.stage === 'bound') trace = value.trace_id;
+    if (value.stage === 'collector_stopped') stopped = true;
+    if (value.stage === 'completed_while_offline') completed = value;
+    if (value.acknowledgment_exact) settled = value;
+  });
+  try {
+    await expect.poll(() => trace, { timeout: 20_000 }).toBeTruthy();
+    await page.goto(`/#execution?run=${trace}`);
+    await connect(page);
+    await expect(page.getByLabel('Collection status')).toContainText('Collector connected');
+    const before = await page.locator('[data-node-id]').count();
+    expect(before).toBeGreaterThan(0);
+    ssh(`touch ${directory}/client-ready`);
+    await expect.poll(() => stopped, { timeout: 20_000 }).toBe(true);
+    await expect(page.getByLabel('Collection status')).toContainText('Collection unavailable', { timeout: 25_000 });
+    ssh(`touch ${directory}/outage-observed`);
+    await expect.poll(() => completed, { timeout: 140_000 }).toBeTruthy();
+    expect(completed.uncollected_events).toBeGreaterThan(0);
+    await expect(page.locator('[data-node-id]')).toHaveCount(before);
+    await expect(page.locator('[data-node-id^="task:"]')).toHaveCount(0);
+    await expect(page.getByLabel('Collection status')).toContainText('Collection unavailable');
+    await page.getByLabel('Collection status').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-collector-offline.png`) });
+    ssh(`touch ${directory}/resume-collector`);
+    await expect.poll(() => settled, { timeout: 130_000 }).toBeTruthy();
+    expect(await finished).toBe(0);
+    expect(processError).toBe(false);
+    expect(settled.execution_completed_with_collector_stopped).toBe(true);
+    expect(settled.all_core_settled).toBe(true);
+    await expect(page.locator(`[data-node-id="task:${settled.task_id}"]`)).toHaveClass(/state-completed/, { timeout: 25_000 });
+    await expect(page.getByLabel('Collection status')).toContainText('Collector connected', { timeout: 25_000 });
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-collector-recovered.png`) });
+    writeFileSync(path.join(evidence, `${artifactPrefix}-collector-outage.json`), JSON.stringify({ ...settled,
+      uncollected_events_during_outage: completed.uncollected_events,
+      browser_warned_stale: true, browser_no_fabricated_child: true, browser_recovered_completed_task: true,
+    }, null, 2) + '\n');
+  } finally {
+    // Release every owned handshake on assertion failure; the server helper's
+    // finally block restores collection before this test can finish.
+    ssh(`touch ${directory}/client-ready ${directory}/outage-observed ${directory}/resume-collector`);
+    await finished;
+    lines.close();
+    const status = await fetch(`${process.env.APP_URL}/api/system/status`).then(response => response.json());
+    expect(status.telemetry.state).toBe('running');
+    expect(status.nats_connected).toBe(true);
+  }
 });

@@ -2790,7 +2790,7 @@ persistent signing-key ownership remain required before routing is enabled.
 Every response carries a graph `at` token, a distinct live `resume_cursor`, the
 selected graph's ingestion high-watermark and current observed collector/projector
 freshness. The event reader accepts this graph token directly. All state, node,
-relationship, coverage, cursor and freshness reads share one SQLite transaction;
+relationship, coverage, cursor and database freshness reads share one SQLite transaction;
 a pending raw commit may raise freshness without entering the selected graph.
 
 A `page_kind: snapshot` response replaces the client's graph. A
@@ -3007,3 +3007,21 @@ header or first WS authentication frame, never query strings. Deployment still
 requires its private/encrypted network perimeter; a fleet credential is not
 individual user authorization. These opt-in routes do not close the storage,
 retained-volume, frontend or full M4–M7 qualification gates.
+
+### Collector availability in read freshness
+
+Every freshness object now requires `collector_state`: `collecting`, `unavailable`,
+or `unknown`. Graph/list database readers return `unknown`; the mounted read
+service samples its owned collector after the database read and replaces that
+value. `collecting` requires both a running collector and an observed broker
+connection. Stopped, starting, retrying, paused or disconnected collectors report
+`unavailable`. Standalone readers without a runtime status provider remain
+`unknown`.
+
+This field is current runtime evidence, separate from the atomic database cursors
+and selected historical snapshot. It is neither a stored projection change nor
+proof of complete source delivery. WS heartbeats refresh it even when ingestion
+has stopped, without advancing the client's application ACK. The execution map
+shows unavailable/unknown collection explicitly and reports projection lag
+separately. Historical views label it as the status at their last check; they do
+not invent historical collector health.

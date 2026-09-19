@@ -134,6 +134,9 @@ def make_app(for_testing: bool = False) -> FastAPI:
             Path(db_path).parent / "trace-cursor.key",
             read_token=os.environ.get("EDGECITADEL_TRACE_READ_TOKEN", ""),
             allowed_origins=set(origins),
+            collector_status=lambda: state["trace_collector"].status()
+            if state.get("trace_collector")
+            else {"state": "disabled", "connected": False},
         )
         trace_router = make_trace_router(reads)
         # The nested router lifespan drains reads/sockets before this app's

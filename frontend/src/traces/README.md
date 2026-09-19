@@ -84,3 +84,11 @@ checks; see the milestone evidence for exact revision and scope. Full multi-bran
 S1/S4/S6, retained-volume/history read-cost qualification, large-run render/memory measurements and
 full deterministic regression remain open. A 501-step component fixture proves
 reachability, not production stress performance or a completed M6 gate.
+
+Collection availability is independent of socket connectivity and execution
+outcomes. Required `freshness.collector_state` arrives on graph/list reads and WS
+heartbeats. The mounted map uses the session's latest observed freshness, shows a
+stale-view warning for `unavailable`, and preserves unknown availability rather
+than inferring health from matching ingest/projection positions. A connected
+collector does not establish complete source coverage. Historical views display
+collection status at their last check, not retrospective health.

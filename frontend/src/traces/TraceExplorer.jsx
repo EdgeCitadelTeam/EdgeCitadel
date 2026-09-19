@@ -25,6 +25,20 @@ function Coverage({ coverage }) {
   </div>
 }
 
+function Freshness({ freshness }) {
+  if (!freshness) return null
+  const label = {
+    unavailable: 'Collection unavailable — the global view may be stale.',
+    unknown: 'Collection availability has not been observed.',
+    collecting: 'Collector connected. Source coverage is reported separately.',
+  }[freshness.collector_state]
+  return <div className="trace-coverage" aria-label="Collection status" role="status">
+    <strong>{label}</strong>
+    {freshness.projection_cursor < freshness.ingest_cursor && <span>Projection catching up with collected evidence.</span>}
+    <span>Collection status at last check; independent of the selected snapshot and execution outcome.</span>
+  </div>
+}
+
 function RunList({ api, route, onDenied }) {
   const [page, setPage] = useState({ items: [], next: null, loading: true, error: null })
   const request = useRef(null)
@@ -87,7 +101,7 @@ function RunView({ api, route, onDenied }) {
       {route.at && state.error.retryable && <button onClick={() => session?.open(route.run, { at: route.at })}>Retry this snapshot</button>}
     </div>}
     {!graph && !state.error && <p className="trace-empty" role="status">{state.traceState === 'expired' || state.traceState === 'absent' ? 'This run is no longer present in the current projection.' : state.progress ? `Loading ${state.progress.loaded} of ${state.progress.total ?? 'unknown'} steps…` : 'Loading execution evidence…'}</p>}
-    {graph && <><Coverage coverage={graph.coverage} />
+    {graph && <><Freshness freshness={state.freshness} /><Coverage coverage={graph.coverage} />
       {route.step && !selected && <p className="trace-note" role="status">The selected step is not present in this snapshot. Its selection is preserved for another view.</p>}
       <div className="trace-workbench"><ExecutionMap graph={graph} selected={route.step} onSelect={select} />
         {selected ? <ObservationInspector key={`${graph.at}/${selected.id}`} api={api} graph={graph} node={selected} route={route} onDenied={onDenied} onSelect={select} />

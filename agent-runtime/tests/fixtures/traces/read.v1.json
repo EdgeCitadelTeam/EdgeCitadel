@@ -193,7 +193,8 @@
     "freshness": {
       "ingest_cursor": 20,
       "projection_cursor": 8,
-      "oldest_unsettled_age_ms": null
+      "oldest_unsettled_age_ms": null,
+      "collector_state": "unknown"
     },
     "resume_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec",
     "page_kind": "snapshot"
@@ -228,7 +229,8 @@
       "freshness": {
         "ingest_cursor": 20,
         "projection_cursor": 8,
-        "oldest_unsettled_age_ms": null
+        "oldest_unsettled_age_ms": null,
+        "collector_state": "unknown"
       }
     },
     {
@@ -315,7 +317,8 @@
       "freshness": {
         "ingest_cursor": 20,
         "projection_cursor": 8,
-        "oldest_unsettled_age_ms": null
+        "oldest_unsettled_age_ms": null,
+        "collector_state": "unknown"
       },
       "resume_cursor": "eyJrZXkiOm51bGwsImtpbmQiOiJjaGFuZ2VzIiwicG9zaXRpb24iOjgsInByb2plY3Rpb25fZ2VuZXJhdGlvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkwMCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzY29wZV9oYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInNuYXBzaG90Ijo4LCJ0cmFjZV9pZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXBwZXIiOjh9.v3dStlEc_gIdZVRf3ufpekO-FVAng0PXeA8gMZB_8Ec",
       "page_kind": "snapshot"
@@ -531,7 +534,8 @@
       "freshness": {
         "ingest_cursor": 20,
         "projection_cursor": 8,
-        "oldest_unsettled_age_ms": null
+        "oldest_unsettled_age_ms": null,
+        "collector_state": "unknown"
       }
     },
     {

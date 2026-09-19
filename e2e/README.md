@@ -45,3 +45,15 @@ worker: authorization rejects the request before delivery. Run only this case
 with `--grep 'S4 denied'` added to the direct Playwright command above. The helper
 always closes its session and revokes its own connector; private server evidence
 stays under `/root/edgecitadel-s4-20260919/`.
+
+The S6 case (`--grep 'S6 collector'`) uses the live task helper's explicit
+`--collector-outage` mode. After the browser sees the native root, the helper uses
+the existing authenticated collector control to stop collection, checks that
+broker/task transport stays available, and waits for the browser's stale warning.
+A real Hermes acknowledgment completes while its execution observations remain
+uncollected. The browser must keep the old graph without fabricating a child.
+Collection then resumes; the helper checks exact source/Core settlement and the
+browser must show the completed child and recovered collection status. All
+handshakes are bounded; the helper restores collection in `finally`, and the test
+releases handshakes and waits for helper cleanup even after an assertion failure.
+Only run this case when a temporary fleet-wide collector pause is appropriate.

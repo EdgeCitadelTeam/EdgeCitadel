@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 from uuid import uuid4
+from urllib.request import Request, urlopen
 
 from edgecitadel_agentd.client import AgentdClient
 from edgecitadel_agentd.service import socket_path_for
@@ -18,6 +19,37 @@ OUTPUT_DIRECTORY = Path(sys.argv[1])
 assert OUTPUT_DIRECTORY.is_absolute(), "Use an absolute owned output directory"
 OUT = OUTPUT_DIRECTORY / "live-task-result.json"
 CORE = Path("/root/.edgecitadel/core/data/openclaw.db")
+OUTAGE = sys.argv[2:] == ["--collector-outage"]
+assert not sys.argv[2:] or OUTAGE, "Unknown scenario option"
+outage_started = False
+
+
+def telemetry(action=None):
+    if action is None:
+        request = Request("http://127.0.0.1/api/system/status")
+    else:
+        token = next(
+            line.split("=", 1)[1]
+            for line in Path("/root/.edgecitadel/core/.env").read_text().splitlines()
+            if line.startswith("EDGECITADEL_ADMIN_TOKEN=")
+        )
+        request = Request(
+            "http://127.0.0.1/api/system/telemetry/control",
+            data=json.dumps({"action": action}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "X-EdgeCitadel-Admin-Token": token,
+            },
+        )
+    with urlopen(request, timeout=15) as response:
+        return json.load(response)
+
+
+def wait_marker(name):
+    deadline = time.monotonic() + 45
+    while not (OUTPUT_DIRECTORY / name).exists():
+        assert time.monotonic() < deadline, "browser handshake timeout"
+        time.sleep(0.1)
 
 
 def connection(path):
@@ -98,6 +130,14 @@ try:
     while not ready.exists():
         assert time.monotonic() < deadline, "client readiness timeout"
         time.sleep(0.1)
+    if OUTAGE:
+        health = telemetry()
+        assert health["telemetry"]["state"] == "running"
+        assert health["nats_connected"] and health["jetstream_stream_ok"]
+        outage_started = True
+        assert telemetry("stop")["state"] == "stopped"
+        print(json.dumps({"stage": "collector_stopped"}), flush=True)
+        wait_marker("outage-observed")
     marker = "JIM_EQ_TRACE_ACK_" + uuid4().hex[:12]
     request = dict(
         schema_version=1,
@@ -145,6 +185,25 @@ try:
     )
     assert finished["status"] == "ok"
     elapsed = time.monotonic() - started
+    if OUTAGE:
+        health = telemetry()
+        assert health["telemetry"]["state"] == "stopped"
+        assert health["nats_connected"] and health["jetstream_stream_ok"]
+        pending_rows, _, collected_rows, _ = inspect(binding["trace_id"])
+        missing = len(pending_rows) - len(collected_rows)
+        assert missing > 0, "expected uncollected execution evidence"
+        print(
+            json.dumps(
+                {
+                    "stage": "completed_while_offline",
+                    "task_id": task_id,
+                    "uncollected_events": missing,
+                }
+            ),
+            flush=True,
+        )
+        wait_marker("resume-collector")
+        telemetry("start")
     deadline = time.monotonic() + 120
     while True:
         rows, positions, core, mappings = inspect(binding["trace_id"])
@@ -159,7 +218,8 @@ try:
         time.sleep(0.5)
     assert len({r[0] for r in rows}) == 2, "expected both live sources"
     report = dict(
-        revision="m6-ui-worktree",
+        scenario="S6" if OUTAGE else "live_task",
+        execution_completed_with_collector_stopped=OUTAGE,
         task_id=task_id,
         trace_id=binding["trace_id"],
         task_state=task["state"],
@@ -177,5 +237,11 @@ try:
     OUT.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report), flush=True)
 finally:
-    client.call("session.close", session_id=session)
-    admin.call("connector.revoke", connector_id=name)
+    try:
+        if outage_started:
+            telemetry("start")
+    finally:
+        try:
+            client.call("session.close", session_id=session)
+        finally:
+            admin.call("connector.revoke", connector_id=name)

@@ -345,12 +345,21 @@
               "type": "null"
             }
           ]
+        },
+        "collector_state": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "collecting",
+            "unavailable"
+          ]
         }
       },
       "required": [
         "ingest_cursor",
         "projection_cursor",
-        "oldest_unsettled_age_ms"
+        "oldest_unsettled_age_ms",
+        "collector_state"
       ]
     },
     "change": {

@@ -10,6 +10,7 @@ import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -40,6 +41,7 @@ class TraceReadService:
         *,
         read_token: str,
         allowed_origins: set[str],
+        collector_status: Callable[[], dict] | None = None,
     ):
         if (
             not isinstance(read_token, str)
@@ -64,6 +66,7 @@ class TraceReadService:
                 or parsed.fragment
             ):
                 raise ValueError("trace_read_configuration_unavailable")
+        self._collector_status = collector_status
         self.db_path = db_path.resolve()
         self._read_token = read_token
         self.allowed_origins = frozenset(allowed_origins)
@@ -107,7 +110,18 @@ class TraceReadService:
             # awaiting request is canceled while SQLite still owns a connection.
             future.add_done_callback(lambda _: self._slots.release())
         try:
-            return await asyncio.wrap_future(future)
+            result = await asyncio.wrap_future(future)
+            if "freshness" in result and self._collector_status is not None:
+                # Runtime availability is sampled after the retained database read;
+                # it is not historical state or proof that all sources are caught up.
+                status = self._collector_status()
+                result["freshness"]["collector_state"] = (
+                    "collecting"
+                    if status.get("state") == "running"
+                    and status.get("connected") is True
+                    else "unavailable"
+                )
+            return result
         except asyncio.CancelledError:
             canceled.set()
             raise
@@ -143,6 +157,7 @@ class TraceReadService:
                                 "ingest_cursor": high,
                                 "projection_cursor": state.change_cursor,
                                 "oldest_unsettled_age_ms": None,
+                                "collector_state": "unknown",
                             },
                         }
                 if kind == "list":

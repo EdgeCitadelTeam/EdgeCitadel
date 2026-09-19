@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import TraceExplorer from './TraceExplorer'
 import { createTraceApi } from './api'
-import { changes, deferred, fixture, graph, traceId } from './testFixtures'
+import { changes, deferred, fixture, graph, heartbeat, traceId } from './testFixtures'
 import { navigateTrace, parseTraceRoute } from './navigation'
 
 vi.mock('./api', () => ({ createTraceApi: vi.fn() }))
@@ -91,4 +91,28 @@ it('cancels stale inspector work and follows an exact observation link across sp
   await act(async () => old.reject({ code: 'not_authorized' }))
   expect(screen.queryByLabelText('Fleet read credential')).not.toBeInTheDocument()
   expect(api.events.mock.calls.at(-1)[1]).toEqual({ as_of: graph().at, node_id: graph().nodes[1].id, after: 'next', limit: 100 })
+})
+
+
+it('shows collection outage and recovery from heartbeats without changing execution evidence', async () => {
+  render(<Owner />)
+  await connect()
+  const offline = deferred(), online = deferred()
+  instances.at(-1).subscribe.mockImplementation(async function* (id, after, signal) {
+    await offline.promise
+    yield { ...heartbeat(), freshness: { ...graph().freshness, collector_state: 'unavailable' } }
+    await online.promise
+    yield { ...heartbeat(), freshness: { ...graph().freshness, collector_state: 'collecting' } }
+    if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
+  })
+  act(() => navigateTrace({ run: traceId }))
+  await screen.findByText('Collection availability has not been observed.')
+  const before = document.querySelectorAll('[data-node-id]').length
+  await act(async () => offline.resolve())
+  await screen.findByText(/Collection unavailable/)
+  expect(document.querySelectorAll('[data-node-id]').length).toBe(before)
+  await act(async () => online.resolve())
+  await screen.findByText('Collector connected. Source coverage is reported separately.')
+  expect(screen.queryByText(/Collection unavailable/)).not.toBeInTheDocument()
+  expect(document.querySelectorAll('[data-node-id]').length).toBe(before)
 })

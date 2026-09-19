@@ -150,6 +150,7 @@ def read_list(
                         "ingest_cursor": collector_high,
                         "projection_cursor": current.change_cursor,
                         "oldest_unsettled_age_ms": None,
+                        "collector_state": "unknown",
                     },
                 }
                 # Reserve a full-length continuation before appending summaries.
