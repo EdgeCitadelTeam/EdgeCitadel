@@ -108,7 +108,26 @@ user quota. Its synthetic slots complete at the fixture's database admission
 ceiling; this does not prove completion at arbitrary filesystem exhaustion or
 implement production reservations, migration, restore, or cross-platform support.
 The existing deployed stores remain unchanged by this qualification.
+The approved production contract requires an administrator-provisioned Linux
+user-quota filesystem and a dedicated unprivileged service UID without quota
+bypass privileges, with shared infrastructure accounted separately. Production
+admission must fail closed if enforcement cannot be verified; that enforcement
+integration remains outstanding.
 
+
+Agentd now opens its source store in verified `journal_mode=DELETE` with
+`synchronous=EXTRA`. This is the transaction-mode prerequisite for an atomic
+attached task/trace split: [SQLite does not provide cross-file crash atomicity
+with WAL](https://www.sqlite.org/lang_attach.html).
+[EXTRA](https://www.sqlite.org/pragma.html#pragma_synchronous) also syncs the
+containing directory after rollback-journal deletion. Startup converts an existing WAL store
+through SQLite; an outstanding WAL reader refuses startup rather than leaving the
+service in WAL mode. Initialization failures close the connection. Operator and
+inspection readers must release snapshots promptly: pinned rollback readers can
+block a writer commit, whose entire task/trace/export transaction then rolls back.
+No sidecar is deleted manually. This does not yet split storage or implement
+Linux user-quota admission checks, physical completion reservations or paired
+migration/restore. Prior WAL workload measurements do not qualify the new mode.
 
 The runtime suite includes owned child-process SIGKILL tests at journal commit
 and side-effect boundaries, plus restore staging/activation boundaries. They use temporary stores and do not stop a running
@@ -250,8 +269,9 @@ optional model/tool records report `quota_exceeded`; health reports degraded wit
 `trace_storage: physical_pressure` when sampled usage reaches that threshold.
 Task/content and free pages count, so optional tracing can stop before its JSON
 quota is exhausted. Mandatory records retain existing persistence semantics.
-Reconciliation attempts WAL truncation under pressure without waiting on readers;
-once readers release their snapshots, a later pass can resume optional admission.
+Legacy WAL pressure diagnostics retain nonblocking checkpoint support for owned
+fixtures. The production source writer now uses rollback journals; a pinned
+reader can prevent its whole transaction from committing.
 This guard is not a total-size cap or a physical reserve. Database VACUUM and
 control/spool compaction are not performed automatically.
 
@@ -733,8 +753,9 @@ remain conservatively included. This measurement does not include super-journals
 unlinked temporary files or future transaction growth and is not a hard quota
 or an attribution of only telemetry-owned bytes.
 
-At physical pressure, reconciliation attempts a nonblocking WAL checkpoint before
-cache maintenance. If a reader or another checkpoint blocks reclamation, health
+For legacy WAL fixtures, reconciliation attempts a nonblocking checkpoint at
+physical pressure before cache maintenance. If a reader or another checkpoint
+blocks reclamation, health
 reports `cache_maintenance: checkpoint_blocked` and defers cache writes until a
 later pass can checkpoint. Task/session recovery still commits before this check.
 The daemon neither evicts the reader nor spends more WAL space deleting cache

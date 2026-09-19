@@ -161,28 +161,37 @@ class AgentdStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.parent.chmod(0o700)
         self._connection = sqlite3.connect(path, check_same_thread=False)
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA journal_mode=WAL")
-        self._connection.execute("PRAGMA foreign_keys=ON")
-        self._connection.execute("PRAGMA busy_timeout=5000")
-        self._lock = threading.RLock()
-        self._authentication_rejections = 0
-        self._settled_retirement_after: tuple[str, str, str, int] | None = None
-        self._last_retention_ms = 0
-        self._reconciliation_storage_unavailable = False
-        self._maintenance_checkpoint_blocked = False
-        schema_version = int(
-            self._connection.execute("PRAGMA user_version").fetchone()[0]
-        )
-        payload_key = path.parent / "payload.key"
-        if schema_version >= 5 and not payload_key.exists():
-            self._connection.close()
-            raise StoreError(
-                "agentd payload key is missing; restore agentd.sqlite3 and payload.key from the same backup"
+        try:
+            self._connection.row_factory = sqlite3.Row
+            # Rollback journals are required for the task/trace attached-database
+            # transaction. A pinned legacy WAL reader must refuse startup, never
+            # leave the writer running in a mode without cross-file atomicity.
+            mode = self._connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+            if mode != "delete":
+                raise StoreError("agentd requires a file-backed rollback journal")
+            self._connection.execute("PRAGMA synchronous=EXTRA")
+            self._connection.execute("PRAGMA foreign_keys=ON")
+            self._connection.execute("PRAGMA busy_timeout=5000")
+            self._lock = threading.RLock()
+            self._authentication_rejections = 0
+            self._settled_retirement_after: tuple[str, str, str, int] | None = None
+            self._last_retention_ms = 0
+            self._reconciliation_storage_unavailable = False
+            self._maintenance_checkpoint_blocked = False
+            schema_version = int(
+                self._connection.execute("PRAGMA user_version").fetchone()[0]
             )
-        self._content_cipher = self._load_content_cipher(payload_key)
-        self._migrate()
-        path.chmod(0o600)
+            payload_key = path.parent / "payload.key"
+            if schema_version >= 5 and not payload_key.exists():
+                raise StoreError(
+                    "agentd payload key is missing; restore agentd.sqlite3 and payload.key from the same backup"
+                )
+            self._content_cipher = self._load_content_cipher(payload_key)
+            self._migrate()
+            path.chmod(0o600)
+        except BaseException:
+            self._connection.close()
+            raise
 
     def close(self) -> None:
         with self._lock:

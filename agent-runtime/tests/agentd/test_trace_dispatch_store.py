@@ -143,6 +143,7 @@ def test_dispatch_pinned_wal_pressure_and_recovery(configured, monkeypatch, allo
             )
     original = request(binding)
     committed = dispatch(store, token, original)
+    db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     limit = trace_capacity.physical_storage(db)["pressure_bytes"] + 192 * 1024
     monkeypatch.setattr(trace_capacity, "PHYSICAL_PRESSURE_BYTES", limit)

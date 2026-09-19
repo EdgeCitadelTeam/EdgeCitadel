@@ -331,6 +331,7 @@ def test_reused_binding_receipts_hit_real_pinned_wal_pressure(configured, monkey
         )
     original = request(session, task["task_id"])
     committed = bind(store, token, original)
+    db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     baseline = trace_capacity.physical_storage(db)
     limit = baseline["pressure_bytes"] + 64 * 1024

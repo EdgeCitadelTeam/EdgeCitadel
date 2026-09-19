@@ -29,6 +29,7 @@ def test_pinned_wal_stops_optional_admission_preserves_retry_and_recovers(
     try:
         original = tool()
         committed = write(store, original)
+        db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         baseline = trace_capacity.physical_storage(db)
         limit = baseline["pressure_bytes"] + 192 * 1024
@@ -113,6 +114,7 @@ def test_pending_pages_and_free_pages_remain_accounted_without_checkpoint(tmp_pa
     store = AgentdStore(tmp_path / "agentd.sqlite3")
     db = store._connection
     try:
+        db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         baseline = trace_capacity.physical_storage(db)
         with db:
@@ -165,6 +167,7 @@ def test_pinned_checkpoint_does_not_defer_task_expiry(tmp_path, monkeypatch):
             payload={},
             deadline_at_ms=deadline,
         )
+        store._connection.execute("PRAGMA journal_mode=WAL")
         store._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         reader.execute("BEGIN")
         reader.execute("SELECT state FROM tasks").fetchall()

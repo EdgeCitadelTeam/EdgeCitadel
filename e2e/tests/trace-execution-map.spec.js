@@ -15,6 +15,9 @@ test.beforeAll(async () => {
   expect(new URL(process.env.APP_URL).hostname).toBe('jim-eq');
   mkdirSync(evidence, { recursive: true });
   credential = execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `python3 -c 'from pathlib import Path; print(next(line.split("=",1)[1] for line in Path("/root/.edgecitadel/core/.env").read_text().splitlines() if line.startswith("EDGECITADEL_TRACE_READ_TOKEN=")))'`], { encoding: 'utf8' }).trim();
+});
+async function requireRetainedRun() {
+  if (run) return;
   // Discover an existing completed Hermes run rather than pinning an expiring ID.
   const read = async suffix => {
     const response = await fetch(`${process.env.APP_URL}/api/traces${suffix}`, { headers: { Authorization: `Bearer ${credential}` } });
@@ -28,7 +31,7 @@ test.beforeAll(async () => {
     if (match) { run = item.trace_id; task = match.task_id; break; }
   }
   if (!run) throw new Error('The jim-eq fixture needs a retained completed Hermes trace');
-});
+}
 test.afterAll(() => { credential = null; });
 async function connect(page) {
   await page.getByLabel('Fleet read credential').fill(credential);
@@ -36,6 +39,7 @@ async function connect(page) {
   await expect(page.getByRole('button', { name: 'Disconnect read access' })).toBeVisible();
 }
 async function openRun(page) {
+  await requireRetainedRun();
   await page.goto(`/#execution?run=${run}`);
   await connect(page);
   await expect(page.getByRole('button', { name: 'Pause live' })).toBeEnabled();
@@ -96,6 +100,7 @@ test('real retained run: selection, exact observation URL, history reload, theme
 });
 
 test('task lookup, Flow entry, tab shortcuts and browser back preserve navigation and memory access', async ({ page }) => {
+  await requireRetainedRun();
   await page.goto('/#flow');
   await page.getByRole('button', { name: 'Open execution map' }).click();
   await connect(page);

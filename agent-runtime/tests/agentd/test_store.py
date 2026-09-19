@@ -27,12 +27,13 @@ def register(store: AgentdStore, connector_id: str = "pi-local") -> str:
     )
 
 
-def test_store_initializes_private_wal_database(store: AgentdStore) -> None:
+def test_store_initializes_private_rollback_database(store: AgentdStore) -> None:
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.path.parent.stat().st_mode & 0o777 == 0o700
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert store._connection.execute("PRAGMA synchronous").fetchone()[0] == 3
 
 
 def test_version_five_database_migrates_context_id_atomically(tmp_path: Path) -> None:
@@ -811,3 +812,85 @@ def test_reconcile_applies_incremental_record_caps(
     assert records["spans"] == 2
     assert isinstance(health["database_bytes"], int)
     assert health["database_bytes"] > 0
+
+
+def test_wal_conversion_preserves_committed_task_and_trace_rows(tmp_path):
+    path = tmp_path / "agentd.sqlite3"
+    original = AgentdStore(path)
+    original._connection.execute("PRAGMA journal_mode=WAL")
+    original._connection.execute("PRAGMA wal_autocheckpoint=0")
+    original.create_task(
+        sender_id="sender", recipient_id="worker", payload={"body": "saved"}
+    )
+    before = list(original._connection.iterdump())
+    original.close()
+    reopened = AgentdStore(path)
+    try:
+        assert (
+            reopened._connection.execute("PRAGMA journal_mode").fetchone()[0]
+            == "delete"
+        )
+        assert list(reopened._connection.iterdump()) == before
+        assert reopened._connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        reopened.close()
+
+
+def test_pinned_legacy_wal_refuses_startup_and_closes_failed_connection(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "agentd.sqlite3"
+    original = AgentdStore(path)
+    original._connection.execute("PRAGMA journal_mode=WAL")
+    reader = sqlite3.connect(path)
+    reader.execute("BEGIN")
+    reader.execute("SELECT * FROM tasks").fetchall()
+    original.create_task(sender_id="sender", recipient_id="worker", payload={})
+    original.close()
+    connect = sqlite3.connect
+    opened = []
+
+    def tracked_connect(*args, **kwargs):
+        db = connect(*args, **kwargs)
+        db.execute("PRAGMA busy_timeout=0")
+        opened.append(db)
+        return db
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(store_module.sqlite3, "connect", tracked_connect)
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                AgentdStore(path)
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            opened[0].execute("SELECT 1")
+        assert reader.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        reader.close()
+    reopened = AgentdStore(path)
+    try:
+        assert len(reopened.list_tasks()) == 1
+        assert (
+            reopened._connection.execute("PRAGMA journal_mode").fetchone()[0]
+            == "delete"
+        )
+    finally:
+        reopened.close()
+
+
+def test_pinned_rollback_reader_rolls_back_task_trace_and_export_together(store):
+    reader = sqlite3.connect(store.path)
+    db = store._connection
+    before = list(db.iterdump())
+    db.execute("PRAGMA busy_timeout=0")
+    try:
+        reader.execute("BEGIN")
+        reader.execute("SELECT * FROM tasks").fetchall()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            store.create_task(sender_id="sender", recipient_id="worker", payload={})
+        assert not db.in_transaction
+        assert list(db.iterdump()) == before
+        reader.rollback()
+        task = store.create_task(sender_id="sender", recipient_id="worker", payload={})
+        assert store.get_task(task["task_id"])["state"] == "queued"
+    finally:
+        reader.close()
