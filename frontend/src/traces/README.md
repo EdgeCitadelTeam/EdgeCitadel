@@ -102,3 +102,9 @@ Selecting an exact step clears map filters and opens its map page, while the
 existing inspector and reloadable selection continue to use its canonical ID.
 Live state changes preserve expanded groups and selected step identity. The map
 keeps its recorded relationships; the browser does not generate aggregate edges.
+
+The observation inspector uses canonical `attributes.local_content_ref` to label
+local-only records. It never links or fetches these references. Component coverage
+checks inert HTML-shaped text; jim-eq coverage checks rejected source metadata,
+inert allowed labels and client rejection of a malformed graph response. This is
+bounded metadata qualification, not full security acceptance.

@@ -85,7 +85,7 @@ export default function ObservationInspector({ api, graph, node, route, onDenied
           <dt>Skill ID</dt><dd>{selectedEvent.attributes.skill_id ?? 'Not reported'}</dd>
           <dt>Grant version</dt><dd>{selectedEvent.attributes.grant_version ?? 'Not reported'}</dd>
           <dt>Policy version</dt><dd>{selectedEvent.attributes.policy_version ?? 'Not reported'}</dd>
-          <dt>Local record</dt><dd>{selectedEvent.attributes.content_ref ? 'Local-only reference; not fetched by this dashboard' : 'Not reported'}</dd>
+          <dt>Local record</dt><dd>{selectedEvent.attributes.local_content_ref ? 'Local-only reference; not fetched by this dashboard' : 'Not reported'}</dd>
           <dt>Usage</dt><dd>{selectedEvent.attributes.input_tokens !== undefined || selectedEvent.attributes.output_tokens !== undefined
             ? `Input: ${selectedEvent.attributes.input_tokens ?? 'unknown'}; output: ${selectedEvent.attributes.output_tokens ?? 'unknown'}` : 'Not reported'}</dd>
         </dl>

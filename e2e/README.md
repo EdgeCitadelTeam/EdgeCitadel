@@ -98,3 +98,12 @@ retained S1 run with three tasks and repeated model operations. It expands a tas
 and operation group with keyboard controls, selects an exact step despite an
 active map filter, checks the inspector/selection, and verifies 320/1440 px layout
 and zero non-GET API requests. Run S1 first if its retained history has expired.
+
+The metadata case (`--grep 'hostile metadata'`) uses
+`helpers/trace-hostile-metadata.py` on jim-eq. Its trace-only connector rejects five
+invalid inputs without journal writes, then reports explicitly synthetic tool
+metadata to exercise inert labels and canonical local-reference display. Exact
+source/Core payloads settle and the connector is revoked. These observations do
+not claim real tool execution or a retrievable local record. The browser separately
+tampers with its graph read to verify strict rejection, checks no reference fetch
+or execution API writes, and saves a sanitized report and screenshot.

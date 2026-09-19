@@ -442,3 +442,59 @@ test('retained branches group repeated operations and reveal exact steps read-on
   }
   expect(writes).toEqual([]);
 });
+
+test('hostile metadata is rejected or inert and local references are never fetched', async ({ page }) => {
+  test.setTimeout(180_000);
+  const directory = `/root/edgecitadel-hostile-20260919/run-${Date.now()}`;
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `install -d -m 700 ${directory}`]);
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-metadata.py`], {
+    input: readFileSync(path.resolve(__dirname, '../helpers/trace-hostile-metadata.py')),
+  });
+  const result = JSON.parse(execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
+    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-metadata.py ${directory}`], { encoding: 'utf8', timeout: 150_000 }));
+  expect(result.rejected_inputs).toBe(5);
+  expect(result.rejections_did_not_append).toBe(true);
+  expect(result.source_core_exact).toBe(true);
+  expect(result.all_core_settled).toBe(true);
+  expect(result.owned_connector_revoked).toBe(true);
+  const forbiddenRequests = [], writes = [];
+  page.on('request', request => {
+    if (request.url().includes(result.local_reference) || request.url().includes('trace-metadata-probe')) forbiddenRequests.push(request.url());
+    if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.method());
+  });
+  await page.goto(`/#execution?run=${result.trace_id}`);
+  await connect(page);
+  for (const label of result.labels) {
+    await page.locator('[data-node-id]').filter({ hasText: label }).click();
+    await page.locator('.trace-observations button').first().click();
+    await expect(page.getByLabel('Observation details')).toContainText('Local-only reference; not fetched by this dashboard');
+    await expect(page.getByLabel('Selected step details').locator('a')).toHaveCount(0);
+  }
+  await page.getByLabel('Observation details').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-local-reference.png`) });
+  // Deliberately tamper with this browser's read response only. The source schema
+  // already rejected this HTML; this separately checks the client trust boundary.
+  const hostile = '<img src=x onerror="window.traceInjected=true">';
+  let tampered = false;
+  await page.route(`**/api/traces/${result.trace_id}*`, async route => {
+    if (new URL(route.request().url()).pathname !== `/api/traces/${result.trace_id}`) return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    body.nodes.find(node => node.kind === 'tool').operation = hostile;
+    tampered = true;
+    await route.fulfill({ response, json: body });
+  });
+  await page.reload();
+  await connect(page);
+  await expect(page.getByRole('alert')).toContainText('Core returned inconsistent evidence');
+  expect(tampered).toBe(true);
+  await expect(page.locator('[data-node-id]')).toHaveCount(0);
+  await expect(page.locator('img[src="x"]')).toHaveCount(0);
+  expect(await page.evaluate(() => window.traceInjected)).toBeUndefined();
+  expect(forbiddenRequests).toEqual([]);
+  expect(writes).toEqual([]);
+  writeFileSync(path.join(evidence, `${artifactPrefix}-hostile-metadata.json`), JSON.stringify({ ...result,
+    browser_local_reference_labeled: true, browser_never_fetched_reference: true,
+    browser_labels_inert: true, tampered_read_rejected: true, zero_execution_requests: true,
+  }, null, 2) + '\n');
+});
