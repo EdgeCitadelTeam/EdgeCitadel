@@ -166,4 +166,34 @@ ssh -o BatchMode=yes root@jim-eq /usr/bin/python3 - < /Users/yefanzhang/workplac
 This read-only probe requires the existing running Core container. Its twenty
 clock comparisons do not measure display latency. The bounded commit observer
 component is implemented and tested in `helpers/trace_commit_observer.py`; the
-service launcher, rendered acknowledgments and qualification run remain open.
+service launcher and rendered acknowledgments now have a ten-sample jim-eq pilot.
+The >=1,000-observation and sustained-load qualification remains open.
+
+The pilot consists of `trace-latency-pilot.py`, `trace-latency-core.py`,
+`trace-latency-fixture.py`, `trace-latency-browser.js`, `trace_render_receiver.py`,
+`trace_commit_observer.py` and `trace-clock-probe.py` in `helpers/`. Copy this set
+into `/root/edgecitadel-latency-20260919/helpers` on jim-eq. The browser helper
+requires the pinned local `playwright` and `playwright-core` packages in the
+adjacent `node_modules` directory and the existing `/snap/bin/chromium`; use the
+repository E2E lock/dependencies, without upgrading them.
+
+Create a new, empty private output directory for each run, then invoke the
+controller on jim-eq with its absolute path. For example, after preparing the
+helpers/dependencies and an unused directory:
+
+```bash
+ssh -o BatchMode=yes root@jim-eq '/usr/bin/python3 /root/edgecitadel-latency-20260919/helpers/trace-latency-pilot.py /root/edgecitadel-latency-20260919/pilot-new'
+```
+
+This temporarily restarts Core with a scoped observer and restores the normal
+command/image afterwards; it does not build an image or change source Agent
+services. It rejects an unexpected existing Compose override. Browser failures
+and controller exceptions unwind owned processes before restoration. SIGKILL or
+host failure cannot guarantee cleanup: inspect the active Compose command and
+restore the normal managed configuration before another run.
+
+Private `scope.json` contains a receiver token and must not be exported. Keep
+raw commit/ack reports and process logs on the server. `result.json`, `clock.json`
+and `pilot.png` are the sanitized qualification artifacts. `restoration.json`
+records exact image/command/config restoration and collector readiness, including
+on a failed pilot. Ten samples must never be labeled p95 qualification.

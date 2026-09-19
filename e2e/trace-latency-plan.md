@@ -1,8 +1,8 @@
 # Controlled Core commit-to-display qualification
 
-Status: clock prerequisite and bounded commit-observer component verified.
-The jim-eq launcher, render acknowledgments and latency acceptance run remain
-unimplemented. This does not close M6 or M7.
+Status: clock prerequisite, bounded observers and a ten-observation jim-eq pilot
+are verified. The >=1,000-observation qualification, observer-overhead comparison
+and baseline/stress/soak workload remain open. This does not close M6 or M7.
 
 ## Observed boundaries
 
@@ -123,3 +123,35 @@ Local component tests exercise real commit visibility, rollback, deferred
 constraint COMMIT failure, idle/multiple transactions, real ingest replay,
 observer failure, ingestion rollback/no ACK, scope filtering, capacity overflow
 and wiring restoration. Live deployment and browser measurement remain next.
+
+## Live pilot implementation checkpoint
+
+The `trace-latency-core.py` launcher installs the observer before app startup,
+lets the normal ASGI lifespan stop the collector, then saves its private report.
+It accounts for Uvicorn re-raising SIGTERM after shutdown. The pilot controller
+uses a temporary Compose command/mount override, no image rebuild, and restores
+the original image/command/configuration after success or failure. Missing report
+or incomplete correlations fail qualification. Forced termination cannot produce
+a successful sample report.
+
+`trace_render_receiver.py` binds host loopback, authenticates a private token,
+caps bodies and expected identities, and preserves the first timestamp. Invalid
+requests, overflow and missing acknowledgments invalidate measurement; duplicate
+ACKs cannot reset timing. The browser controller alone holds the token. It checks
+the canonical node/state, scrolls it into view and verifies a stable visible
+center point across two animation frames before acknowledging. This is a paint
+opportunity policy, not physical scanout measurement.
+
+The pilot generates five synthetic tool spans, starting and finishing each only
+after the previous display ACK. Its ten samples are deliberately closed-loop,
+not the adopted open-loop baseline. Exact reconciliation covers twelve source/Core
+events including root boundaries. The first launch failed before sampling because
+Chromium could not reach the host through its hostname; the normal Core and owned
+connector were restored. The browser now accesses the existing server through
+`http://127.0.0.1`, an already-authorized origin. Both clock observations and browser
+controller run on jim-eq.
+
+Next generalize fixture scheduling and sample eligibility without dropping
+missing/coalesced observations, characterize full observer overhead, and run the
+>=1,000-observation workload. Preserve separate small/large graph, retained-volume,
+network/topology and sustained-load qualifications. A fast pilot cannot waive them.
