@@ -238,3 +238,21 @@ helper sources for long qualification. Never infer completion from a progress
 file: verify the actual controller process, final result and restoration record.
 The baseline does not close observer-overhead, stress/soak, retained-volume,
 physical quota or full topology acceptance.
+
+After a baseline controller finishes and restores Core, run the read-only
+`helpers/trace_baseline_audit.py` on jim-eq against its absolute run directory.
+Place `trace_latency_workload.py` beside it. The auditor reads the private raw
+reports and existing source/Core databases, reconstructs the exact schedule and
+eligible cohort from source order, verifies hashes/positions/settlement and
+connector/session cleanup, then recomputes every reported bound/statistic. It
+rejects a missing result or a Core still using the qualification launcher.
+
+```bash
+ssh -o BatchMode=yes root@jim-eq '/usr/bin/python3 /root/edgecitadel-latency-20260919/helpers/trace_baseline_audit.py /root/edgecitadel-latency-20260919/baseline-full-1'
+```
+
+Its stdout is a sanitized audit summary. Source payloads, receiver tokens and raw
+markers remain on the host. Run this after measurement; its full database reads
+should not compete with the timed workload. Recheck current collector readiness
+and backlog separately. The audit proves its listed cohort/storage/restoration
+properties, not observer overhead, stress/soak or the entire acceptance plan.
