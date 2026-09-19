@@ -152,3 +152,17 @@ refetches during the burst, all final nodes reachable/terminal and 1,202 exact
 settled events. HTTP replay and socket observations are deduplicated in browser
 memory; reports omit signed cursors. The single release-to-final-display timing
 includes emission, transport and instrumentation and is not commit-to-render p95.
+
+## Controlled display latency
+
+[The measurement plan](trace-latency-plan.md) identifies the actual commit and
+React display boundaries, conservative latency bounds, required failure tests
+and the 1,000-observation sampling gate. The clock prerequisite is executable:
+
+```bash
+ssh -o BatchMode=yes root@jim-eq /usr/bin/python3 - < /Users/yefanzhang/workplace/edge-research/e2e/helpers/trace-clock-probe.py
+```
+
+This read-only probe requires the existing running Core container. Its twenty
+clock comparisons do not measure display latency. The commit/render observer
+and qualification run remain to be implemented.
