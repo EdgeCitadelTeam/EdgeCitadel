@@ -247,3 +247,116 @@ def test_materializing_early_terminal_reclaims_only_unused_future_slots(
         ]
         == "queued"
     )
+
+
+def test_requeue_consumes_execution_capacity_and_next_acceptance_needs_new_slot(
+    installed, monkeypatch
+):
+    from time import time_ns
+
+    store, token, first_session = installed
+    db = store._connection
+    monkeypatch.setattr(trace_reservations, "MAX_SLOTS", 4)
+    task = store.create_task(sender_id="origin", recipient_id="worker", payload={})
+    store.claim_next_task(connector_id="native", token=token, session_id=first_session)
+    # Exercise the production task-recovery transaction at its fixed page ceiling.
+    pages = db.execute("PRAGMA page_count").fetchone()[0]
+    db.execute(f"PRAGMA max_page_count={pages}")
+    with store._task_transaction():
+        store._recover_session_tasks_locked(first_session, time_ns() // 1_000_000)
+    assert db.execute("PRAGMA page_count").fetchone()[0] == pages
+    assert store.get_task(task["task_id"])["state"] == "queued"
+    event = store.get_trace(task["trace_id"])["events"][-1]
+    assert event["event_type"] == "task.requeued"
+    assert (
+        db.execute(
+            "SELECT filled FROM trace_completion_slots WHERE purpose='running'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        db.execute(
+            "SELECT filled FROM trace_completion_slots WHERE purpose='terminal'"
+        ).fetchone()[0]
+        == 0
+    )
+    db.execute("PRAGMA max_page_count=1073741823")
+    second = store.open_session(connector_id="native", token=token)["session_id"]
+    before = snapshot(store)
+    with pytest.raises(StoreError, match="quota_exceeded"):
+        store.claim_next_task(connector_id="native", token=token, session_id=second)
+    assert snapshot(store) == before
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        for slot_id in (1, 2, 3):
+            assert materialize(db, slot_id)
+    assert (
+        store.claim_next_task(connector_id="native", token=token, session_id=second)[
+            "state"
+        ]
+        == "accepted"
+    )
+    assert (
+        db.execute(
+            "SELECT count(*) FROM trace_completion_slots WHERE owner_kind='attempt' AND filled=0"
+        ).fetchone()[0]
+        == 1
+    )
+    pages = db.execute("PRAGMA page_count").fetchone()[0]
+    db.execute(f"PRAGMA max_page_count={pages}")
+    with store._task_transaction():
+        store._recover_session_tasks_locked(second, time_ns() // 1_000_000)
+    assert db.execute("PRAGMA page_count").fetchone()[0] == pages
+    assert (
+        db.execute(
+            "SELECT count(*) FROM trace_completion_slots WHERE owner_kind='attempt' AND filled=1"
+        ).fetchone()[0]
+        == 1
+    )
+    assert store.get_task(task["task_id"])["state"] == "queued"
+    assert (
+        len(
+            [
+                event
+                for event in store.get_trace(task["trace_id"])["events"]
+                if event["event_type"] == "task.requeued"
+            ]
+        )
+        == 2
+    )
+
+
+def test_later_execution_uses_its_attempt_slot_and_preserves_terminal_capacity(
+    installed,
+):
+    from time import time_ns
+
+    store, token, first = installed
+    task = store.create_task(sender_id="origin", recipient_id="worker", payload={})
+    store.claim_next_task(connector_id="native", token=token, session_id=first)
+    store.close_session(connector_id="native", token=token, session_id=first)
+    second = store.open_session(connector_id="native", token=token)["session_id"]
+    store.claim_next_task(connector_id="native", token=token, session_id=second)
+    db = store._connection
+    pages = db.execute("PRAGMA page_count").fetchone()[0]
+    db.execute(f"PRAGMA max_page_count={pages}")
+    store.transition_task(
+        task_id=task["task_id"], state="running", actor_id="worker", session_id=second
+    )
+    with store._task_transaction():
+        store._recover_session_tasks_locked(second, time_ns() // 1_000_000)
+    assert db.execute("PRAGMA page_count").fetchone()[0] == pages
+    assert store.get_task(task["task_id"])["state"] == "failed"
+    attempts = [
+        json.loads(row[0])["event"]["phase"]
+        for row in db.execute(
+            "SELECT record FROM trace_completion_slots WHERE owner_kind='attempt' AND filled=1"
+        )
+    ]
+    assert attempts == ["running"]
+    assert (
+        db.execute(
+            "SELECT filled FROM trace_completion_slots WHERE purpose='terminal'"
+        ).fetchone()[0]
+        == 1
+    )

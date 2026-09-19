@@ -206,9 +206,16 @@ transitions committed. The owned jim-eq
 for 128 remote results at quota pressure and tests paired rollback/commit crashes.
 `tests/agentd/test_trace_task_completion_native.py` separately covers early
 cancellation and transport intent. These fixtures install the workspace explicitly.
-Production installation, repeated-attempt/requeue admission, ancillary recovery
-and complete physical bounds remain open. Later attempts currently use ordinary
-intermediate-event admission, which can refuse before the transition commits.
+The initial running slot covers either execution start or accepted-session
+requeue. Later local acceptance reserves a fresh next-boundary slot keyed by its
+session before committing admission; a full pool refuses the claim atomically.
+Later offered/accepted events use ordinary admission capacity, while execution
+start/requeue and eventual terminal evidence use their reserved slots. Terminal
+materialization releases unused attempt slots. The owned
+`tests/agentd/test_trace_task_requeue_native.py` gate exercises accepted-task
+recovery at quota, independently of session/presence closure. Ancillary recovery
+writes, existing-work seeding, production installation and complete physical
+bounds remain open.
 
 For a stopped, clean schema-28 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with

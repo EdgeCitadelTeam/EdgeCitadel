@@ -1586,6 +1586,19 @@ class AgentdStore:
                         )
                     elif claimed_session_id != session_id:
                         raise StoreError("task is claimed by another session")
+                    if state == "accepted" and self._connection.workspace is not None:
+                        from .trace_reservations import reserve
+                        from .trace_task_completion import execution_obligation
+
+                        obligation = execution_obligation(
+                            self._connection, task_id, session_id
+                        )
+                        if obligation is None:
+                            raise StoreError("completion_reservation_missing")
+                        try:
+                            reserve(self._connection, obligation)
+                        except TraceContractError as error:
+                            raise StoreError(error.code) from error
             result_json = self._encode_content(result) if result is not None else None
             self._connection.execute(
                 """
@@ -2303,7 +2316,7 @@ class AgentdStore:
             if task["state"] == "accepted":
                 self._connection.execute(
                     """
-                    UPDATE tasks SET state = 'queued', claimed_session_id = NULL,
+                    UPDATE tasks SET state = 'queued',
                         updated_at_ms = ? WHERE task_id = ?
                     """,
                     (now, task_id),
@@ -2315,6 +2328,10 @@ class AgentdStore:
                     trace_id=str(task["trace_id"]),
                     attributes={"reason": "session_closed_before_execution"},
                     now=now,
+                )
+                self._connection.execute(
+                    "UPDATE tasks SET claimed_session_id=NULL WHERE task_id=?",
+                    (task_id,),
                 )
                 continue
             result = {"error": "executor_session_lost", "retry_safe": False}

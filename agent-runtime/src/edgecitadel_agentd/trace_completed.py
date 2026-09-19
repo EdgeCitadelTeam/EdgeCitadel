@@ -376,12 +376,17 @@ def set_completed_metadata(
     ):
         raise TraceContractError("invalid_completion_metadata")
     if name == "legacy_event" and (
-        obligation.kind != "task"
+        obligation.kind not in {"task", "attempt"}
         or any(
             value.get(key) != record["event"][key]
             for key in ("event_id", "agent_id", "task_id", "trace_id")
         )
-        or value.get("event_type") != "task." + record["event"]["phase"]
+        or value.get("event_type")
+        not in (
+            {"task.queued", "task.requeued"}
+            if record["event"]["phase"] == "queued"
+            else {"task." + record["event"]["phase"]}
+        )
         or record["event"]["kind"] != "task"
         or record["event"]["task_id"] != obligation.owner_id
     ):

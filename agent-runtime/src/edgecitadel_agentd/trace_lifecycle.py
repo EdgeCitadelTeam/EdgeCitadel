@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from .trace_contract import TraceContractError
 from .trace_journal import TraceJournal
 from .trace_reservations import Obligation
+from .trace_task_completion import execution_obligation
 
 if TYPE_CHECKING:
     from .store import AgentdStore
@@ -115,15 +116,19 @@ def record_task_boundary(
             "undeliverable",
         }:
             completion = obligation
-        elif phase in {"offered", "accepted", "running"}:
+        elif phase in {"running", "requeued"}:
+            completion = execution_obligation(db, task_id, task["claimed_session_id"])
+            if phase == "requeued" and completion is None:
+                raise TraceContractError("completion_reservation_missing")
+        elif phase in {"offered", "accepted"}:
             candidate = Obligation("task", task_id, phase)
             if db.execute(
                 "SELECT 1 FROM trace_completion_slots WHERE owner_kind=? AND owner_id=? AND purpose=? AND filled=0",
                 candidate.key,
             ).fetchone():
                 completion = candidate
-            # A later attempt has no first-cycle slot left. Its ordinary
-            # admission must succeed before the caller can execute that work.
+            # Later offered/accepted evidence uses ordinary admission; accepted
+            # local work reserves its next execution/requeue boundary first.
     TraceJournal(db).record(
         node_id,
         {
