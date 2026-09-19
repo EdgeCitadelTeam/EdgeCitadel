@@ -30,6 +30,7 @@ def db(tmp_path, monkeypatch):
         tmp_path / "trace.sqlite3", factory=workspace.ReservedConnection
     )
     configure_scratch(connection)
+    connection.execute("PRAGMA synchronous=EXTRA")
     connection.executescript(TRACE_SCHEMA_SQL + SCHEMA_SQL)
     with connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -133,3 +134,97 @@ def test_outer_savepoint_cannot_bypass_completion_commit_guard(db):
         db.execute("SAVEPOINT bypass")
     assert not db.in_transaction
     assert_restored(db)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/* boundary */ COMMIT",
+        "-- boundary\nEND",
+        "; ; /* boundary */ COMMIT",
+        "\ufeffCOMMIT",
+    ],
+)
+def test_sql_spelling_cannot_bypass_completion_commit_guard(db, command):
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        db.use_completion_workspace()
+        with pytest.raises(sqlite3.ProgrammingError, match="commit"):
+            db.execute(command)
+        assert db.in_transaction and db.workspace.owned
+        fill(db, Obligation("run", "owned", "terminal"), {"guarded": True})
+    assert_restored(db)
+
+
+@pytest.mark.parametrize(
+    "method,arguments",
+    [
+        ("execute", ("COMMIT",)),
+        ("executemany", ("UPDATE trace_completion_slots SET purpose=?", [("bypass",)])),
+        ("executescript", ("COMMIT;",)),
+    ],
+)
+def test_returned_cursor_cannot_run_unowned_sql(db, method, arguments):
+    cursor = db.execute("SELECT 1")
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        db.use_completion_workspace()
+        with pytest.raises(sqlite3.ProgrammingError, match="connection execution"):
+            getattr(cursor, method)(*arguments)
+        assert db.in_transaction and db.workspace.owned
+    assert cursor.fetchone()[0] == 1
+    assert_restored(db)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "PRAGMA cache_spill=ON",
+        "PRAGMA main.journal_mode=WAL",
+        "PRAGMA synchronous=OFF",
+        "PRAGMA temp_store=FILE",
+        "PRAGMA optimize",
+        "PRAGMA writable_schema=ON",
+        "PRAGMA main.cache_spill(ON)",
+        "EXPLAIN PRAGMA cache_spill=ON",
+        "EXPLAIN /* bypass */ PRAGMA temp_store=FILE",
+    ],
+)
+def test_installed_workspace_rejects_changes_to_qualified_sqlite_policy(db, command):
+    with pytest.raises(sqlite3.ProgrammingError, match="qualified SQLite policy"):
+        db.execute(command)
+    assert db.execute("PRAGMA cache_spill").fetchone()[0] == 0
+    assert db.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    assert_restored(db)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "PRAGMA journal_mode=WAL",
+        "PRAGMA synchronous=OFF",
+        "PRAGMA temp_store=FILE",
+        "PRAGMA cache_spill=ON",
+    ],
+)
+def test_workspace_installation_refuses_unqualified_policy_before_borrow(
+    tmp_path, command
+):
+    connection = sqlite3.connect(
+        tmp_path / "refused.sqlite3", factory=workspace.ReservedConnection
+    )
+    configure_scratch(connection)
+    connection.execute("PRAGMA synchronous=EXTRA")
+    connection.execute(command)
+    physical = workspace.CompletionWorkspace(tmp_path / "refused.reserve")
+    try:
+        with pytest.raises(
+            sqlite3.NotSupportedError, match="completion workspace requires"
+        ):
+            connection.install_workspace(physical)
+        assert connection.workspace is None
+        assert not physical.borrowed and not physical.owned
+        assert os.fstat(physical.descriptor).st_size == 0
+    finally:
+        connection.close()
+        physical.close()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 import sqlite3
 import stat
 import time
@@ -105,6 +106,62 @@ class CompletionWorkspace:
         os.close(self.descriptor)
 
 
+_LEADING_SQL = re.compile(
+    r"(?:[\s\ufeff;]+|--[^\n]*(?:\n|$)|/\*.*?(?:\*/|$))*", re.DOTALL
+)
+_READ_PRAGMAS = frozenset(
+    {
+        "page_count",
+        "page_size",
+        "freelist_count",
+        "foreign_keys",
+        "user_version",
+        "journal_mode",
+        "synchronous",
+        "temp_store",
+        "cache_spill",
+        "compile_options",
+        "database_list",
+        "busy_timeout",
+        "max_page_count",
+    }
+)
+_INSPECTION_PRAGMAS = frozenset(
+    {
+        "table_info",
+        "table_xinfo",
+        "index_list",
+        "index_info",
+        "index_xinfo",
+        "integrity_check",
+        "quick_check",
+        "foreign_key_check",
+    }
+)
+
+
+class ResultCursor(sqlite3.Cursor):
+    """A connection result supports fetching, never a second writer entrypoint."""
+
+    def _check_execution(self) -> None:
+        if self.connection.workspace is not None:
+            raise sqlite3.ProgrammingError(
+                "source writers must use connection execution"
+            )
+
+    def execute(self, sql: str, parameters: Any = (), /) -> ResultCursor:
+        self._check_execution()
+        return super().execute(sql, parameters)
+
+    def executemany(self, sql: str, parameters: Any, /) -> ResultCursor:
+        self._check_execution()
+        return super().executemany(sql, parameters)
+
+    def executescript(self, sql: str, /) -> ResultCursor:
+        self._check_execution()
+        return super().executescript(sql)
+
+
 class ReservedConnection(sqlite3.Connection):
     """Keep allocation ownership around explicit and implicit source transactions.
 
@@ -145,6 +202,29 @@ class ReservedConnection(sqlite3.Connection):
                 raise sqlite3.NotSupportedError(
                     "completion workspace requires 4096-byte trace pages"
                 )
+            if super().execute("PRAGMA temp_store").fetchone()[0] != 2:
+                raise sqlite3.NotSupportedError(
+                    "completion workspace requires memory scratch"
+                )
+            for _, schema, _ in super().execute("PRAGMA database_list"):
+                if schema == "temp":
+                    continue
+                if schema not in {"main", "task_state"}:
+                    raise sqlite3.NotSupportedError(
+                        "completion workspace has an unexpected database"
+                    )
+                for setting, expected in (
+                    ("journal_mode", "delete"),
+                    ("synchronous", 3),
+                    ("cache_spill", 0),
+                ):
+                    if (
+                        super().execute(f"PRAGMA {schema}.{setting}").fetchone()[0]
+                        != expected
+                    ):
+                        raise sqlite3.NotSupportedError(
+                            f"completion workspace requires qualified {schema}.{setting}"
+                        )
             self._recover_workspace(workspace)
             self.workspace = workspace
         finally:
@@ -188,33 +268,86 @@ class ReservedConnection(sqlite3.Connection):
             raise sqlite3.ProgrammingError("reserved completion has no writer owner")
         self.workspace.borrow()
 
-    def execute(self, sql: str, parameters: Any = (), /) -> sqlite3.Cursor:
-        # Source statements are trusted program SQL. SELECT/EXPLAIN/PRAGMA outside
-        # transactions do not write application rows; other statements include
-        # BEGIN and WITH-prefixed writes and must acquire before SQLite ownership.
-        keyword = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
-        if (
-            self.workspace is not None
-            and keyword == "SAVEPOINT"
-            and not self.in_transaction
-        ):
+    def _check_statement(self, sql: str) -> str:
+        # SQLite accepts comments, empty statements and a UTF-8 BOM before SQL.
+        # Classify that first real statement, not its first whitespace token.
+        statement = _LEADING_SQL.sub("", sql, count=1)
+        match = re.match(r"[A-Za-z_]+", statement)
+        keyword = match[0].upper() if match else ""
+        if self.workspace is None:
+            return keyword
+        if keyword == "SAVEPOINT" and not self.in_transaction:
             raise sqlite3.ProgrammingError(
                 "source savepoints require an outer transaction"
             )
-        if self.workspace is not None and keyword in {"COMMIT", "END"}:
+        if keyword in {"COMMIT", "END"}:
             raise sqlite3.ProgrammingError("source commits must use commit()")
+        if keyword in {"ATTACH", "DETACH", "VACUUM"}:
+            raise sqlite3.ProgrammingError(
+                "source layout changes require offline ownership"
+            )
+        if (
+            keyword == "EXPLAIN"
+            and re.match(
+                r"EXPLAIN(?:\s+QUERY\s+PLAN)?\s+(?:SELECT|WITH)\b",
+                statement,
+                re.IGNORECASE,
+            )
+            is None
+        ):
+            # Some PRAGMAs act at prepare time, even beneath EXPLAIN.
+            raise sqlite3.ProgrammingError(
+                "source EXPLAIN is outside the qualified SQLite policy"
+            )
+        if keyword == "PRAGMA":
+            pragma = re.fullmatch(
+                r'PRAGMA\s+(?:(?:main|task_state|temp|"main"|"task_state"|"temp")\s*\.\s*)?([a-z_]+)\s*(.*?)\s*;?\s*',
+                statement,
+                re.IGNORECASE | re.DOTALL,
+            )
+            name, argument = (
+                (pragma[1].lower(), pragma[2].rstrip("; \t\r\n"))
+                if pragma
+                else ("", "")
+            )
+            if name in _READ_PRAGMAS and not argument:
+                return keyword
+            if name in _INSPECTION_PRAGMAS:
+                return keyword
+            if name == "busy_timeout" and re.fullmatch(r"=\s*[0-9]+", argument):
+                # The bounded reader changes only this connection wait policy.
+                return keyword
+            # A lower page ceiling is useful for admission/allocation probes;
+            # it cannot change the qualified pager or journal policy. Like any
+            # write, it still takes workspace ownership before execution.
+            if (
+                name == "max_page_count"
+                and re.fullmatch(r"=\s*[0-9]+", argument)
+                and not self.workspace.borrowed
+            ):
+                return "PRAGMA_WRITE"
+            raise sqlite3.ProgrammingError(
+                "source pragma is outside the qualified SQLite policy"
+            )
+        return keyword
+
+    def execute(self, sql: str, parameters: Any = (), /) -> sqlite3.Cursor:
+        keyword = self._check_statement(sql)
         if keyword not in {"SELECT", "EXPLAIN", "PRAGMA", ""}:
             self._acquire()
         try:
-            return super().execute(sql, parameters)
+            cursor = super().cursor(factory=ResultCursor)
+            return sqlite3.Cursor.execute(cursor, sql, parameters)
         finally:
             if not self.in_transaction:
                 self._finish()
 
     def executemany(self, sql: str, parameters: Any, /) -> sqlite3.Cursor:
+        self._check_statement(sql)
         self._acquire()
         try:
-            return super().executemany(sql, parameters)
+            cursor = super().cursor(factory=ResultCursor)
+            return sqlite3.Cursor.executemany(cursor, sql, parameters)
         finally:
             if not self.in_transaction:
                 self._finish()
@@ -224,13 +357,16 @@ class ReservedConnection(sqlite3.Connection):
             raise sqlite3.ProgrammingError(
                 "source scripts cannot bypass transaction ownership"
             )
-        return super().executescript(sql)
+        cursor = super().cursor(factory=ResultCursor)
+        return sqlite3.Cursor.executescript(cursor, sql)
 
     def cursor(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
         if self.workspace is not None:
             raise sqlite3.ProgrammingError(
                 "source writers must use connection execution"
             )
+        if not args and "factory" not in kwargs:
+            kwargs["factory"] = ResultCursor
         return super().cursor(*args, **kwargs)
 
     def __enter__(self) -> ReservedConnection:
