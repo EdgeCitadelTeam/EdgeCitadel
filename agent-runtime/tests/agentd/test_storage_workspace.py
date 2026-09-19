@@ -5,9 +5,8 @@ import pytest
 
 from edgecitadel_agentd import storage_workspace as workspace
 from edgecitadel_agentd.storage_sqlite import configure_scratch
-from edgecitadel_agentd.trace_journal import TRACE_SCHEMA_SQL
+from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.trace_reservations import (
-    SCHEMA_SQL,
     Obligation,
     fill,
     read,
@@ -26,12 +25,12 @@ def db(tmp_path, monkeypatch):
             assert os.pwrite(fd, b"\0" * size, offset) == size
 
         monkeypatch.setattr(os, "posix_fallocate", allocate, raising=False)
+    AgentdStore(tmp_path / "trace.sqlite3").close()
     connection = sqlite3.connect(
         tmp_path / "trace.sqlite3", factory=workspace.ReservedConnection
     )
     configure_scratch(connection)
     connection.execute("PRAGMA synchronous=EXTRA")
-    connection.executescript(TRACE_SCHEMA_SQL + SCHEMA_SQL)
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         reserve(connection, Obligation("run", "owned", "terminal"))

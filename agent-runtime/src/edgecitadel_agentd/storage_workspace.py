@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import storage_geometry
+
 WORKSPACE_BYTES = 32 * 1024 * 1024
 
 
@@ -195,6 +197,10 @@ class ReservedConnection(sqlite3.Connection):
         database: str | None,
         trigger: str | None,
     ) -> int:
+        if storage_geometry.protects_schema(action, table, column, database):
+            if self.workspace is not None and self.workspace.borrowed:
+                self._completion_write_violation = True
+            return sqlite3.SQLITE_DENY
         if database != "main" or action not in {
             sqlite3.SQLITE_INSERT,
             sqlite3.SQLITE_UPDATE,
@@ -228,6 +234,7 @@ class ReservedConnection(sqlite3.Connection):
             super().execute("BEGIN IMMEDIATE")
             version = super().execute("PRAGMA main.user_version").fetchone()[0]
             super().execute(f"PRAGMA main.user_version={int(version)}")
+            storage_geometry.verify_journal(self)
             super().commit()
         except BaseException:
             super().rollback()
@@ -273,6 +280,7 @@ class ReservedConnection(sqlite3.Connection):
                             f"completion workspace requires qualified {schema}.{setting}"
                         )
             self._recover_workspace(workspace)
+            storage_geometry.install(self)
             self.workspace = workspace
             super().set_authorizer(self._authorize_write)
         finally:

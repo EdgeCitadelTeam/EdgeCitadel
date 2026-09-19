@@ -229,8 +229,17 @@ materializes its prior revocation and reserves the next one atomically.
 `tests/agentd/test_trace_session_recovery_native.py` exercises actual reconciliation
 and revocation at user-quota pressure, with accepted tasks and an open run/operation,
 including SIGKILL before commit and after commit/before reserve refill. Production
-workspace installation remains disabled until existing-work seeding, bounded
-maintenance, geometry/memory/journal and sequence-headroom qualification are complete.
+workspace installation remains disabled until production seeding integration,
+writer fencing, bounded maintenance and physical geometry/memory/journal/inode
+qualification are complete. Atomic seeding and sequence-headroom guards exist.
+
+An installed workspace admits at most 512 source identities and 512 export
+generations in total, including inactive history, alongside the 512 completion
+slots. It verifies protected table/index layouts, 4 KiB usable pages, VFS journal
+sectors no larger than a page and bounded UTF-8 field sizes; per-handle guards preserve those limits. Over-limit restored
+stores refuse installation and new identities refuse atomically without deleting
+history. These bounds constrain completion database pages; they do not alone
+qualify the full filesystem journal/workspace requirement.
 
 For a stopped, clean schema-29 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with

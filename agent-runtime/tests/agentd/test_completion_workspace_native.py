@@ -22,6 +22,7 @@ def worker(state, operation):
     os.umask(0o077)
     assert ctypes.CDLL(None).prctl(38, 1, 0, 0, 0) == 0
     from edgecitadel_agentd.storage_sqlite import configure_scratch
+    from edgecitadel_agentd.storage_geometry import MAX_COMPLETION_PAGES, PAGE_BYTES
     from edgecitadel_agentd.storage_workspace import (
         CompletionWorkspace,
         ReservedConnection,
@@ -29,14 +30,13 @@ def worker(state, operation):
     from edgecitadel_agentd.trace_reservations import (
         MAX_SLOTS,
         SLOT_BYTES,
-        SCHEMA_SQL,
         Obligation,
         fill,
         read,
         reserve,
     )
-    from edgecitadel_agentd.trace_counters import encode_counter, migrate_counters
-    from edgecitadel_agentd.trace_journal import TRACE_SCHEMA_SQL
+    from edgecitadel_agentd.trace_counters import encode_counter
+    from edgecitadel_agentd.store import AgentdStore
     from edgecitadel_agentd.trace_contract import canonical_bytes
     from edgecitadel_agentd.trace_quota import verify_trace_quota
 
@@ -57,6 +57,12 @@ def worker(state, operation):
     physical = CompletionWorkspace(trace / "completion.reserve")
     db = None
     try:
+        if operation == "seed":
+            AgentdStore(
+                trace / "trace.sqlite3",
+                task_path=state / "tasks.sqlite3",
+                payload_key_path=state / "payload.key",
+            ).close()
         db = sqlite3.connect(trace / "trace.sqlite3", factory=ReservedConnection)
         configure_scratch(db)
         db.execute("PRAGMA journal_mode=DELETE")
@@ -114,12 +120,8 @@ def worker(state, operation):
 
         if operation == "seed":
             # The schema is owned by this probe; no service store is touched.
-            for statement in (SCHEMA_SQL + TRACE_SCHEMA_SQL).split(";"):
-                if statement.strip():
-                    db.execute(statement)
             with db:
                 db.execute("BEGIN IMMEDIATE")
-                migrate_counters(db)
                 # Artificial padded rows exercise paired atomicity only. Main
                 # quota writes use the actual fixed production counter columns.
                 db.execute(
@@ -268,11 +270,35 @@ def worker(state, operation):
                 assert db.execute("PRAGMA page_count").fetchone()[0] == initial_pages
                 if operation == "before_commit":
                     journal = trace / "trace.sqlite3-journal"
+                    content = journal.read_bytes()
+                    sector = int.from_bytes(content[20:24], "big")
+                    assert (
+                        sector >= 512
+                        and sector <= PAGE_BYTES
+                        and sector & (sector - 1) == 0
+                    )
+                    assert int.from_bytes(content[24:28], "big") == PAGE_BYTES
+                    frames = content[sector:]
+                    assert len(frames) % (PAGE_BYTES + 8) == 0
+                    page_numbers = [
+                        int.from_bytes(frames[i : i + 4], "big")
+                        for i in range(0, len(frames), PAGE_BYTES + 8)
+                    ]
+                    assert (
+                        len(page_numbers)
+                        == len(set(page_numbers))
+                        <= MAX_COMPLETION_PAGES
+                    )
+                    assert all(1 <= page <= initial_pages for page in page_numbers)
                     print(
                         json.dumps(
                             {
                                 "barrier": "before_commit",
                                 "journal_bytes": journal.stat().st_size,
+                                "journal_sector_bytes": sector,
+                                "journal_page_records": len(page_numbers),
+                                "qualified_main_page_bound": MAX_COMPLETION_PAGES,
+                                "sqlite_version": sqlite3.sqlite_version,
                                 "journal_allocated": journal.stat().st_blocks * 512,
                                 **snapshot(),
                             }
