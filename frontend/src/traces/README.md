@@ -108,3 +108,9 @@ local-only records. It never links or fetches these references. Component covera
 checks inert HTML-shaped text; jim-eq coverage checks rejected source metadata,
 inert allowed labels and client rejection of a malformed graph response. This is
 bounded metadata qualification, not full security acceptance.
+
+During live graph updates, map and text-view pages follow the currently focused
+step if its sorted position crosses a page boundary. The page changes before DOM
+commit so that the keyed step stays mounted and keyboard focus is retained.
+Moving focus to a different control ends that behavior; ordinary pagination and
+filter controls retain ownership of the requested page.

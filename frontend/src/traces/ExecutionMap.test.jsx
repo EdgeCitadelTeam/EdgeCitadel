@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import ExecutionMap from './ExecutionMap'
 import { causalContext, extendLayout } from './layout'
@@ -49,4 +49,27 @@ it('supports keyboard step navigation without requiring pointer selection', () =
   expect(buttons[1]).toHaveFocus()
   fireEvent.keyDown(buttons[1], { key: 'Home' })
   expect(buttons[0]).toHaveFocus()
+})
+
+it.each(['map', 'text'])('keeps a focused %s step mounted when live insertion moves it across a page boundary', mode => {
+  const value = graph()
+  value.nodes = Array.from({ length: 101 }, (_, index) => ({ ...value.nodes[0], id: `step${String(index).padStart(3, '0')}` }))
+  value.edges = []
+  const select = vi.fn()
+  const { container, rerender } = render(<ExecutionMap graph={value} selected="step099" onSelect={select} />)
+  if (mode === 'text') fireEvent.click(screen.getByRole('button', { name: 'Text view' }))
+  const selector = mode === 'text' ? '[data-text-node-id="step099"]' : '[data-node-id="step099"]'
+  const focused = container.querySelector(selector)
+  act(() => focused.focus())
+  const next = { ...value, nodes: [{ ...value.nodes[0], id: 'step-before' }, ...value.nodes] }
+  rerender(<ExecutionMap graph={next} selected="step099" onSelect={select} />)
+  expect(container.querySelector(selector)).toHaveFocus()
+  expect(screen.getByText('Showing 101–102 of 102 steps')).toBeInTheDocument()
+  fireEvent.click(container.querySelector(selector))
+  expect(select).toHaveBeenCalledWith('step099')
+  const search = screen.getByLabelText('Find a step')
+  act(() => search.focus())
+  rerender(<ExecutionMap graph={value} selected="step099" onSelect={select} />)
+  expect(search).toHaveFocus()
+  expect(screen.getByText('Showing 101–101 of 101 steps')).toBeInTheDocument()
 })

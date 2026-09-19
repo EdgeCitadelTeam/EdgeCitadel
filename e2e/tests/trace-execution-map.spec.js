@@ -589,3 +589,66 @@ test('large retained run expands beyond 500 nodes and exposes every step', async
   }, null, 2) + '\n');
   await cdp.detach();
 });
+
+test('keyboard focus survives a real live insertion across a map page boundary', async ({ page }) => {
+  test.skip(process.env.EDGECITADEL_TRACE_LARGE_E2E !== '1', 'Explicit large fixture opt-in required');
+  test.setTimeout(240_000);
+  const directory = `/root/edgecitadel-large-20260919/run-${Date.now()}`;
+  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
+  ssh(`install -d -m 700 ${directory}`);
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-large.py`], {
+    input: readFileSync(path.resolve(__dirname, '../helpers/trace-large-run.py')),
+  });
+  const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
+    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-large.py ${directory} --focus-update`], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let trace, report, exitCode, processError = false;
+  child.stderr.on('data', () => { processError = true; });
+  const finished = new Promise(resolve => child.on('exit', code => { exitCode = code; resolve(code); }));
+  const lines = createInterface({ input: child.stdout });
+  lines.on('line', line => {
+    const value = JSON.parse(line);
+    if (value.stage === 'ready') trace = value.trace_id;
+    if (value.all_core_settled) report = value;
+  });
+  try {
+    await expect.poll(() => {
+      if (exitCode !== undefined) throw new Error('Owned focus helper exited before readiness');
+      return trace;
+    }, { timeout: 120_000 }).toBeTruthy();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto(`/#execution?run=${trace}`);
+    await connect(page);
+    await expect(page.getByRole('option', { name: 'All owners (602)', exact: true })).toHaveCount(1, { timeout: 30_000 });
+    const focused = page.locator('[data-node-id]').nth(99);
+    const identity = await focused.getAttribute('data-node-id');
+    expect(identity).toMatch(/^span:[0-9a-f]{64}$/);
+    await page.locator('[data-node-id]').first().focus();
+    await page.keyboard.press('End');
+    await expect(focused).toBeFocused();
+    ssh(`printf '%s' '${identity}' > ${directory}/focused-step`);
+    await expect.poll(() => report, { timeout: 60_000 }).toBeTruthy();
+    expect(await finished).toBe(0);
+    expect(processError).toBe(false);
+    expect(report.event_count).toBe(1204);
+    expect(report.source_core_exact).toBe(true);
+    expect(report.owned_connector_revoked).toBe(true);
+    await expect(page.getByText('Showing 101–200 of 603 steps', { exact: true })).toBeVisible();
+    await expect(page.locator(`[data-node-id="${identity}"]`)).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByLabel('Selected step details')).toContainText(identity);
+    const outline = await page.locator(`[data-node-id="${identity}"]`).evaluate(element => getComputedStyle(element).outlineStyle);
+    expect(outline).not.toBe('none');
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-live-focus.png`) });
+    const { span_ids, ...summary } = report;
+    expect(span_ids).toHaveLength(601);
+    writeFileSync(path.join(evidence, `${artifactPrefix}-live-focus.json`), JSON.stringify({ ...summary,
+      focus_preserved_across_page_boundary: true, keyboard_selection_after_update: true,
+      reduced_motion: true, visible_focus_outline: true,
+    }, null, 2) + '\n');
+  } finally {
+    // Release a waiting owned helper even if browser setup/assertions fail.
+    ssh(`test -f ${directory}/focused-step || printf '%s' 'span:${'f'.repeat(64)}' > ${directory}/focused-step`);
+    await finished;
+    lines.close();
+  }
+});

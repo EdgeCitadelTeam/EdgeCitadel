@@ -5,12 +5,12 @@ import { causalContext, extendLayout, NODE_HEIGHT, NODE_WIDTH, nodeTitle, readab
 const PAGE_SIZE = 100
 export default function ExecutionMap({ graph, selected, onSelect }) {
   const [memory, setMemory] = useState(() => ({ graph, positions: extendLayout(new Map(), graph) }))
-  if (memory.graph !== graph) setMemory({ graph, positions: extendLayout(memory.positions, graph) })
   const positions = memory.graph === graph ? memory.positions : extendLayout(memory.positions, graph)
   const [textView, setTextView] = useState(false)
   const [filter, setFilter] = useState('')
   const [group, setGroup] = useState('all')
   const [requestedPage, setPage] = useState(0)
+  const [focusedStep, setFocusedStep] = useState(null)
   const scroll = useRef(null), initialized = useRef(null)
   const marker = useId().replaceAll(':', '')
   const ordered = useMemo(() => [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id)), [graph.nodes])
@@ -21,6 +21,13 @@ export default function ExecutionMap({ graph, selected, onSelect }) {
   }, [graph.nodes])
   const filtered = ordered.filter(node => (group === 'all' || (node.agent_id ?? '') === group.slice(6)) &&
     `${nodeTitle(node, graph.trace_id)} ${node.agent_id ?? ''} ${node.state} ${node.id}`.toLowerCase().includes(filter.toLowerCase()))
+  if (memory.graph !== graph) {
+    setMemory({ graph, positions: extendLayout(memory.positions, graph) })
+    // Retain the focused DOM identity when new evidence shifts a page boundary.
+    // Adjust before commit so React never unmounts the focused step in between.
+    const focusedIndex = focusedStep === null ? -1 : filtered.findIndex(node => node.id === focusedStep)
+    if (focusedIndex >= 0) setPage(Math.floor(focusedIndex / PAGE_SIZE))
+  }
   const lastPage = Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1)
   const page = Math.min(requestedPage, lastPage)
   const visible = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
@@ -79,7 +86,7 @@ export default function ExecutionMap({ graph, selected, onSelect }) {
     </div>
     {textView ? <ul className="trace-text-view" aria-label="Execution step list">
       {visible.map(node => <li key={node.id}>
-        <button aria-pressed={selected === node.id} onClick={() => select(node.id)}>
+        <button data-text-node-id={node.id} aria-pressed={selected === node.id} onFocus={() => setFocusedStep(node.id)} onBlur={() => setFocusedStep(null)} onClick={() => select(node.id)}>
           <strong>{nodeTitle(node, graph.trace_id)}</strong><span>{node.agent_id ?? 'Owner unknown'}</span><span>{readable(node.state)}{node.conflict ? ' · conflicting evidence' : ''}</span>
         </button>
         <ul>{graph.edges.filter(edge => edge.from === node.id || edge.to === node.id).map(edge => {
@@ -107,6 +114,7 @@ export default function ExecutionMap({ graph, selected, onSelect }) {
           return <button key={node.id} data-node-id={node.id} data-map-index={index} className={`trace-node ${relation(node.id)} state-${node.state}`}
             style={{ left: point.x, top: point.y, width: NODE_WIDTH, height: NODE_HEIGHT }}
             aria-pressed={selected === node.id} aria-label={`${nodeTitle(node, graph.trace_id)}, ${node.agent_id ?? 'Owner unknown'}, ${readable(node.state)}`}
+            onFocus={() => setFocusedStep(node.id)} onBlur={() => setFocusedStep(null)}
             onClick={() => select(node.id)} onKeyDown={event => keyboard(event, index)}>
             <span className="trace-node-type">{readable(node.kind)}{node.conflict ? ' · conflict' : ''}</span>
             <strong>{nodeTitle(node, graph.trace_id)}</strong>

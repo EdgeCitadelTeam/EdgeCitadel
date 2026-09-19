@@ -120,3 +120,12 @@ private `/root/edgecitadel-large-20260919/run-<timestamp>` directory; expired da
 fails rather than silently creating a replacement. The single cold-load/heap
 samples include cloned-response observer overhead and are diagnostic, not the
 1,000-observation commit-to-render or retained-memory acceptance measurements.
+
+The live focus case (`--grep 'keyboard focus survives'`, with the same large-run
+opt-in) uses `trace-large-run.py --focus-update`. After its initial 600 operations,
+the helper waits for the browser's focused canonical step ID, emits a new span
+whose ID sorts before it, and verifies all 1,204 events settle exactly. The browser
+uses End/Enter to check focus and selection across the resulting page boundary
+with reduced motion enabled. The helper handshake is bounded, and the test releases
+it in cleanup even after browser failures. This remains synthetic observation
+qualification, not actual tool execution or a full accessibility audit.
