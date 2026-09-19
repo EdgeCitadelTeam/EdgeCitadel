@@ -93,10 +93,10 @@ def worker(state, operation):
                 "tasks": db.execute(
                     "SELECT phase,count(*) FROM task_state.work GROUP BY phase"
                 ).fetchall(),
-                "counters": [
+                "synthetic_task_counters": [
                     (bytes(v).decode(), count)
                     for v, count in db.execute(
-                        "SELECT value,count(*) FROM counters GROUP BY value"
+                        "SELECT value,count(*) FROM task_state.counters GROUP BY value"
                     )
                 ],
                 "production_counters": {
@@ -120,8 +120,10 @@ def worker(state, operation):
             with db:
                 db.execute("BEGIN IMMEDIATE")
                 migrate_counters(db)
+                # Artificial padded rows exercise paired atomicity only. Main
+                # quota writes use the actual fixed production counter columns.
                 db.execute(
-                    "CREATE TABLE counters (id INTEGER PRIMARY KEY, value BLOB NOT NULL CHECK(length(value)=20), padding BLOB NOT NULL)"
+                    "CREATE TABLE task_state.counters (id INTEGER PRIMARY KEY, value BLOB NOT NULL CHECK(length(value)=20), padding BLOB NOT NULL)"
                 )
                 db.execute("CREATE TABLE pressure (id INTEGER PRIMARY KEY, value BLOB)")
                 db.execute(
@@ -139,7 +141,7 @@ def worker(state, operation):
                         (node, encode_counter(127)),
                     )
                     db.executemany(
-                        "INSERT INTO counters VALUES (?,?,?)",
+                        "INSERT INTO task_state.counters VALUES (?,?,?)",
                         [
                             (2 * i + offset, b"00000000000000000001", b"z" * 3000)
                             for offset in (0, 1)
@@ -242,14 +244,16 @@ def worker(state, operation):
                 db.use_completion_workspace()
                 if operation == "hold_restore":
                     db.execute(
-                        "UPDATE counters SET value=?", (b"00000000000000000003",)
+                        "UPDATE task_state.counters SET value=?",
+                        (b"00000000000000000003",),
                     )
                     db.execute("UPDATE task_state.work SET phase='closed'")
                 else:
                     for i, obligation in enumerate(obligations):
                         fill(db, obligation, record(i))
                     db.execute(
-                        "UPDATE counters SET value=?", (b"00000000000000000002",)
+                        "UPDATE task_state.counters SET value=?",
+                        (b"00000000000000000002",),
                     )
                     db.execute("UPDATE task_state.work SET phase='completed'")
                 counter = 129 if operation == "hold_restore" else 128
@@ -297,17 +301,23 @@ def worker(state, operation):
                 assert value["filled"] == 0 and value["tasks"] == [
                     ("pending", MAX_SLOTS)
                 ]
-                assert value["counters"] == [("00000000000000000001", 2 * MAX_SLOTS)]
+                assert value["synthetic_task_counters"] == [
+                    ("00000000000000000001", 2 * MAX_SLOTS)
+                ]
             elif operation in {"verify_complete", "survive_complete"}:
                 assert value["filled"] == MAX_SLOTS and value["tasks"] == [
                     ("completed", MAX_SLOTS)
                 ]
-                assert value["counters"] == [("00000000000000000002", 2 * MAX_SLOTS)]
+                assert value["synthetic_task_counters"] == [
+                    ("00000000000000000002", 2 * MAX_SLOTS)
+                ]
                 for i in range(MAX_SLOTS):
                     assert read(db, i + 1) == record(i)
             elif operation == "wait_writer":
                 assert value["tasks"] == [("closed", MAX_SLOTS)]
-                assert value["counters"] == [("00000000000000000003", 2 * MAX_SLOTS)]
+                assert value["synthetic_task_counters"] == [
+                    ("00000000000000000003", 2 * MAX_SLOTS)
+                ]
             else:
                 raise AssertionError(operation)
             expected_counter = (
@@ -344,7 +354,7 @@ def main(output=None):
     from test_trace_linux_quota import owned_volume
 
     report = {
-        "scope": "Slot/workspace primitives only; production task/trace admission remains unimplemented."
+        "scope": "Full-width slot/workspace primitives with production main counters and synthetic attached-state counters; not production lifecycle or deployment qualification."
     }
     with owned_volume() as (root, state, _, _):
         state.chmod(0o700)

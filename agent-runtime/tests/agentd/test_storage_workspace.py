@@ -73,7 +73,7 @@ def test_failed_completion_restores_both_record_and_allocation(db):
 
 
 def test_completion_cannot_commit_database_growth(db):
-    with pytest.raises(sqlite3.IntegrityError, match="changed database allocation"), db:
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"), db:
         db.execute("BEGIN IMMEDIATE")
         db.use_completion_workspace()
         reserve(db, Obligation("run", "must-not-be-admitted", "terminal"))
@@ -228,3 +228,84 @@ def test_workspace_installation_refuses_unqualified_policy_before_borrow(
     finally:
         connection.close()
         physical.close()
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_ordinary_write_before_borrow_refuses_without_releasing_reserve(db, cached):
+    sql = "UPDATE trace_completion_slots SET purpose=? WHERE slot_id=1"
+    if cached:
+        with db:
+            db.execute(sql, ("terminal",))
+    with (
+        pytest.raises(sqlite3.ProgrammingError, match="after ordinary trace writes"),
+        db,
+    ):
+        db.execute("BEGIN IMMEDIATE")
+        db.execute(sql, ("changed",))
+        before = os.fstat(db.workspace.descriptor).st_blocks
+        try:
+            db.use_completion_workspace()
+        finally:
+            assert not db.workspace.borrowed
+            assert os.fstat(db.workspace.descriptor).st_blocks == before
+    assert (
+        db.execute("SELECT purpose FROM trace_completion_slots").fetchone()[0]
+        == "terminal"
+    )
+    assert_restored(db)
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_cached_ordinary_write_after_borrow_cannot_commit_partial_completion(
+    db, cached
+):
+    sql = "UPDATE trace_completion_slots SET purpose=? WHERE slot_id=1"
+    if cached:
+        with db:
+            db.execute(sql, ("terminal",))
+    with (
+        pytest.raises(
+            sqlite3.IntegrityError, match="attempted an ordinary trace write"
+        ),
+        db,
+    ):
+        db.execute("BEGIN IMMEDIATE")
+        db.use_completion_workspace()
+        fill(db, Obligation("run", "owned", "terminal"), {"must_rollback": True})
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            db.execute(sql, ("forbidden",))
+        # Even swallowing the statement error cannot commit a partial result.
+    assert read(db, 1) is None
+    assert_restored(db)
+    with db:
+        db.execute(sql, ("terminal",))
+    assert_restored(db)
+
+
+def test_trigger_cannot_hide_an_ordinary_trace_write_from_completion_guard(db):
+    db.execute(
+        "CREATE TRIGGER owned_hidden_write AFTER UPDATE OF filled ON trace_completion_slots BEGIN UPDATE trace_sources SET active=0; END"
+    )
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"), db:
+        db.execute("BEGIN IMMEDIATE")
+        db.use_completion_workspace()
+        fill(db, Obligation("run", "owned", "terminal"), {"must_rollback": True})
+    assert read(db, 1) is None
+    assert_restored(db)
+
+
+def test_installed_workspace_keeps_its_authorizer(db):
+    with pytest.raises(sqlite3.ProgrammingError, match="owns SQL authorization"):
+        db.set_authorizer(None)
+
+
+def test_fixed_column_write_before_borrow_is_still_ordinary(db):
+    with (
+        pytest.raises(sqlite3.ProgrammingError, match="after ordinary trace writes"),
+        db,
+    ):
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("UPDATE trace_completion_slots SET record=record")
+        db.use_completion_workspace()
+    assert not db.workspace.borrowed
+    assert_restored(db)

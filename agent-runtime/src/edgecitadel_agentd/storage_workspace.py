@@ -140,6 +140,17 @@ _INSPECTION_PRAGMAS = frozenset(
 )
 
 
+_FIXED_MAIN_UPDATES = frozenset(
+    {
+        ("trace_completion_slots", "filled"),
+        ("trace_completion_slots", "record"),
+        ("trace_sources", "next_source_seq_bytes"),
+        ("trace_export_generations", "next_export_seq_bytes"),
+        ("trace_presence_counter", "next_id"),
+    }
+)
+
+
 class ResultCursor(sqlite3.Cursor):
     """A connection result supports fetching, never a second writer entrypoint."""
 
@@ -173,6 +184,42 @@ class ReservedConnection(sqlite3.Connection):
     workspace: CompletionWorkspace | None = None
     _initial_pages: int | None = None
     _closed = False
+    _ordinary_main_write = False
+    _completion_write_violation = False
+
+    def _authorize_write(
+        self,
+        action: int,
+        table: str | None,
+        column: str | None,
+        database: str | None,
+        trigger: str | None,
+    ) -> int:
+        if database != "main" or action not in {
+            sqlite3.SQLITE_INSERT,
+            sqlite3.SQLITE_UPDATE,
+            sqlite3.SQLITE_DELETE,
+        }:
+            return sqlite3.SQLITE_OK
+        fixed_update = (
+            action == sqlite3.SQLITE_UPDATE and (table, column) in _FIXED_MAIN_UPDATES
+        )
+        if self.workspace is not None and self.workspace.borrowed:
+            if fixed_update:
+                return sqlite3.SQLITE_OK
+            self._completion_write_violation = True
+            return sqlite3.SQLITE_DENY
+        # Even fixed-column writes before borrowing are ordinary: they need not
+        # have come from a bounded completion, and may have touched many rows.
+        self._ordinary_main_write = True
+        return sqlite3.SQLITE_OK
+
+    def set_authorizer(self, authorizer: Any) -> None:
+        if self.workspace is not None:
+            raise sqlite3.ProgrammingError(
+                "completion workspace owns SQL authorization"
+            )
+        super().set_authorizer(authorizer)
 
     def _recover_workspace(self, workspace: CompletionWorkspace) -> None:
         """Let SQLite recover/reuse its own journals before refilling the reserve."""
@@ -227,6 +274,7 @@ class ReservedConnection(sqlite3.Connection):
                         )
             self._recover_workspace(workspace)
             self.workspace = workspace
+            super().set_authorizer(self._authorize_write)
         finally:
             workspace.release()
 
@@ -244,6 +292,11 @@ class ReservedConnection(sqlite3.Connection):
                     self._recover_workspace(self.workspace)
                 else:
                     self.workspace.restore()
+                self._ordinary_main_write = False
+                self._completion_write_violation = False
+                # Authorizers run when SQL is prepared, not on every step.
+                # Reinstall at each ownership boundary to reauthorize cached SQL.
+                super().set_authorizer(self._authorize_write)
                 self._initial_pages = (
                     super().execute("PRAGMA main.page_count").fetchone()[0]
                 )
@@ -258,6 +311,8 @@ class ReservedConnection(sqlite3.Connection):
             finally:
                 self.workspace.release()
                 self._initial_pages = None
+                self._ordinary_main_write = False
+                self._completion_write_violation = False
 
     def use_completion_workspace(self) -> None:
         if self.workspace is None or not self.in_transaction:
@@ -266,7 +321,14 @@ class ReservedConnection(sqlite3.Connection):
             )
         if not self.workspace.owned:
             raise sqlite3.ProgrammingError("reserved completion has no writer owner")
-        self.workspace.borrow()
+        if self._ordinary_main_write:
+            raise sqlite3.ProgrammingError(
+                "completion cannot borrow after ordinary trace writes"
+            )
+        if not self.workspace.borrowed:
+            self.workspace.borrow()
+            # Invalidate statements prepared while ordinary writes were allowed.
+            super().set_authorizer(self._authorize_write)
 
     def _check_statement(self, sql: str) -> str:
         # SQLite accepts comments, empty statements and a UTF-8 BOM before SQL.
@@ -385,6 +447,10 @@ class ReservedConnection(sqlite3.Connection):
         return False
 
     def commit(self) -> None:
+        if self.workspace is not None and self._completion_write_violation:
+            raise sqlite3.IntegrityError(
+                "completion transaction attempted an ordinary trace write"
+            )
         if self.workspace is not None and self.workspace.borrowed:
             pages = super().execute("PRAGMA main.page_count").fetchone()[0]
             if pages != self._initial_pages:

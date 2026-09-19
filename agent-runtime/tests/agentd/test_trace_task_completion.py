@@ -360,3 +360,23 @@ def test_later_execution_uses_its_attempt_slot_and_preserves_terminal_capacity(
         ).fetchone()[0]
         == 1
     )
+
+
+def test_terminal_cannot_borrow_after_ordinary_event_in_same_transaction(installed):
+    from edgecitadel_agentd.trace_journal import TraceJournal
+    from test_trace_journal import event
+
+    store, _, _ = installed
+    task = running(installed)
+    before = snapshot(store)
+    db = store._connection
+    with (
+        pytest.raises(sqlite3.ProgrammingError, match="after ordinary trace writes"),
+        db,
+    ):
+        db.execute("BEGIN IMMEDIATE")
+        TraceJournal(db).record("owned-edge", event(), selected=True)
+        complete(installed, task)
+    assert snapshot(store) == before
+    assert not db.workspace.borrowed
+    assert complete(installed, task)["state"] == "completed"
