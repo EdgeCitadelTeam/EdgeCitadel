@@ -153,8 +153,38 @@ environment or RPC switch to bypass production quota admission.
 handle on an owned jim-eq quota volume, including startup refusals and persisted
 task/trace/export data. Run it with the interpreter, source, schemas and dependencies
 readable by the test UID, such as a root-owned read-only test bundle under `/var/tmp`.
-Dedicated-UID rollout of existing services, migration
-headroom and completion capacity reservations remain outstanding.
+Dedicated-UID rollout of existing services, migration sizing and completion
+capacity reservations remain outstanding.
+
+For a stopped, clean schema-24 DELETE pair already owned by the dedicated UID,
+provision its private `trace/` quota mount, then run under that UID with
+`no_new_privs` enabled and no capabilities:
+
+```sh
+python -m edgecitadel_agentd.storage_migration --state-dir /absolute/service/agentd
+```
+
+The offline command verifies the native quota, takes both writer locks and SQLite
+exclusive locks, and fences startup using `restore-barrier.json`. It copies only
+the trace database, verifies exact hashes of both database files and the key,
+fsyncs the copy and its directory, retires the old trace file, and durably removes
+the fence. Task state, pair identity and source/export identities are preserved;
+this operation does not restore, rotate, requeue or stop a service. Run it before
+starting the new daemon; running an old daemon against the migrated layout is
+unsupported. Administrator provisioning/ownership changes and service-account
+relocation are separate operations, not performed by this command.
+
+On quota exhaustion or interruption, keep the fence and retry the same command
+after resolving capacity. A valid migration fence permits replacement of its
+partial candidate or completion of a handoff after old-file retirement. Changed
+inputs, malformed/incomplete fences, other restore operations, foreign target
+files and SQLite sidecars refuse automatic recovery; retain the files for
+operator investigation. Never delete a fence to force admission. The source must
+fit available quota; no migration-space reservation is claimed. Both source and
+candidate can exist during fenced copying, but only the quota-owned trace remains
+after successful handoff. Offline backups have separate administrator ownership
+and lifecycle. `tests/agentd/test_storage_migration_native.py` qualifies real
+EDQUOT and process-death recovery on an owned jim-eq filesystem.
 
 
 Agentd now opens its source store in verified `journal_mode=DELETE` with
