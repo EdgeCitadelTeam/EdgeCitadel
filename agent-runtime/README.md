@@ -146,6 +146,9 @@ old `agentd.sqlite3` in the state directory refuse startup. Existing deployments
 need offline migration and dedicated-UID provisioning; startup never silently
 moves data or falls back to an ordinary directory. The systemd user unit enables
 `NoNewPrivileges=yes`; it must run under the provisioned non-root account.
+The [administrator provisioning workflow](../deploy/trace-storage/README.md)
+creates a dedicated account and persistent quota mounts and verifies admission
+under that UID before any daemon starts.
 Direct library component fixtures inject their own store opener; there is no CLI,
 environment or RPC switch to bypass production quota admission.
 
