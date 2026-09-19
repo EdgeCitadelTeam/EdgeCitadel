@@ -2,7 +2,7 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "9fe6e69710d26f9cc34f670d8aab2df002f9b37b14d98a03f2d758c3d9fb43a4"
+      "sha256": "bfb05e7bb5d89bc88fcf444b310913c0cc3a40f50848ec28a1b8fa0aca040536"
     },
     {
       "path": "edgecitadel_hermes_plugin/__init__.py",

@@ -328,3 +328,67 @@ test('S6 collector outage leaves execution running and recovers retained evidenc
     expect(status.nats_connected).toBe(true);
   }
 });
+
+test('S1 three real Hermes workers show parallel activity and explicit root completion', async ({ page }) => {
+  test.skip(process.env.EDGECITADEL_TRACE_S1_E2E !== '1', 'Requires private Hermes runtime overlay and owned worker provisioning');
+  test.setTimeout(360_000);
+  const directory = `/root/edgecitadel-s1-20260919/browser-${Date.now()}`;
+  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
+  ssh(`install -d -m 700 ${directory}`);
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-workers.py`], {
+    input: readFileSync(path.resolve(__dirname, '../helpers/trace-multi-worker.py')),
+  });
+  const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
+    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-workers.py ${directory} --browser`],
+  { stdio: ['ignore', 'pipe', 'pipe'] });
+  let trace, dispatched, settled, processError = false;
+  child.stderr.on('data', () => { processError = true; });
+  const finished = new Promise(resolve => child.on('exit', resolve));
+  const lines = createInterface({ input: child.stdout });
+  lines.on('line', line => {
+    const value = JSON.parse(line);
+    if (value.stage === 'bound') trace = value.trace_id;
+    if (value.stage === 'dispatched') dispatched = value.task_ids;
+    if (value.stage === 'complete') settled = value;
+  });
+  try {
+    await expect.poll(() => trace, { timeout: 180_000 }).toBeTruthy();
+    await page.goto(`/#execution?run=${trace}`);
+    await connect(page);
+    await expect(page.locator(`[data-node-id="run:${trace}"]`)).toHaveClass(/state-running/);
+    ssh(`touch ${directory}/client-ready`);
+    await expect.poll(() => dispatched, { timeout: 15_000 }).toBeTruthy();
+    await expect(page.locator('[data-node-id^="task:"].state-running')).toHaveCount(3, { timeout: 30_000 });
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-s1-running.png`) });
+    await expect.poll(() => settled, { timeout: 170_000 }).toBeTruthy();
+    expect(await finished).toBe(0);
+    expect(processError).toBe(false);
+    expect(settled.actual_model_tool_events_per_worker).toBe(true);
+    expect(settled.terminal_results_verified_locally).toBe(true);
+    expect(settled.three_tool_actions_overlapped).toBe(true);
+    expect(settled.all_core_settled).toBe(true);
+    expect(settled.owned_workers_removed).toBe(true);
+    await expect(page.locator('[data-node-id^="task:"].state-completed')).toHaveCount(3);
+    await expect(page.locator(`[data-node-id="run:${trace}"]`)).toHaveClass(/state-completed/);
+    const response = await fetch(`${process.env.APP_URL}/api/traces/${trace}`, { headers: { Authorization: `Bearer ${credential}` } });
+    expect(response.ok).toBe(true);
+    const graph = await response.json();
+    expect(graph.expansions).toEqual([]);
+    for (const taskId of settled.task_ids) {
+      expect(graph.edges.some(edge => edge.from === `run:${trace}` && edge.to === `task:${taskId}` && edge.status === 'resolved')).toBe(true);
+      expect(graph.nodes.some(node => node.task_id === taskId && node.kind === 'model' && node.state === 'finished')).toBe(true);
+      expect(graph.nodes.some(node => node.task_id === taskId && node.kind === 'tool' && node.state === 'finished')).toBe(true);
+    }
+    const childTask = page.locator(`[data-node-id="task:${settled.task_ids[0]}"]`);
+    await childTask.click();
+    await expect(page.getByLabel('Selected step details')).toContainText(settled.workers[0]);
+    await page.getByRole('button', { name: 'Text view', exact: true }).click();
+    await expect(page.getByRole('list', { name: 'Execution step list' })).toContainText(settled.workers[2]);
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-s1-completed.png`) });
+    writeFileSync(path.join(evidence, `${artifactPrefix}-s1.json`), JSON.stringify({ ...settled, browser_three_running_children: true, resolved_root_child_links: true, browser_completed_root: true }, null, 2) + '\n');
+  } finally {
+    ssh(`touch ${directory}/client-ready`);
+    await finished;
+    lines.close();
+  }
+});

@@ -57,3 +57,38 @@ browser must show the completed child and recovered collection status. All
 handshakes are bounded; the helper restores collection in `finally`, and the test
 releases handshakes and waits for helper cleanup even after an assertion failure.
 Only run this case when a temporary fleet-wide collector pause is appropriate.
+
+## Three-worker S1 qualification
+
+The opt-in S1 case provisions three uniquely named, temporary Hermes Agent
+Packages on the existing jim-eq Leaf. Each has its own execution-bound wrapper,
+loopback port, HTTP token and private Hermes profile. The helper copies only the
+existing provider configuration and credentials into those private profiles;
+MCP servers are disabled there, and the API toolset is limited to terminal and
+scoped delegation. It leaves the existing Hermes gateway/adapter running.
+
+Prepare the private Python dependency overlay on jim-eq once, using the matching
+installed release (the Hermes interpreter must be Python 3.12 or newer):
+
+```bash
+ssh root@jim-eq 'install -d -m 700 /root/edgecitadel-s1-20260919; /root/.local/bin/uv pip install --python /opt/hermes-agent/venv/bin/python --target /root/edgecitadel-s1-20260919/python /root/.local/share/uv/tools/edgecitadel/share/edgecitadel/agent-runtime'
+```
+
+Add `EDGECITADEL_TRACE_S1_E2E=1` to the existing direct Playwright environment and
+`--grep 'S1 three'` to its command. This case needs the configured production
+provider and can make model requests. It uses a native connector root to dispatch
+three distinct child tasks; each model executes `sleep 8` and prints its own
+marker. Local Hermes tool records must prove successful output independently of
+the model's final reply. Actual tool start/end source positions must prove that
+all three actions overlapped. Each child needs model/tool observations, exact
+source/Core event and export settlement, and the root emits an explicit completed
+outcome. The browser checks concurrent child activity, resolved root/child links,
+model/tool steps, completed root, owner inspection and text view.
+
+`helpers/trace-multi-worker.py` owns the temporary packages, connectors and wrapper
+processes; its cleanup attempts every owned resource even if another cleanup
+fails. Private profiles/logs remain under `/root/edgecitadel-s1-20260919/` for
+operator diagnosis and must not be exported. No production approval setting is
+changed: the workload uses basic shell commands accepted by the unattended API,
+not a Python `-c` command that Hermes blocks. S1 uses three agents on one Leaf;
+it does not qualify the full multi-host topology or a human Codex session.

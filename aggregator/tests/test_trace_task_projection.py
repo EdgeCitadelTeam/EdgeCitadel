@@ -209,3 +209,47 @@ def test_core_commit_replay_and_reopen_supply_stable_task_projection(
     assert rebuilt.node["state"] == "completed"
     assert rebuilt.node["outcome_candidate_count"] == 2
     assert len(rebuilt.outcomes) == 2
+
+
+def test_received_queue_does_not_compete_with_the_executing_recipient(tmp_path):
+    from contextlib import closing
+    from edgecitadel_agentd.store import AgentdStore
+
+    (tmp_path / "node.json").write_text('{"agent_id":"recipient-edge"}')
+    with closing(AgentdStore(tmp_path / "agentd/agentd.sqlite3")) as store:
+        token = store.register_connector(
+            connector_id="worker",
+            host_type="codex",
+            agent_id="worker",
+            capabilities=["edgecitadel_trace"],
+        )
+        session = store.open_session(connector_id="worker", token=token)["session_id"]
+        task_id = str(uuid4())
+        store.ingest_transport_envelope(
+            {
+                "v": 1,
+                "id": str(uuid4()),
+                "type": "command",
+                "task_id": task_id,
+                "sender_id": "remote-root",
+                "recipient_id": "worker",
+                "timestamp": "2026-09-19T00:00:00.000Z",
+                "payload": {"body": "test"},
+            }
+        )
+        store.claim_next_task(connector_id="worker", token=token, session_id=session)
+        store.transition_task(
+            task_id=task_id, state="running", actor_id="worker", session_id=session
+        )
+        events = [
+            json.loads(row[0])
+            for row in store._connection.execute(
+                "SELECT event_json FROM trace_journal ORDER BY source_seq"
+            )
+        ]
+    result = reduce_task(
+        [TaskObservation(i + 1, event) for i, event in enumerate(events)]
+    )
+    assert result.node["state"] == "running"
+    assert result.node["agent_id"] == "worker"
+    assert not result.ambiguous_live_state

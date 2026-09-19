@@ -3025,3 +3025,14 @@ has stopped, without advancing the client's application ACK. The execution map
 shows unavailable/unknown collection explicitly and reports projection lag
 separately. Historical views label it as the status at their last check; they do
 not invent historical collector health.
+
+### Incoming queue observation ownership
+
+A transported command entering a recipient daemon records its initial queued
+observation with `source_role=daemon`. Receiving an envelope is not evidence that
+the addressed worker accepted or started it. The observation retains the task
+sender attribution; the worker's later accepted/running boundaries supply the
+recipient perspective. Outgoing queue observations remain sender evidence. This
+keeps the initial transport receipt from competing indefinitely with the actual
+worker's current state in the projection. Existing immutable observations are
+not rewritten; corrected attribution applies to newly received commands.

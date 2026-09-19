@@ -19,8 +19,8 @@ through the manifest-declared environment allowlist. Tests live in
 For live model/tool observations and correctly parented model delegation, run the
 packaged server wrapper instead of the ordinary Hermes API server. Use a dedicated
 Python 3.12+ environment with Hermes, `edgecitadel-agent-runtime` and `aiohttp`
-installed. The existing Hermes Python 3.11 environment is not sufficient. This
-launcher does not install dependencies or change a running Hermes service.
+installed. Python versions older than 3.12 are unsupported. This launcher does
+not install dependencies or change a running Hermes service.
 
 Set `HERMES_HOME` to the intended Hermes profile and configure its model/provider
 normally. Include `edgecitadel-scoped` in that profile's

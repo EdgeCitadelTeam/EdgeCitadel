@@ -1270,7 +1270,9 @@ class AgentdStore:
                 attributes={"recipient_id": recipient_id, "skill_id": skill_id},
                 now=now,
                 trace_node_id=trace_node_id,
-                trace_source_role="sender" if queue_transport else "recipient",
+                # Receipt queues work at the daemon; only the worker's later
+                # acceptance/execution can claim the recipient perspective.
+                trace_source_role="sender" if queue_transport else "daemon",
             )
             if queue_transport and not self._agent_is_local_locked(recipient_id):
                 message_id = str(uuid.uuid4())

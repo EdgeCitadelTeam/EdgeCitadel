@@ -181,7 +181,7 @@ def test_incoming_command_offer_is_locally_observed(configured):
     )
     observed = events(store)
     assert [e["phase"] for e in observed] == ["queued", "offered"]
-    assert observed[0]["attributes"]["source_role"] == "recipient"
+    assert observed[0]["attributes"]["source_role"] == "daemon"
     assert observed[-1]["attributes"]["source_role"] == "daemon"
     assert all(e["evidence_kind"] == "source_observed" for e in observed)
 
