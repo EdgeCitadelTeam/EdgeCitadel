@@ -299,3 +299,12 @@ broker/browser observer cost, actual task-execution overhead or the full-system
 overhead gate. Preserve all pair results and variation before designing those
 matched live controls. No result is accepted merely from the callback maximum
 or from a partially completed benchmark.
+
+The first full-size component comparison completed all four pairs (eight arms,
+17,500 observations each) on jim-eq. All populations, stored content/positions,
+ACK/callback counts and observer records verify; owned databases were cleaned up.
+Median paired process-CPU difference is +2.480%. Wall differences span -20.262%
+to +29.530% (median +6.735%); retain this variability rather than treating the
+median as a stable overhead bound. The next controls must cover live broker/
+browser costs and actual task execution. No full-system overhead gate is closed
+by this component comparison.
