@@ -342,19 +342,68 @@ def test_commit_during_replay_is_delivered_on_next_request_without_snapshot_race
     assert first["changes"][0]["ingest_high_watermark"] == 2
 
 
-def test_large_new_node_retains_exact_snapshot_replacement(core):
-    populate(core, 501)
+@pytest.mark.parametrize("parent", ["none", "known", "missing"])
+def test_large_new_node_uses_patch_only_for_proven_leaf(core, parent):
+    tasks, _ = populate(core, 501, ring=True)
     initial = graph(core)
+    nodes, edges, _ = collect(core, initial)
     task_id = str(uuid4())
-    put(core, event(seq=502, trace_id=TRACE, task_id=task_id), str(uuid4()), 1)
+    parent_id = {
+        "none": None,
+        "known": tasks[0],
+        "missing": str(uuid4()),
+    }[parent]
+    put(
+        core,
+        event(seq=502, trace_id=TRACE, task_id=task_id, parent_task_id=parent_id),
+        str(uuid4()),
+        1,
+    )
     project_all(core)
     response = read(core, initial["resume_cursor"])
     assert len(response["changes"]) == 1
     change = response["changes"][0]
-    assert change["mode"] == "snapshot"
-    nodes, edges = client_state(initial)
+    assert change["mode"] == ("patch" if parent in {"none", "known"} else "snapshot")
     apply(core, nodes, edges, change)
-    assert len(nodes) == 502 and "task:" + task_id in nodes
+    expected_nodes, expected_edges, _ = collect(core, graph(core, at=change["at"]))
+    assert nodes == expected_nodes and edges == expected_edges
+    assert "task:" + task_id in nodes
+
+
+@pytest.mark.parametrize("cycle", [False, True])
+def test_large_late_parent_requires_global_resolution(core, cycle):
+    tasks, _ = populate(core, 501)
+    late_parent = str(uuid4())
+    put(
+        core,
+        event(seq=502, trace_id=TRACE, task_id=tasks[0], parent_task_id=late_parent),
+        str(uuid4()),
+        1,
+    )
+    project_all(core)
+    initial = graph(core)
+    nodes, edges, _ = collect(core, initial)
+    assert nodes["task:" + late_parent]["kind"] == "unresolved"
+    put(
+        core,
+        event(
+            seq=503,
+            trace_id=TRACE,
+            task_id=late_parent,
+            parent_task_id=tasks[0] if cycle else None,
+        ),
+        str(uuid4()),
+        1,
+    )
+    project_all(core)
+    change = read(core, initial["resume_cursor"])["changes"][0]
+    assert change["mode"] == "snapshot"
+    apply(core, nodes, edges, change)
+    expected_nodes, expected_edges, _ = collect(core, graph(core, at=change["at"]))
+    assert nodes == expected_nodes and edges == expected_edges
+    assert {edge["status"] for edge in edges.values()} == (
+        {"invalid"} if cycle else {"resolved"}
+    )
 
 
 def test_large_tool_updates_preserve_each_historical_commit(core):

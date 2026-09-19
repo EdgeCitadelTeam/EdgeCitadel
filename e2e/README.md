@@ -136,3 +136,10 @@ first retained-history page and reads its remaining changes, recording HTTP time
 and patch/snapshot/clear counts. Tokens stay in memory and reports contain no
 credentials or signed cursors. Compare the same trace and cursor interval across
 releases; these single samples do not establish browser latency or p95 targets.
+
+The replay profiler accepts an optional third argument: an absolute private file
+containing a previously read history response. This mode requires a contiguous
+window of at most 63 commits and checks that replay ends at its exact final graph
+token. It enables repeatable before/after comparison while newer commits arrive.
+Keep that input private; output reports omit its signed cursors. This mode fails
+if any position is missing, expired or no longer reconstructible.

@@ -2905,12 +2905,17 @@ an empty page with continuation; signed `through_cursor` records the scanned
 prefix, never a commit withheld by count or byte bounds.
 
 A graph above the initial 500-node/1,000-edge resolver budget may still receive a
-bounded patch when retained row history proves topology unchanged. At most 500
-changed task/entity rows are examined. Each must have an existing nondeleted
-predecessor with the same canonical node ID and kind; any relationship mutation,
-new/deleted node or kind change retains exact snapshot replacement. State/metadata
-updates preserve every intermediate cursor, including inspector-only changes.
-This does not coalesce commits or relax ordered application/acknowledgment.
+bounded patch when retained row history proves no existing edge changes resolution.
+At most 500 changed task/entity rows and 1,000 changed claims are examined. Existing
+nodes must preserve canonical ID and kind. One new node may be added if no older
+retained relationship has referenced it; any new edges must point to that node
+from known existing nodes, with at most one distinct ancestry parent. This proves
+that the addition neither resolves an old placeholder nor creates a cycle or
+ambiguous ancestry. Isolated new nodes use the same no-prior-reference proof.
+Multiple new nodes, deletion/kind changes, missing parents, late parents and other
+relationship changes retain exact snapshot replacement. State/metadata updates
+preserve every intermediate cursor, including inspector-only changes. This does
+not coalesce commits or relax ordered application/acknowledgment.
 
 Clients apply responses in cursor order, deduplicate/reapply node and edge IDs,
 and advance resume state only after every returned change is applied. Keep one

@@ -103,21 +103,26 @@ def _delta(before: list[dict], after: list[dict]) -> tuple[list[dict], list[str]
     )
 
 
-def _stable_topology_updates(
-    tables: ProjectionTables, trace_id: str, cursor: int
-) -> list[dict] | None:
-    """Return a bounded node patch only when history proves topology unchanged.
+def _local_graph_patch(
+    tables: ProjectionTables,
+    trace_id: str,
+    cursor: int,
+) -> tuple[list[dict], list[dict]] | None:
+    """Prove a bounded patch without changing any existing edge's resolution.
 
-    Existing node state/metadata cannot change ancestry resolution. New/deleted
-    nodes, kind changes or any relationship mutation require the full resolver.
-    The previous row lookup uses the retained key history, not today's graph.
+    Existing node updates preserve identity/kind. One previously unreferenced
+    node may be added, with incoming edges from known existing nodes and at most
+    one ancestry parent. Everything else uses the global snapshot resolver.
     """
-    if tables.execute(
-        "SELECT 1 FROM {trace_projection_history_rows} WHERE cursor=? "
-        "AND table_name='trace_relationship_claims' AND json_extract(row_json,'$.trace_id')=? LIMIT 1",
-        (cursor, trace_id),
-    ).fetchone():
-        return None
+
+    def previous(table: str, key: str) -> dict | None:
+        row = tables.execute(
+            "SELECT deleted,row_json FROM {trace_projection_history_rows} "
+            "WHERE table_name=? AND row_key=? AND cursor<? ORDER BY cursor DESC LIMIT 1",
+            (table, key, cursor),
+        ).fetchone()
+        return json.loads(row[1]) if row is not None and not row[0] else None
+
     rows = tables.execute(
         "SELECT table_name,row_key,deleted,row_json FROM {trace_projection_history_rows} "
         "WHERE cursor=? AND table_name IN ('trace_projected_tasks','trace_projected_entities') "
@@ -127,27 +132,80 @@ def _stable_topology_updates(
     if len(rows) > 500:
         return None
     updates = []
+    added = []
     for table, key, deleted, encoded in rows:
         if deleted:
             return None
-        previous = tables.execute(
-            "SELECT deleted,row_json FROM {trace_projection_history_rows} "
-            "WHERE table_name=? AND row_key=? AND cursor<? ORDER BY cursor DESC LIMIT 1",
-            (table, key, cursor),
-        ).fetchone()
-        if previous is None or previous[0]:
-            return None
-        before = json.loads(json.loads(previous[1])["node_json"])
+        old = previous(table, key)
         after = json.loads(json.loads(encoded)["node_json"])
-        if (
-            before["id"] != after["id"]
-            or before["kind"] != after["kind"]
-            or after["kind"] == "unresolved"
-        ):
+        if after["kind"] == "unresolved":
             return None
-        if before != after:
+        if old is None:
+            added.append(after["id"])
             updates.append(after)
-    return sorted(updates, key=lambda node: node["id"])
+        else:
+            before = json.loads(old["node_json"])
+            if before["id"] != after["id"] or before["kind"] != after["kind"]:
+                return None
+            if before != after:
+                updates.append(after)
+    # One event normally introduces one step. Multiple new nodes require the
+    # general resolver rather than another local cycle/ancestry implementation.
+    if len(added) > 1:
+        return None
+    claims = tables.execute(
+        "SELECT row_key,deleted,row_json FROM {trace_projection_history_rows} WHERE cursor=? "
+        "AND table_name='trace_relationship_claims' AND json_extract(row_json,'$.trace_id')=? LIMIT 1001",
+        (cursor, trace_id),
+    ).fetchall()
+    if len(claims) > 1000 or (claims and not added):
+        return None
+    edges = []
+    parents = set()
+    for key, deleted, encoded in claims:
+        if deleted or previous("trace_relationship_claims", key) is not None:
+            return None
+        claim = json.loads(encoded)
+        if claim["child_id"] != added[0] or claim["parent_id"] == added[0]:
+            return None
+        if claim["kind"] != "join":
+            parents.add(claim["parent_id"])
+        parent = claim["parent_id"]
+        table, identity = (
+            ("trace_projected_tasks", parent[5:])
+            if parent.startswith("task:")
+            else ("trace_projected_entities", parent)
+        )
+        known = previous(table, json.dumps([trace_id, identity], separators=(",", ":")))
+        if known is None or json.loads(known["node_json"])["kind"] == "unresolved":
+            return None
+        edges.append(
+            {
+                "id": claim["edge_id"],
+                "kind": claim["kind"],
+                "from": parent,
+                "to": claim["child_id"],
+                "status": "resolved",
+            }
+        )
+    if len(parents) > 1:
+        return None
+    if added:
+        # An apparently new real node may replace an unresolved endpoint. That
+        # can change old edges or complete a cycle and must use global resolution.
+        # Any older reference is enough to decline the optimization, including
+        # retired claims. Avoid reconstructing all historical tables to prove it.
+        referenced = tables.execute(
+            "SELECT 1 FROM {trace_projection_history_rows} WHERE table_name='trace_relationship_claims' "
+            "AND json_extract(row_json,'$.trace_id')=? AND cursor<? "
+            "AND (json_extract(row_json,'$.parent_id')=? OR json_extract(row_json,'$.child_id')=?) LIMIT 1",
+            (trace_id, cursor, added[0], added[0]),
+        ).fetchone()
+        if referenced:
+            return None
+    return sorted(updates, key=lambda node: node["id"]), sorted(
+        edges, key=lambda edge: edge["id"]
+    )
 
 
 def read_changes(
@@ -251,8 +309,8 @@ def read_changes(
                     for key in ("trace_state", "coverage", "large", "nodes", "edges")
                 )
                 if changed:
-                    stable_updates = (
-                        _stable_topology_updates(tables, trace_id, cursor)
+                    local_patch = (
+                        _local_graph_patch(tables, trace_id, cursor)
                         if current["trace_state"] == before["trace_state"] == "present"
                         and current["large"]
                         and before["large"]
@@ -262,19 +320,20 @@ def read_changes(
                         "clear"
                         if current["trace_state"] != "present"
                         else "snapshot"
-                        if (current["large"] or before["large"])
-                        and stable_updates is None
+                        if (current["large"] or before["large"]) and local_patch is None
                         else "patch"
                     )
                     nodes, removed_nodes = (
-                        (stable_updates, [])
-                        if stable_updates is not None
+                        (local_patch[0], [])
+                        if local_patch is not None
                         else _delta(before["nodes"], current["nodes"])
                         if mode == "patch"
                         else ([], [])
                     )
                     edges, removed_edges = (
-                        _delta(before["edges"], current["edges"])
+                        (local_patch[1], [])
+                        if local_patch is not None
+                        else _delta(before["edges"], current["edges"])
                         if mode == "patch"
                         else ([], [])
                     )
