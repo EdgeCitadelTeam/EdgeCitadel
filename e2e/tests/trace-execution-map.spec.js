@@ -498,3 +498,94 @@ test('hostile metadata is rejected or inert and local references are never fetch
     browser_labels_inert: true, tampered_read_rejected: true, zero_execution_requests: true,
   }, null, 2) + '\n');
 });
+
+test('large retained run expands beyond 500 nodes and exposes every step', async ({ page }) => {
+  test.skip(process.env.EDGECITADEL_TRACE_LARGE_E2E !== '1', 'Explicit large fixture opt-in required');
+  test.setTimeout(300_000);
+  const retained = process.env.EDGECITADEL_TRACE_LARGE_FIXTURE;
+  if (retained && !/^\/root\/edgecitadel-large-20260919\/run-[0-9]+$/.test(retained)) throw new Error('Invalid large fixture directory');
+  const directory = retained || `/root/edgecitadel-large-20260919/run-${Date.now()}`;
+  if (!retained) {
+    execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `install -d -m 700 ${directory}`]);
+    execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-large.py`], {
+      input: readFileSync(path.resolve(__dirname, '../helpers/trace-large-run.py')),
+    });
+  }
+  const result = JSON.parse(execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
+    retained ? `cat ${directory}/result.json` : `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-large.py ${directory}`], { encoding: 'utf8', timeout: 200_000 }));
+  expect(result.source_core_exact).toBe(true);
+  expect(result.all_core_settled).toBe(true);
+  expect(result.event_count).toBe(1202);
+  expect(result.owned_connector_revoked).toBe(true);
+  const writes = [], errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => {
+    if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.method());
+  });
+  // Observe a cloned Fetch body: CDP cannot reliably retrieve bodies already
+  // consumed by the application's bounded stream reader.
+  await page.addInitScript(traceId => {
+    const fetch = window.fetch.bind(window);
+    window.traceGraphReads = [];
+    window.fetch = async (...args) => {
+      const response = await fetch(...args);
+      if (new URL(response.url).pathname === `/api/traces/${traceId}`) {
+        window.traceGraphReads.push(response.clone().json().catch(() => ({ capture_error: true })));
+      }
+      return response;
+    };
+  }, result.trace_id);
+  const cdp = await page.context().newCDPSession(page);
+  await page.goto(`/#execution?run=${result.trace_id}`);
+  const heapBefore = await cdp.send('Runtime.getHeapUsage');
+  const started = performance.now();
+  await connect(page);
+  await expect(page.getByRole('button', { name: 'Pause live' })).toBeEnabled({ timeout: 30_000 });
+  await expect(page.locator('[data-node-id]')).toHaveCount(100);
+  const coldLoadMs = performance.now() - started;
+  const heapLoaded = await cdp.send('Runtime.getHeapUsage');
+  const pages = await page.evaluate(() => Promise.all(window.traceGraphReads));
+  expect(pages.every(value => !value.capture_error)).toBe(true);
+  const first = pages.find(value => value.page_kind === 'snapshot');
+  expect(first.total_nodes).toBeGreaterThan(500);
+  expect(first.nodes.length).toBeLessThanOrEqual(500);
+  expect(first.expansions.length).toBeGreaterThan(0);
+  expect(pages.some(value => value.page_kind === 'expansion')).toBe(true);
+  const nodes = new Map(pages.flatMap(value => value.nodes).map(node => [node.id, node]));
+  const edges = new Map(pages.flatMap(value => value.edges).map(edge => [edge.id, edge]));
+  expect(edges.size).toBe(601);
+  expect([...edges.values()].every(edge => edge.status === 'resolved' && nodes.has(edge.from) && nodes.has(edge.to))).toBe(true);
+  expect(nodes.size).toBe(first.total_nodes);
+  expect([...nodes.values()].filter(node => node.kind === 'tool')).toHaveLength(600);
+  expect(new Set(pages.map(value => value.at)).size).toBe(1);
+  const seen = new Set();
+  let pageCount = 0;
+  while (true) {
+    const ids = await page.locator('[data-node-id]').evaluateAll(items => items.map(item => item.dataset.nodeId));
+    expect(ids.length).toBeLessThanOrEqual(100);
+    for (const id of ids) { expect(seen.has(id)).toBe(false); seen.add(id); }
+    pageCount++;
+    const next = page.getByRole('button', { name: 'Next steps', exact: true });
+    if (await next.isDisabled()) break;
+    await next.click();
+    await expect(page.locator('[data-node-id]').first()).not.toHaveAttribute('data-node-id', ids[0]);
+  }
+  expect([...seen].sort()).toEqual([...nodes.keys()].sort());
+  const last = [...seen].at(-1);
+  await page.locator(`[data-node-id="${last}"]`).click();
+  await expect(page.getByLabel('Selected step details')).toContainText(last);
+  await page.getByRole('button', { name: 'Text view', exact: true }).click();
+  await expect(page.getByRole('list', { name: 'Execution step list' })).toBeVisible();
+  await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-large-last-page.png`) });
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+  const { span_ids, ...summary } = result;
+  expect(span_ids).toHaveLength(600);
+  writeFileSync(path.join(evidence, `${artifactPrefix}-large-run.json`), JSON.stringify({ ...summary,
+    graph_nodes: nodes.size, graph_edges: edges.size, graph_responses: pages.length, map_pages: pageCount,
+    all_steps_reachable: true, cold_load_ms: coldLoadMs,
+    js_heap_before_bytes: heapBefore.usedSize, js_heap_loaded_bytes: heapLoaded.usedSize,
+    measurement_scope: 'single cold load and unforced-GC heap samples including cloned-response observer; not commit-to-render latency or retained-memory bounds',
+  }, null, 2) + '\n');
+  await cdp.detach();
+});

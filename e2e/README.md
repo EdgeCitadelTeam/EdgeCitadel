@@ -107,3 +107,16 @@ source/Core payloads settle and the connector is revoked. These observations do
 not claim real tool execution or a retrievable local record. The browser separately
 tampers with its graph read to verify strict rejection, checks no reference fetch
 or execution API writes, and saves a sanitized report and screenshot.
+
+The large-run case (`--grep 'large retained'`) additionally requires
+`EDGECITADEL_TRACE_LARGE_E2E=1`. `helpers/trace-large-run.py` emits 600 explicitly
+synthetic operations through a temporary trace-only connector on jim-eq, checks
+1,202 exact source/Core events and settlement, and revokes the connector. It is
+not tool-execution evidence. The browser follows real graph expansions beyond
+500 initial nodes, visits every map page and selects a final-page step/text view.
+It asserts complete node/relationship coverage and no execution API writes.
+For read-only repetition, `EDGECITADEL_TRACE_LARGE_FIXTURE` may identify the existing
+private `/root/edgecitadel-large-20260919/run-<timestamp>` directory; expired data
+fails rather than silently creating a replacement. The single cold-load/heap
+samples include cloned-response observer overhead and are diagnostic, not the
+1,000-observation commit-to-render or retained-memory acceptance measurements.
