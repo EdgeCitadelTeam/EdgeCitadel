@@ -175,7 +175,8 @@ def test_owned_socket_reconciler_persists_failure_without_caller_metadata(tmp_pa
     import time
 
     from edgecitadel_agentd.client import AgentdClient, AgentdClientError
-    from edgecitadel_agentd.service import serve, socket_path_for
+    from service_test_support import serve
+    from edgecitadel_agentd.service import socket_path_for
 
     state = tmp_path / "agentd"
     (tmp_path / "node.json").write_text(json.dumps({"agent_id": "node-a"}))

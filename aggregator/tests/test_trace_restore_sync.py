@@ -1,3 +1,4 @@
+from functools import partial
 import asyncio
 import json
 import os
@@ -89,7 +90,7 @@ async def test_older_snapshot_replays_retained_evidence_and_declares_exact_loss(
             with sqlite3.connect(backup) as target:
                 db.backup(target)
         collector = TraceCollectorService(current, server.url, server.token)
-        sync = TraceSyncService(node, store.path, enabled=True)
+        sync = TraceSyncService(node, partial(AgentdStore, store.path), enabled=True)
 
         def until(predicate):
             deadline = time.monotonic() + 15

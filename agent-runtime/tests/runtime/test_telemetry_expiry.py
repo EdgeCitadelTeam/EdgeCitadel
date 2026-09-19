@@ -1,5 +1,6 @@
 """Actual age eviction after broker ACK, before collector commit, with retained replay."""
 
+from functools import partial
 import asyncio
 import json
 import sqlite3
@@ -60,7 +61,7 @@ async def test_age_expiry_replays_retained_payload_without_false_settlement(
     store = AgentdStore(node / "agentd/agentd.sqlite3")
     db = sqlite3.connect(tmp_path / "core.db")
     initialize(db)
-    sync = TraceSyncService(node, store.path, enabled=True)
+    sync = TraceSyncService(node, partial(AgentdStore, store.path), enabled=True)
     collector = TraceCollectorService(tmp_path / "core.db", url, token)
     event = json.loads(
         (Path(__file__).parents[1] / "fixtures/traces/events.v1.json").read_text()

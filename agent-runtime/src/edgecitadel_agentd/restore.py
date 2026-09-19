@@ -13,6 +13,7 @@ from typing import Any
 
 from .store import AgentdStore, StoreError
 from .storage_pair import attach_task_snapshot, task_database_path
+from .storage_layout import StorageLayout
 from .trace_restore import rotate_restored_source
 from .writer_lock import exclusive_writer
 
@@ -53,6 +54,8 @@ def stage_restore(
     destination_dir: Path,
     node_id: str,
     expected_source_epoch: str,
+    destination_layout: StorageLayout | None = None,
+    source_layout: StorageLayout | None = None,
 ) -> dict[str, Any]:
     """Create a fenced restored copy; never resume or discard saved work.
 
@@ -64,6 +67,23 @@ def stage_restore(
     snapshot = snapshot_dir.resolve(strict=True)
     previous = previous_state_dir.resolve(strict=True)
     destination = destination_dir.resolve()
+    layout = destination_layout or StorageLayout(destination)
+    if layout.state_directory.resolve() != destination:
+        raise StoreError(
+            "restore destination layout does not match its state directory"
+        )
+    if (
+        source_layout is not None
+        and source_layout.state_directory.resolve() != snapshot
+    ):
+        raise StoreError("restore snapshot layout does not match its state directory")
+    source_path = (
+        source_layout.trace_path if source_layout else snapshot / "agentd.sqlite3"
+    )
+    source_tasks = (
+        source_layout.task_path if source_layout else task_database_path(source_path)
+    )
+    source_key = source_layout.key_path if source_layout else snapshot / "payload.key"
     if any(
         destination == p or destination.is_relative_to(p) for p in (snapshot, previous)
     ):
@@ -73,12 +93,33 @@ def stage_restore(
             locks.enter_context(exclusive_writer(directory))
         require_startable(previous)
         if (
-            not (snapshot / "agentd.sqlite3").is_file()
-            or not (snapshot / "payload.key").is_file()
+            source_layout is not None
+            and source_layout.trace_directory.resolve() != snapshot
         ):
+            locks.enter_context(exclusive_writer(source_layout.trace_directory))
+        if not source_path.is_file() or not source_key.is_file():
             raise StoreError("restore requires a matched database and payload key")
-        destination.mkdir(mode=0o700)
+        destination.mkdir(mode=0o700, exist_ok=True)
         locks.enter_context(exclusive_writer(destination))
+        allowed = {"writer.lock"}
+        if layout.trace_directory.resolve() != destination:
+            allowed.add(layout.trace_directory.name)
+        if any(path.name not in allowed for path in destination.iterdir()):
+            raise StoreError(
+                "restore destination must contain only its provisioned trace directory"
+            )
+        layout.verify()
+        if layout.trace_directory.resolve() != destination:
+            locks.enter_context(exclusive_writer(layout.trace_directory))
+        if any(path.name != "writer.lock" for path in layout.trace_directory.iterdir()):
+            raise StoreError("restore trace destination is not empty")
+        if any(
+            path.exists() or path.is_symlink()
+            for path in (layout.trace_path, layout.task_path, layout.key_path)
+        ):
+            raise StoreError(
+                "restore destination already contains database or key state"
+            )
         _barrier(
             destination,
             {
@@ -89,27 +130,23 @@ def stage_restore(
         )
         with (
             closing(
-                sqlite3.connect(
-                    (snapshot / "agentd.sqlite3").as_uri() + "?mode=ro", uri=True
-                )
+                sqlite3.connect(source_path.as_uri() + "?mode=ro", uri=True)
             ) as source,
-            closing(sqlite3.connect(destination / "agentd.sqlite3")) as target,
+            closing(sqlite3.connect(layout.trace_path)) as target,
         ):
             source.execute("BEGIN")
-            paired = attach_task_snapshot(source, snapshot / "agentd.sqlite3")
+            paired = attach_task_snapshot(source, source_path, task_path=source_tasks)
             # Hold both read locks until both backups finish. A live source
             # transaction cannot commit between the two snapshots.
             source.execute("SELECT count(*) FROM sqlite_schema").fetchone()
             source.backup(target)
             if paired:
-                with closing(
-                    sqlite3.connect(task_database_path(destination / "agentd.sqlite3"))
-                ) as task_target:
+                with closing(sqlite3.connect(layout.task_path)) as task_target:
                     source.backup(task_target, name="task_state")
             source.rollback()
-        shutil.copyfile(snapshot / "payload.key", destination / "payload.key")
-        (destination / "payload.key").chmod(0o600)
-        store = AgentdStore(destination / "agentd.sqlite3")
+        shutil.copyfile(source_key, layout.key_path)
+        layout.key_path.chmod(0o600)
+        store = layout.open()
         try:
             db = store._connection
             for schema in ("main", "task_state"):
@@ -155,7 +192,7 @@ def hold_restored_execution(store: AgentdStore, *, source_epoch: str) -> dict[st
     """
     from .trace_finish import close_session_bindings_locked
 
-    barrier = store.path.parent / RESTORE_BARRIER
+    barrier = store.state_directory / RESTORE_BARRIER
     try:
         with barrier.open() as source:
             status = json.loads(source.read(65537))

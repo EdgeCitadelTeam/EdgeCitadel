@@ -13,7 +13,8 @@ from test_restore import rows, seed
 from test_restore_activation import activate, staged
 from test_writer_lock import start, stop
 
-from edgecitadel_agentd.restore import RESTORE_BARRIER, require_startable, stage_restore
+from edgecitadel_agentd.restore import RESTORE_BARRIER, require_startable
+from storage_test_support import stage_restore
 from edgecitadel_agentd.restore_activation import review_inventory
 from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.writer_lock import exclusive_writer
@@ -248,8 +249,8 @@ def child(config):
     original_store = AgentdStore
 
     class FaultStore(original_store):
-        def __init__(self, path):
-            super().__init__(path)
+        def __init__(self, path, **kwargs):
+            super().__init__(path, **kwargs)
             receipt_inserted = False
 
             def trace(statement):
@@ -268,8 +269,9 @@ def child(config):
 
             self._connection.set_trace_callback(trace)
 
-    restore.AgentdStore = FaultStore
-    restore_activation.AgentdStore = FaultStore
+    from edgecitadel_agentd import storage_layout
+
+    storage_layout.AgentdStore = FaultStore
     if config["operation"] == "stage":
         stage_restore(
             snapshot_dir=old,

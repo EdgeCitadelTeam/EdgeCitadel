@@ -147,14 +147,16 @@ def test_daemon_survives_exhausted_closure_reserve_and_recovers(tmp_path, monkey
     normal = trace_capacity.NORMAL_LIMIT_BYTES
     monkeypatch.setattr(trace_capacity, "NORMAL_LIMIT_BYTES", 0)
     monkeypatch.setattr(trace_capacity, "CONTROL_RESERVE_BYTES", 0)
-    monkeypatch.setattr(service, "AgentdStore", lambda _path: store)
     errors = []
     monkeypatch.setattr(
         threading, "excepthook", lambda args: errors.append(args.exc_value)
     )
     stop = threading.Event()
     thread = threading.Thread(
-        target=service.serve, args=(store.path.parent, stop), daemon=True
+        target=service.serve,
+        args=(store.path.parent, stop),
+        kwargs={"open_store": lambda: store},
+        daemon=True,
     )
     thread.start()
     client = AgentdClient(service.socket_path_for(store.path.parent), timeout=0.2)

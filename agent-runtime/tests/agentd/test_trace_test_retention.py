@@ -196,7 +196,8 @@ def test_daemon_environment_configures_provenance_without_rpc_authority(
     import sqlite3
     import threading
     from edgecitadel_agentd.client import AgentdClient, AgentdClientError
-    from edgecitadel_agentd.service import serve, socket_path_for
+    from service_test_support import serve
+    from edgecitadel_agentd.service import socket_path_for
 
     run = str(uuid4())
     monkeypatch.setenv("EDGECITADEL_TRACE_TEST_RUN_ID", run)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from nats import errors as nats_errors
@@ -25,9 +26,14 @@ from .trace_sync_manager import TraceSyncManager, clear_scope_fault
 
 class TraceSyncService:
     def __init__(
-        self, state_dir: Path, store_path: Path, *, enabled: bool = False
+        self,
+        state_dir: Path,
+        open_store: Callable[[], AgentdStore],
+        *,
+        enabled: bool = False,
     ) -> None:
-        self.state_dir, self.store_path, self.enabled = state_dir, store_path, enabled
+        self.state_dir, self.enabled = state_dir, enabled
+        self._open_store = open_store
         self._metrics = SourceMetrics()
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.RLock()
@@ -173,7 +179,7 @@ class TraceSyncService:
             return
         self._set_status(state="starting", fault=None)
         # Construct and close the second SQLite handle on the telemetry thread.
-        store = AgentdStore(self.store_path)
+        store = self._open_store()
         nc: NATS | None = None
         delay = 1.0
         try:

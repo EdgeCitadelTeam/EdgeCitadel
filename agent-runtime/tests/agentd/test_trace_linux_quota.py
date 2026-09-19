@@ -114,6 +114,13 @@ def owned_volume():
     finally:
         if mounted:
             subprocess.run(["umount", str(mount)], check=True)
+        if any(
+            str(root) in line
+            for line in Path("/proc/self/mountinfo").read_text().splitlines()
+        ):
+            raise RuntimeError(
+                "owned descendant mount remains; retain fixture for cleanup"
+            )
         subprocess.run(["losetup", "--detach", device], check=True)
         shutil.rmtree(root)
 

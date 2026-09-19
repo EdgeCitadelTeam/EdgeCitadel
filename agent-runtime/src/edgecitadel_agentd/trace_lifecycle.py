@@ -48,7 +48,7 @@ def record_task_boundary(
     phase = event_type.removeprefix("task.")
     if not event_type.startswith("task.") or phase not in _PHASES or task_id is None:
         return
-    identity_path = store.path.parent.parent / "node.json"
+    identity_path = store.state_directory.parent / "node.json"
     try:
         configured = json.loads(identity_path.read_text())["agent_id"]
     except FileNotFoundError:

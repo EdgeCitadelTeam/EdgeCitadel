@@ -6,14 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from storage_test_support import flatten_connection, paired_connect
+from storage_test_support import flatten_connection, paired_connect, stage_restore
 
 import pytest
 
 from edgecitadel_agentd.restore import (
     RESTORE_BARRIER,
     hold_restored_execution,
-    stage_restore,
 )
 from edgecitadel_agentd.service import PROCESS_STATE_NAME, socket_path_for
 from edgecitadel_agentd.store import AgentdStore, StoreError

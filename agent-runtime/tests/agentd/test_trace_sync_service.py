@@ -1,3 +1,4 @@
+from functools import partial
 import asyncio
 import json
 import threading
@@ -64,7 +65,7 @@ def configured(tmp_path, monkeypatch):
 
 def test_disabled_service_has_no_thread_database_or_network_side_effects(tmp_path):
     service = lifecycle.TraceSyncService(
-        tmp_path, tmp_path / "missing" / "agentd.sqlite3"
+        tmp_path, partial(AgentdStore, tmp_path / "missing" / "agentd.sqlite3")
     )
     service.start()
     service.stop()
@@ -96,7 +97,9 @@ def test_separate_thread_store_and_connection_do_not_block_command_handle(
 
     monkeypatch.setattr(lifecycle, "ensure_telemetry_stream", forbidden_management)
     monkeypatch.setattr(lifecycle, "TraceSyncManager", Manager)
-    service = lifecycle.TraceSyncService(path, command_store.path, enabled=True)
+    service = lifecycle.TraceSyncService(
+        path, partial(AgentdStore, command_store.path), enabled=True
+    )
     service.start()
     try:
         assert entered.wait(2)
@@ -140,7 +143,9 @@ def test_configuration_fault_pauses_without_exposing_credentials(
         raise TelemetryConfigurationError("private-test-token")
 
     monkeypatch.setattr(lifecycle, "ensure_telemetry_stream", drift)
-    service = lifecycle.TraceSyncService(path, store.path, enabled=True)
+    service = lifecycle.TraceSyncService(
+        path, partial(AgentdStore, store.path), enabled=True
+    )
     service.start()
     wait_until(lambda: not service._thread.is_alive())
     assert service.status()["fault"] == "telemetry_configuration_error"
@@ -163,7 +168,9 @@ def test_stop_cancels_initial_connect_and_closes_owned_connection(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(client_type, "connect", connect)
-    service = lifecycle.TraceSyncService(path, store.path, enabled=True)
+    service = lifecycle.TraceSyncService(
+        path, partial(AgentdStore, store.path), enabled=True
+    )
     service.start()
     assert entered.wait(2)
     service.stop()
@@ -194,7 +201,9 @@ def test_direct_source_retries_missing_core_stream_without_creating_it(
 
     monkeypatch.setattr(lifecycle, "ensure_telemetry_stream", verify)
     monkeypatch.setattr(lifecycle.TraceSyncService, "_manage", manage)
-    service = lifecycle.TraceSyncService(path, store.path, enabled=True)
+    service = lifecycle.TraceSyncService(
+        path, partial(AgentdStore, store.path), enabled=True
+    )
     service.start()
     try:
         assert entered.wait(4)

@@ -326,7 +326,8 @@ def test_import_over_owned_socket_survives_service_restart(tmp_path):
     import threading
 
     from edgecitadel_agentd.client import AgentdClient, AgentdClientError
-    from edgecitadel_agentd.service import serve, socket_path_for
+    from service_test_support import serve
+    from edgecitadel_agentd.service import socket_path_for
 
     state = tmp_path / "agentd"
     (tmp_path / "node.json").write_text(json.dumps({"agent_id": "node-a"}))
@@ -423,10 +424,10 @@ def test_pruned_import_retry_does_not_recreate_lost_payload(store):
 def test_populated_import_fenced_restore_preserves_namespace_and_original_receipt(
     tmp_path,
 ):
+    from storage_test_support import stage_restore
     from edgecitadel_agentd.restore import (
         RestorePendingError,
         require_startable,
-        stage_restore,
     )
 
     old = tmp_path / "old"

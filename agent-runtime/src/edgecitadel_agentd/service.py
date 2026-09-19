@@ -17,12 +17,14 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 from .restore import RestorePendingError, require_startable
 from .store import AgentdStore, StoreError
+from .storage_layout import StorageLayout
 from .supervisor import ManagedAgentSupervisor
 from .trace_contract import TraceContractError, validate_rpc_reply
 from .trace_security import (
@@ -30,6 +32,7 @@ from .trace_security import (
     note_authentication_rejection,
 )
 from .trace_sync_service import TraceSyncService
+from .trace_quota import TraceQuotaError
 from .transport import AgentdNatsTransport
 from .writer_lock import WriterActiveError, exclusive_writer
 
@@ -290,7 +293,7 @@ def _trace_operation(
     # node.json is daemon-owned enrollment state. Never accept a node claim in
     # connector params or copy its credentials into a diagnostic.
     try:
-        with (store.path.parent.parent / "node.json").open("rb") as source:
+        with (store.state_directory.parent / "node.json").open("rb") as source:
             node = json.loads(source.read(65537))
         node_id = node["agent_id"]
         if not isinstance(node_id, str):
@@ -655,23 +658,43 @@ def dispatch(
     raise StoreError("unsupported operation")
 
 
-def serve(state_dir: Path, stop_event: threading.Event | None = None) -> None:
-    with exclusive_writer(state_dir):
+def serve(
+    state_dir: Path,
+    stop_event: threading.Event | None = None,
+    *,
+    open_store: Callable[[], AgentdStore] | None = None,
+) -> None:
+    """Own the service lifetime; explicit store injection is for component fixtures.
+
+    CLI startup always selects the provisioned layout and native quota checks.
+    No environment variable or RPC permits ordinary-directory admission.
+    """
+    with ExitStack() as ownership:
+        ownership.enter_context(exclusive_writer(state_dir))
         require_startable(state_dir)
+        if open_store is None:
+            layout = StorageLayout(state_dir.resolve())
+            layout.verify()
+            ownership.enter_context(exclusive_writer(layout.trace_directory))
+            open_store = layout.open
         _write_process_record(state_dir, os.getpid())
         try:
-            _serve_locked(state_dir, stop_event)
+            _serve_locked(state_dir, stop_event, open_store)
         finally:
             _write_process_record(state_dir, None)
 
 
-def _serve_locked(state_dir: Path, stop_event: threading.Event | None = None) -> None:
+def _serve_locked(
+    state_dir: Path,
+    stop_event: threading.Event | None,
+    open_store: Callable[[], AgentdStore],
+) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     state_dir.chmod(0o700)
     socket_path = socket_path_for(state_dir)
+    store = open_store()
     if socket_path.exists():
         socket_path.unlink()
-    store = AgentdStore(state_dir / "agentd.sqlite3")
     test_run_id = os.environ.get("EDGECITADEL_TRACE_TEST_RUN_ID")
     if test_run_id:
         try:
@@ -687,7 +710,7 @@ def _serve_locked(state_dir: Path, stop_event: threading.Event | None = None) ->
     supervisor = ManagedAgentSupervisor(state_dir.parent, store)
     telemetry = TraceSyncService(
         state_dir.parent,
-        store.path,
+        open_store,
         enabled=os.environ.get("EDGECITADEL_TRACE_SYNC") == "1",
     )
     server = AgentdServer(
@@ -748,7 +771,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     state_dir.chmod(0o700)
     try:
         serve(state_dir, stop)
-    except (WriterActiveError, RestorePendingError) as error:
+    except (WriterActiveError, RestorePendingError, TraceQuotaError) as error:
         print(str(error), file=sys.stderr)
         return 1
     return 0

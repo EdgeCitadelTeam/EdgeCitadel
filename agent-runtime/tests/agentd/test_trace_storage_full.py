@@ -169,14 +169,16 @@ def test_daemon_reconciliation_survives_full_storage_and_clears_degraded_health(
         store._connection.execute(
             "UPDATE trace_journal SET received_at_ms=1 WHERE json_extract(event_json,'$.kind')='tool'"
         )
-    monkeypatch.setattr(service, "AgentdStore", lambda _path: store)
     thread_errors = []
     monkeypatch.setattr(
         threading, "excepthook", lambda args: thread_errors.append(args.exc_value)
     )
     stop = threading.Event()
     thread = threading.Thread(
-        target=service.serve, args=(store.path.parent, stop), daemon=True
+        target=service.serve,
+        args=(store.path.parent, stop),
+        kwargs={"open_store": lambda: store},
+        daemon=True,
     )
     thread.start()
     client = AgentdClient(service.socket_path_for(store.path.parent), timeout=0.2)

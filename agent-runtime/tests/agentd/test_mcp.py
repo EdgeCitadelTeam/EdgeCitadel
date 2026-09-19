@@ -7,7 +7,8 @@ from typing import Any, cast
 
 from edgecitadel_agentd.client import AgentdClient, AgentdClientError
 from edgecitadel_agentd.mcp import TOOLS, NativeMcpServer
-from edgecitadel_agentd.service import serve, socket_path_for
+from service_test_support import serve
+from edgecitadel_agentd.service import socket_path_for
 
 
 def test_native_mcp_session_tools_and_cleanup(tmp_path: Path) -> None:

@@ -1,3 +1,4 @@
+from functools import partial
 import asyncio
 import json
 import os
@@ -64,7 +65,9 @@ async def test_production_core_startup_and_source_sync_settle_and_stop(
             journal = TraceJournal(source._connection)
             journal.initialize("edge-a")
             journal.record("edge-a", event, selected=True)
-        sync = TraceSyncService(node_dir, source.path, enabled=True)
+        sync = TraceSyncService(
+            node_dir, partial(AgentdStore, source.path), enabled=True
+        )
         try:
             with TestClient(make_app()) as client:
                 deadline = time.monotonic() + 5

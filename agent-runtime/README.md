@@ -111,8 +111,8 @@ The existing deployed stores remain unchanged by this qualification.
 The approved production contract requires an administrator-provisioned Linux
 user-quota filesystem and a dedicated unprivileged service UID without quota
 bypass privileges, with shared infrastructure accounted separately. Production
-admission must fail closed if enforcement cannot be verified; that enforcement
-integration remains outstanding.
+admission fails closed if enforcement cannot be verified, as described below.
+Existing deployments still need dedicated-UID provisioning and offline migration.
 
 `edgecitadel_agentd.trace_quota.verify_trace_quota(trace_directory, task_directory)`
 now verifies that boundary without changing mounts, quota limits or privileges.
@@ -130,9 +130,31 @@ directory descriptor, avoiding a separate device-path lookup.
 `tests/agentd/test_trace_quota_native.py` runs its own quota filesystem on jim-eq
 and verifies acceptance, privilege/path/ownership refusal, accounting-only
 refusal, unlimited-quota refusal and recovery after reprovisioning. It leaves live
-services unchanged. The verifier is not yet connected to daemon startup;
-coherent volume configuration, dedicated-UID deployment and completion capacity
-reservations remain required before claiming production admission enforcement.
+services unchanged. Daemon startup now calls the verifier before opening either
+database or admitting socket clients, and telemetry rechecks it for its own
+database handle. The production layout is fixed under the Agentd state directory:
+
+- `trace/agentd.sqlite3`: trace main and its journals, on a separately provisioned
+  quota filesystem. The `trace/` directory must be real, private and service-owned;
+  an administrator can bind-mount a private quota directory at this location.
+- `agentd-tasks.sqlite3` and `payload.key`: task content and its key, outside that
+  trace filesystem.
+
+The daemon holds writer ownership for both the state and trace directories.
+Missing/unmounted quota storage, root or otherwise privileged writers, and an
+old `agentd.sqlite3` in the state directory refuse startup. Existing deployments
+need offline migration and dedicated-UID provisioning; startup never silently
+moves data or falls back to an ordinary directory. The systemd user unit enables
+`NoNewPrivileges=yes`; it must run under the provisioned non-root account.
+Direct library component fixtures inject their own store opener; there is no CLI,
+environment or RPC switch to bypass production quota admission.
+
+`tests/agentd/test_storage_layout_native.py` exercises the actual daemon and sync
+handle on an owned jim-eq quota volume, including startup refusals and persisted
+task/trace/export data. Run it with the interpreter, source, schemas and dependencies
+readable by the test UID, such as a root-owned read-only test bundle under `/var/tmp`.
+Dedicated-UID rollout of existing services, migration
+headroom and completion capacity reservations remain outstanding.
 
 
 Agentd now opens its source store in verified `journal_mode=DELETE` with
@@ -161,9 +183,13 @@ Backups must retain both database files and `payload.key` from one consistent
 snapshot. Copying only `agentd.sqlite3` is incomplete. Restore staging locks both
 members while backing them up, checks the pair and references, and preserves its
 activation barrier until reconciliation. Offline compaction processes both files.
-The current daemon uses sibling files; separating them on the same filesystem
-does not isolate a user quota. Provisioning a separate trace filesystem, dedicated
-UID, fail-closed quota checks and physical completion reservations remain open.
+Offline snapshots may bundle the two databases and key in one directory. Restore
+staging requires a separately provisioned destination `trace/` directory; it
+refuses existing destination data and keeps the activation barrier. A live-layout
+snapshot can be identified explicitly with `source_layout=StorageLayout(...)`.
+Restore activation and maintenance verify the same layout and native quota before
+opening it. Do not copy a live pair independently: retain a consistent snapshot
+of both members and the matching key. Physical completion reservations remain open.
 
 The runtime suite includes owned child-process SIGKILL tests at journal commit
 and side-effect boundaries, plus restore staging/activation boundaries. They use temporary stores and do not stop a running

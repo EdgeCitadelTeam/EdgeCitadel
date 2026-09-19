@@ -7,9 +7,9 @@ from test_restore import rejected_start, seed
 from test_writer_lock import start, stop
 
 from edgecitadel_agentd.client import AgentdClient, AgentdClientError
-from edgecitadel_agentd.restore import RESTORE_BARRIER, stage_restore
+from edgecitadel_agentd.restore import RESTORE_BARRIER
+from storage_test_support import stage_restore, activate_restored_state
 from edgecitadel_agentd.restore_activation import (
-    activate_restored_state,
     review_inventory,
 )
 from edgecitadel_agentd.service import socket_path_for

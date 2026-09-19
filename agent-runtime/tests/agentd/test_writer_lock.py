@@ -16,9 +16,7 @@ from edgecitadel_agentd.writer_lock import WriterActiveError, exclusive_writer
 def command(state):
     return [
         sys.executable,
-        "-m",
-        "edgecitadel_agentd.service",
-        "--state-dir",
+        str(Path(__file__).with_name("service_test_support.py")),
         str(state),
     ]
 

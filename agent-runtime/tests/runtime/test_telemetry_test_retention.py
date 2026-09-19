@@ -1,5 +1,6 @@
 """Trusted development provenance survives Leaf ingestion, settlement and cleanup."""
 
+from functools import partial
 import asyncio
 import json
 import sqlite3
@@ -98,7 +99,11 @@ async def test_leaf_test_priority_retention_preserves_identity_and_active_work(
             scopes.append(scope)
             batches.append(selected_batch(store, scope))
             assert len(batches[-1]) == 5
-            syncs.append(TraceSyncService(directory, store.path, enabled=True))
+            syncs.append(
+                TraceSyncService(
+                    directory, partial(AgentdStore, store.path), enabled=True
+                )
+            )
         collector.start()
         await until(lambda: collector.status()["state"] == "running")
         for store, sync, scope in zip(stores, syncs, scopes, strict=True):

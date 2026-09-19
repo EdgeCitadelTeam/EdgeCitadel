@@ -2166,6 +2166,7 @@ def _render_agentd_systemd(state_dir: Path, python: Path) -> None:
             f"StandardOutput=append:{service_dir / 'agentd.log'}",
             f"StandardError=append:{service_dir / 'agentd.log'}",
             "UMask=0077",
+            "NoNewPrivileges=yes",
             "",
             "[Install]",
             "WantedBy=default.target",

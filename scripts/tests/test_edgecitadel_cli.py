@@ -473,6 +473,7 @@ def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
     assert f"StandardError=append:{tmp_path / 'agentd' / 'agentd.log'}" in document
     assert "WantedBy=default.target" in document
     assert "UMask=0077" in document
+    assert "NoNewPrivileges=yes" in document
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 

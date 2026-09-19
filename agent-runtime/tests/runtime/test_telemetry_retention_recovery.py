@@ -1,5 +1,6 @@
 """Source maintenance and real broker expiry cannot manufacture complete history."""
 
+from functools import partial
 import asyncio
 import json
 import sqlite3
@@ -53,7 +54,7 @@ async def test_outage_retention_reports_exact_loss_and_recovers_retained_data(
     )
     (node / "node.json").chmod(0o600)
     store = AgentdStore(node / "agentd/agentd.sqlite3")
-    sync = TraceSyncService(node, store.path, enabled=True)
+    sync = TraceSyncService(node, partial(AgentdStore, store.path), enabled=True)
     collector = TraceCollectorService(tmp_path / "core.db", url, token)
     template = json.loads(
         (Path(__file__).parents[1] / "fixtures/traces/events.v1.json").read_text()

@@ -196,14 +196,19 @@ def migrate_pair(db: sqlite3.Connection) -> None:
     verify_references(db)
 
 
-def attach_task_snapshot(db: sqlite3.Connection, trace_path: Path) -> bool:
+def attach_task_snapshot(
+    db: sqlite3.Connection, trace_path: Path, *, task_path: Path | None = None
+) -> bool:
     """Attach the paired snapshot read-only; legacy shared snapshots need no pair."""
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version < PAIR_VERSION:
         return False
     db.execute(
         "ATTACH DATABASE ? AS task_state",
-        (task_database_path(trace_path).resolve().as_uri() + "?mode=ro",),
+        (
+            (task_path or task_database_path(trace_path)).resolve().as_uri()
+            + "?mode=ro",
+        ),
     )
     verify_pair(db)
     return True

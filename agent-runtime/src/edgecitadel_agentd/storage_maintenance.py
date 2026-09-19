@@ -3,21 +3,23 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import closing
+from contextlib import closing, ExitStack
 from pathlib import Path
 
 from .restore import require_startable
 from .storage_pair import (
     attach_tasks,
-    task_database_path,
     verify_pair,
     verify_references,
 )
 from .trace_capacity import physical_storage
+from .storage_layout import StorageLayout
 from .writer_lock import exclusive_writer
 
 
-def compact_database(state_dir: Path) -> dict[str, dict[str, int]]:
+def compact_database(
+    state_dir: Path, *, layout: StorageLayout | None = None
+) -> dict[str, dict[str, int]]:
     """Reclaim free pages without migrating, rotating or deleting application rows.
 
     The operator must stop agentd first. No daemon is stopped by this API. Both
@@ -26,13 +28,18 @@ def compact_database(state_dir: Path) -> dict[str, dict[str, int]]:
     temporary disk space; an error is propagated, never reported as reclamation.
     """
     directory = state_dir.resolve(strict=True)
-    with exclusive_writer(directory):
+    layout = layout or StorageLayout(directory)
+    if layout.state_directory.resolve() != directory:
+        raise ValueError("maintenance layout does not match its state directory")
+    with ExitStack() as ownership:
+        ownership.enter_context(exclusive_writer(directory))
         require_startable(directory)
-        uri = (directory / "agentd.sqlite3").as_uri() + "?mode=rw"
+        layout.verify()
+        if layout.trace_directory.resolve() != directory:
+            ownership.enter_context(exclusive_writer(layout.trace_directory))
+        uri = layout.trace_path.as_uri() + "?mode=rw"
         with closing(sqlite3.connect(uri, uri=True, timeout=0)) as db:
-            attach_tasks(
-                db, task_database_path(directory / "agentd.sqlite3"), existing=True
-            )
+            attach_tasks(db, layout.task_path, existing=True)
             verify_pair(db)
             db.execute("PRAGMA synchronous=EXTRA")
             db.execute("PRAGMA locking_mode=EXCLUSIVE")

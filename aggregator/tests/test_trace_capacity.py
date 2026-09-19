@@ -1,3 +1,4 @@
+from functools import partial
 import json
 import sqlite3
 from contextlib import closing
@@ -259,7 +260,7 @@ async def test_owned_broker_capacity_refusal_does_not_ack_or_advance_settlement(
         journal.record("edge-a", event, selected=True)
         event["event_id"] = str(uuid4())
         journal.record("edge-a", event, selected=True)
-    sync = TraceSyncService(node, source.path, enabled=True)
+    sync = TraceSyncService(node, partial(AgentdStore, source.path), enabled=True)
     nc = NATS()
 
     async def until(predicate):

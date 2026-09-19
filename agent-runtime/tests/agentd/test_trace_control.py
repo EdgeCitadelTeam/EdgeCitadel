@@ -1,3 +1,4 @@
+from functools import partial
 import json
 import os
 import subprocess
@@ -50,7 +51,7 @@ def test_real_socket_requires_admin_and_cannot_enable_disabled_service(service):
 
 def test_retry_clears_only_named_fault_and_inspection_exposes_others(tmp_path):
     store = AgentdStore(tmp_path / "agentd.sqlite3")
-    sync = TraceSyncService(tmp_path, store.path, enabled=True)
+    sync = TraceSyncService(tmp_path, partial(AgentdStore, store.path), enabled=True)
     try:
         with store._connection:
             store._connection.execute("BEGIN IMMEDIATE")
@@ -100,7 +101,7 @@ def test_retry_clears_only_named_fault_and_inspection_exposes_others(tmp_path):
 )
 def test_invalid_controls_do_not_start_or_mutate(tmp_path, params):
     store = AgentdStore(tmp_path / "agentd.sqlite3")
-    sync = TraceSyncService(tmp_path, store.path, enabled=True)
+    sync = TraceSyncService(tmp_path, partial(AgentdStore, store.path), enabled=True)
     try:
         before = list(store._connection.iterdump())
         with pytest.raises(StoreError, match="invalid telemetry control request"):
@@ -142,7 +143,7 @@ def test_management_auth_precedes_lifecycle_control(tmp_path):
 
 def test_concurrent_lifecycle_commands_leave_no_orphan_thread(tmp_path):
     store = AgentdStore(tmp_path / "agentd.sqlite3")
-    sync = TraceSyncService(tmp_path, store.path, enabled=True)
+    sync = TraceSyncService(tmp_path, partial(AgentdStore, store.path), enabled=True)
     try:
         with ThreadPoolExecutor(max_workers=4) as pool:
             calls = [

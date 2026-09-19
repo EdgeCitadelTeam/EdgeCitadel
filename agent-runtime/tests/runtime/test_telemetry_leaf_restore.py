@@ -1,5 +1,6 @@
 """Older Core restore reconciles two real Leaves without resetting broker history."""
 
+from functools import partial
 import asyncio
 import json
 import sqlite3
@@ -103,7 +104,11 @@ async def test_older_core_restore_replays_two_leaves_with_normal_timers(
             scopes.append(scope)
             records.append(selected_batch(store, scope))
             assert len(records[-1]) == 5
-            syncs.append(TraceSyncService(directory, store.path, enabled=True))
+            syncs.append(
+                TraceSyncService(
+                    directory, partial(AgentdStore, store.path), enabled=True
+                )
+            )
         with sqlite3.connect(current) as db:
             initialize(db)
             for batch in records:

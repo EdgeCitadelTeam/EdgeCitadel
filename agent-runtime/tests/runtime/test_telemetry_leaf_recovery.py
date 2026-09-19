@@ -1,5 +1,6 @@
 """Production telemetry lifecycles survive Core broker loss through a real Leaf."""
 
+from functools import partial
 import asyncio
 import json
 import shutil
@@ -48,7 +49,7 @@ async def test_core_or_link_recovery_preserves_leaf_spool_and_reconciles(
     )
     (directory / "node.json").chmod(0o600)
     store = AgentdStore(directory / "agentd/agentd.sqlite3")
-    sync = TraceSyncService(directory, store.path, enabled=True)
+    sync = TraceSyncService(directory, partial(AgentdStore, store.path), enabled=True)
     collector = TraceCollectorService(tmp_path / "core.db", core_url, core_token)
     event = json.loads(
         (Path(__file__).parents[1] / "fixtures/traces/events.v1.json").read_text()

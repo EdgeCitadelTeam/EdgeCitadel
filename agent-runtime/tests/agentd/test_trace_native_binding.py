@@ -13,7 +13,8 @@ import pytest
 
 from edgecitadel_agentd.client import AgentdClient
 from edgecitadel_agentd.mcp import TOOLS, NativeMcpServer
-from edgecitadel_agentd.service import serve, socket_path_for
+from service_test_support import serve
+from edgecitadel_agentd.service import socket_path_for
 from edgecitadel_agentd.trace_authority import (
     BindingAuthority,
     SessionAuthority,

@@ -18,7 +18,8 @@ import pytest
 from nats.aio.client import Client as NATS
 
 from edgecitadel_agentd.client import AgentdClient
-from edgecitadel_agentd.service import serve, socket_path_for
+from service_test_support import serve
+from edgecitadel_agentd.service import socket_path_for
 from edgecitadel_plugin_runtime.jetstream import ensure_consumer, ensure_stream
 
 

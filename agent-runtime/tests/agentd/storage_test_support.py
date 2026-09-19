@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from edgecitadel_agentd.storage_pair import TASK_TABLES, task_database_path
+from edgecitadel_agentd.storage_layout import StorageLayout
 
 
 def paired_connect(path, **kwargs):
@@ -58,3 +59,36 @@ def flatten_connection(db):
         db.execute(f'DROP TABLE IF EXISTS task_state."{table}"')
     db.execute("DROP TABLE main.storage_pair")
     db.execute("DROP TABLE task_state.storage_pair")
+
+
+class FixtureLayout(StorageLayout):
+    """Owned ordinary-directory fixture; never production quota evidence."""
+
+    @property
+    def trace_directory(self):
+        return self.state_directory
+
+    def verify(self):
+        pass
+
+
+def stage_restore(**kwargs):
+    from edgecitadel_agentd.restore import stage_restore as restore
+
+    return restore(
+        **kwargs, destination_layout=FixtureLayout(kwargs["destination_dir"].resolve())
+    )
+
+
+def activate_restored_state(**kwargs):
+    from edgecitadel_agentd.restore_activation import (
+        activate_restored_state as activate,
+    )
+
+    return activate(**kwargs, layout=FixtureLayout(kwargs["state_dir"].resolve()))
+
+
+def compact_database(state_dir):
+    from edgecitadel_agentd.storage_maintenance import compact_database as compact
+
+    return compact(state_dir, layout=FixtureLayout(state_dir.resolve()))

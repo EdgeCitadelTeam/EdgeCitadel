@@ -1,5 +1,6 @@
 """Configured telemetry saturation preserves cross-Leaf task delivery and replay."""
 
+from functools import partial
 import asyncio
 import json
 import sqlite3
@@ -95,7 +96,11 @@ async def test_configured_stream_saturation_keeps_cross_leaf_tasks_running(
             transport = AgentdNatsTransport(directory, store)
             transports.append(transport)
             transport.start()
-            syncs.append(TraceSyncService(directory, store.path, enabled=True))
+            syncs.append(
+                TraceSyncService(
+                    directory, partial(AgentdStore, store.path), enabled=True
+                )
+            )
         await until(
             lambda: all(t.status().get("ready_inbox_count") == 1 for t in transports)
         )

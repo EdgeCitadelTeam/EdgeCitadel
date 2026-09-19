@@ -6,7 +6,7 @@ import pytest
 from test_trace_crash import prepare, snapshot
 
 from edgecitadel_agentd.restore import RESTORE_BARRIER, RestorePendingError
-from edgecitadel_agentd.storage_maintenance import compact_database
+from storage_test_support import compact_database
 from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.writer_lock import WriterActiveError, exclusive_writer
 

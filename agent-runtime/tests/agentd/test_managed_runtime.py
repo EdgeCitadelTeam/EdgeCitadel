@@ -14,7 +14,8 @@ import pytest
 
 from edgecitadel_agentd.client import AgentdClient
 from edgecitadel_agentd.managed_runtime import run
-from edgecitadel_agentd.service import serve, socket_path_for
+from service_test_support import serve
+from edgecitadel_agentd.service import socket_path_for
 from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.trace_correlation import TaskTraceContext
 

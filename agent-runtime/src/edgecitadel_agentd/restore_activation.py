@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from .restore import RESTORE_BARRIER
 from .store import AgentdStore, StoreError
+from .storage_layout import StorageLayout
 from .trace_journal import TraceJournal
 from .writer_lock import exclusive_writer
 
@@ -77,6 +78,7 @@ def activate_restored_state(
     node_id: str,
     source_epoch: str,
     inventory_sha256: str,
+    layout: StorageLayout | None = None,
 ) -> dict[str, Any]:
     """Keep every reviewed hold; durably declare uncertainty before serving.
 
@@ -89,6 +91,9 @@ def activate_restored_state(
     )
     if state == previous:
         raise StoreError("restore directories must differ")
+    layout = layout or StorageLayout(state)
+    if layout.state_directory.resolve() != state:
+        raise StoreError("restore activation layout does not match its state directory")
     with ExitStack() as locks:
         for directory in sorted((state, previous)):
             locks.enter_context(exclusive_writer(directory))
@@ -97,12 +102,12 @@ def activate_restored_state(
             state
         ):
             raise StoreError("previous restore writer is not retired")
-        if (
-            not (state / "agentd.sqlite3").is_file()
-            or not (state / "payload.key").is_file()
-        ):
+        layout.verify()
+        if layout.trace_directory.resolve() != state:
+            locks.enter_context(exclusive_writer(layout.trace_directory))
+        if not layout.trace_path.is_file() or not layout.key_path.is_file():
             raise StoreError("restored database and key are required")
-        store = AgentdStore(state / "agentd.sqlite3")
+        store = layout.open()
         try:
             db = store._connection
             with store._lock, db:

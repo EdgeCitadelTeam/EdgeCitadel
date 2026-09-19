@@ -275,7 +275,12 @@ async def test_opt_in_agentd_service_exports_and_settles_over_owned_broker(
     await broker.flush()
     monkeypatch.setenv("EDGECITADEL_TRACE_SYNC", "1")
     stop = threading.Event()
-    thread = threading.Thread(target=serve, args=(state, stop), daemon=True)
+    thread = threading.Thread(
+        target=serve,
+        args=(state, stop),
+        kwargs={"open_store": lambda: AgentdStore(state / "agentd.sqlite3")},
+        daemon=True,
+    )
     thread.start()
     observer = None
     try:

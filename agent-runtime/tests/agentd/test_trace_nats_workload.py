@@ -13,7 +13,8 @@ import pytest
 from nats.aio.client import Client as NATS
 from test_trace_socket_workload import exercise
 
-from edgecitadel_agentd.service import serve, socket_path_for
+from service_test_support import serve
+from edgecitadel_agentd.service import socket_path_for
 from edgecitadel_agentd.trace_correlation import TaskTraceContext
 
 pytestmark = pytest.mark.skipif(

@@ -44,7 +44,7 @@ def flush_authentication_rejections(
         if not count:
             return False
         try:
-            with (store.path.parent.parent / "node.json").open("rb") as source:
+            with (store.state_directory.parent / "node.json").open("rb") as source:
                 raw = source.read(65537)
             node_id = json.loads(raw)["agent_id"]
             if (

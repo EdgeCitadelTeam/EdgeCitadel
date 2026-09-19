@@ -164,9 +164,16 @@ def _reject_sensitive(value: object, path: str = "metadata") -> None:
 class AgentdStore:
     """The single-writer local state boundary used by the agentd service."""
 
-    def __init__(self, path: Path, *, task_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        task_path: Path | None = None,
+        payload_key_path: Path | None = None,
+    ) -> None:
         self.path = path
         self.task_path = task_path or task_database_path(path)
+        self.payload_key_path = payload_key_path or path.parent / "payload.key"
         if path.resolve() == self.task_path.resolve() or (
             path.exists() and self.task_path.exists() and path.samefile(self.task_path)
         ):
@@ -200,7 +207,7 @@ class AgentdStore:
                 raise StoreError(
                     f"agentd database schema {schema_version} is newer than supported {SCHEMA_VERSION}"
                 )
-            payload_key = path.parent / "payload.key"
+            payload_key = self.payload_key_path
             if schema_version >= 5 and not payload_key.exists():
                 raise StoreError(
                     "agentd payload key is missing; restore agentd.sqlite3 and payload.key from the same backup"
@@ -218,6 +225,10 @@ class AgentdStore:
         except BaseException:
             self._connection.close()
             raise
+
+    @property
+    def state_directory(self) -> Path:
+        return self.payload_key_path.parent
 
     def close(self) -> None:
         with self._lock:

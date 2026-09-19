@@ -1,5 +1,6 @@
 """Wall-clock collector outage with continuing local tasks over two real Leaves."""
 
+from functools import partial
 import asyncio
 import hashlib
 import json
@@ -184,7 +185,11 @@ async def test_collector_outage_with_continuing_leaf_tasks(
             identity.chmod(0o600)
             store = AgentdStore(directory / "agentd/agentd.sqlite3")
             stores.append(store)
-            services.append(TraceSyncService(directory, store.path, enabled=True))
+            services.append(
+                TraceSyncService(
+                    directory, partial(AgentdStore, store.path), enabled=True
+                )
+            )
             for number in range(5):
                 connector = f"worker-{leaf}-{number}"
                 secret = store.register_connector(
