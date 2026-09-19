@@ -249,3 +249,19 @@ the same key. Next inspect the historical-view query plan and implement bounded
 latest-version lookup while preserving the exact requested cursor, deletion and
 generation semantics. Verify identical retained snapshots and replay before
 redeploying, then rerun preflight/full baseline without widening timeouts.
+
+### Point lookup fixed; repeat full qualification
+
+Revision `28c03be` replaces historical source-progress version scanning with an
+indexed latest-row seek inside the exact generation/cursor transaction. It
+preserves tombstones and context cleanup. 246 focused backend checks pass; the
+retained changes response matches exactly (5.911 seconds before / 0.218 after
+in one read-only diagnostic). Deployed Core returns that request successfully.
+
+The repeated two-minute preflight and independent completion auditor pass with
+1,000 exact settled observations and all 96 ACKs; normal Core restoration and
+zero backlog/lag are verified. The full 35-minute profile must now finish with
+all predeclared observations/ACKs before claiming baseline latency acceptance.
+Frozen harness `baseline-code-28c03be` and output `baseline-full-2` on jim-eq
+identify this attempt; revalidate its process before acting. Observer overhead,
+stress/soak, retained-volume and broader M4–M7 acceptance remain separate gates.
