@@ -103,6 +103,53 @@ def _delta(before: list[dict], after: list[dict]) -> tuple[list[dict], list[str]
     )
 
 
+def _stable_topology_updates(
+    tables: ProjectionTables, trace_id: str, cursor: int
+) -> list[dict] | None:
+    """Return a bounded node patch only when history proves topology unchanged.
+
+    Existing node state/metadata cannot change ancestry resolution. New/deleted
+    nodes, kind changes or any relationship mutation require the full resolver.
+    The previous row lookup uses the retained key history, not today's graph.
+    """
+    if tables.execute(
+        "SELECT 1 FROM {trace_projection_history_rows} WHERE cursor=? "
+        "AND table_name='trace_relationship_claims' AND json_extract(row_json,'$.trace_id')=? LIMIT 1",
+        (cursor, trace_id),
+    ).fetchone():
+        return None
+    rows = tables.execute(
+        "SELECT table_name,row_key,deleted,row_json FROM {trace_projection_history_rows} "
+        "WHERE cursor=? AND table_name IN ('trace_projected_tasks','trace_projected_entities') "
+        "AND json_extract(row_json,'$.trace_id')=? LIMIT 501",
+        (cursor, trace_id),
+    ).fetchall()
+    if len(rows) > 500:
+        return None
+    updates = []
+    for table, key, deleted, encoded in rows:
+        if deleted:
+            return None
+        previous = tables.execute(
+            "SELECT deleted,row_json FROM {trace_projection_history_rows} "
+            "WHERE table_name=? AND row_key=? AND cursor<? ORDER BY cursor DESC LIMIT 1",
+            (table, key, cursor),
+        ).fetchone()
+        if previous is None or previous[0]:
+            return None
+        before = json.loads(json.loads(previous[1])["node_json"])
+        after = json.loads(json.loads(encoded)["node_json"])
+        if (
+            before["id"] != after["id"]
+            or before["kind"] != after["kind"]
+            or after["kind"] == "unresolved"
+        ):
+            return None
+        if before != after:
+            updates.append(after)
+    return sorted(updates, key=lambda node: node["id"])
+
+
 def read_changes(
     connection: sqlite3.Connection,
     *,
@@ -204,15 +251,25 @@ def read_changes(
                     for key in ("trace_state", "coverage", "large", "nodes", "edges")
                 )
                 if changed:
+                    stable_updates = (
+                        _stable_topology_updates(tables, trace_id, cursor)
+                        if current["trace_state"] == before["trace_state"] == "present"
+                        and current["large"]
+                        and before["large"]
+                        else None
+                    )
                     mode = (
                         "clear"
                         if current["trace_state"] != "present"
                         else "snapshot"
-                        if current["large"] or before["large"]
+                        if (current["large"] or before["large"])
+                        and stable_updates is None
                         else "patch"
                     )
                     nodes, removed_nodes = (
-                        _delta(before["nodes"], current["nodes"])
+                        (stable_updates, [])
+                        if stable_updates is not None
+                        else _delta(before["nodes"], current["nodes"])
                         if mode == "patch"
                         else ([], [])
                     )

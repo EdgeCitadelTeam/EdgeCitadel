@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -188,8 +189,9 @@ def test_sparse_global_scan_advances_without_skipping_selected_changes(
     assert position(response["through_cursor"], initial["projection_generation"]) == 7
 
 
-def test_large_update_is_exact_snapshot_replacement_and_expiry_is_atomic_clear(core):
-    tasks, _ = populate(core, 501)
+@pytest.mark.parametrize("ring", [False, True])
+def test_large_existing_node_update_is_atomic_patch_and_expiry_is_clear(core, ring):
+    tasks, _ = populate(core, 501, ring=ring)
     initial = graph(core)
     nodes, edges, _ = collect(core, initial)
     put(
@@ -201,9 +203,13 @@ def test_large_update_is_exact_snapshot_replacement_and_expiry_is_atomic_clear(c
     project_all(core)
     response = read(core, initial["resume_cursor"])
     change = response["changes"][0]
-    assert change["mode"] == "snapshot" and change["upsert_nodes"] == []
+    assert change["mode"] == "patch"
+    assert [node["id"] for node in change["upsert_nodes"]] == ["task:" + tasks[0]]
+    assert change["upsert_edges"] == [] and change["remove_edge_ids"] == []
     apply(core, nodes, edges, change)
     assert len(nodes) == 501 and nodes["task:" + tasks[0]]["state"] == "completed"
+    expected_nodes, expected_edges, _ = collect(core, graph(core, at=change["at"]))
+    assert nodes == expected_nodes and edges == expected_edges
     assert retirement.expire_one(core, now_ms=NOW)["status"] == "retired"
     expired = read(core, response["through_cursor"])
     assert expired["changes"][0]["mode"] == "clear"
@@ -334,3 +340,81 @@ def test_commit_during_replay_is_delivered_on_next_request_without_snapshot_race
     ] == [3]
     assert first["next_cursor"] is None
     assert first["changes"][0]["ingest_high_watermark"] == 2
+
+
+def test_large_new_node_retains_exact_snapshot_replacement(core):
+    populate(core, 501)
+    initial = graph(core)
+    task_id = str(uuid4())
+    put(core, event(seq=502, trace_id=TRACE, task_id=task_id), str(uuid4()), 1)
+    project_all(core)
+    response = read(core, initial["resume_cursor"])
+    assert len(response["changes"]) == 1
+    change = response["changes"][0]
+    assert change["mode"] == "snapshot"
+    nodes, edges = client_state(initial)
+    apply(core, nodes, edges, change)
+    assert len(nodes) == 502 and "task:" + task_id in nodes
+
+
+def test_large_tool_updates_preserve_each_historical_commit(core):
+    populate(core, 501)
+    fixtures = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "agent-runtime/tests/fixtures/traces/events.v1.json"
+        ).read_text()
+    )
+    tool = next(
+        item["event"] for item in fixtures["fixtures"] if item["name"] == "tool"
+    )
+    tool = {**tool, "trace_id": TRACE, "source_seq": 502, "event_id": str(uuid4())}
+    put(core, tool, str(uuid4()), 1)
+    project_all(core)
+    initial = graph(core)
+    nodes, edges, _ = collect(core, initial)
+    for seq, phase in [(503, "finished"), (504, "failed")]:
+        put(
+            core,
+            {**tool, "source_seq": seq, "event_id": str(uuid4()), "phase": phase},
+            str(uuid4()),
+            1,
+        )
+    project_all(core)
+    changes = read(core, initial["resume_cursor"])["changes"]
+    assert len(changes) == 2
+    for change in changes:
+        assert change["mode"] == "patch" and len(change["upsert_nodes"]) == 1
+        apply(core, nodes, edges, change)
+        expected_nodes, expected_edges, _ = collect(core, graph(core, at=change["at"]))
+        assert nodes == expected_nodes and edges == expected_edges
+    assert changes[0]["upsert_nodes"][0]["state"] == "finished"
+    assert changes[1]["upsert_nodes"][0]["conflict"]
+
+
+def test_large_relationship_change_requires_full_resolution(core):
+    tasks, _ = populate(core, 501)
+    initial = graph(core)
+    put(
+        core,
+        event(
+            "completed",
+            seq=502,
+            trace_id=TRACE,
+            task_id=tasks[0],
+            parent_task_id=tasks[1],
+        ),
+        str(uuid4()),
+        1,
+    )
+    project_all(core)
+    change = read(core, initial["resume_cursor"])["changes"][0]
+    assert change["mode"] == "snapshot"
+    nodes, edges, _ = collect(core, initial)
+    apply(core, nodes, edges, change)
+    expected_nodes, expected_edges, _ = collect(core, graph(core, at=change["at"]))
+    assert nodes == expected_nodes and edges == expected_edges
+    assert any(
+        edge["from"] == "task:" + tasks[1] and edge["to"] == "task:" + tasks[0]
+        for edge in edges.values()
+    )

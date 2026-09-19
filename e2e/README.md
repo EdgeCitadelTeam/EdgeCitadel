@@ -129,3 +129,10 @@ uses End/Enter to check focus and selection across the resulting page boundary
 with reduced motion enabled. The helper handshake is bounded, and the test releases
 it in cleanup even after browser failures. This remains synthetic observation
 qualification, not actual tool execution or a full accessibility audit.
+
+`node helpers/trace-replay-profile.js <retained-trace-id> <absolute-report-path>`
+performs read-only diagnostics on jim-eq. It samples the oldest snapshot from the
+first retained-history page and reads its remaining changes, recording HTTP times
+and patch/snapshot/clear counts. Tokens stay in memory and reports contain no
+credentials or signed cursors. Compare the same trace and cursor interval across
+releases; these single samples do not establish browser latency or p95 targets.
