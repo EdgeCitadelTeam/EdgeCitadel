@@ -2286,6 +2286,7 @@ class AgentdStore:
                 }
             with self._connection:
                 self._connection.execute("BEGIN IMMEDIATE")
+                maintenance_changes = self._connection.total_changes
                 retention_ran = now - self._last_retention_ms >= RETENTION_INTERVAL_MS
                 if retention_ran:
                     cutoff = now - TELEMETRY_RETENTION_MS
@@ -2332,6 +2333,13 @@ class AgentdStore:
                 _, retirement_after = compact_settled_spool(
                     self._connection, after=self._settled_retirement_after
                 )
+                if self._connection.total_changes == maintenance_changes:
+                    # This maintenance pass contains only row DML. With no row
+                    # changes (including triggers), rollback preserves its result
+                    # and avoids the super-journal an empty attached commit can
+                    # allocate. Rolled-back savepoint changes still increment the
+                    # counter, so those passes conservatively take normal commit.
+                    self._connection.rollback()
             if retention_ran:
                 self._last_retention_ms = now
             self._settled_retirement_after = retirement_after

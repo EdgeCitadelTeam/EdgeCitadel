@@ -334,20 +334,9 @@ def worker(state, operation, fixture, mode, inode_pressure=False):
                     else:
                         raise AssertionError("revoked connector was revoked twice")
                 else:
-                    try:
-                        recover()
-                    except sqlite3.OperationalError as error:
-                        # Ordinary maintenance runs after lifecycle commit and
-                        # cannot borrow completion resources. At full inode quota
-                        # even its empty attached commit can need a super-journal.
-                        assert inode_pressure
-                        assert error.sqlite_errorcode & 255 == sqlite3.SQLITE_CANTOPEN
-                        assert snapshot() == result
-                        result["maintenance_refused_at_inode_quota"] = True
-                    else:
-                        assert snapshot() == result
-                if mode == "revoke":
-                    assert snapshot() == result
+                    recover()
+                assert snapshot() == result
+                result["empty_maintenance_completed"] = mode == "reconcile"
                 result["exact_exported_events"] = after
             for schema in ("main", "task_state"):
                 assert (

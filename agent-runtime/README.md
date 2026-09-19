@@ -248,6 +248,10 @@ files and the byte reserve are durable. Invalid reservation files refuse admissi
 The attached task journal remains outside the trace quota filesystem. This closes
 inode-quota exhaustion for the qualified paired transaction, while filesystem
 allocation overhead, full journal framing and memory bounds remain separate gates.
+An empty row-maintenance pass ends with rollback to avoid allocating an unnecessary
+paired super-journal at full inode quota. Passes that change rows still use normal
+commit and may refuse for lack of capacity; bounded reclamation under full quota
+is not yet qualified.
 
 For a stopped, clean schema-29 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with

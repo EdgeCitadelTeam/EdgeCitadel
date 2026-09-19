@@ -769,6 +769,29 @@ def test_transport_rejects_invalid_envelope_before_persistence(
     assert store.list_tasks() == []
 
 
+def test_empty_maintenance_needs_no_attached_commit(store, monkeypatch):
+    db = store._connection
+    commit = db.commit
+
+    def refuse_attached_commit():
+        if db.in_transaction:
+            raise sqlite3.OperationalError("no inode for super-journal")
+        commit()
+
+    monkeypatch.setattr(db, "commit", refuse_attached_commit)
+    now = 31 * 24 * 60 * 60 * 1000
+    assert store.reconcile(now_ms=now) == {
+        "expired_sessions": 0,
+        "expired_tasks": 0,
+    }
+    assert not db.in_transaction
+    assert store._last_retention_ms == now
+    assert store.reconcile(now_ms=now + 1) == {
+        "expired_sessions": 0,
+        "expired_tasks": 0,
+    }
+
+
 def test_reconcile_applies_bounded_metadata_retention(store: AgentdStore) -> None:
     store.record_span(
         trace_id="a" * 32,
