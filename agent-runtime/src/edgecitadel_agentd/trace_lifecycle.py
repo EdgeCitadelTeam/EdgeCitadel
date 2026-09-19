@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from .trace_contract import TraceContractError
 from .trace_journal import TraceJournal
+from .trace_reservations import Obligation, reserve
 
 if TYPE_CHECKING:
     from .store import AgentdStore
@@ -44,7 +45,7 @@ def record_task_boundary(
     node_id: str | None = None,
     source_role: str | None = None,
     evidence_kind: str = "source_observed",
-) -> None:
+) -> Obligation | None:
     phase = event_type.removeprefix("task.")
     if not event_type.startswith("task.") or phase not in _PHASES or task_id is None:
         return
@@ -102,6 +103,20 @@ def record_task_boundary(
         attributes["reason"] = (
             _REASONS.get(reason, "unknown") if isinstance(reason, str) else "unknown"
         )
+    completion = None
+    if db.workspace is not None:
+        obligation = Obligation("task", task_id, "terminal")
+        if phase == "queued":
+            reserve(db, obligation)
+        elif phase in {
+            "completed",
+            "failed",
+            "rejected",
+            "cancelled",
+            "expired",
+            "undeliverable",
+        }:
+            completion = obligation
     TraceJournal(db).record(
         node_id,
         {
@@ -126,4 +141,6 @@ def record_task_boundary(
             "supersedes_event_id": None,
         },
         selected=True,
+        completion=completion,
     )
+    return completion

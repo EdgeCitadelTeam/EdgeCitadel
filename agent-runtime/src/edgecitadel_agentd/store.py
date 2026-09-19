@@ -60,7 +60,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -597,6 +597,13 @@ class AgentdStore:
             install_terminal_views(self._connection)
             self._connection.execute("PRAGMA main.user_version=27")
             self._connection.execute("PRAGMA task_state.user_version=27")
+
+        if version < 28:
+            from .trace_task_completion import install_view
+
+            install_view(self._connection)
+            self._connection.execute("PRAGMA main.user_version=28")
+            self._connection.execute("PRAGMA task_state.user_version=28")
 
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.
@@ -1485,6 +1492,10 @@ class AgentdStore:
     ) -> dict[str, object]:
         if state not in TASK_STATES:
             raise StoreError("unsupported task state")
+        if reason is not None and (
+            not isinstance(reason, str) or len(reason.encode("utf-8")) > 1024
+        ):
+            raise StoreError("task reason must be a string of at most 1024 UTF-8 bytes")
         now = _now_ms()
         if state in TERMINAL_STATES and result is not None:
             conflict: tuple[str | None, str | None] | None = None
@@ -2048,7 +2059,7 @@ class AgentdStore:
                 arguments,
             ).fetchall()
             events = self._connection.execute(
-                "SELECT * FROM events WHERE trace_id = ?"
+                "SELECT * FROM events_all WHERE trace_id = ?"
                 + scope
                 + " ORDER BY created_at_ms, event_id",
                 arguments,
@@ -2350,7 +2361,7 @@ class AgentdStore:
             telemetry_records = {
                 table: int(
                     self._connection.execute(
-                        f"SELECT COUNT(*) FROM {table}"  # noqa: S608 - fixed tuple.
+                        f"SELECT COUNT(*) FROM {'events_all' if table == 'events' else table}"  # noqa: S608 - fixed tuple.
                     ).fetchone()[0]
                 )
                 for table in ("events", "spans", "presence_history")
@@ -2488,40 +2499,41 @@ class AgentdStore:
         record_lifecycle: bool = True,
     ) -> str:
         event_id = str(uuid.uuid4())
-        self._connection.execute(
-            """
-            INSERT INTO events (
-                event_id, event_type, agent_id, task_id, trace_id,
-                attributes_json, created_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event_id,
-                event_type,
-                agent_id,
-                task_id,
-                trace_id,
-                _json_object(attributes),
-                now,
-            ),
-        )
-        if not record_lifecycle:
-            return event_id
-        try:
-            record_task_boundary(
-                self,
-                event_type=event_type,
-                event_id=event_id,
-                actor_id=agent_id,
-                task_id=task_id,
-                now=now,
-                reason=(attributes or {}).get("reason"),
-                node_id=trace_node_id,
-                source_role=trace_source_role,
-                evidence_kind=trace_evidence_kind,
+        completion = None
+        if record_lifecycle:
+            try:
+                completion = record_task_boundary(
+                    self,
+                    event_type=event_type,
+                    event_id=event_id,
+                    actor_id=agent_id,
+                    task_id=task_id,
+                    now=now,
+                    reason=(attributes or {}).get("reason"),
+                    node_id=trace_node_id,
+                    source_role=trace_source_role,
+                    evidence_kind=trace_evidence_kind,
+                )
+            except TraceContractError as error:
+                raise StoreError(error.code) from error
+        value = {
+            "event_id": event_id,
+            "event_type": event_type,
+            "agent_id": agent_id,
+            "task_id": task_id,
+            "trace_id": trace_id,
+            "attributes_json": _json_object(attributes),
+            "created_at_ms": now,
+        }
+        if completion is not None:
+            from .trace_task_completion import attach_event
+
+            attach_event(self._connection, completion, value)
+        else:
+            self._connection.execute(
+                "INSERT INTO events(event_id,event_type,agent_id,task_id,trace_id,attributes_json,created_at_ms) VALUES (?,?,?,?,?,?,?)",
+                tuple(value.values()),
             )
-        except TraceContractError as error:
-            raise StoreError(error.code) from error
         return event_id
 
     def _restore_held_locked(self, kind: str, object_id: str) -> bool:

@@ -141,7 +141,7 @@ def test_upgrade_preserves_rows_and_uses_partial_index(source):  # noqa: F811
         db.execute("PRAGMA user_version=21")
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 27
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 28
         assert [
             tuple(r) for r in reopened._connection.execute("SELECT * FROM trace_spool")
         ] == rows

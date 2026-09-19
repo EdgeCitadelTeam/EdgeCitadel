@@ -191,7 +191,19 @@ required before activation. The owned jim-eq gate in
 `tests/agentd/test_trace_terminal_native.py` tests actual bind/append/finish calls
 at user-quota pressure, including SIGKILL before/after commit and exact export.
 
-For a stopped, clean schema-27 DELETE pair already owned by the dedicated UID,
+Schema 28 reserves one terminal slot when an enrolled task is created with a
+workspace installed. Terminal transitions carry the canonical event and legacy
+local event in that slot, atomically with task state, attempt history and transport
+intent in the attached task database. `events_all` provides coherent local reads;
+ordinary materialization preserves both event forms. Transition reasons are
+limited to 1,024 UTF-8 bytes before state changes so the legacy record fits.
+Intermediate transitions, remote-result synthesis, requeue and ancillary
+session/connector recovery still require capacity integration. The workspace
+remains disabled in production. The owned jim-eq
+`tests/agentd/test_trace_task_completion_native.py` gate exercises actual task
+admission/cancellation and paired rollback/commit crashes at quota pressure.
+
+For a stopped, clean schema-28 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with
 `no_new_privs` enabled and no capabilities:
 

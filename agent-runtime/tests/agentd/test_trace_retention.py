@@ -255,7 +255,7 @@ def test_v11_upgrade_preserves_event_hashes_and_starts_conservative_age(recorded
     started = int(time.time() * 1000)
     migrated = AgentdStore(store.path)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 27
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 28
         assert [
             tuple(r)
             for r in migrated._connection.execute(

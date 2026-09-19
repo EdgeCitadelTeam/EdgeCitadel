@@ -235,7 +235,7 @@ def test_migration_from_v17_and_atomic_migration_failure(store):
     )
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 27
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 28
         grant(reopened)
         record(reopened, request())
     finally:

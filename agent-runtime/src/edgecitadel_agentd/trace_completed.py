@@ -69,6 +69,13 @@ def fill_completed(
 def _references():
     return (
         (
+            "task",
+            "tasks",
+            ("task_id", "trace_id"),
+            ("event.task_id", "event.trace_id"),
+            "json_extract(CAST({record} AS TEXT),'$.legacy_event') IS NOT NULL",
+        ),
+        (
             "source",
             "trace_sources",
             ("node_id", "source_epoch"),
@@ -341,7 +348,7 @@ def set_completed_metadata(
     """Attach owned metadata once, before the completing transaction commits."""
     if not db.in_transaction:
         raise TraceContractError("trace_transaction_required")
-    if name not in {"receipt", "binding", "operation"}:
+    if name not in {"receipt", "binding", "operation", "legacy_event"}:
         raise TraceContractError("invalid_completion_metadata")
     row = db.execute(
         "SELECT slot_id,record FROM trace_completion_slots WHERE owner_kind=? AND owner_id=? AND purpose=? AND filled=1",
@@ -366,6 +373,17 @@ def set_completed_metadata(
         or value.get("span_id") != obligation.owner_id
         or record["event"]["span_id"] != obligation.owner_id
         or record["event"]["phase"] not in {"finished", "failed", "interrupted"}
+    ):
+        raise TraceContractError("invalid_completion_metadata")
+    if name == "legacy_event" and (
+        obligation.kind != "task"
+        or any(
+            value.get(key) != record["event"][key]
+            for key in ("event_id", "agent_id", "task_id", "trace_id")
+        )
+        or value.get("event_type") != "task." + record["event"]["phase"]
+        or record["event"]["kind"] != "task"
+        or record["event"]["task_id"] != obligation.owner_id
     ):
         raise TraceContractError("invalid_completion_metadata")
     record[name] = value
@@ -426,6 +444,9 @@ def materialize(db: sqlite3.Connection, slot_id: int) -> bool:
     from .trace_terminal import materialize as materialize_terminal
 
     materialize_terminal(db, value)
+    from .trace_task_completion import materialize as materialize_task_event
+
+    materialize_task_event(db, value)
     db.execute(
         "UPDATE trace_completion_slots SET owner_kind='',owner_id='',purpose='',filled=0,record=? WHERE slot_id=?",
         (b"{}".ljust(SLOT_BYTES, b" "), slot_id),

@@ -251,7 +251,7 @@ def test_v8_operation_migration_preserves_bindings_and_rolls_back_failure(setup)
     ).fetchall()
     migrated = AgentdStore(store.path)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 27
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 28
         assert [
             tuple(row)
             for row in migrated._connection.execute("SELECT * FROM trace_bindings")
