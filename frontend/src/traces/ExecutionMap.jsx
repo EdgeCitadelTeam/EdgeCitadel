@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import BranchBrowser from './BranchBrowser'
 import { causalContext, extendLayout, NODE_HEIGHT, NODE_WIDTH, nodeTitle, readable } from './layout'
 
 const PAGE_SIZE = 100
@@ -66,6 +67,11 @@ export default function ExecutionMap({ graph, selected, onSelect }) {
       </select></label>
       <button type="button" aria-pressed={textView} onClick={() => setTextView(!textView)}>{textView ? 'Map view' : 'Text view'}</button>
     </div>
+    <BranchBrowser graph={graph} selected={selected} onSelect={id => {
+      setFilter(''); setGroup('all')
+      setPage(Math.max(0, Math.floor(ordered.findIndex(node => node.id === id) / PAGE_SIZE)))
+      onSelect(id)
+    }} />
     <div className="trace-map-caption">
       <span>{filtered.length === 0 ? 'No matching steps' : `Showing ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + visible.length} of ${filtered.length} steps`}</span>
       {selected && !ids.has(selected) && graph.nodes.some(node => node.id === selected) && <button onClick={revealSelection}>Show selected step</button>}

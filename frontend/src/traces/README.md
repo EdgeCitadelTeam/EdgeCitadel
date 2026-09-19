@@ -92,3 +92,13 @@ stale-view warning for `unavailable`, and preserves unknown availability rather
 than inferring health from matching ingest/projection positions. A connected
 collector does not establish complete source coverage. Historical views display
 collection status at their last check, not retrospective health.
+
+The branch browser groups canonical steps by task identity, then by operation
+kind/name and owner. Steps without a task remain a separate group. Counts and
+per-state totals describe steps, never invented execution outcomes or causal
+relationships. One task and one operation group expand at a time; each level
+paginates at 50 entries. Collapsed groups do not mount their step buttons.
+Selecting an exact step clears map filters and opens its map page, while the
+existing inspector and reloadable selection continue to use its canonical ID.
+Live state changes preserve expanded groups and selected step identity. The map
+keeps its recorded relationships; the browser does not generate aggregate edges.

@@ -100,3 +100,10 @@
 .trace-history-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin: 12px 0; max-height: 290px; overflow: auto; padding: 3px; }
 .trace-history-list button { display: grid; gap: 4px; width: 100%; font-size: 11px; }
 .trace-history-list span { color: var(--trace-muted); overflow-wrap: anywhere; }
+
+.trace-branches { padding: 12px 14px; border-bottom: 1px solid var(--trace-line); }
+.trace-branches p { margin: 10px 0; overflow-wrap: anywhere; }
+.trace-branches ul, .trace-branches ol { margin: 8px 0; padding-left: 16px; }
+.trace-branches li { margin: 6px 0; }
+.trace-branches li > button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.trace-branches code { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }

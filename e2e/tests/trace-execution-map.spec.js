@@ -392,3 +392,53 @@ test('S1 three real Hermes workers show parallel activity and explicit root comp
     lines.close();
   }
 });
+
+test('retained branches group repeated operations and reveal exact steps read-only', async ({ page }) => {
+  const read = async suffix => {
+    const response = await fetch(`${process.env.APP_URL}/api/traces${suffix}`, { headers: { Authorization: `Bearer ${credential}` } });
+    expect(response.ok).toBe(true);
+    return response.json();
+  };
+  const list = await read('?limit=100');
+  let fixture;
+  for (const item of list.items.filter(item => item.root_agent_id?.startsWith('trace-s1-'))) {
+    const candidate = await read('/' + item.trace_id);
+    if (candidate.nodes.filter(node => node.kind === 'task').length === 3 && candidate.nodes.filter(node => node.kind === 'model').length >= 6) { fixture = candidate; break; }
+  }
+  expect(fixture).toBeTruthy();
+  const taskNode = fixture.nodes.find(node => node.kind === 'task');
+  const models = fixture.nodes.filter(node => node.kind === 'model' && node.task_id === taskNode.task_id);
+  const selected = models.sort((a, b) => a.id.localeCompare(b.id)).at(-1);
+  const writes = [];
+  page.on('request', request => {
+    if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.method());
+  });
+  await page.goto(`/#execution?run=${fixture.trace_id}`);
+  await connect(page);
+  await page.getByLabel('Find a step').fill('no matching operation');
+  const branches = page.getByLabel('Branch browser', { exact: true });
+  await branches.getByRole('button', { name: 'Browse branches and repeated steps' }).click();
+  await expect(branches).toContainText('3 task branches');
+  const taskBranch = branches.getByRole('list', { name: 'Task branches', exact: true }).locator(':scope > li').filter({ has: page.locator(`[data-branch-id="${taskNode.task_id}"]`) });
+  await taskBranch.locator(':scope > button').click();
+  const operation = taskBranch.getByRole('list', { name: 'Operation groups' }).locator(':scope > li').filter({ has: page.getByRole('button', { name: new RegExp(`${selected.operation} · ${models.length} steps`) }) });
+  await operation.locator(':scope > button').focus();
+  await page.keyboard.press('Enter');
+  const exactStep = operation.locator(`[data-step-id="${selected.id}"]`);
+  await exactStep.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Find a step')).toHaveValue('');
+  await expect(page.locator(`[data-node-id="${selected.id}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByLabel('Selected step details')).toContainText(taskNode.agent_id);
+  await expect(exactStep).toHaveAttribute('aria-pressed', 'true');
+  await expect(operation.locator(':scope > button')).toHaveAttribute('aria-expanded', 'true');
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    if (width === 320) await expect(page.getByRole('button', { name: 'All Agents', exact: true })).not.toBeInViewport();
+    await branches.scrollIntoViewIfNeeded();
+    const bounds = await page.evaluate(() => ({ viewport: innerWidth, width: document.documentElement.scrollWidth }));
+    expect(bounds.width).toBeLessThanOrEqual(bounds.viewport);
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-branches-${width}.png`) });
+  }
+  expect(writes).toEqual([]);
+});

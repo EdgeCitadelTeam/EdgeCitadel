@@ -92,3 +92,9 @@ operator diagnosis and must not be exported. No production approval setting is
 changed: the workload uses basic shell commands accepted by the unattended API,
 not a Python `-c` command that Hermes blocks. S1 uses three agents on one Leaf;
 it does not qualify the full multi-host topology or a human Codex session.
+
+The retained branch-browser check (`--grep 'retained branches'`) discovers a
+retained S1 run with three tasks and repeated model operations. It expands a task
+and operation group with keyboard controls, selects an exact step despite an
+active map filter, checks the inspector/selection, and verifies 320/1440 px layout
+and zero non-GET API requests. Run S1 first if its retained history has expired.
