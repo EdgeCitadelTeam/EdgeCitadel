@@ -282,3 +282,20 @@ stress/soak capture before running those profiles. The 10x full schedule exceeds
 the current observer's 100,000-record cap; changing the CLI rate alone is invalid.
 Actual execution overhead, large/retained-volume behavior, multi-host scenarios
 and the other milestone gates still require their own evidence.
+
+### Observer overhead: matched component control
+
+A bounded component benchmark now exercises the complete production ingestion
+call with the commit observer on/off, identical envelopes and fresh WAL/separated-
+payload databases, alternating pair order. The existing jim-eq Core image supplies
+the runtime; private fixture databases do not modify the fleet's Core database.
+Four pairs use 2,500 warmup and 15,000 measured events per arm to reach the
+baseline observer population. Serialization is measured separately; cleanup is
+outside timing. Exact accepted content, positions, ACK/callback counts and observer
+cohorts must match before a pair can contribute.
+
+This isolates collector instrumentation with an ACK stub. It does not establish
+broker/browser observer cost, actual task-execution overhead or the full-system
+overhead gate. Preserve all pair results and variation before designing those
+matched live controls. No result is accepted merely from the callback maximum
+or from a partially completed benchmark.

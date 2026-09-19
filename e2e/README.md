@@ -268,3 +268,35 @@ ordinary navigation cancellations and do not alone establish a transport fault.
 Run its component checks with `node --test helpers/trace-browser-diagnostics.spec.js`;
 real browser verification belongs on jim-eq. Include the diagnostics module when
 copying/freezing the browser helper.
+
+### Collector observer component comparison
+
+`helpers/trace_observer_benchmark.py` compares ordinary and instrumented ingestion
+through the production delivery adapter using new private WAL databases and the
+separated payload layout. It supplies a local ACK stub: this is a SQLite/observer
+component comparison, not a real broker, browser or task-execution overhead gate.
+Run reported measurements on jim-eq in a separate process using the current Core
+image and a newly created private directory on its data filesystem. Do not run
+this concurrently with a timed baseline/stress/soak workload.
+
+Copy the benchmark and `trace_commit_observer.py` together into a private helper
+directory in the existing Core container. With that copy at
+`/tmp/observer-overhead-code`, and an unused empty private output directory:
+
+```bash
+ssh -o BatchMode=yes root@jim-eq 'docker exec -e PYTHONPATH=/app:/app/agent-runtime/src edgecitadel-aggregator-1 python /tmp/observer-overhead-code/trace_observer_benchmark.py /data/qualification-observer-new --samples 15000 --warmup 2500 --pairs 4'
+```
+
+The CLI rejects nonempty output and bounds population/pair counts. Every pair
+uses identical precomputed envelopes from one synthetic agent in repeated
+50-observation runs, alternating control-first and observer-first order. Warmup remains in observer storage but outside measured wall/CPU intervals.
+It verifies exact stored identities/hashes/positions, one ACK/callback per event
+and the observer's full cohort before reporting. Its own database directory is
+removed after each verified arm; report serialization and cleanup are outside
+the measured interval. Serialization cost is reported separately.
+
+`result.json` records all paired aggregates, signed percentage differences,
+PRAGMAs, runtime versions and helper hashes. Preserve negative differences as
+measurement variation. No pass/fail threshold or full-system overhead claim is
+inferred from this component result. Component tests are in
+`aggregator/tests/test_trace_observer_benchmark.py`.
