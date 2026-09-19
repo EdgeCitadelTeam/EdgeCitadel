@@ -18,6 +18,9 @@ from .trace_contract import (
     validate_rpc_reply,
 )
 from .trace_journal import TraceJournal
+from .trace_reservations import Obligation
+from .trace_completed import attach_receipt
+from .trace_terminal import close_binding, close_operation
 
 if TYPE_CHECKING:
     from .store import AgentdStore
@@ -83,6 +86,21 @@ def finish_trace(
             },
         }
         validate_rpc_reply(reply, operation="finish", request_id=params["request_id"])
+        if db.workspace is not None:
+            attach_receipt(
+                db,
+                Obligation("run", binding["binding_id"], "terminal"),
+                {
+                    "connector_id": connector_id,
+                    "operation": "finish",
+                    "scope": binding["binding_id"],
+                    "request_id": params["request_id"],
+                    "request_sha256": digest,
+                    "binding_id": binding["binding_id"],
+                    "result_json": canonical_bytes(reply).decode(),
+                },
+            )
+            return reply
         db.execute(
             "INSERT INTO trace_requests(connector_id,operation,scope,request_id,request_sha256,binding_id,result_json) VALUES (?,'finish',?,?,?,?,?)",
             (
@@ -135,7 +153,7 @@ def close_binding_locked(
     # Closure marks missing terminal evidence; it never claims the tool/model
     # actually failed or causes its external effect to run again.
     for operation in db.execute(
-        "SELECT * FROM trace_operations WHERE binding_id=? AND terminal_event_id IS NULL",
+        "SELECT * FROM trace_operations_all WHERE binding_id=? AND terminal_event_id IS NULL",
         (binding["binding_id"],),
     ).fetchall():
         attrs = {"name": operation["name"], "reason": "unknown"}
@@ -161,16 +179,32 @@ def close_binding_locked(
             # Internal missing-terminal evidence is mandatory closure metadata,
             # even though its kind matches the interrupted optional operation.
             reserve_capacity=True,
+            completion=Obligation("operation", operation["span_id"], "terminal")
+            if db.workspace is not None
+            else None,
         )
-        db.execute(
-            "UPDATE trace_operations SET phase='interrupted',terminal_event_id=? WHERE span_id=?",
-            (interrupted["event_id"], operation["span_id"]),
-        )
-    event = journal.record(node_id, base, selected=True)
-    db.execute(
-        "UPDATE trace_bindings SET closed_at_ms=? WHERE binding_id=?",
-        (now, binding["binding_id"]),
+        if db.workspace is not None:
+            close_operation(db, operation["span_id"], binding["binding_id"])
+        else:
+            db.execute(
+                "UPDATE trace_operations SET phase='interrupted',terminal_event_id=? WHERE span_id=?",
+                (interrupted["event_id"], operation["span_id"]),
+            )
+    event = journal.record(
+        node_id,
+        base,
+        selected=True,
+        completion=Obligation("run", binding["binding_id"], "terminal")
+        if db.workspace is not None
+        else None,
     )
+    if db.workspace is not None:
+        close_binding(db, binding["binding_id"], now)
+    else:
+        db.execute(
+            "UPDATE trace_bindings SET closed_at_ms=? WHERE binding_id=?",
+            (now, binding["binding_id"]),
+        )
     return event
 
 
@@ -178,7 +212,7 @@ def close_session_bindings_locked(
     store: AgentdStore, session_id: str, now: int
 ) -> None:
     for binding in store._connection.execute(
-        "SELECT * FROM trace_bindings WHERE session_id=? AND closed_at_ms IS NULL",
+        "SELECT * FROM trace_bindings_all WHERE session_id=? AND closed_at_ms IS NULL",
         (session_id,),
     ).fetchall():
         close_binding_locked(

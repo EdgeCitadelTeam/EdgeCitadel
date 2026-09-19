@@ -179,7 +179,19 @@ allocate obligations or install that workspace. All lifecycle and recovery paths
 must be integrated and qualified before this provides a production completion
 guarantee.
 
-For a stopped, clean schema-26 DELETE pair already owned by the dedicated UID,
+Schema 27 carries binding closure and operation terminal state in completed slots.
+With an explicitly installed workspace, binding/start admission reserves a future
+terminal slot atomically with its start event and receipt. Append/finish consume
+those slots, including exact retry receipts; logical readers see terminal state
+before ordinary materialization updates indexed tables. A full pool refuses new
+trace admission without committing the binding or operation. This does not yet
+reserve task/recovery obligations or gate external tool effects. Production
+workspace installation, existing-work migration and bounded maintenance remain
+required before activation. The owned jim-eq gate in
+`tests/agentd/test_trace_terminal_native.py` tests actual bind/append/finish calls
+at user-quota pressure, including SIGKILL before/after commit and exact export.
+
+For a stopped, clean schema-27 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with
 `no_new_privs` enabled and no capabilities:
 

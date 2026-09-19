@@ -89,6 +89,25 @@ def _references():
             ("receipt.binding_id", "receipt.connector_id"),
             "json_extract(CAST({record} AS TEXT),'$.receipt') IS NOT NULL",
         ),
+        (
+            "binding",
+            "trace_bindings",
+            ("binding_id", "trace_id", "execution_attempt_id"),
+            ("binding.binding_id", "event.trace_id", "event.execution_attempt_id"),
+            "json_extract(CAST({record} AS TEXT),'$.binding') IS NOT NULL",
+        ),
+        (
+            "operation",
+            "trace_operations",
+            ("span_id", "binding_id", "kind", "name"),
+            (
+                "operation.span_id",
+                "operation.binding_id",
+                "event.kind",
+                "event.attributes.name",
+            ),
+            "json_extract(CAST({record} AS TEXT),'$.operation') IS NOT NULL",
+        ),
     )
 
 
@@ -308,6 +327,22 @@ def attach_receipt(
         is None
     ):
         raise TraceContractError("invalid_completion_receipt")
+    if db.execute(
+        "SELECT 1 FROM trace_requests_all WHERE connector_id=? AND operation=? AND scope=? AND request_id=?",
+        tuple(receipt[name] for name in RECEIPT_COLUMNS[:4]),
+    ).fetchone():
+        raise TraceContractError("completion_receipt_already_present")
+    set_completed_metadata(db, obligation, "receipt", receipt)
+
+
+def set_completed_metadata(
+    db: sqlite3.Connection, obligation: Obligation, name: str, value: dict[str, Any]
+) -> None:
+    """Attach owned metadata once, before the completing transaction commits."""
+    if not db.in_transaction:
+        raise TraceContractError("trace_transaction_required")
+    if name not in {"receipt", "binding", "operation"}:
+        raise TraceContractError("invalid_completion_metadata")
     row = db.execute(
         "SELECT slot_id,record FROM trace_completion_slots WHERE owner_kind=? AND owner_id=? AND purpose=? AND filled=1",
         obligation.key,
@@ -315,15 +350,25 @@ def attach_receipt(
     if row is None:
         raise TraceContractError("completion_reservation_missing")
     record = json.loads(row[1])
-    if (
-        "receipt" in record
-        or db.execute(
-            "SELECT 1 FROM trace_requests_all WHERE connector_id=? AND operation=? AND scope=? AND request_id=?",
-            tuple(receipt[name] for name in RECEIPT_COLUMNS[:4]),
-        ).fetchone()
+    if name in record:
+        raise TraceContractError("completion_metadata_already_present")
+    if name == "binding" and (
+        obligation.kind != "run"
+        or value.get("binding_id") != obligation.owner_id
+        or type(value.get("closed_at_ms")) is not int
+        or value["closed_at_ms"] < 0
+        or record["event"]["kind"] != "run"
+        or record["event"]["phase"] == "started"
     ):
-        raise TraceContractError("completion_receipt_already_present")
-    record["receipt"] = receipt
+        raise TraceContractError("invalid_completion_metadata")
+    if name == "operation" and (
+        obligation.kind != "operation"
+        or value.get("span_id") != obligation.owner_id
+        or record["event"]["span_id"] != obligation.owner_id
+        or record["event"]["phase"] not in {"finished", "failed", "interrupted"}
+    ):
+        raise TraceContractError("invalid_completion_metadata")
+    record[name] = value
     _check_settlement_room(record)
     db.execute(
         "UPDATE trace_completion_slots SET record=? WHERE slot_id=?",
@@ -378,6 +423,9 @@ def materialize(db: sqlite3.Connection, slot_id: int) -> bool:
             f"INSERT INTO trace_requests({','.join(RECEIPT_COLUMNS)}) VALUES ({','.join('?' for _ in RECEIPT_COLUMNS)})",
             tuple(value["receipt"][key] for key in RECEIPT_COLUMNS),
         )
+    from .trace_terminal import materialize as materialize_terminal
+
+    materialize_terminal(db, value)
     db.execute(
         "UPDATE trace_completion_slots SET owner_kind='',owner_id='',purpose='',filled=0,record=? WHERE slot_id=?",
         (b"{}".ljust(SLOT_BYTES, b" "), slot_id),

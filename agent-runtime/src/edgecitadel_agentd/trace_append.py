@@ -16,6 +16,9 @@ from .trace_contract import (
     validate_rpc_reply,
 )
 from .trace_journal import TraceJournal
+from .trace_reservations import Obligation, reserve
+from .trace_completed import attach_receipt
+from .trace_terminal import close_operation
 
 if TYPE_CHECKING:
     from .store import AgentdStore
@@ -68,12 +71,12 @@ def append_trace(
         span_id, parent = observation["span_id"], observation["parent_span_id"]
         if parent is not None:
             owner = db.execute(
-                "SELECT binding_id FROM trace_operations WHERE span_id=?", (parent,)
+                "SELECT binding_id FROM trace_operations_all WHERE span_id=?", (parent,)
             ).fetchone()
             if owner is None or owner[0] != binding["binding_id"]:
                 raise TraceContractError("span_parent_not_owned")
         span = db.execute(
-            "SELECT * FROM trace_operations WHERE span_id=?", (span_id,)
+            "SELECT * FROM trace_operations_all WHERE span_id=?", (span_id,)
         ).fetchone()
         phase = observation["phase"]
         if span is not None:
@@ -96,6 +99,12 @@ def append_trace(
         if root is None:
             raise TraceContractError("binding_evidence_missing")
         original = json.loads(root[0])
+        completion = None
+        if db.workspace is not None:
+            if span is None and phase == "started":
+                reserve(db, Obligation("operation", span_id, "terminal"))
+            elif span is not None and phase != "started":
+                completion = Obligation("operation", span_id, "terminal")
         stamped = TraceJournal(db).record(
             node_id,
             {
@@ -113,6 +122,7 @@ def append_trace(
                 "supersedes_event_id": None,
             },
             selected=True,
+            completion=completion,
         )
         event_id = stamped["event_id"]
         if span is None:
@@ -135,6 +145,8 @@ def append_trace(
                 "UPDATE trace_operations SET started_event_id=? WHERE span_id=?",
                 (event_id, span_id),
             )
+        elif completion is not None:
+            close_operation(db, span_id, binding["binding_id"])
         else:
             db.execute(
                 "UPDATE trace_operations SET terminal_event_id=?,phase=? WHERE span_id=?",
@@ -152,6 +164,21 @@ def append_trace(
         validate_rpc_reply(
             reply, operation="append", request_id=params["observation_id"]
         )
+        if completion is not None:
+            attach_receipt(
+                db,
+                completion,
+                {
+                    "connector_id": connector_id,
+                    "operation": "append",
+                    "scope": binding["binding_id"],
+                    "request_id": params["observation_id"],
+                    "request_sha256": digest,
+                    "binding_id": binding["binding_id"],
+                    "result_json": canonical_bytes(reply).decode(),
+                },
+            )
+            return reply
         db.execute(
             "INSERT INTO trace_requests(connector_id,operation,scope,request_id,request_sha256,binding_id,result_json) VALUES (?,'append',?,?,?,?,?)",
             (

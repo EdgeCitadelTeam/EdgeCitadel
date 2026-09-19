@@ -245,7 +245,7 @@ def test_v14_index_migration_preserves_receipts_and_operations(tmp_path):
         db.execute("PRAGMA user_version=14")
     reopened = AgentdStore(path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 26
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 27
         assert {
             t: [tuple(r) for r in reopened._connection.execute(f"SELECT * FROM {t}")]
             for t in before

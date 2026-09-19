@@ -407,7 +407,7 @@ def test_v9_migration_preserves_existing_journal(configured):
         flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=9")
     with closing(AgentdStore(path)) as migrated:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 26
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 27
         assert [
             tuple(row)
             for row in migrated._connection.execute("SELECT * FROM trace_journal")

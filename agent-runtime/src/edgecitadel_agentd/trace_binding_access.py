@@ -34,7 +34,7 @@ def authorized_binding_locked(
         raise TraceContractError("trace_transaction_required")
     connector = store.authenticate(connector_id, token)
     binding = db.execute(
-        "SELECT * FROM trace_bindings WHERE binding_id=? AND connector_id=?",
+        "SELECT * FROM trace_bindings_all WHERE binding_id=? AND connector_id=?",
         (binding_id, connector_id),
     ).fetchone()
     if binding is None:

@@ -24,6 +24,7 @@ from .trace_contract import (
     validate_rpc_reply,
 )
 from .trace_journal import TraceJournal
+from .trace_reservations import Obligation, reserve
 
 if TYPE_CHECKING:
     from .store import AgentdStore
@@ -122,7 +123,7 @@ def bind_trace(
             if previous["request_sha256"] != digest:
                 raise TraceContractError("idempotency_conflict")
             row = db.execute(
-                "SELECT * FROM trace_bindings WHERE binding_id=?",
+                "SELECT * FROM trace_bindings_all WHERE binding_id=?",
                 (previous["binding_id"],),
             ).fetchone()
             authorize_binding_operation(
@@ -144,7 +145,7 @@ def bind_trace(
             None
             if execution is None
             else db.execute(
-                "SELECT * FROM trace_bindings WHERE task_id=? AND session_id=?",
+                "SELECT * FROM trace_bindings_all WHERE task_id=? AND session_id=?",
                 (execution.task_id, session.session_id),
             ).fetchone()
         )
@@ -189,6 +190,8 @@ def bind_trace(
                     now_ms,
                 ),
             )
+            if db.workspace is not None:
+                reserve(db, Obligation("run", result["binding_id"], "terminal"))
             payload = (
                 store._decode_content(task_row["payload_json"]) if task_row else {}
             )

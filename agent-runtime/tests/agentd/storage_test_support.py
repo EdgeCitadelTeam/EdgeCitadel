@@ -24,6 +24,8 @@ def flatten_connection(db):
     Current runtime never writes this layout. All files belong to the test.
     Preserve rowids and rows; leave the paired destination empty for migration.
     """
+    db.execute("DROP VIEW IF EXISTS trace_bindings_all")
+    db.execute("DROP VIEW IF EXISTS trace_operations_all")
     db.execute("DROP VIEW IF EXISTS trace_export_records")
     db.execute("DROP VIEW IF EXISTS trace_completed_export")
     db.execute("DROP TRIGGER IF EXISTS trace_completed_spool_update")

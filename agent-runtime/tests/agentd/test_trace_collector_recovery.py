@@ -226,7 +226,7 @@ def test_schema_19_upgrade_failure_preserves_existing_settlement(settled):
     assert list(store._connection.iterdump()) == before
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 26
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 27
         assert page_request(reopened, scope)["collector_epoch"] == old
         assert page_request(reopened, scope)["after_export_seq"] == 130
     finally:

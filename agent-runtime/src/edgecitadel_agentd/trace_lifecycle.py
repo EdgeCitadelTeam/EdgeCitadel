@@ -81,7 +81,7 @@ def record_task_boundary(
             else None,
         }
     binding = db.execute(
-        "SELECT execution_attempt_id FROM trace_bindings WHERE task_id=? AND session_id=?",
+        "SELECT execution_attempt_id FROM trace_bindings_all WHERE task_id=? AND session_id=?",
         (task_id, task["claimed_session_id"]),
     ).fetchone()
     if source_role is None:

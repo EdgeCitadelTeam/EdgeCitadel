@@ -60,7 +60,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -591,6 +591,12 @@ class AgentdStore:
             install_views(self._connection)
             self._connection.execute("PRAGMA main.user_version=26")
             self._connection.execute("PRAGMA task_state.user_version=26")
+        if version < 27:
+            from .trace_terminal import install_views as install_terminal_views
+
+            install_terminal_views(self._connection)
+            self._connection.execute("PRAGMA main.user_version=27")
+            self._connection.execute("PRAGMA task_state.user_version=27")
 
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.

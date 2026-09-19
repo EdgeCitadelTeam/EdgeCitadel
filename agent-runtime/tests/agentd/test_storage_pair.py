@@ -243,7 +243,7 @@ AgentdStore(Path(sys.argv[1]))
     # authority; reopening Agentd then retries an interrupted migration normally.
     with sqlite3.connect(path) as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == (
-            26 if point == "after_commit" else 23
+            27 if point == "after_commit" else 23
         )
     reopened = AgentdStore(path)
     try:
