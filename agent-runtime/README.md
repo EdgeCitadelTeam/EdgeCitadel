@@ -114,6 +114,26 @@ bypass privileges, with shared infrastructure accounted separately. Production
 admission must fail closed if enforcement cannot be verified; that enforcement
 integration remains outstanding.
 
+`edgecitadel_agentd.trace_quota.verify_trace_quota(trace_directory, task_directory)`
+now verifies that boundary without changing mounts, quota limits or privileges.
+It requires private service-owned directories on separate filesystems, ext4,
+one non-root writer UID, no effective/permitted/inheritable/ambient capabilities,
+and `no_new_privs`. It checks the calling thread's credentials, existing trace
+file ownership and links, active user accounting **and enforcement**, and the
+qualified 256 MiB/128-inode hard limits. Unavailable evidence refuses verification.
+The native interface currently supports 64-bit Linux x86-64/aarch64 with
+`quotactl_fd`; only x86-64 is qualified on jim-eq. Limits alone do not prove
+enforcement: the [kernel quota state API](https://github.com/torvalds/linux/blob/master/fs/quota/quota.c)
+reports accounting and enforcement separately. The verifier uses an opened
+directory descriptor, avoiding a separate device-path lookup.
+
+`tests/agentd/test_trace_quota_native.py` runs its own quota filesystem on jim-eq
+and verifies acceptance, privilege/path/ownership refusal, accounting-only
+refusal, unlimited-quota refusal and recovery after reprovisioning. It leaves live
+services unchanged. The verifier is not yet connected to daemon startup;
+coherent volume configuration, dedicated-UID deployment and completion capacity
+reservations remain required before claiming production admission enforcement.
+
 
 Agentd now opens its source store in verified `journal_mode=DELETE` with
 `synchronous=EXTRA`. This is the transaction-mode prerequisite for an atomic
