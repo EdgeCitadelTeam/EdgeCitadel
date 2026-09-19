@@ -60,7 +60,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -564,6 +564,12 @@ class AgentdStore:
 
         if version < 24:
             migrate_pair(self._connection)
+        if version < 25:
+            from .trace_counters import migrate_counters
+
+            migrate_counters(self._connection)
+            self._connection.execute("PRAGMA main.user_version=25")
+            self._connection.execute("PRAGMA task_state.user_version=25")
 
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.

@@ -9,6 +9,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from .trace_counters import MAX_COUNTER, encode_counter
 from .trace_capacity import admit_event
 from .trace_contract import TraceContractError, validate_event, validate_export_header
 
@@ -143,6 +144,8 @@ class TraceJournal:
                 (node_id, epoch),
             ).fetchone()[0]
         )
+        if not previous and sequence >= MAX_COUNTER:
+            raise TraceContractError("trace_sequence_exhausted")
         stamped = {
             **event,
             "node_id": node_id,
@@ -188,14 +191,16 @@ class TraceJournal:
             ),
         )
         self.connection.execute(
-            "UPDATE trace_sources SET next_source_seq=next_source_seq+1 WHERE node_id=? AND source_epoch=?",
-            (node_id, epoch),
+            "UPDATE trace_sources SET next_source_seq_bytes=? WHERE node_id=? AND source_epoch=?",
+            (encode_counter(sequence + 1), node_id, epoch),
         )
         if selected:
             export_sequence = self.connection.execute(
                 "SELECT next_export_seq FROM trace_export_generations WHERE node_id=? AND source_epoch=? AND export_generation=?",
                 (node_id, epoch, generation),
             ).fetchone()[0]
+            if export_sequence >= MAX_COUNTER:
+                raise TraceContractError("trace_sequence_exhausted")
             # The stamped event already passed full validation above. Origin
             # fields are constructed from that same writer identity; validate
             # the wrapper and content hash without a second event-schema walk.
@@ -223,7 +228,7 @@ class TraceJournal:
                 ),
             )
             self.connection.execute(
-                "UPDATE trace_export_generations SET next_export_seq=next_export_seq+1 WHERE node_id=? AND source_epoch=? AND export_generation=?",
-                (node_id, epoch, generation),
+                "UPDATE trace_export_generations SET next_export_seq_bytes=? WHERE node_id=? AND source_epoch=? AND export_generation=?",
+                (encode_counter(export_sequence + 1), node_id, epoch, generation),
             )
         return stamped

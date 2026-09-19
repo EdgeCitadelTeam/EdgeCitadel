@@ -124,7 +124,7 @@ def test_marker_referenced_by_another_generation_is_preserved(recorded):
     generation = str(uuid4())
     with db:
         db.execute(
-            "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,next_export_seq,active) SELECT node_id,source_epoch,?,next_export_seq,0 FROM trace_export_generations",
+            "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,next_export_seq_bytes,active) SELECT node_id,source_epoch,?,next_export_seq_bytes,0 FROM trace_export_generations",
             (generation,),
         )
         db.execute(
@@ -314,7 +314,9 @@ def fragmented_markers(store):
         db.execute("BEGIN IMMEDIATE")
         # Positions below 1000 stand for already-pruned historical assignments.
         # Sparse ledgers retain their assigned high-watermark independently.
-        db.execute("UPDATE trace_export_generations SET next_export_seq=1000")
+        db.execute(
+            "UPDATE trace_export_generations SET next_export_seq_bytes=CAST('00000000000000001000' AS BLOB)"
+        )
         for start in (10, 10, 210, 210):
             ranges = [{"first": n, "last": n} for n in range(start, start + 200, 2)]
             TraceJournal(db).record(

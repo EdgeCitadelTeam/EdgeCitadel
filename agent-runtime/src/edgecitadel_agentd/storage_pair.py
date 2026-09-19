@@ -36,16 +36,18 @@ def attach_tasks(db: sqlite3.Connection, path: Path, *, existing: bool) -> None:
     db.execute("ATTACH DATABASE ? AS task_state", (uri,))
     if existing:
         # A misplaced database is not ours to change, even to set its journal mode.
-        verify_pair(db)
+        verify_pair(db, version=db.execute("PRAGMA user_version").fetchone()[0])
     if db.execute("PRAGMA task_state.journal_mode=DELETE").fetchone()[0] != "delete":
         raise sqlite3.DatabaseError("task storage requires rollback journaling")
     db.execute("PRAGMA task_state.synchronous=EXTRA")
 
 
-def verify_pair(db: sqlite3.Connection) -> None:
+def verify_pair(db: sqlite3.Connection, *, version: int = 25) -> None:
+    if version not in (24, 25):
+        raise sqlite3.DatabaseError("unsupported storage pair schema")
     ids = []
     for schema in ("main", "task_state"):
-        if db.execute(f"PRAGMA {schema}.user_version").fetchone()[0] != PAIR_VERSION:
+        if db.execute(f"PRAGMA {schema}.user_version").fetchone()[0] != version:
             raise sqlite3.DatabaseError("storage pair schema versions differ")
     for schema in ("main", "task_state"):
         rows = db.execute(f"SELECT pair_id FROM {schema}.storage_pair").fetchall()
@@ -210,5 +212,5 @@ def attach_task_snapshot(
             + "?mode=ro",
         ),
     )
-    verify_pair(db)
+    verify_pair(db, version=version)
     return True

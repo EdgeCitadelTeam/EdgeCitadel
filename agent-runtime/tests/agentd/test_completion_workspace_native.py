@@ -35,6 +35,8 @@ def worker(state, operation):
         read,
         reserve,
     )
+    from edgecitadel_agentd.trace_counters import encode_counter, migrate_counters
+    from edgecitadel_agentd.trace_journal import TRACE_SCHEMA_SQL
     from edgecitadel_agentd.trace_contract import canonical_bytes
     from edgecitadel_agentd.trace_quota import verify_trace_quota
 
@@ -97,17 +99,27 @@ def worker(state, operation):
                         "SELECT value,count(*) FROM counters GROUP BY value"
                     )
                 ],
+                "production_counters": {
+                    name: db.execute(
+                        f"SELECT {column},count(*) FROM {name} GROUP BY {column}"
+                    ).fetchall()
+                    for name, column in (
+                        ("trace_sources", "next_source_seq"),
+                        ("trace_export_generations", "next_export_seq"),
+                    )
+                },
                 "workspace_bytes": os.fstat(physical.descriptor).st_blocks * 512,
                 "quota_bytes": quota_bytes(),
             }
 
         if operation == "seed":
             # The schema is owned by this probe; no service store is touched.
-            for statement in SCHEMA_SQL.split(";"):
+            for statement in (SCHEMA_SQL + TRACE_SCHEMA_SQL).split(";"):
                 if statement.strip():
                     db.execute(statement)
             with db:
                 db.execute("BEGIN IMMEDIATE")
+                migrate_counters(db)
                 db.execute(
                     "CREATE TABLE counters (id INTEGER PRIMARY KEY, value BLOB NOT NULL CHECK(length(value)=20), padding BLOB NOT NULL)"
                 )
@@ -117,6 +129,15 @@ def worker(state, operation):
                 )
                 for i, obligation in enumerate(obligations):
                     reserve(db, obligation)
+                    node = f"counter-{i}"
+                    db.execute(
+                        "INSERT INTO trace_sources(node_id,source_epoch,next_source_seq_bytes) VALUES (?,'owned',?)",
+                        (node, encode_counter(127)),
+                    )
+                    db.execute(
+                        "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,next_export_seq_bytes) VALUES (?,'owned','owned',?)",
+                        (node, encode_counter(127)),
+                    )
                     db.executemany(
                         "INSERT INTO counters VALUES (?,?,?)",
                         [
@@ -231,6 +252,15 @@ def worker(state, operation):
                         "UPDATE counters SET value=?", (b"00000000000000000002",)
                     )
                     db.execute("UPDATE task_state.work SET phase='completed'")
+                counter = 129 if operation == "hold_restore" else 128
+                db.execute(
+                    "UPDATE trace_sources SET next_source_seq_bytes=?",
+                    (encode_counter(counter),),
+                )
+                db.execute(
+                    "UPDATE trace_export_generations SET next_export_seq_bytes=?",
+                    (encode_counter(counter),),
+                )
                 assert db.execute("PRAGMA page_count").fetchone()[0] == initial_pages
                 if operation == "before_commit":
                     journal = trace / "trace.sqlite3-journal"
@@ -280,6 +310,17 @@ def worker(state, operation):
                 assert value["counters"] == [("00000000000000000003", 2 * MAX_SLOTS)]
             else:
                 raise AssertionError(operation)
+            expected_counter = (
+                127
+                if operation in {"verify_rollback", "survive_rollback"}
+                else 129
+                if operation == "wait_writer"
+                else 128
+            )
+            assert all(
+                rows == [(expected_counter, MAX_SLOTS)]
+                for rows in value["production_counters"].values()
+            )
             assert value["workspace_bytes"] >= 32 * 1024 * 1024
             for schema in ("main", "task_state"):
                 assert (

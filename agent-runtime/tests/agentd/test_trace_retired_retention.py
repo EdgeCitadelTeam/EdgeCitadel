@@ -118,7 +118,7 @@ def test_shared_payload_marks_each_export_generation_before_delete(recorded):
     with db:
         db.execute("UPDATE trace_export_generations SET active=0")
         db.execute(
-            "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,next_export_seq) VALUES ('edge-a',?,?,2)",
+            "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,next_export_seq_bytes) VALUES ('edge-a',?,?,CAST('00000000000000000002' AS BLOB))",
             (epoch, new_generation),
         )
         db.execute(
@@ -224,7 +224,7 @@ def test_large_referenced_generation_fanout_keeps_payloads_replayable(recorded):
         for _index in range(8):
             generation = str(uuid4())
             store._connection.execute(
-                "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,active,next_export_seq) VALUES ('edge-a',?,?,0,2)",
+                "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,active,next_export_seq_bytes) VALUES ('edge-a',?,?,0,CAST('00000000000000000002' AS BLOB))",
                 (old, generation),
             )
             store._connection.execute(
@@ -255,7 +255,7 @@ def test_v15_reference_index_migration_preserves_spool_and_uses_event_key(record
         store._connection.execute("PRAGMA user_version=15")
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 25
         assert [
             tuple(r) for r in reopened._connection.execute("SELECT * FROM trace_spool")
         ] == before

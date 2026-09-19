@@ -156,10 +156,18 @@ environment or RPC switch to bypass production quota admission.
 handle on an owned jim-eq quota volume, including startup refusals and persisted
 task/trace/export data. Run it with the interpreter, source, schemas and dependencies
 readable by the test UID, such as a root-owned read-only test bundle under `/var/tmp`.
-Dedicated-UID rollout of existing services, migration sizing and completion
-capacity reservations remain outstanding.
+Retained-state migration sizing and production completion capacity reservations
+remain outstanding.
 
-For a stopped, clean schema-24 DELETE pair already owned by the dedicated UID,
+Schema 25 stores source/export sequence counters as fixed-width 20-byte values;
+generated integer columns preserve numeric reads. Startup migrates both pair
+versions in one rollback transaction without changing identities or positions.
+Migration needs allocation headroom and refuses on failure. Exhausted v1 sequence
+space refuses new events while exact retries remain readable. Fixed counters and
+the tested completion-slot/workspace primitives are prerequisites; production
+admission and reserved lifecycle completion are not yet integrated.
+
+For a stopped, clean schema-25 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with
 `no_new_privs` enabled and no capabilities:
 

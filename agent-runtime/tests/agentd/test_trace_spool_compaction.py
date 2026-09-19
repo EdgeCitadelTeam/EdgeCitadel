@@ -84,7 +84,7 @@ def test_other_generation_cannot_borrow_loss_evidence(recorded):
     generation = str(uuid4())
     with db:
         db.execute(
-            "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,next_export_seq,active) SELECT node_id,source_epoch,?,next_export_seq,0 FROM trace_export_generations",
+            "INSERT INTO trace_export_generations(node_id,source_epoch,export_generation,next_export_seq_bytes,active) SELECT node_id,source_epoch,?,next_export_seq_bytes,0 FROM trace_export_generations",
             (generation,),
         )
         db.execute(
@@ -123,7 +123,7 @@ def test_v16_migration_preserves_rows_and_reconcile_compacts(recorded):
         recorded._connection.execute("PRAGMA user_version=16")
     reopened = AgentdStore(recorded.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 25
         assert snapshot(reopened) == before
         plan = reopened._connection.execute(
             "EXPLAIN QUERY PLAN SELECT event_id FROM trace_journal WHERE node_id=? "
