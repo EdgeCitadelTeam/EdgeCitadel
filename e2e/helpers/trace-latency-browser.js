@@ -23,19 +23,25 @@ async function main() {
   };
   const browser = await chromium.launch({ executablePath: '/snap/bin/chromium', headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1200 }, reducedMotion: 'reduce' });
   const errors = [];
   let writes = 0;
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => {
-    if (request.url().includes('/api/') && request.method() !== 'GET') writes++;
-  });
+  const lanes = [];
   try {
-    await page.goto('http://127.0.0.1/#execution?run=' + config.scope.trace_id);
-    await page.getByLabel('Fleet read credential').fill(token);
-    await page.getByRole('button', { name: 'Connect read access', exact: true }).click();
-    await page.getByRole('button', { name: 'Pause live', exact: true }).waitFor();
-    await page.locator('[data-node-id]').first().waitFor();
+    const laneCount = config.workload.mode === 'baseline' ? config.workload.sampled_agents.length : 1;
+    for (let lane = 0; lane < laneCount; lane++) {
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1200 }, reducedMotion: 'reduce' });
+      page.on('pageerror', error => errors.push(error.message));
+      page.on('request', request => {
+        if (request.url().includes('/api/') && request.method() !== 'GET') writes++;
+      });
+      const trace = config.scope.trace_id || null;
+      await page.goto('http://127.0.0.1/#execution' + (trace ? '?run=' + trace : ''));
+      await page.getByLabel('Fleet read credential').fill(token);
+      await page.getByRole('button', { name: 'Connect read access', exact: true }).click();
+      await page.getByRole('button', { name: 'Disconnect read access', exact: true }).waitFor();
+      if (trace) await page.locator('[data-node-id]').first().waitFor();
+      lanes.push({ page, trace, samples: 0 });
+    }
     await request('/ready', '');
     const seen = new Set();
     const deadline = performance.now() + config.workload.browser_timeout_s * 1000;
@@ -44,9 +50,17 @@ async function main() {
       const next = await request('/next');
       if (!next) { await new Promise(resolve => setTimeout(resolve, 25)); continue; }
       if (seen.has(next.event_id)) throw new Error('receiver repeated acknowledged identity');
+      const lane = lanes[next.lane];
+      if (!lane) throw new Error('undeclared browser lane');
+      const page = lane.page;
+      if (next.trace_id && lane.trace !== next.trace_id) {
+        await page.evaluate(trace => { location.hash = '#execution?run=' + trace; }, next.trace_id);
+        await page.locator('.trace-run-heading code').filter({ hasText: next.trace_id }).waitFor();
+        lane.trace = next.trace_id;
+      }
       // Predeclared terminal samples remain eligible even after pagination grows.
       // Include reveal/filter cost in the conservative display-latency bound.
-      if (config.workload.mode === 'open_loop_terminal') {
+      if (config.workload.mode !== 'closed_loop') {
         await page.getByLabel('Find a step', { exact: true }).fill(next.node_id);
       }
       const node = page.locator(`[data-node-id="${next.node_id}"].state-${next.state}`);
@@ -66,11 +80,14 @@ async function main() {
       }));
       await request('/ack', JSON.stringify({ event_id: next.event_id }));
       seen.add(next.event_id);
+      lane.samples++;
     }
     if (errors.length || writes) throw new Error('browser errors or execution writes');
-    await page.screenshot({ path: path.join(directory, 'pilot.png') });
+    for (const [index, lane] of lanes.entries()) {
+      await lane.page.screenshot({ path: path.join(directory, index ? `pilot-${index}.png` : 'pilot.png') });
+    }
     writeFileSync(path.join(directory, 'browser.json'), JSON.stringify({
-      samples: seen.size, page_errors: errors, execution_writes: writes, chromium: browser.version(),
+      samples: seen.size, lanes: lanes.map(lane => ({ samples: lane.samples })), page_errors: errors, execution_writes: writes, chromium: browser.version(),
       frame_policy: 'visible stable step across double animation frames; host receipt upper bound',
     }, null, 2));
   } finally { await browser.close(); }

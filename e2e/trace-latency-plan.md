@@ -189,3 +189,28 @@ explicit source/run/operation distribution and bounded observer storage over the
 whole schedule. Keep the 1,000-sample diagnostic separate: one growing synthetic
 run on host loopback does not establish the full baseline population, long-lived
 resource bounds, distributed topology or execution overhead.
+
+## Full baseline distribution
+
+The declared full profile has 350 distinct runs from ten synthetic agents on the
+existing source, fifty observations per run, in 17,500 uniform 120 ms emission
+slots. Agents receive one slot each every 1.2 seconds; a new run starts each
+minute. The first fifty runs are warmup, and the next three hundred runs are the
+thirty-minute measured window. Starts/finishes remain source scheduled, independent
+of acknowledgments. This matches the exported metadata load model, not actual
+task execution, adapter coverage or multi-host topology.
+
+The predeclared visible cohort is every terminal observation for agents 0 and 1,
+in two separate Chromium contexts. Both warmup and measured acknowledgments are
+required (240 + 1,440). A run switch uses the ordinary saved run address and
+canonical-step filter, so navigation/reveal cost remains inside the upper bound.
+The source/agent allowlist prevents unrelated fleet events from filling observer
+storage. Record capacities derive from the finite schedule: 17,500 commits and
+1,680 render observations. Stress and soak need their own bounded storage design;
+do not silently increase this run's duration or rates.
+
+Before the full run, a two-minute preflight uses the same ten agents, slot order,
+run rollover, filtering and cleanup with twenty runs and 1,000 exact events. Its
+48 measured observations are insufficient for p95. Long-run evidence must come
+from a verified live process through completion/restoration; a progress artifact
+is only diagnostic.

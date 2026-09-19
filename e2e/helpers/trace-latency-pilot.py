@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 
-from trace_latency_workload import summarize_latencies, workload
+from trace_latency_workload import baseline_workload, summarize_latencies, workload
 
 
 BASE = [
@@ -71,10 +71,19 @@ def main():
         raise RuntimeError("jim-eq only")
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
-    parser.add_argument("--open-loop-samples", type=int)
+    profile = parser.add_mutually_exclusive_group()
+    profile.add_argument("--open-loop-samples", type=int)
+    profile.add_argument("--baseline", action="store_true")
+    profile.add_argument("--baseline-preflight", action="store_true")
     parser.add_argument("--event-rate", type=float, default=25 / 3)
     args = parser.parse_args()
-    declared = workload(args.open_loop_samples, args.event_rate)
+    if (args.baseline or args.baseline_preflight) and args.event_rate != 25 / 3:
+        parser.error("baseline profiles require the fixed 25/3 event rate")
+    declared = (
+        baseline_workload(preflight=args.baseline_preflight)
+        if args.baseline or args.baseline_preflight
+        else workload(args.open_loop_samples, args.event_rate)
+    )
     out = args.directory
     if not out.is_absolute() or not out.is_dir() or list(out.iterdir()):
         raise ValueError("empty private absolute pilot directory required")
@@ -129,7 +138,14 @@ def main():
             fixture = subprocess.Popen(
                 [
                     "/root/.edgecitadel/supervisor/bin/python",
-                    str(helpers / "trace-latency-fixture.py"),
+                    str(
+                        helpers
+                        / (
+                            "trace-baseline-fixture.py"
+                            if declared["mode"] == "baseline"
+                            else "trace-latency-fixture.py"
+                        )
+                    ),
                     str(out),
                 ],
                 stdout=log,
@@ -157,9 +173,18 @@ def main():
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-        if browser.wait(timeout=declared["browser_timeout_s"] + 30) != 0:
+        browser_deadline = time.monotonic() + declared["browser_timeout_s"] + 30
+        while browser.poll() is None:
+            if fixture.poll() is not None and fixture.returncode != 0:
+                raise RuntimeError(
+                    "fixture exited before browser; see private fixture.log"
+                )
+            if time.monotonic() >= browser_deadline:
+                raise TimeoutError("browser workload timeout")
+            time.sleep(0.25)
+        if browser.returncode != 0:
             raise RuntimeError("browser pilot failed; see private browser.log")
-        if fixture.wait(timeout=70) != 0:
+        if fixture.wait(timeout=120) != 0:
             raise RuntimeError("fixture pilot failed; see private fixture.log")
     finally:
         try:
@@ -228,26 +253,30 @@ def main():
     )
     upper = []
     widths = []
-    for identity in render["expected"]:
+    measured_count = declared.get("measured_samples", declared["samples"])
+    assert len(render["eligible"]) == measured_count
+    for identity in render["eligible"]:
         marker = markers[identity]
         assert marker["before_ns"] <= marker["after_ns"] <= render["acks"][identity]
         upper.append((render["acks"][identity] - marker["before_ns"]) / 1_000_000)
         widths.append((marker["after_ns"] - marker["before_ns"]) / 1_000_000)
     report.update(
         trace_id=fixture_report["trace_id"],
-        samples=declared["samples"],
+        samples=measured_count,
+        warmup_and_measured_samples=declared["samples"],
         workload=declared,
         emission=fixture_report["emission"],
         source_core_exact=True,
         all_core_settled=True,
         event_count=fixture_report["event_count"],
+        run_count=fixture_report.get("run_count", 1),
         owned_connector_revoked=True,
         commit_bracket_max_ms=max(widths),
         observer_callback_max_ms=commits["max_callback_ns"] / 1_000_000,
         latency_upper_bounds_ms=upper,
-        **summarize_latencies(upper, declared["samples"]),
+        **summarize_latencies(upper, measured_count),
         browser=browser_report,
-        scope="Declared synthetic diagnostic, not full-duration baseline/stress or actual tools. Bounds include step reveal and render ACK transport; callback metric is not total observer overhead. P95 applies only to the complete declared cohort when >=1000 samples.",
+        scope="Declared synthetic workload on one source host; no actual tools or multi-host topology. Bounds include step reveal and render ACK transport; callback metric is not total observer overhead. Warmup is excluded from statistics, never from required correlations; profile declares whether full baseline duration ran.",
     )
     (out / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report), flush=True)

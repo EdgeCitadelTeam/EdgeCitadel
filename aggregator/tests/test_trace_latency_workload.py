@@ -2,7 +2,12 @@ import math
 
 import pytest
 
-from e2e.helpers.trace_latency_workload import summarize_latencies, workload
+from e2e.helpers.trace_latency_workload import (
+    baseline_slot,
+    baseline_workload,
+    summarize_latencies,
+    workload,
+)
 
 
 def test_open_loop_declares_terminal_cohort_and_all_emitted_events():
@@ -40,3 +45,21 @@ def test_p95_requires_complete_cohort_and_uses_nearest_rank():
 def test_invalid_latency_data_cannot_produce_a_statistic(values):
     with pytest.raises(ValueError):
         summarize_latencies(values, len(values))
+
+
+def test_baseline_schedule_has_ten_agents_fifty_events_and_disjoint_warmup():
+    declared = baseline_workload()
+    assert declared["duration_s"] == 5 * 60 + 30 * 60
+    assert declared["expected_events"] == 17500
+    assert declared["samples"] == 1680 and declared["measured_samples"] == 1440
+    observed = {}
+    for index in range(declared["expected_events"]):
+        cycle, agent, step = baseline_slot(index)
+        observed.setdefault((cycle, agent), []).append(step)
+    assert len(observed) == declared["expected_runs"] == 350
+    assert all(steps == list(range(50)) for steps in observed.values())
+    assert baseline_slot(499) == (0, 9, 49)
+    assert baseline_slot(500) == (1, 0, 0)
+    preflight = baseline_workload(preflight=True)
+    assert preflight["expected_events"] == 1000 and preflight["samples"] == 96
+    assert preflight["measured_samples"] == 48

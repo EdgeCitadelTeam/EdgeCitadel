@@ -172,7 +172,8 @@ baseline, stress, soak and observer-overhead qualification remain open.
 
 The pilot consists of `trace-latency-pilot.py`, `trace-latency-core.py`,
 `trace-latency-fixture.py`, `trace-latency-browser.js`, `trace_render_receiver.py`,
-`trace_commit_observer.py`, `trace_latency_workload.py` and `trace-clock-probe.py`
+`trace_commit_observer.py`, `trace_latency_workload.py`, `trace-baseline-fixture.py`
+and `trace-clock-probe.py`
 in `helpers/`. Copy this set
 into `/root/edgecitadel-latency-20260919/helpers` on jim-eq. The browser helper
 requires the pinned local `playwright` and `playwright-core` packages in the
@@ -214,3 +215,26 @@ All declared samples must correlate before a nearest-rank p95 is reported, and
 fewer than 1,000 samples yield no p95. Missing events or a timed-out browser fail
 the run; they are not discarded. This does not qualify transient start-state
 display, the adopted full-duration baseline/stress/soak schedule, or actual tools.
+
+The full synthetic metadata baseline is selected with `--baseline`; use
+`--baseline-preflight` first for one minute of warmup and one measured minute.
+The full profile runs five warmup minutes plus thirty measured minutes. Ten
+trace-only connectors on the existing source each produce one new 50-observation
+run per minute (root start, 24 tool start/finish pairs, root finish). Uniform
+120 ms slots give 8.333 exported observations/s. These are synthetic native
+observations, not actual delegated tasks or multi-host execution.
+
+Two independent browser contexts follow agents 0 and 1 across run boundaries.
+All their terminal observations are required: 1,680 total, of which 1,440 belong
+to the measured window. Warmup must correlate successfully but does not enter
+measured statistics. The observer allowlists the owned node/epoch and ten agents,
+with at most 17,500 commit records; the receiver is capped at 1,680 observations.
+`progress.json` advances each minute with emitted/acknowledged counts. The
+controller detects an early fixture failure rather than waiting for the browser
+timeout and restores normal Core configuration on exit.
+
+Use a new empty private directory for each run and retain a frozen copy of the
+helper sources for long qualification. Never infer completion from a progress
+file: verify the actual controller process, final result and restoration record.
+The baseline does not close observer-overhead, stress/soak, retained-volume,
+physical quota or full topology acceptance.

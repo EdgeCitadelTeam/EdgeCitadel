@@ -41,11 +41,18 @@ class TimedConnection(sqlite3.Connection):
 
 
 class CommitObserver:
-    """One owned source/run; bounded memory, first identity wins, no payload output."""
+    """One source and explicit run/agent cohort; bounded records, first identity wins."""
 
-    def __init__(self, *, node_id, source_epoch, trace_id, capacity=4096):
+    def __init__(
+        self, *, node_id, source_epoch, trace_id=None, agent_ids=None, capacity=4096
+    ):
         if not 1 <= capacity <= 100_000:
             raise ValueError("invalid observer capacity")
+        if (trace_id is None) == (agent_ids is None):
+            raise ValueError("select exactly one run or agent cohort")
+        self.agent_ids = frozenset(agent_ids) if agent_ids is not None else None
+        if self.agent_ids is not None and not 1 <= len(self.agent_ids) <= 10:
+            raise ValueError("agent cohort must contain one to ten identities")
         self.scope = (node_id, source_epoch, trace_id)
         self.capacity = capacity
         self._lock = threading.Lock()
@@ -66,11 +73,12 @@ class CommitObserver:
             if result.outcome != "accepted" or bracket is None:
                 return
             event = json.loads(message.data)["event"]
-            if (
-                event["node_id"],
-                event["source_epoch"],
-                event["trace_id"],
-            ) != self.scope:
+            if (event["node_id"], event["source_epoch"]) != self.scope[:2]:
+                return
+            if self.agent_ids is not None:
+                if event["agent_id"] not in self.agent_ids:
+                    return
+            elif event["trace_id"] != self.scope[2]:
                 return
             identity = (event["node_id"], event["source_epoch"], event["event_id"])
             with self._lock:
@@ -83,6 +91,8 @@ class CommitObserver:
                     "node_id": identity[0],
                     "source_epoch": identity[1],
                     "event_id": identity[2],
+                    "trace_id": event["trace_id"],
+                    "agent_id": event["agent_id"],
                     "collector_epoch": result.collector_epoch,
                     "ingest_seq": result.ingest_seq,
                     **asdict(bracket),

@@ -104,7 +104,7 @@ class RenderReceiver:
     def url(self):
         return f"http://127.0.0.1:{self.server.server_port}"
 
-    def expect(self, event_id, node_id, state):
+    def expect(self, event_id, node_id, state, *, trace_id=None, lane=0, measured=True):
         with self._lock:
             if event_id in self._expected:
                 raise ValueError("duplicate expected identity")
@@ -115,6 +115,9 @@ class RenderReceiver:
                 "event_id": event_id,
                 "node_id": node_id,
                 "state": state,
+                "trace_id": trace_id,
+                "lane": lane,
+                "measured": measured,
             }
 
     def wait(self, event_id, timeout):
@@ -134,6 +137,9 @@ class RenderReceiver:
                 "valid": self._failure is None,
                 "failure": self._failure,
                 "expected": list(self._expected),
+                "eligible": [
+                    key for key, value in self._expected.items() if value["measured"]
+                ],
                 "acks": dict(self._acks),
             }
 

@@ -217,3 +217,32 @@ def test_ingestion_failure_has_no_ack_and_restores_wiring(tmp_path, monkeypatch)
     assert observer.report()["records"] == []
     assert trace_collector.sqlite3 is sqlite3
     assert trace_collector.ingest_delivery is original_delivery
+
+
+def test_agent_cohort_matches_owned_source_across_distinct_runs():
+    from e2e.helpers.trace_commit_observer import CommitBracket
+
+    record = event_record()
+    event = record["event"]
+    observer = CommitObserver(
+        node_id=event["node_id"],
+        source_epoch=event["source_epoch"],
+        agent_ids=["owned-a", "owned-b"],
+        capacity=4,
+    )
+    db = SimpleNamespace(last_commit=CommitBracket(1, 2))
+    result = SimpleNamespace(outcome="accepted", collector_epoch="epoch", ingest_seq=1)
+    for agent, trace in [
+        ("owned-a", "a" * 32),
+        ("owned-b", "b" * 32),
+        ("foreign", "c" * 32),
+    ]:
+        event.update(agent_id=agent, trace_id=trace, event_id=str(uuid4()))
+        observer.observe(db, Message(record), result)
+    event.update(agent_id="owned-a", node_id="different-source", event_id=str(uuid4()))
+    observer.observe(db, Message(record), result)
+    assert {r["trace_id"] for r in observer.report()["records"]} == {"a" * 32, "b" * 32}
+    assert observer.report()["valid"]
+    for scope in [{}, {"agent_ids": []}, {"trace_id": "a", "agent_ids": ["owned-a"]}]:
+        with pytest.raises(ValueError):
+            CommitObserver(node_id="source", source_epoch="epoch", **scope)

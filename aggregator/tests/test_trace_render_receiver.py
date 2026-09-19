@@ -36,6 +36,9 @@ def test_ack_is_allowlisted_first_receipt_on_monotonic_clock(receiver):
         "event_id": "event-1",
         "node_id": "span:1",
         "state": "running",
+        "trace_id": None,
+        "lane": 0,
+        "measured": True,
     }
     request(receiver, "/ready", b"")
     assert receiver.ready.is_set()
@@ -90,3 +93,19 @@ def test_capacity_is_bounded_and_report_is_not_mutable_state(receiver):
     snapshot["acks"]["forged"] = 1
     assert receiver.report()["expected"] == ["first", "second"]
     assert receiver.report()["acks"] == {}
+
+
+def test_warmup_is_required_but_not_in_measured_cohort(receiver):
+    receiver.expect(
+        "warmup", "span:1", "finished", trace_id="run-1", lane=1, measured=False
+    )
+    receiver.expect("measured", "span:2", "finished", trace_id="run-2", lane=0)
+    pending = request(receiver, "/next")
+    assert pending["event_id"] == "warmup" and pending["lane"] == 1
+    assert pending["trace_id"] == "run-1" and not pending["measured"]
+    request(receiver, "/ack", b'{"event_id":"warmup"}')
+    assert request(receiver, "/next")["event_id"] == "measured"
+    report = receiver.report()
+    assert report["expected"] == ["warmup", "measured"]
+    assert report["eligible"] == ["measured"]
+    assert set(report["acks"]) == {"warmup"}

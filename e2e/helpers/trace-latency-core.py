@@ -18,7 +18,9 @@ def main():
     if (directory / "host-name").read_text().strip().lower() != "jim-eq":
         raise RuntimeError("qualification is restricted to jim-eq")
     config = json.loads((directory / "scope.json").read_text())
-    observer = CommitObserver(**config["scope"], capacity=4096)
+    observer = CommitObserver(
+        **config["scope"], capacity=max(4096, config["workload"]["expected_events"])
+    )
     sys.path.insert(0, str(Path.cwd()))
     from aggregator import trace_collector
 

@@ -45,3 +45,34 @@ def summarize_latencies(values, expected):
         else None,
         "p95_sample_sufficient": expected >= 1000,
     }
+
+
+def baseline_workload(*, preflight=False):
+    warmup_cycles, measured_cycles = (1, 1) if preflight else (5, 30)
+    cycles = warmup_cycles + measured_cycles
+    return {
+        "mode": "baseline",
+        "profile": "preflight" if preflight else "full",
+        "agents": 10,
+        "sampled_agents": [0, 1],
+        "events_per_run": 50,
+        "operations_per_run": 24,
+        "cycles": cycles,
+        "warmup_cycles": warmup_cycles,
+        "measured_cycles": measured_cycles,
+        "duration_s": cycles * 60,
+        "event_rate": 25 / 3,
+        "expected_events": cycles * 500,
+        "expected_runs": cycles * 10,
+        "samples": cycles * 48,
+        "measured_samples": measured_cycles * 48,
+        "eligible_phases": ["finished"],
+        "browser_timeout_s": cycles * 60 + 180,
+    }
+
+
+def baseline_slot(index):
+    """Uniform 120 ms slots: ten agents, fifty events per run, one run/minute."""
+    cycle, offset = divmod(index, 500)
+    step, agent = divmod(offset, 10)
+    return cycle, agent, step
