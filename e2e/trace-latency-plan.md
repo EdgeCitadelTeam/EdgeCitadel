@@ -1,9 +1,10 @@
 # Controlled Core commit-to-display qualification
 
-Status: clock prerequisite, bounded observers, pilot and a 1,000-terminal-state
-fixed-rate jim-eq diagnostic are verified. Its conservative p95 is 1.706 s.
-Observer-overhead comparison and the full baseline/stress/soak workload remain
-open. This does not close M6 or M7.
+Status: the full 35-minute synthetic jim-eq baseline is complete and independently
+audited after the historical source-progress lookup fix. All 17,500 events and
+1,680 warmup/measured displays correlate; measured p95 upper bound is 928.531 ms
+across 1,440 samples. Normal Core startup is restored. Observer overhead,
+stress/soak and broader M4–M7 gates remain open.
 
 ## Observed boundaries
 
@@ -265,3 +266,19 @@ all predeclared observations/ACKs before claiming baseline latency acceptance.
 Frozen harness `baseline-code-28c03be` and output `baseline-full-2` on jim-eq
 identify this attempt; revalidate its process before acting. Observer overhead,
 stress/soak, retained-volume and broader M4–M7 acceptance remain separate gates.
+
+### Full synthetic baseline result
+
+Frozen source/harness `28c03be`, run `baseline-full-2`, completed with all 350 runs,
+17,500 exact settled events, 240 warmup and 1,440 measured ACKs. The independent
+completion auditor passes. Measured median/p95/maximum upper bounds are
+683.835/928.531/1,806.108 ms. All eleven helper hashes match; normal Core image,
+command/config/mounts, owned connector/session cleanup and zero backlog/lag are
+verified. The earlier failed run remains preserved.
+
+This establishes the numerical target for the declared synthetic baseline only.
+Next measure observer overhead with matched controls, then implement bounded
+stress/soak capture before running those profiles. The 10x full schedule exceeds
+the current observer's 100,000-record cap; changing the CLI rate alone is invalid.
+Actual execution overhead, large/retained-volume behavior, multi-host scenarios
+and the other milestone gates still require their own evidence.

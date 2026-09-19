@@ -248,7 +248,7 @@ connector/session cleanup, then recomputes every reported bound/statistic. It
 rejects a missing result or a Core still using the qualification launcher.
 
 ```bash
-ssh -o BatchMode=yes root@jim-eq '/usr/bin/python3 /root/edgecitadel-latency-20260919/helpers/trace_baseline_audit.py /root/edgecitadel-latency-20260919/baseline-full-1'
+ssh -o BatchMode=yes root@jim-eq '/usr/bin/python3 /root/edgecitadel-latency-20260919/baseline-code-28c03be/trace_baseline_audit.py /root/edgecitadel-latency-20260919/baseline-full-2'
 ```
 
 Its stdout is a sanitized audit summary. Source payloads, receiver tokens and raw
