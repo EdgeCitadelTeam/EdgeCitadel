@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
 import platform
 import sqlite3
 import subprocess
-import sys
 from pathlib import Path
 
 if __package__:
+    from .trace_live_control import cpu_summary, source_display_summary
     from .trace_latency_workload import (
         baseline_slot,
         baseline_workload,
         summarize_latencies,
     )
 else:
+    from trace_live_control import cpu_summary, source_display_summary
     from trace_latency_workload import (
         baseline_slot,
         baseline_workload,
@@ -30,7 +32,7 @@ def require(condition, reason):
         raise ValueError(reason)
 
 
-def audit_cohort(declared, scope, events, positions, commits, render, browser, claimed):
+def audit_source_render(declared, scope, events, render, browser, claimed):
     """Reconstruct eligibility from actual source order, independently of ACK lists."""
     require(
         declared == baseline_workload(preflight=declared.get("profile") == "preflight"),
@@ -115,6 +117,33 @@ def audit_cohort(declared, scope, events, positions, commits, render, browser, c
         browser["page_errors"] == [] and browser["execution_writes"] == 0,
         "browser behavior failed",
     )
+    emission = claimed["emission"]
+    require(
+        emission["events"] == len(events)
+        and emission["waited_for_render_during_emission"] is False,
+        "emission cohort mismatch",
+    )
+    require(
+        math.isfinite(emission["seconds"])
+        and emission["seconds"] >= declared["duration_s"],
+        "declared duration not reached",
+    )
+    return dict(
+        events=events,
+        expected=expected,
+        eligible=eligible,
+        runs=len(runs),
+        tool_pairs=len(spans),
+    )
+
+
+def audit_cohort(declared, scope, events, positions, commits, render, browser, claimed):
+    cohort = audit_source_render(declared, scope, events, render, browser, claimed)
+    events, expected, eligible = (
+        cohort["events"],
+        cohort["expected"],
+        cohort["eligible"],
+    )
     require(
         commits["valid"] is True and commits["failure"] is None,
         "commit observer invalidated",
@@ -179,25 +208,14 @@ def audit_cohort(declared, scope, events, positions, commits, render, browser, c
         claimed["commit_bracket_max_ms"] == max(widths),
         "reported commit width mismatch",
     )
-    emission = claimed["emission"]
-    require(
-        emission["events"] == len(events)
-        and emission["waited_for_render_during_emission"] is False,
-        "emission cohort mismatch",
-    )
-    require(
-        math.isfinite(emission["seconds"])
-        and emission["seconds"] >= declared["duration_s"],
-        "declared duration not reached",
-    )
     return {
         "source_events": len(events),
-        "runs": len(runs),
-        "tool_pairs": len(spans),
+        "runs": cohort["runs"],
+        "tool_pairs": cohort["tool_pairs"],
         "warmup_samples": len(expected) - len(eligible),
         "measured_samples": len(eligible),
         "all_source_commit_and_render_identities_verified": True,
-        "mean_emitted_events_per_second": len(events) / emission["seconds"],
+        "mean_emitted_events_per_second": len(events) / claimed["emission"]["seconds"],
         **summary,
         "p95_numerical_target_met": summary["p95_upper_bound_ms"] <= 2000
         if summary["p95_sample_sufficient"]
@@ -207,7 +225,11 @@ def audit_cohort(declared, scope, events, positions, commits, render, browser, c
 
 def main():
     require(platform.node().lower() == "jim-eq", "audit runs on jim-eq only")
-    directory = Path(sys.argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--observer-control", action="store_true")
+    args = parser.parse_args()
+    directory = args.directory
     require(
         directory.is_absolute() and directory.is_dir(),
         "absolute run directory required",
@@ -217,7 +239,8 @@ def main():
         return json.loads((directory / name).read_text())
 
     declared, config = load("workload.json"), load("scope.json")
-    claimed, fixture = load("result.json"), load("fixture.json")
+    claimed = load("control-result.json" if args.observer_control else "result.json")
+    fixture = load("fixture.json")
     require(
         config["workload"] == fixture["workload"] == claimed["workload"] == declared,
         "workload records disagree",
@@ -295,15 +318,50 @@ def main():
             positions[event["event_id"]] = (epoch, central[6])
     finally:
         db.close()
-    report = audit_cohort(
-        declared,
-        scope,
-        events,
-        positions,
-        load("commits.json"),
-        fixture["render"],
-        load("browser.json"),
-        claimed,
+    render, browser = fixture["render"], load("browser.json")
+    common = source_display_summary(declared, render, fixture["source_started_ns"])
+    cpu = cpu_summary(fixture["core_cpu_before"], fixture["core_cpu_after"])
+    require(claimed["source_to_display"] == common, "source/display report mismatch")
+    require(claimed["core_cpu"] == cpu, "Core CPU report mismatch")
+    commits = load("commits.json")
+    require(
+        claimed["commit_observer_enabled"] is (not args.observer_control),
+        "observer mode mismatch",
+    )
+    if args.observer_control:
+        require(
+            commits == {"enabled": False, "records": []},
+            "control retained commit markers",
+        )
+        require(
+            not any(
+                key in claimed
+                for key in (
+                    "latency_upper_bounds_ms",
+                    "p95_upper_bound_ms",
+                    "commit_bracket_max_ms",
+                )
+            ),
+            "control claims commit timing",
+        )
+        cohort = audit_source_render(declared, scope, events, render, browser, claimed)
+        report = dict(
+            source_events=len(events),
+            runs=cohort["runs"],
+            tool_pairs=cohort["tool_pairs"],
+            all_source_and_render_identities_verified=True,
+            commit_observer_enabled=False,
+        )
+    else:
+        require(commits["enabled"] is True, "commit observer disabled")
+        report = audit_cohort(
+            declared, scope, events, positions, commits, render, browser, claimed
+        )
+    report.update(
+        source_to_display={
+            key: value for key, value in common.items() if key != "values_ms"
+        },
+        core_cpu=cpu,
     )
     container = json.loads(
         subprocess.check_output(["docker", "inspect", "edgecitadel-aggregator-1"])

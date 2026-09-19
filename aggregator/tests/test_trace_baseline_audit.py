@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from e2e.helpers.trace_baseline_audit import audit_cohort
+from e2e.helpers.trace_baseline_audit import audit_cohort, audit_source_render
 from e2e.helpers.trace_latency_workload import (
     baseline_slot,
     baseline_workload,
@@ -155,3 +155,12 @@ def test_rejects_incomplete_or_substituted_evidence_even_when_counts_match(
         )
     with pytest.raises(ValueError):
         audit_cohort(*values)
+
+
+def test_control_reconstructs_source_cohort_without_commit_markers(evidence):
+    declared, scope, events, _, _, render, browser, claimed = deepcopy(evidence)
+    result = audit_source_render(declared, scope, events, render, browser, claimed)
+    assert result["runs"] == 20 and result["tool_pairs"] == 480
+    render["eligible"][0] = render["expected"][0]
+    with pytest.raises(ValueError, match="cohort substituted"):
+        audit_source_render(declared, scope, events, render, browser, claimed)

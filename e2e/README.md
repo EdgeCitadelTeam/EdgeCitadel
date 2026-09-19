@@ -173,7 +173,7 @@ baseline, stress, soak and observer-overhead qualification remain open.
 The pilot consists of `trace-latency-pilot.py`, `trace-latency-core.py`,
 `trace-latency-fixture.py`, `trace-latency-browser.js`, `trace-browser-diagnostics.js`, `trace_render_receiver.py`,
 `trace_commit_observer.py`, `trace_latency_workload.py`, `trace-baseline-fixture.py`
-and `trace-clock-probe.py`
+and `trace-clock-probe.py`, plus `trace_live_control.py`
 in `helpers/`. Copy this set
 into `/root/edgecitadel-latency-20260919/helpers` on jim-eq. The browser helper
 requires the pinned local `playwright` and `playwright-core` packages in the
@@ -241,7 +241,7 @@ physical quota or full topology acceptance.
 
 After a baseline controller finishes and restores Core, run the read-only
 `helpers/trace_baseline_audit.py` on jim-eq against its absolute run directory.
-Place `trace_latency_workload.py` beside it. The auditor reads the private raw
+Place `trace_latency_workload.py` and `trace_live_control.py` beside it. The auditor reads the private raw
 reports and existing source/Core databases, reconstructs the exact schedule and
 eligible cohort from source order, verifies hashes/positions/settlement and
 connector/session cleanup, then recomputes every reported bound/statistic. It
@@ -300,3 +300,25 @@ PRAGMAs, runtime versions and helper hashes. Preserve negative differences as
 measurement variation. No pass/fail threshold or full-system overhead claim is
 inferred from this component result. Component tests are in
 `aggregator/tests/test_trace_observer_benchmark.py`.
+
+
+### Matched live commit-observer control
+
+The baseline controller accepts `--observer-control` with `--baseline` or
+`--baseline-preflight`. Use separate empty private output directories for the
+control and observed arms. The control keeps the same source/browser workload
+and Core launcher but disables commit instrumentation. Both arms record
+before-source-append to host render-ACK bounds and Core process CPU ticks over
+the measured phase, including the final ACK drain. PID/start-tick changes,
+missing samples and reversed clocks invalidate the result. CPU includes any
+unrelated fleet work in that process.
+
+Control writes `control-result.json` and contains no commit-to-render claim;
+observed mode writes `result.json`. Pass `--observer-control` to the auditor for
+the control arm. It independently reconstructs the source cohort and warmup
+membership in both modes. Both modes restore the normal Core service.
+Use each run's matching frozen helpers when auditing historical evidence.
+
+One preflight pair verifies harness wiring, not an overhead bound. Full matched
+repeated measurements remain necessary; this control does not measure browser
+observer cost or actual task-execution overhead.

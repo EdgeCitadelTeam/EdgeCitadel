@@ -15,6 +15,7 @@ from uuid import uuid4
 from edgecitadel_agentd.client import AgentdClient
 from edgecitadel_agentd.service import socket_path_for
 from trace_latency_workload import baseline_slot
+from trace_live_control import process_cpu
 from trace_render_receiver import RenderReceiver
 
 
@@ -46,6 +47,7 @@ def main():
     report = {
         "fixture": "synthetic_ten_agents_one_source_not_actual_execution",
         "workload": workload,
+        "source_started_ns": {},
     }
 
     def terminate(*_):
@@ -94,6 +96,7 @@ def main():
         print(json.dumps({"stage": "scope_ready", "agents": 10}), flush=True)
         if not receiver.ready.wait(150):
             raise TimeoutError("baseline browser readiness timeout")
+        core_pid = json.loads((out / "runtime.json").read_text())["core_pid"]
         started = time.monotonic()
         next_renewal = started + 60
         max_lateness = 0
@@ -109,6 +112,8 @@ def main():
                     )
                 next_renewal = time.monotonic() + 60
             cycle, agent, step = baseline_slot(index)
+            if index == workload["warmup_cycles"] * 500:
+                report["core_cpu_before"] = process_cpu(core_pid)
             actor = actors[agent]
             client = actor["client"]
             max_lateness = max(max_lateness, time.monotonic() - scheduled)
@@ -139,6 +144,7 @@ def main():
                 span = actor["spans"][(step - 1) // 2]
                 phase = "started" if step % 2 else "finished"
                 binding = actor["binding"]
+                append_started = time.monotonic_ns()
                 response = client.call(
                     "trace.append",
                     schema_version=1,
@@ -173,6 +179,7 @@ def main():
                         ).hexdigest()
                     )
                     event_id = response["result"]["event_id"]
+                    report["source_started_ns"][event_id] = append_started
                     receiver.expect(
                         event_id,
                         identity,
@@ -206,6 +213,7 @@ def main():
         deadline = time.monotonic() + 120
         for event_id in expected:
             receiver.wait(event_id, max(0.01, deadline - time.monotonic()))
+        report["core_cpu_after"] = process_cpu(core_pid)
         names = tuple(actor["name"] for actor in actors)
         placeholders = ",".join("?" for _ in names)
         source = read(

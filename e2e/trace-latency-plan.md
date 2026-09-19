@@ -308,3 +308,16 @@ to +29.530% (median +6.735%); retain this variability rather than treating the
 median as a stable overhead bound. The next controls must cover live broker/
 browser costs and actual task execution. No full-system overhead gate is closed
 by this component comparison.
+
+
+### Live commit-observer control
+
+The baseline runner now supports observer-disabled controls with identical
+source/browser schedules. Both modes record source-append-to-host-render bounds
+and Core process CPU counters outside warmup; process identity changes and
+incomplete cohorts invalidate the run. The auditor reconstructs warmup membership
+from source order even without commit markers. Control results cannot claim
+commit-to-render timing. This isolates the incremental commit instrumentation in
+a live broker/browser workload; browser observer cost and actual task-execution
+overhead remain separate. Two-minute preflights qualify wiring only; full repeated
+matched arms and their variation are required before an overhead conclusion.

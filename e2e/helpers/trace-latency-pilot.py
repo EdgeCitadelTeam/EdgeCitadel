@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 from trace_latency_workload import baseline_workload, summarize_latencies, workload
+from trace_live_control import cpu_summary, source_display_summary
 
 
 BASE = [
@@ -76,9 +77,12 @@ def main():
     profile.add_argument("--baseline", action="store_true")
     profile.add_argument("--baseline-preflight", action="store_true")
     parser.add_argument("--event-rate", type=float, default=25 / 3)
+    parser.add_argument("--observer-control", action="store_true")
     args = parser.parse_args()
     if (args.baseline or args.baseline_preflight) and args.event_rate != 25 / 3:
         parser.error("baseline profiles require the fixed 25/3 event rate")
+    if args.observer_control and not (args.baseline or args.baseline_preflight):
+        parser.error("observer control requires a baseline profile")
     declared = (
         baseline_workload(preflight=args.baseline_preflight)
         if args.baseline or args.baseline_preflight
@@ -88,6 +92,9 @@ def main():
     if not out.is_absolute() or not out.is_dir() or list(out.iterdir()):
         raise ValueError("empty private absolute pilot directory required")
     (out / "workload.json").write_text(json.dumps(declared))
+    (out / "observer.json").write_text(
+        json.dumps({"enabled": not args.observer_control})
+    )
     helpers = Path(__file__).resolve().parent
     inspect = json.loads(run(["docker", "inspect", "edgecitadel-aggregator-1"]).stdout)[
         0
@@ -166,6 +173,12 @@ def main():
         ready()
         clock = run(["/usr/bin/python3", str(helpers / "trace-clock-probe.py")])
         (out / "clock.json").write_text(clock.stdout)
+        current = json.loads(
+            run(["docker", "inspect", "edgecitadel-aggregator-1"]).stdout
+        )[0]
+        (out / "runtime.json").write_text(
+            json.dumps({"core_pid": current["State"]["Pid"]})
+        )
         with (out / "browser.log").open("w") as log:
             browser = subprocess.Popen(
                 ["/usr/bin/node", str(helpers / "trace-latency-browser.js"), str(out)],
@@ -241,16 +254,43 @@ def main():
     fixture_report = json.loads((out / "fixture.json").read_text())
     browser_report = json.loads((out / "browser.json").read_text())
     render = fixture_report["render"]
-    assert commits["valid"] and render["valid"]
+    assert render["valid"]
     assert fixture_report["source_core_exact"] and fixture_report["all_core_settled"]
     assert fixture_report["owned_connector_revoked"]
-    markers = {record["event_id"]: record for record in commits["records"]}
     assert (
         len(render["expected"])
         == len(render["acks"])
         == browser_report["samples"]
         == declared["samples"]
     )
+    if declared["mode"] == "baseline":
+        report.update(
+            source_to_display=source_display_summary(
+                declared, render, fixture_report["source_started_ns"]
+            ),
+            core_cpu=cpu_summary(
+                fixture_report["core_cpu_before"], fixture_report["core_cpu_after"]
+            ),
+            commit_observer_enabled=not args.observer_control,
+        )
+    if args.observer_control:
+        assert commits == {"enabled": False, "records": []}
+        report.update(
+            workload=declared,
+            emission=fixture_report["emission"],
+            source_core_exact=True,
+            all_core_settled=True,
+            event_count=fixture_report["event_count"],
+            run_count=fixture_report["run_count"],
+            owned_connector_revoked=True,
+            browser=browser_report,
+            scope="Matched commit-observer control; source-append-to-display and Core CPU only. No commit-to-render measurement, browser-observer or actual execution overhead claim.",
+        )
+        (out / "control-result.json").write_text(json.dumps(report, indent=2) + "\n")
+        print(json.dumps(report), flush=True)
+        return
+    assert commits["enabled"] is True and commits["valid"]
+    markers = {record["event_id"]: record for record in commits["records"]}
     upper = []
     widths = []
     measured_count = declared.get("measured_samples", declared["samples"])
