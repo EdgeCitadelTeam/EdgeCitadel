@@ -257,11 +257,18 @@ def main():
     require(len(agents) == 10, "agent scope mismatch")
     placeholders = ",".join("?" for _ in agents)
     db = sqlite3.connect(
-        "file:/root/.edgecitadel/agentd/agentd.sqlite3?mode=ro", uri=True
+        "file:/var/lib/edgecitadel-core/state/agentd/trace/agentd.sqlite3?mode=ro",
+        uri=True,
     )
     try:
         db.execute("BEGIN")
-        attach_task_snapshot(db, Path("/root/.edgecitadel/agentd/agentd.sqlite3"))
+        attach_task_snapshot(
+            db,
+            Path("/var/lib/edgecitadel-core/state/agentd/trace/agentd.sqlite3"),
+            task_path=Path(
+                "/var/lib/edgecitadel-core/state/agentd/agentd-tasks.sqlite3"
+            ),
+        )
         rows = db.execute(
             f"SELECT node_id,source_epoch,event_id,source_seq,event_sha256,event_json FROM trace_journal WHERE agent_id IN ({placeholders}) ORDER BY source_seq LIMIT ?",
             (*agents, declared["expected_events"] + 1),

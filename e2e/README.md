@@ -58,6 +58,28 @@ handshakes are bounded; the helper restores collection in `finally`, and the tes
 releases handshakes and waits for helper cleanup even after an assertion failure.
 Only run this case when a temporary fleet-wide collector pause is appropriate.
 
+## Current jim-eq source layout
+
+The live source services use the Linux user-quota deployment:
+
+| Role | Service UID | State directory |
+| --- | --- | --- |
+| Core host Agent | 994 (`edgecitadel-core`) | `/var/lib/edgecitadel-core/state` |
+| Leaf Agent | 993 (`edgecitadel-leaf`) | `/var/lib/edgecitadel-leaf/state` |
+
+Each source's main database is `agentd/trace/agentd.sqlite3` on its provisioned
+quota filesystem. The attached task database and key remain in `agentd/` outside
+that filesystem. Paired readers must pass the explicit task path. Current helpers
+use the Core account's matching supervisor interpreter and updated source paths.
+Core Docker data, the separately operated NATS broker and Hermes gateway retain
+their administrator-owned locations. The old root Agentd directories are fenced
+retirement snapshots; do not restart their old services or use them for live reads.
+
+The CLI/assets used by managed-worker fixtures are installed at
+`/opt/edgecitadel/quota-1a150dc`. Keep account ownership when provisioning temporary
+workers; root-created private files can otherwise be unreadable by the service.
+See [the provisioning and migration workflow](../deploy/trace-storage/README.md).
+
 ## Three-worker S1 qualification
 
 The opt-in S1 case provisions three uniquely named, temporary Hermes Agent
@@ -67,12 +89,13 @@ existing provider configuration and credentials into those private profiles;
 MCP servers are disabled there, and the API toolset is limited to terminal and
 scoped delegation. It leaves the existing Hermes gateway/adapter running.
 
-Prepare the private Python dependency overlay on jim-eq once, using the matching
-installed release (the Hermes interpreter must be Python 3.12 or newer):
-
-```bash
-ssh root@jim-eq 'install -d -m 700 /root/edgecitadel-s1-20260919; /root/.local/bin/uv pip install --python /opt/hermes-agent/venv/bin/python --target /root/edgecitadel-s1-20260919/python /root/.local/share/uv/tools/edgecitadel/share/edgecitadel/agent-runtime'
-```
+The helper uses the installed Leaf runtime source and its Python 3.12 dependencies
+with the existing Hermes Python 3.12 interpreter. It installs/removes packages as
+the Leaf service UID, using that account's systemd bus. Temporary package sources
+and adapter HTTP tokens live in a private service-owned qualification directory;
+provider profiles and wrapper logs remain in the root-owned evidence directory.
+The helper removes its service-owned fixture after cleanup, including failed runs
+whose packages/processes were successfully removed.
 
 Add `EDGECITADEL_TRACE_S1_E2E=1` to the existing direct Playwright environment and
 `--grep 'S1 three'` to its command. This case needs the configured production
@@ -248,7 +271,7 @@ connector/session cleanup, then recomputes every reported bound/statistic. It
 rejects a missing result or a Core still using the qualification launcher.
 
 ```bash
-ssh -o BatchMode=yes root@jim-eq '/root/.edgecitadel/supervisor/bin/python /root/edgecitadel-latency-20260919/helpers/trace_baseline_audit.py /root/edgecitadel-latency-20260919/baseline-new'
+ssh -o BatchMode=yes root@jim-eq '/var/lib/edgecitadel-core/state/supervisor/bin/python /root/edgecitadel-latency-20260919/helpers/trace_baseline_audit.py /root/edgecitadel-latency-20260919/baseline-new'
 ```
 
 Use the matching installed Agentd runtime: the auditor validates and reads the

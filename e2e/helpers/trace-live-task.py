@@ -13,8 +13,8 @@ from edgecitadel_agentd.client import AgentdClient
 from edgecitadel_agentd.service import socket_path_for
 
 assert platform.node().lower() == "jim-eq", "Run real E2E on jim-eq only"
-ROOT = Path("/root/.edgecitadel/agentd")
-LEAF = Path("/root/.edgecitadel-hermes-leaf/agentd")
+ROOT = Path("/var/lib/edgecitadel-core/state/agentd")
+LEAF = Path("/var/lib/edgecitadel-leaf/state/agentd")
 OUTPUT_DIRECTORY = Path(sys.argv[1])
 assert OUTPUT_DIRECTORY.is_absolute(), "Use an absolute owned output directory"
 OUT = OUTPUT_DIRECTORY / "live-task-result.json"
@@ -59,7 +59,7 @@ def connection(path):
 def inspect(trace_id):
     rows, positions, core, mappings = [], [], [], []
     for directory in (ROOT, LEAF):
-        with connection(directory / "agentd.sqlite3") as db:
+        with connection(directory / "trace/agentd.sqlite3") as db:
             rows.extend(
                 db.execute(
                     "SELECT node_id,source_epoch,event_id,source_seq,event_sha256,event_json FROM trace_journal WHERE trace_id=?",

@@ -127,7 +127,7 @@ test('fresh Hermes execution updates the real browser, reconnects and preserves 
   ssh(`install -d -m 700 ${directory}`);
   const source = readFileSync(path.resolve(__dirname, '../helpers/trace-live-task.py'), 'utf8');
   execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-task.py`], { input: source });
-  const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-task.py ${directory}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-task.py ${directory}`], { stdio: ['ignore', 'pipe', 'pipe'] });
   let trace, settled, processError = false;
   child.stderr.on('data', () => { processError = true; });
   const finished = new Promise(resolve => child.on('exit', resolve));
@@ -244,7 +244,7 @@ test('S4 denied dispatch has permission evidence and no child execution', async 
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-denied-dispatch.py')),
   });
   const result = JSON.parse(execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
-    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-denial.py ${directory}`],
+    `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-denial.py ${directory}`],
   { encoding: 'utf8', timeout: 150_000 }));
   expect(result.denied_before_child_creation).toBe(true);
   expect(result.no_tasks_on_core_or_leaf).toBe(true);
@@ -278,7 +278,7 @@ test('S6 collector outage leaves execution running and recovers retained evidenc
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-live-task.py')),
   });
   const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
-    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-task.py ${directory} --collector-outage`],
+    `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-task.py ${directory} --collector-outage`],
   { stdio: ['ignore', 'pipe', 'pipe'] });
   let trace, stopped, completed, settled, processError = false;
   child.stderr.on('data', () => { processError = true; });
@@ -335,7 +335,7 @@ test('S6 collector outage leaves execution running and recovers retained evidenc
 });
 
 test('S1 three real Hermes workers show parallel activity and explicit root completion', async ({ page }) => {
-  test.skip(process.env.EDGECITADEL_TRACE_S1_E2E !== '1', 'Requires private Hermes runtime overlay and owned worker provisioning');
+  test.skip(process.env.EDGECITADEL_TRACE_S1_E2E !== '1', 'Requires dedicated-UID Leaf and owned Hermes worker provisioning');
   test.setTimeout(360_000);
   const directory = `/root/edgecitadel-s1-20260919/browser-${Date.now()}`;
   const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
@@ -344,7 +344,7 @@ test('S1 three real Hermes workers show parallel activity and explicit root comp
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-multi-worker.py')),
   });
   const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
-    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-workers.py ${directory} --browser`],
+    `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-workers.py ${directory} --browser`],
   { stdio: ['ignore', 'pipe', 'pipe'] });
   let trace, dispatched, settled, processError = false;
   child.stderr.on('data', () => { processError = true; });
@@ -357,7 +357,10 @@ test('S1 three real Hermes workers show parallel activity and explicit root comp
     if (value.stage === 'complete') settled = value;
   });
   try {
-    await expect.poll(() => trace, { timeout: 180_000 }).toBeTruthy();
+    await expect.poll(() => {
+      if (!trace && (child.exitCode !== null || child.signalCode !== null)) throw new Error('Owned worker helper exited before binding; inspect its private logs');
+      return trace;
+    }, { timeout: 180_000 }).toBeTruthy();
     await page.goto(`/#execution?run=${trace}`);
     await connect(page);
     await expect(page.locator(`[data-node-id="run:${trace}"]`)).toHaveClass(/state-running/);
@@ -365,7 +368,10 @@ test('S1 three real Hermes workers show parallel activity and explicit root comp
     await expect.poll(() => dispatched, { timeout: 15_000 }).toBeTruthy();
     await expect(page.locator('[data-node-id^="task:"].state-running')).toHaveCount(3, { timeout: 30_000 });
     await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-s1-running.png`) });
-    await expect.poll(() => settled, { timeout: 170_000 }).toBeTruthy();
+    await expect.poll(() => {
+      if (!settled && (child.exitCode !== null || child.signalCode !== null)) throw new Error('Owned worker helper exited before settlement; inspect its private logs');
+      return settled;
+    }, { timeout: 170_000 }).toBeTruthy();
     expect(await finished).toBe(0);
     expect(processError).toBe(false);
     expect(settled.actual_model_tool_events_per_worker).toBe(true);
@@ -456,7 +462,7 @@ test('hostile metadata is rejected or inert and local references are never fetch
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-hostile-metadata.py')),
   });
   const result = JSON.parse(execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
-    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-metadata.py ${directory}`], { encoding: 'utf8', timeout: 150_000 }));
+    `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-metadata.py ${directory}`], { encoding: 'utf8', timeout: 150_000 }));
   expect(result.rejected_inputs).toBe(5);
   expect(result.rejections_did_not_append).toBe(true);
   expect(result.source_core_exact).toBe(true);
@@ -517,7 +523,7 @@ test('large retained run expands beyond 500 nodes and exposes every step', async
     });
   }
   const result = JSON.parse(execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
-    retained ? `cat ${directory}/result.json` : `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-large.py ${directory}`], { encoding: 'utf8', timeout: 200_000 }));
+    retained ? `cat ${directory}/result.json` : `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-large.py ${directory}`], { encoding: 'utf8', timeout: 200_000 }));
   expect(result.source_core_exact).toBe(true);
   expect(result.all_core_settled).toBe(true);
   expect(result.event_count).toBe(1202);
@@ -605,7 +611,7 @@ test('keyboard focus survives a real live insertion across a map page boundary',
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-large-run.py')),
   });
   const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
-    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-large.py ${directory} --focus-update`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-large.py ${directory} --focus-update`], { stdio: ['ignore', 'pipe', 'pipe'] });
   let trace, report, exitCode, processError = false;
   child.stderr.on('data', () => { processError = true; });
   const finished = new Promise(resolve => child.on('exit', code => { exitCode = code; resolve(code); }));
@@ -668,7 +674,7 @@ test('live burst above 500 nodes catches up through ordered patches without grap
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-large-run.py')),
   });
   const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
-    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-large.py ${directory} --burst-update`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-large.py ${directory} --burst-update`], { stdio: ['ignore', 'pipe', 'pipe'] });
   let trace, report, exitCode, processError = false, released = false;
   const graphRequests = [], errors = [], writes = [];
   child.stderr.on('data', () => { processError = true; });

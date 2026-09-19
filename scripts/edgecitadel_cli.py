@@ -1982,35 +1982,17 @@ def _load_plugins(state_dir: Path) -> dict[str, Any]:
     return state
 
 
-def _toolkit_python(state_dir: Path) -> Path:
-    managed = os.environ.get("EDGECITADEL_SUPERVISOR_PYTHON")
-    if managed:
-        python = Path(managed)
-        if not python.exists():
-            raise UserError(f"Homebrew Agent service runtime is missing: {python}")
-        return python
-    venv = state_dir / "supervisor"
-    python = venv / "bin" / "python"
-    marker = venv / ".edgecitadel-toolkit-version"
-    expected = (
-        f"{VERSION}|{Path(sys.executable).resolve()}|{INSTALL_ROOT.resolve()}|"
-        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|runtime-copy-v1\n"
-    )
-    if python.exists() and marker.exists() and marker.read_text() == expected:
-        return python
-
-    print("Preparing the local Agent service...", file=sys.stderr)
-    source = venv / "runtime-source"
-    # An interrupted older copy may retain read-only directory modes, which
-    # would otherwise prevent venv --clear from removing its generated files.
-    for copied in (source, venv / "schemas"):
+def _writable_runtime_copies(venv: Path) -> None:
+    """Private copies may retain read-only distribution directory modes."""
+    for copied in (venv / "runtime-source", venv / "schemas"):
         if not copied.is_symlink():
             for directory, _, _ in os.walk(copied):
                 Path(directory).chmod(0o700)
-    _run([sys.executable, "-m", "venv", "--clear", str(venv)])
-    # Editable builds write metadata beside their source, while the runtime
-    # loads schemas relative to that source. Keep both in a private writable
-    # copy inside this venv; never modify potentially read-only bundled assets.
+
+
+def _copy_runtime_sources(venv: Path) -> Path:
+    """Keep editable build metadata and adjacent schemas in the owned runtime."""
+    source = venv / "runtime-source"
     shutil.copytree(
         _asset_root(agent_runtime_root),
         source,
@@ -2031,11 +2013,31 @@ def _toolkit_python(state_dir: Path) -> Path:
         venv / "schemas",
         ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"),
     )
-    # copytree preserves read-only Cellar modes. Both build metadata creation
-    # and later venv cleanup need writable directories in these private copies.
-    for copied in (source, venv / "schemas"):
-        for directory, _, _ in os.walk(copied):
-            Path(directory).chmod(0o700)
+    _writable_runtime_copies(venv)
+    return source
+
+
+def _toolkit_python(state_dir: Path) -> Path:
+    managed = os.environ.get("EDGECITADEL_SUPERVISOR_PYTHON")
+    if managed:
+        python = Path(managed)
+        if not python.exists():
+            raise UserError(f"Homebrew Agent service runtime is missing: {python}")
+        return python
+    venv = state_dir / "supervisor"
+    python = venv / "bin" / "python"
+    marker = venv / ".edgecitadel-toolkit-version"
+    expected = (
+        f"{VERSION}|{Path(sys.executable).resolve()}|{INSTALL_ROOT.resolve()}|"
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|runtime-copy-v1\n"
+    )
+    if python.exists() and marker.exists() and marker.read_text() == expected:
+        return python
+
+    print("Preparing the local Agent service...", file=sys.stderr)
+    _writable_runtime_copies(venv)
+    _run([sys.executable, "-m", "venv", "--clear", str(venv)])
+    source = _copy_runtime_sources(venv)
     _run(
         [
             str(python),
@@ -2765,16 +2767,18 @@ def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> P
     expected = (
         f"{VERSION}|{Path(sys.executable).resolve()}|{INSTALL_ROOT.resolve()}|"
         f"{fingerprint}|"
-        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\n"
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|runtime-copy-v1\n"
     )
     if python.exists() and marker.exists() and marker.read_text() == expected:
         return python
 
     if runtime_root.exists():
+        _writable_runtime_copies(runtime_root)
         shutil.rmtree(runtime_root)
     print(f"Preparing isolated Python runtime for Managed Agent {plugin_id}...")
     try:
         _run([sys.executable, "-m", "venv", str(runtime_root)])
+        source = _copy_runtime_sources(runtime_root)
         _run(
             [
                 str(python),
@@ -2784,7 +2788,7 @@ def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> P
                 "--quiet",
                 "--disable-pip-version-check",
                 "-e",
-                str(_asset_root(agent_runtime_root)),
+                str(source),
                 "-r",
                 str(requirements_path),
             ]
@@ -2792,6 +2796,7 @@ def _plugin_python(state_dir: Path, plugin_id: str, record: dict[str, Any]) -> P
         _secure_write(marker, expected)
     except (OSError, UserError):
         if runtime_root.exists():
+            _writable_runtime_copies(runtime_root)
             shutil.rmtree(runtime_root)
         raise
     return python
@@ -3032,8 +3037,6 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
     ):
         raise UserError(f"Managed Agent {plugin_id} has an invalid runtime command")
     managed_protocol = True
-    python = _plugin_python(state_dir, plugin_id, record)
-    executable = str(python) if command[0] in {"python", "python3"} else command[0]
     logs_dir = state_dir / "logs"
     _private_directory(logs_dir)
     log_path = logs_dir / f"{plugin_id}.log"
@@ -3092,6 +3095,16 @@ def _start_plugin(state_dir: Path, plugin_id: str) -> None:
                 f"({process_status.get('detail', 'ready')})."
             )
             return
+        if (
+            process_status is not None
+            and process_status.get("runtime_state") == "running"
+        ):
+            raise UserError(
+                f"Managed Agent {plugin_id} is running without a ready local session; "
+                "stop it before preparing its runtime"
+            )
+        python = _plugin_python(state_dir, plugin_id, record)
+        executable = str(python) if command[0] in {"python", "python3"} else command[0]
         token_path = _connector_token_path(state_dir, connector_id)
         if existing_connector is None:
             registration = _agentd_rpc(

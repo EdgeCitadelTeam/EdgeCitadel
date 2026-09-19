@@ -144,7 +144,7 @@ def main():
         with (out / "fixture.log").open("w") as log:
             fixture = subprocess.Popen(
                 [
-                    "/root/.edgecitadel/supervisor/bin/python",
+                    "/var/lib/edgecitadel-core/state/supervisor/bin/python",
                     str(
                         helpers
                         / (

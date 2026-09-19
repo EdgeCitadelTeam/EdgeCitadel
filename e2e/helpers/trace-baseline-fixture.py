@@ -19,7 +19,7 @@ from trace_live_control import process_cpu
 from trace_render_receiver import RenderReceiver
 
 
-ROOT = Path("/root/.edgecitadel/agentd")
+ROOT = Path("/var/lib/edgecitadel-core/state/agentd")
 CORE = Path("/root/.edgecitadel/core/data/openclaw.db")
 
 
@@ -74,7 +74,7 @@ def main():
                 "session_id"
             ]
         node_id, source_epoch = read(
-            ROOT / "agentd.sqlite3",
+            ROOT / "trace/agentd.sqlite3",
             "SELECT node_id,source_epoch FROM trace_sources WHERE active=1",
         )[0]
         receiver = RenderReceiver(capacity=workload["samples"])
@@ -217,7 +217,7 @@ def main():
         names = tuple(actor["name"] for actor in actors)
         placeholders = ",".join("?" for _ in names)
         source = read(
-            ROOT / "agentd.sqlite3",
+            ROOT / "trace/agentd.sqlite3",
             f"SELECT node_id,source_epoch,event_id,source_seq,event_sha256,event_json FROM trace_journal WHERE agent_id IN ({placeholders}) ORDER BY source_seq",
             names,
         )
@@ -243,7 +243,7 @@ def main():
             finally:
                 db.close()
             states = read(
-                ROOT / "agentd.sqlite3",
+                ROOT / "trace/agentd.sqlite3",
                 f"SELECT p.state FROM trace_spool p JOIN trace_journal j ON j.node_id=p.node_id AND j.source_epoch=p.source_epoch AND j.event_id=p.journal_event_id WHERE j.agent_id IN ({placeholders})",
                 names,
             )

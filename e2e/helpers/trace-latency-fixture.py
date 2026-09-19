@@ -32,7 +32,7 @@ def main():
     if not out.is_absolute() or not out.is_dir():
         raise ValueError("private absolute output directory required")
     workload = json.loads((out / "workload.json").read_text())
-    root = Path("/root/.edgecitadel/agentd")
+    root = Path("/var/lib/edgecitadel-core/state/agentd")
     core = Path("/root/.edgecitadel/core/data/openclaw.db")
     admin = AgentdClient(
         socket_path_for(root), admin_token=(root / "admin.token").read_text().strip()
@@ -75,7 +75,7 @@ def main():
 
         def rows():
             return read(
-                root / "agentd.sqlite3",
+                root / "trace/agentd.sqlite3",
                 "SELECT node_id,source_epoch,event_id,source_seq,event_sha256,event_json FROM trace_journal WHERE trace_id=? ORDER BY source_seq",
                 (trace_id,),
             )
@@ -192,7 +192,7 @@ def main():
                     )
                 )
             states = read(
-                root / "agentd.sqlite3",
+                root / "trace/agentd.sqlite3",
                 "SELECT p.state FROM trace_spool p JOIN trace_journal j ON j.node_id=p.node_id AND j.source_epoch=p.source_epoch AND j.event_id=p.journal_event_id WHERE j.trace_id=?",
                 (trace_id,),
             )

@@ -17,7 +17,7 @@ from edgecitadel_agentd.service import socket_path_for
 assert platform.node().lower() == "jim-eq", "Run real E2E on jim-eq only"
 OUT = Path(sys.argv[1])
 assert OUT.is_absolute() and OUT.is_dir()
-ROOT = Path("/root/.edgecitadel/agentd")
+ROOT = Path("/var/lib/edgecitadel-core/state/agentd")
 CORE = Path("/root/.edgecitadel/core/data/openclaw.db")
 
 
@@ -31,7 +31,7 @@ def read(path, sql, args):
 
 def rows(trace_id):
     return read(
-        ROOT / "agentd.sqlite3",
+        ROOT / "trace/agentd.sqlite3",
         "SELECT node_id,source_epoch,event_id,source_seq,event_sha256,event_json FROM trace_journal WHERE trace_id=? ORDER BY source_seq",
         (trace_id,),
     )
@@ -197,7 +197,7 @@ try:
                 )
             )
         states = read(
-            ROOT / "agentd.sqlite3",
+            ROOT / "trace/agentd.sqlite3",
             "SELECT p.state FROM trace_spool p JOIN trace_journal j ON j.node_id=p.node_id AND j.source_epoch=p.source_epoch AND j.event_id=p.journal_event_id WHERE j.trace_id=?",
             (trace_id,),
         )

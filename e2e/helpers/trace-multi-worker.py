@@ -3,6 +3,7 @@
 import json
 import os
 import platform
+import pwd
 import secrets
 import shutil
 import socket
@@ -22,19 +23,31 @@ from edgecitadel_agentd.service import socket_path_for
 assert platform.node().lower() == "jim-eq", "Run real E2E on jim-eq only"
 OUT = Path(sys.argv[1])
 assert OUT.is_absolute() and OUT.is_dir(), "Use an existing owned output directory"
-ASSETS = Path("/root/.local/share/uv/tools/edgecitadel/share/edgecitadel")
-STATE = Path("/root/.edgecitadel-hermes-leaf")
-ROOT = Path("/root/.edgecitadel/agentd")
+ASSETS = Path("/opt/edgecitadel/quota-1a150dc/share/edgecitadel")
+STATE = Path("/var/lib/edgecitadel-leaf/state")
+ROOT = Path("/var/lib/edgecitadel-core/state/agentd")
 CORE = Path("/root/.edgecitadel/core/data/openclaw.db")
 PYTHON = "/opt/hermes-agent/venv/bin/python"
-OVERLAY = Path("/root/edgecitadel-s1-20260919/python")
+OVERLAY = STATE / "supervisor/runtime-source/src"
+DEPENDENCIES = STATE / "supervisor/lib/python3.12/site-packages"
 assert (OVERLAY / "edgecitadel_agentd").is_dir(), (
-    "Install the private runtime overlay first"
+    "Prepared Leaf runtime source is missing"
 )
-CLI = "/root/.local/bin/edgecitadel"
+assert (DEPENDENCIES / "nats").is_dir(), (
+    "Prepared Leaf runtime dependencies are missing"
+)
+CLI = "/opt/edgecitadel/quota-1a150dc/bin/edgecitadel"
 BROWSER = sys.argv[2:] == ["--browser"]
 assert not sys.argv[2:] or BROWSER, "Unknown scenario option"
 nonce = uuid4().hex[:8]
+identity = pwd.getpwuid(STATE.stat().st_uid)
+assert identity.pw_uid != 0, "Live Leaf must use its dedicated service UID"
+fixture_parent = STATE / "qualification"
+fixture_parent.mkdir(mode=0o700, exist_ok=True)
+os.chown(fixture_parent, identity.pw_uid, identity.pw_gid)
+fixture = fixture_parent / ("trace-workers-" + nonce)
+fixture.mkdir(mode=0o700)
+os.chown(fixture, identity.pw_uid, identity.pw_gid)
 workers = []
 root_client = None
 session = None
@@ -48,6 +61,14 @@ leaf_admin = AgentdClient(
 
 
 def command(argv, env=None):
+    if argv[0] == CLI:
+        env = {
+            **(env or os.environ),
+            "HOME": str(STATE.parent),
+            "XDG_RUNTIME_DIR": f"/run/user/{identity.pw_uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{identity.pw_uid}/bus",
+        }
+        argv = ["runuser", "-u", identity.pw_name, "--", *argv]
     with (OUT / "provision.log").open("a") as log:
         subprocess.run(argv, env=env, stdout=log, stderr=log, check=True, timeout=120)
 
@@ -89,7 +110,13 @@ try:
         token = directory / "http.token"
         token.write_text(secrets.token_urlsafe(40) + "\n")
         token.chmod(0o600)
-        package = directory / "package"
+        service_directory = fixture / suffix
+        service_directory.mkdir(mode=0o700)
+        os.chown(service_directory, identity.pw_uid, identity.pw_gid)
+        service_token = service_directory / "http.token"
+        shutil.copy2(token, service_token)
+        os.chown(service_token, identity.pw_uid, identity.pw_gid)
+        package = service_directory / "package"
         shutil.copytree(ASSETS / "agent-packages/hermes", package)
         manifest = yaml.safe_load((package / "plugin.yaml").read_text())
         manifest["metadata"].update(name=name, version="0.2.0")
@@ -108,7 +135,7 @@ try:
             **os.environ,
             "EDGECITADEL_STATE_DIR": str(STATE),
             "HERMES_BASE_URL": base,
-            "HERMES_TOKEN_FILE": str(token),
+            "HERMES_TOKEN_FILE": str(service_token),
         }
         command(
             [
@@ -120,6 +147,8 @@ try:
             ],
             env,
         )
+        for path in [package, *package.rglob("*")]:
+            os.lchown(path, identity.pw_uid, identity.pw_gid)
         package_id = "edgecitadel." + name
         worker = {
             "agent": agent,
@@ -144,11 +173,12 @@ try:
         credential = STATE / "connectors" / (connector + ".token")
         credential.write_text(registration["token"] + "\n")
         credential.chmod(0o600)
+        os.chown(credential, identity.pw_uid, identity.pw_gid)
         wrapper_env = {
             **os.environ,
             "HERMES_HOME": str(profile),
             "EDGECITADEL_SCHEMA_DIR": str(ASSETS / "schemas"),
-            "PYTHONPATH": str(OVERLAY) + ":" + str(package),
+            "PYTHONPATH": ":".join(map(str, (OVERLAY, DEPENDENCIES, package))),
         }
         with (directory / "server.log").open("w") as log:
             process = subprocess.Popen(
@@ -293,7 +323,7 @@ try:
     for source in [ROOT, STATE / "agentd"]:
         rows.extend(
             read(
-                source / "agentd.sqlite3",
+                source / "trace/agentd.sqlite3",
                 "SELECT node_id,source_epoch,event_id,source_seq,event_sha256,event_json FROM trace_journal WHERE trace_id=?",
                 (trace_id,),
             )
@@ -335,7 +365,7 @@ try:
         for source in [ROOT, STATE / "agentd"]:
             positions.extend(
                 read(
-                    source / "agentd.sqlite3",
+                    source / "trace/agentd.sqlite3",
                     "SELECT p.node_id,p.source_epoch,p.export_generation,p.export_seq,p.event_id,p.event_sha256,p.state "
                     "FROM trace_spool p JOIN trace_journal j ON j.node_id=p.node_id "
                     "AND j.source_epoch=p.source_epoch AND j.event_id=p.journal_event_id WHERE j.trace_id=?",
@@ -411,6 +441,8 @@ finally:
         raise RuntimeError(
             "owned worker cleanup failed; inspect private logs"
         ) from cleanup_errors[0]
+
+    shutil.rmtree(fixture)
 
 report["owned_workers_removed"] = True
 (OUT / "result.json").write_text(json.dumps(report, indent=2) + "\n")

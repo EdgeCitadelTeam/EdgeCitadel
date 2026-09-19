@@ -1775,6 +1775,14 @@ def test_process_identity_changes_with_process_start_description(monkeypatch):
 def test_plugin_python_builds_and_reuses_requirements_scoped_runtime(
     tmp_path, monkeypatch
 ):
+    install = tmp_path / "install"
+    runtime = install / "agent-runtime"
+    (runtime / "src/edgecitadel_agentd").mkdir(parents=True)
+    (runtime / "pyproject.toml").write_text("owned build source")
+    (runtime / "src").chmod(0o555)
+    (install / "schemas").mkdir()
+    (install / "schemas/task-correlation.v1.json").write_text("{}")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", install)
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     requirements = plugin_root / "requirements.txt"
@@ -1795,6 +1803,16 @@ def test_plugin_python_builds_and_reuses_requirements_scoped_runtime(
             runtime_python.parent.mkdir(parents=True)
             runtime_python.touch()
 
+        elif command[1:4] == ["-m", "pip", "install"]:
+            source = Path(command[command.index("-e") + 1])
+            assert source != cli.INSTALL_ROOT / "agent-runtime"
+            assert source.name == "runtime-source"
+            assert (
+                source.parent.joinpath("schemas/task-correlation.v1.json").read_text()
+                == "{}"
+            )
+            (source / "src/generated.egg-info").mkdir()
+
     monkeypatch.setattr(cli, "_run", run)
 
     first = cli._plugin_python(tmp_path, "edgecitadel.gemma", record)
@@ -1811,11 +1829,52 @@ def test_plugin_python_builds_and_reuses_requirements_scoped_runtime(
     upgraded_root = tmp_path / "upgraded-cellar"
     upgraded_runtime = upgraded_root / "agent-runtime"
     (upgraded_runtime / "src" / "edgecitadel_agentd").mkdir(parents=True)
-    (upgraded_runtime / "pyproject.toml").write_text("")
+    (upgraded_runtime / "pyproject.toml").write_text("upgraded build source")
+    (upgraded_root / "schemas").mkdir()
+    (upgraded_root / "schemas/task-correlation.v1.json").write_text("{}")
     monkeypatch.setattr(cli, "INSTALL_ROOT", upgraded_root)
     assert cli._plugin_python(tmp_path, "edgecitadel.gemma", record) == first
     assert len(commands) == 4
-    assert str(upgraded_runtime) in commands[3]
+    staged = first.parents[1] / "runtime-source"
+    assert str(staged) in commands[3]
+    assert (staged / "pyproject.toml").read_text() == "upgraded build source"
+    assert not (runtime / "src/generated.egg-info").exists()
+    assert (runtime / "src").stat().st_mode & 0o777 == 0o555
+
+
+@pytest.mark.parametrize("ready", [True, False])
+def test_managed_agent_start_never_rebuilds_a_live_runtime(
+    tmp_path, monkeypatch, ready
+):
+    inventory = _inventory()
+    inventory["package"]["kind"] = "ManagedAgent"
+    record = {"path": str(tmp_path / "plugin"), "inventory": inventory, "pid": None}
+    monkeypatch.setattr(cli, "_load_node", lambda *_: {"agent_id": "owned"})
+    monkeypatch.setattr(
+        cli,
+        "_plugin_record",
+        lambda *_: ({"managed_agents": {"local.demo": record}}, record),
+    )
+    monkeypatch.setattr(cli, "_start_agentd", lambda *_: {})
+    monkeypatch.setattr(
+        cli,
+        "_plugin_python",
+        lambda *_: pytest.fail("live runtime must not be rebuilt"),
+    )
+
+    def rpc(_state, operation, **_kwargs):
+        if operation == "connector.list":
+            return [{"connector_id": "managed-demo-agent", "session_active": ready}]
+        if operation == "managed.list":
+            return [{"package_id": "local.demo", "runtime_state": "running"}]
+        pytest.fail("unexpected mutation: " + operation)
+
+    monkeypatch.setattr(cli, "_agentd_rpc", rpc)
+    if ready:
+        cli._start_plugin(tmp_path, "local.demo")
+    else:
+        with pytest.raises(cli.UserError, match="stop it before preparing its runtime"):
+            cli._start_plugin(tmp_path, "local.demo")
 
 
 def test_plugin_python_rejects_missing_declared_requirements(tmp_path):

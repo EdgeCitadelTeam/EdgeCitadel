@@ -13,8 +13,8 @@ from edgecitadel_agentd.storage_pair import attach_task_snapshot
 from edgecitadel_agentd.service import socket_path_for
 
 assert platform.node().lower() == "jim-eq", "Run real E2E on jim-eq only"
-ROOT = Path("/root/.edgecitadel/agentd")
-LEAF = Path("/root/.edgecitadel-hermes-leaf/agentd")
+ROOT = Path("/var/lib/edgecitadel-core/state/agentd")
+LEAF = Path("/var/lib/edgecitadel-leaf/state/agentd")
 CORE = Path("/root/.edgecitadel/core/data/openclaw.db")
 output = Path(sys.argv[1])
 assert output.is_absolute() and output.is_dir(), "Use an existing owned directory"
@@ -25,7 +25,9 @@ def read(path, sql, args):
     try:
         db.execute("BEGIN")
         if path.name == "agentd.sqlite3":
-            attach_task_snapshot(db, path)
+            attach_task_snapshot(
+                db, path, task_path=path.parent.parent / "agentd-tasks.sqlite3"
+            )
         return db.execute(sql, args).fetchall()
     finally:
         db.close()
@@ -33,7 +35,7 @@ def read(path, sql, args):
 
 def source_events(trace_id):
     return read(
-        ROOT / "agentd.sqlite3",
+        ROOT / "trace/agentd.sqlite3",
         "SELECT node_id,source_epoch,event_id,source_seq,event_sha256,event_json "
         "FROM trace_journal WHERE trace_id=? ORDER BY source_seq",
         (trace_id,),
@@ -122,7 +124,7 @@ try:
                 )
             )
         positions = read(
-            ROOT / "agentd.sqlite3",
+            ROOT / "trace/agentd.sqlite3",
             "SELECT p.node_id,p.source_epoch,p.export_generation,p.export_seq,p.event_id,p.event_sha256,p.state "
             "FROM trace_spool p JOIN trace_journal j ON j.node_id=p.node_id "
             "AND j.source_epoch=p.source_epoch AND j.event_id=p.journal_event_id WHERE j.trace_id=?",
@@ -150,7 +152,7 @@ try:
         time.sleep(0.5)
     for source in (ROOT, LEAF):
         assert not read(
-            source / "agentd.sqlite3",
+            source / "trace/agentd.sqlite3",
             "SELECT task_id FROM tasks WHERE trace_id=? OR sender_id=?",
             (trace_id, name),
         )
