@@ -230,7 +230,7 @@ materializes its prior revocation and reserves the next one atomically.
 and revocation at user-quota pressure, with accepted tasks and an open run/operation,
 including SIGKILL before commit and after commit/before reserve refill. Production
 workspace installation remains disabled until production seeding integration,
-writer fencing, bounded maintenance and physical geometry/memory/journal/inode
+writer fencing, bounded maintenance and full physical geometry/memory/journal
 qualification are complete. Atomic seeding and sequence-headroom guards exist.
 
 An installed workspace admits at most 512 source identities and 512 export
@@ -240,6 +240,14 @@ sectors no larger than a page and bounded UTF-8 field sizes; per-handle guards p
 stores refuse installation and new identities refuse atomically without deleting
 history. These bounds constrain completion database pages; they do not alone
 qualify the full filesystem journal/workspace requirement.
+
+The installed workspace also holds two empty inode reservations beside its byte
+reserve. Borrowing releases them under the writer lock for the main rollback
+journal and super-journal; restoration publishes readiness only after both empty
+files and the byte reserve are durable. Invalid reservation files refuse admission.
+The attached task journal remains outside the trace quota filesystem. This closes
+inode-quota exhaustion for the qualified paired transaction, while filesystem
+allocation overhead, full journal framing and memory bounds remain separate gates.
 
 For a stopped, clean schema-29 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with

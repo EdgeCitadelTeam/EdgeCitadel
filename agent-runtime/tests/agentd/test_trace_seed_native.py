@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 
-def worker(state, near_limit=False):
+def worker(state, near_limit=False, inode_pressure=False):
     os.umask(0o077)
     state.chmod(0o700)
     assert ctypes.CDLL(None).prctl(38, 1, 0, 0, 0) == 0
@@ -68,8 +68,25 @@ def worker(state, near_limit=False):
 
         pressure = trace / "owned-pressure"
 
+        inode_files = []
+        inode_counts = []
+
         def fill():
             with pressure.open("xb", buffering=0) as handle:
+                if inode_pressure:
+                    for index in range(256):
+                        path = trace / f"i{index}"
+                        try:
+                            path.touch(mode=0o600, exist_ok=False)
+                        except OSError as error:
+                            assert error.errno == errno.EDQUOT
+                            break
+                        inode_files.append(path)
+                    else:
+                        raise AssertionError("inode quota was not enforced")
+                    quota = verify_trace_quota(trace, state)
+                    assert quota.allocated_inodes == quota.hard_inodes == 128
+                    inode_counts.append(quota.allocated_inodes)
                 for size in (1024 * 1024, 4096):
                     while True:
                         try:
@@ -85,10 +102,10 @@ def worker(state, near_limit=False):
         try:
             seed_existing_work(store)
         except sqlite3.OperationalError as error:
-            assert error.sqlite_errorcode & 255 in {
-                sqlite3.SQLITE_FULL,
-                sqlite3.SQLITE_IOERR,
-            }
+            expected = {sqlite3.SQLITE_FULL, sqlite3.SQLITE_IOERR}
+            if inode_pressure:
+                expected.add(sqlite3.SQLITE_CANTOPEN)
+            assert error.sqlite_errorcode & 255 in expected
         else:
             raise AssertionError("seeding admitted without quota capacity")
         assert facts() == before
@@ -97,6 +114,9 @@ def worker(state, near_limit=False):
         )
         assert not physical.borrowed
         pressure.unlink()
+        for path in inode_files:
+            path.unlink()
+        inode_files.clear()
         seeded = seed_existing_work(store)
         assert seeded == {
             "required_pending": 34,
@@ -141,6 +161,10 @@ def worker(state, near_limit=False):
         assert (
             db.execute("SELECT count(*) FROM presence_history_all").fetchone()[0] == 2
         )
+        assert physical.reserved
+        quota_after = verify_trace_quota(trace, state)
+        if inode_pressure:
+            assert quota_after.allocated_inodes == 128
         positions = None
         if near_limit:
             for row in db.execute("SELECT task_id FROM tasks").fetchall():
@@ -173,6 +197,9 @@ def worker(state, near_limit=False):
         print(
             json.dumps(
                 {
+                    "inode_pressure": inode_pressure,
+                    "inode_counts_at_pressure": inode_counts,
+                    "inodes_after_completion": quota_after.allocated_inodes,
                     "quota_at_seed_refusal": at_refusal,
                     "quota_at_recovery": at_recovery,
                     "seeded": seeded,
@@ -190,14 +217,21 @@ def worker(state, near_limit=False):
             physical.close()
 
 
-def main(output=None, near_limit=False):
+def main(output=None, near_limit=False, inode_pressure=False):
     from test_trace_linux_quota import owned_volume
 
     with owned_volume() as (root, state, _, _):
         script = root / "seed-probe.py"
         shutil.copyfile(__file__, script)
         result = subprocess.run(
-            [sys.executable, str(script), "--worker", str(state), str(int(near_limit))],
+            [
+                sys.executable,
+                str(script),
+                "--worker",
+                str(state),
+                str(int(near_limit)),
+                str(int(inode_pressure)),
+            ],
             user=65534,
             group=65534,
             extra_groups=[],
@@ -233,9 +267,10 @@ def test_native_existing_work_seed():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
-        worker(Path(sys.argv[2]), bool(int(sys.argv[3])))
+        worker(Path(sys.argv[2]), bool(int(sys.argv[3])), bool(int(sys.argv[4])))
     else:
         main(
             sys.argv[1] if len(sys.argv) > 1 else None,
             near_limit=len(sys.argv) > 2 and sys.argv[2] == "headroom",
+            inode_pressure=len(sys.argv) > 2 and sys.argv[2] == "inodes",
         )

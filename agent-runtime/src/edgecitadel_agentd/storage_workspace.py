@@ -31,6 +31,9 @@ class CompletionWorkspace:
         )
         self.owned = False
         self.borrowed = False
+        self.inode_paths = tuple(
+            path.with_name(f"{path.name}.inode-{index}") for index in range(2)
+        )
         try:
             info = os.fstat(self.descriptor)
             if (
@@ -68,19 +71,54 @@ class CompletionWorkspace:
                 time.sleep(0.005)
         self.owned = True
 
+    def _inode_reserved(self, path: Path) -> bool:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return False
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size != 0
+            or info.st_dev != os.fstat(self.descriptor).st_dev
+        ):
+            raise sqlite3.OperationalError("invalid completion inode reservation")
+        return True
+
+    def _sync_directory(self) -> None:
+        directory = os.open(
+            self.inode_paths[0].parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+        )
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
     def borrow(self) -> None:
         if not self.owned:
             raise sqlite3.ProgrammingError("completion workspace ownership is required")
         if not self.borrowed:
+            # Validate every placeholder before deleting any. The service-owned
+            # directory and writer lock exclude replacement during this cycle.
+            present = [path for path in self.inode_paths if self._inode_reserved(path)]
+            # A failed release still enters completion mode: cached ordinary SQL
+            # must never remain authorized after we release any allocation.
+            self.borrowed = True
             os.ftruncate(self.descriptor, 0)
             os.fsync(self.descriptor)
-            self.borrowed = True
+            for path in present:
+                path.unlink()
+            self._sync_directory()
 
     @property
     def reserved(self) -> bool:
+        inodes = [self._inode_reserved(path) for path in self.inode_paths]
         info = os.fstat(self.descriptor)
         return (
-            info.st_size == WORKSPACE_BYTES + 1
+            all(inodes)
+            and info.st_size == WORKSPACE_BYTES + 1
             and info.st_blocks * 512 >= WORKSPACE_BYTES
         )
 
@@ -88,12 +126,31 @@ class CompletionWorkspace:
         if not self.owned:
             raise sqlite3.ProgrammingError("completion workspace ownership is required")
         if self.borrowed or not self.reserved:
+            # Remove the publication marker before either kind of allocation.
+            # A killed or failed partial refill must remain visibly incomplete.
+            os.ftruncate(self.descriptor, WORKSPACE_BYTES)
+            os.fsync(self.descriptor)
             os.posix_fallocate(self.descriptor, 0, WORKSPACE_BYTES)
             os.fsync(self.descriptor)
-            # One sparse byte beyond the reserved range is a completion marker.
-            # Publish it only after fallocate and fsync succeed. File length and
-            # st_blocks alone can mistake a failed partial allocation plus extent
-            # metadata for a completely allocated range after another writer dies.
+            # The main rollback journal and attached-transaction super-journal
+            # each need one inode here. The task journal is outside this quota.
+            for path in self.inode_paths:
+                if not self._inode_reserved(path):
+                    descriptor = os.open(
+                        path,
+                        os.O_CREAT
+                        | os.O_EXCL
+                        | os.O_WRONLY
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
+                        0o600,
+                    )
+                    try:
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
+            self._sync_directory()
+            # One sparse byte publishes durable byte AND inode reservations.
             os.ftruncate(self.descriptor, WORKSPACE_BYTES + 1)
             os.fsync(self.descriptor)
         self.borrowed = False
@@ -334,9 +391,12 @@ class ReservedConnection(sqlite3.Connection):
                 "completion cannot borrow after ordinary trace writes"
             )
         if not self.workspace.borrowed:
-            self.workspace.borrow()
-            # Invalidate statements prepared while ordinary writes were allowed.
-            super().set_authorizer(self._authorize_write)
+            try:
+                self.workspace.borrow()
+            finally:
+                # Release can fail after freeing space; invalidate cached ordinary
+                # statements even when the caller catches that failure.
+                super().set_authorizer(self._authorize_write)
 
     def _check_statement(self, sql: str) -> str:
         # SQLite accepts comments, empty statements and a UTF-8 BOM before SQL.

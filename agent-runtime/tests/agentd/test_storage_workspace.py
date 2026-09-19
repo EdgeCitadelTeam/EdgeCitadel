@@ -46,6 +46,10 @@ def assert_restored(db):
     info = os.fstat(db.workspace.descriptor)
     assert info.st_size == workspace.WORKSPACE_BYTES + 1
     assert info.st_blocks * 512 >= workspace.WORKSPACE_BYTES
+    assert db.workspace.reserved
+    assert all(
+        path.is_file() and path.stat().st_size == 0 for path in db.workspace.inode_paths
+    )
     assert not db.workspace.owned and not db.workspace.borrowed
 
 
@@ -55,6 +59,7 @@ def test_fixed_completion_borrows_then_restores_under_one_owner(db):
         db.use_completion_workspace()
         assert db.workspace.owned
         assert os.fstat(db.workspace.descriptor).st_size == 0
+        assert not any(path.exists() for path in db.workspace.inode_paths)
         fill(db, Obligation("run", "owned", "terminal"), {"done": True})
         assert db.workspace.owned
     assert read(db, 1) == {"done": True}
@@ -307,4 +312,77 @@ def test_fixed_column_write_before_borrow_is_still_ordinary(db):
         db.execute("UPDATE trace_completion_slots SET record=record")
         db.use_completion_workspace()
     assert not db.workspace.borrowed
+    assert_restored(db)
+
+
+def test_missing_inode_reservation_recovers_before_admission(db):
+    db.workspace.inode_paths[0].unlink()
+    assert not db.workspace.reserved
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        assert db.workspace.reserved
+    assert_restored(db)
+
+
+@pytest.mark.parametrize("invalid", ["content", "symlink", "hardlink", "mode"])
+def test_invalid_inode_reservation_refuses_without_deleting_files(
+    db, tmp_path, invalid
+):
+    first, second = db.workspace.inode_paths
+    if invalid == "content":
+        second.write_bytes(b"foreign")
+    elif invalid == "symlink":
+        second.unlink()
+        second.symlink_to(first)
+    elif invalid == "hardlink":
+        os.link(second, tmp_path / "other-link")
+    else:
+        second.chmod(0o644)
+    with pytest.raises(sqlite3.OperationalError, match="inode reservation"):
+        db.execute("BEGIN IMMEDIATE")
+    assert first.exists() and second.lstat()
+    assert not db.workspace.owned and not db.in_transaction
+
+
+def test_failed_borrow_invalidates_cached_ordinary_statements(db, monkeypatch):
+    sql = "UPDATE trace_completion_slots SET purpose=purpose WHERE slot_id=-1"
+    with db:
+        db.execute(sql)
+
+    def fail_sync(self):
+        raise OSError("release failed")
+
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        with monkeypatch.context() as patch:
+            patch.setattr(workspace.CompletionWorkspace, "_sync_directory", fail_sync)
+            with pytest.raises(OSError, match="release failed"):
+                db.use_completion_workspace()
+        assert db.workspace.borrowed
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            db.execute(sql)
+        db.rollback()
+    assert_restored(db)
+
+
+def test_failed_inode_refill_cannot_publish_ready_marker(db, monkeypatch):
+    original = os.open
+
+    def refuse(path, flags, *args, **kwargs):
+        if path == db.workspace.inode_paths[1] and flags & os.O_CREAT:
+            raise OSError("inode refill failed")
+        return original(path, flags, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", refuse)
+        with pytest.raises(OSError, match="inode refill failed"), db:
+            db.execute("BEGIN IMMEDIATE")
+            db.use_completion_workspace()
+            fill(db, Obligation("run", "owned", "terminal"), {"committed": True})
+    assert not db.workspace.reserved
+    assert os.fstat(db.workspace.descriptor).st_size == workspace.WORKSPACE_BYTES
+    assert read(db, 1) == {"committed": True}
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        assert db.workspace.reserved
     assert_restored(db)

@@ -248,6 +248,14 @@ class AgentdStore:
 
     def _migrate(self) -> None:
         with self._lock:
+            if (
+                self._connection.execute("PRAGMA user_version").fetchone()[0]
+                == SCHEMA_VERSION
+            ):
+                # Even an empty attached write transaction can need a super-journal
+                # inode at commit. Current pairs must open at full quota before
+                # the completion workspace can release its reserved resources.
+                return
             self._connection.execute("PRAGMA foreign_keys=OFF")
             try:
                 self._connection.execute("BEGIN IMMEDIATE")

@@ -20,7 +20,7 @@ from collections import Counter
 from uuid import UUID, uuid4
 
 
-def worker(state, operation, fixture, mode):
+def worker(state, operation, fixture, mode, inode_pressure=False):
     os.umask(0o077)
     state.chmod(0o700)
     assert ctypes.CDLL(None).prctl(38, 1, 0, 0, 0) == 0
@@ -63,6 +63,8 @@ def worker(state, operation, fixture, mode):
 
         def snapshot():
             return {
+                "allocated_inodes": verify_trace_quota(trace, state).allocated_inodes,
+                "inode_reserve_ready": physical.reserved,
                 "connector_revoked": db.execute(
                     "SELECT revoked_at_ms IS NOT NULL FROM connectors WHERE connector_id='native'"
                 ).fetchone()[0],
@@ -206,6 +208,17 @@ def worker(state, operation, fixture, mode):
                         raise AssertionError("expected EDQUOT")
             finally:
                 probe.unlink()
+            if inode_pressure:
+                for index in range(256):
+                    try:
+                        (trace / f"i{index}").touch(mode=0o600, exist_ok=False)
+                    except OSError as error:
+                        assert error.errno == errno.EDQUOT
+                        break
+                else:
+                    raise AssertionError("inode quota was not enforced")
+                quota = verify_trace_quota(trace, state)
+                assert quota.allocated_inodes == quota.hard_inodes == 128
             print(json.dumps({"kernel_edquot": True, **snapshot()}), flush=True)
         elif operation in ("before_commit", "after_commit"):
             if operation == "after_commit":
@@ -321,8 +334,20 @@ def worker(state, operation, fixture, mode):
                     else:
                         raise AssertionError("revoked connector was revoked twice")
                 else:
-                    recover()
-                assert snapshot() == result
+                    try:
+                        recover()
+                    except sqlite3.OperationalError as error:
+                        # Ordinary maintenance runs after lifecycle commit and
+                        # cannot borrow completion resources. At full inode quota
+                        # even its empty attached commit can need a super-journal.
+                        assert inode_pressure
+                        assert error.sqlite_errorcode & 255 == sqlite3.SQLITE_CANTOPEN
+                        assert snapshot() == result
+                        result["maintenance_refused_at_inode_quota"] = True
+                    else:
+                        assert snapshot() == result
+                if mode == "revoke":
+                    assert snapshot() == result
                 result["exact_exported_events"] = after
             for schema in ("main", "task_state"):
                 assert (
@@ -339,12 +364,13 @@ def worker(state, operation, fixture, mode):
             physical.close()
 
 
-def main(output=None, mode="reconcile"):
+def main(output=None, mode="reconcile", inode_pressure=False):
     assert mode in {"reconcile", "revoke"}
     from test_trace_linux_quota import owned_volume
 
     report = {
-        "scope": f"Production {mode} recovery at Linux user quota: accepted-task requeue, run/operation closure and local presence/audit in one paired commit. Fixture-installed workspace; no live deployment."
+        "inode_pressure": inode_pressure,
+        "scope": f"Production {mode} recovery at Linux user quota: accepted-task requeue, run/operation closure and local presence/audit in one paired commit. Fixture-installed workspace; no live deployment.",
     }
     fixture = Path(__file__).resolve().parents[1] / "fixtures/traces/events.v1.json"
     with owned_volume() as (root, state, _, _):
@@ -362,6 +388,7 @@ def main(output=None, mode="reconcile"):
                     operation,
                     str(fixture),
                     mode,
+                    str(int(inode_pressure)),
                 ],
                 user=65534,
                 group=65534,
@@ -401,6 +428,9 @@ def main(output=None, mode="reconcile"):
                 child.communicate(timeout=10)
                 assert child.returncode == -9
                 report[verify] = run(verify)
+                if inode_pressure:
+                    assert report[verify]["allocated_inodes"] == 128
+                    assert report[verify]["inode_reserve_ready"]
         finally:
             for child in children:
                 if child.poll() is None:
@@ -439,9 +469,16 @@ def test_native_connector_recovery():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
-        worker(Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), sys.argv[5])
+        worker(
+            Path(sys.argv[2]),
+            sys.argv[3],
+            Path(sys.argv[4]),
+            sys.argv[5],
+            bool(int(sys.argv[6])),
+        )
     else:
         main(
             sys.argv[1] if len(sys.argv) > 1 else None,
             sys.argv[2] if len(sys.argv) > 2 else "reconcile",
+            inode_pressure=len(sys.argv) > 3 and sys.argv[3] == "inodes",
         )
