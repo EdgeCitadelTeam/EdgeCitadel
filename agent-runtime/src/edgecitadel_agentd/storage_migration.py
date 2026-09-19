@@ -12,6 +12,7 @@ import stat
 from contextlib import closing
 from pathlib import Path
 
+from .storage_sqlite import configure_scratch
 from .restore import RESTORE_BARRIER, _barrier
 from .storage_layout import StorageLayout
 from .storage_pair import verify_pair, verify_references
@@ -137,6 +138,7 @@ def migrate_storage(state_dir: Path) -> dict[str, str]:
             with closing(
                 sqlite3.connect(source.as_uri() + "?mode=rw", uri=True, timeout=0)
             ) as db:
+                configure_scratch(db)
                 db.execute(
                     "ATTACH DATABASE ? AS task_state",
                     (layout.task_path.as_uri() + "?mode=rw",),

@@ -10,6 +10,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from .storage_sqlite import configure_scratch
+
 MAX_STEPS = 100_000
 MAX_SECONDS = 0.05
 _SCOPE = "node_id=? AND source_epoch=? AND export_generation=?"
@@ -68,6 +70,7 @@ def inspect_source(
                 path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.05
             )
         ) as db:
+            configure_scratch(db)
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA query_only=ON")
             _budget(db)

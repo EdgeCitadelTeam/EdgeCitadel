@@ -21,6 +21,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from edgecitadel_plugin_runtime.validator import ValidationError, default_validator
 
+from .storage_sqlite import configure_scratch
 from .storage_pair import (
     attach_tasks,
     install_reference_guards,
@@ -185,6 +186,7 @@ class AgentdStore:
         )
         try:
             self._connection.row_factory = sqlite3.Row
+            configure_scratch(self._connection)
             # Rollback journals are required for the task/trace attached-database
             # transaction. A pinned legacy WAL reader must refuse startup, never
             # leave the writer running in a mode without cross-file atomicity.

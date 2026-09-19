@@ -6,6 +6,7 @@ import sqlite3
 from contextlib import closing, ExitStack
 from pathlib import Path
 
+from .storage_sqlite import configure_scratch
 from .restore import require_startable
 from .storage_pair import (
     attach_tasks,
@@ -25,7 +26,8 @@ def compact_database(
     The operator must stop agentd first. No daemon is stopped by this API. Both
     daemon ownership and SQLite exclusive locking are required; active readers
     cause immediate failure. VACUUM uses SQLite's transactional recovery and needs
-    temporary disk space; an error is propagated, never reported as reclamation.
+    memory for the rebuilt database and disk space for rollback journals; an
+    error is propagated, never reported as reclamation.
     """
     directory = state_dir.resolve(strict=True)
     layout = layout or StorageLayout(directory)
@@ -39,6 +41,7 @@ def compact_database(
             ownership.enter_context(exclusive_writer(layout.trace_directory))
         uri = layout.trace_path.as_uri() + "?mode=rw"
         with closing(sqlite3.connect(uri, uri=True, timeout=0)) as db:
+            configure_scratch(db)
             attach_tasks(db, layout.task_path, existing=True)
             verify_pair(db)
             db.execute("PRAGMA synchronous=EXTRA")

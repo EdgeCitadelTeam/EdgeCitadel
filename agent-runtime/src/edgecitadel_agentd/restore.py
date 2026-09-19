@@ -11,6 +11,7 @@ from contextlib import ExitStack, closing
 from pathlib import Path
 from typing import Any
 
+from .storage_sqlite import configure_scratch
 from .store import AgentdStore, StoreError
 from .storage_pair import attach_task_snapshot, task_database_path
 from .storage_layout import StorageLayout
@@ -134,6 +135,8 @@ def stage_restore(
             ) as source,
             closing(sqlite3.connect(layout.trace_path)) as target,
         ):
+            configure_scratch(source)
+            configure_scratch(target)
             source.execute("BEGIN")
             paired = attach_task_snapshot(source, source_path, task_path=source_tasks)
             # Hold both read locks until both backups finish. A live source
@@ -142,6 +145,7 @@ def stage_restore(
             source.backup(target)
             if paired:
                 with closing(sqlite3.connect(layout.task_path)) as task_target:
+                    configure_scratch(task_target)
                     source.backup(task_target, name="task_state")
             source.rollback()
         shutil.copyfile(source_key, layout.key_path)

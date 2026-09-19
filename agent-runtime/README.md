@@ -377,7 +377,8 @@ For explicit offline reclamation, the internal
 transactional VACUUM under the daemon writer lock and SQLite exclusive ownership.
 It refuses active writers/readers and restore-fenced state, preserves records and
 the payload key, and returns before/after byte counts. It stops no service, needs
-temporary free disk space, and propagates errors. Operator command/runbook
+memory for the rebuilt database and disk space for rollback journals, and
+propagates errors. Operator command/runbook
 integration remains part of the M7 recovery work.
 
 
@@ -840,14 +841,26 @@ fail explicitly rather than monopolize the shared connection.
 
 ### Named-file physical accounting
 
-Physical pressure sums all attached database schemas, pending page allocations,
-and their named WAL, SHM and rollback-journal files. File contributions use the
-larger of logical length and allocated filesystem blocks. Health adds
-`rollback_journal_file_bytes` and `filesystem_allocated_bytes`; existing byte
-fields now aggregate attached stores. Reusable pages and legacy task content
-remain conservatively included. This measurement does not include super-journals,
-unlinked temporary files or future transaction growth and is not a hard quota
-or an attribution of only telemetry-owned bytes.
+Physical pressure includes trace-owned database pages and named WAL, SHM and
+rollback-journal files; the declared `task_state` database is excluded. Unknown
+attachments remain conservatively included. File contributions use the larger
+of logical length and allocated filesystem blocks. Reusable pages still count.
+This observation omits super-journals and future transaction growth; native user
+quota enforcement provides the separate hard allocation ceiling.
+
+All source SQLite connections—including inspection, backup/restore, offline
+migration and maintenance—use `temp_store=MEMORY` and `cache_spill=OFF`. This keeps
+sort/savepoint/VACUUM scratch out of unlinked system-temp files and avoids
+spill-cycle rollback-journal headers. Builds that force disk temporary storage
+or cannot report compile options refuse. Rollback and super-journals remain
+on disk for crash recovery. See [SQLite temporary files](https://www.sqlite.org/tempfiles.html)
+and [cache spilling](https://www.sqlite.org/pragma.html#pragma_cache_spill).
+
+Dirty pages and temporary results now require memory until their operation
+finishes. This policy does not reserve completion capacity or bound transaction
+memory: durable admission credits, maximum page growth, journal allocation and
+maintenance/recovery reserves remain required. Offline VACUUM is not an
+emergency reclamation path at exhaustion.
 
 For legacy WAL fixtures, reconciliation attempts a nonblocking checkpoint at
 physical pressure before cache maintenance. If a reader or another checkpoint
