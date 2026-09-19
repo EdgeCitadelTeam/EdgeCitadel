@@ -143,3 +143,12 @@ window of at most 63 commits and checks that replay ends at its exact final grap
 token. It enables repeatable before/after comparison while newer commits arrive.
 Keep that input private; output reports omit its signed cursors. This mode fails
 if any position is missing, expired or no longer reconstructible.
+
+The live burst case (`--grep 'live burst above'`, with the large-run opt-in) uses
+`trace-large-run.py --burst-update`. It waits for 500 initial operations to project
+and for the real browser socket to connect, then emits 100 more operations and
+finishes the root. It checks at least 201 distinct patch commits, zero graph
+refetches during the burst, all final nodes reachable/terminal and 1,202 exact
+settled events. HTTP replay and socket observations are deduplicated in browser
+memory; reports omit signed cursors. The single release-to-final-display timing
+includes emission, transport and instrumentation and is not commit-to-render p95.

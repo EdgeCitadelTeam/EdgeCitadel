@@ -652,3 +652,116 @@ test('keyboard focus survives a real live insertion across a map page boundary',
     lines.close();
   }
 });
+
+test('live burst above 500 nodes catches up through ordered patches without graph refetch', async ({ page }) => {
+  test.skip(process.env.EDGECITADEL_TRACE_LARGE_E2E !== '1', 'Explicit large fixture opt-in required');
+  test.setTimeout(240_000);
+  const directory = `/root/edgecitadel-large-20260919/run-${Date.now()}`;
+  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
+  ssh(`install -d -m 700 ${directory}`);
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-large.py`], {
+    input: readFileSync(path.resolve(__dirname, '../helpers/trace-large-run.py')),
+  });
+  const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
+    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-large.py ${directory} --burst-update`], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let trace, report, exitCode, processError = false, released = false;
+  const graphRequests = [], errors = [], writes = [];
+  child.stderr.on('data', () => { processError = true; });
+  const finished = new Promise(resolve => child.on('exit', code => { exitCode = code; resolve(code); }));
+  const lines = createInterface({ input: child.stdout });
+  lines.on('line', line => {
+    const value = JSON.parse(line);
+    if (value.stage === 'ready') trace = value.trace_id;
+    if (value.all_core_settled) report = value;
+  });
+  try {
+    await expect.poll(() => {
+      if (exitCode !== undefined) throw new Error('Owned burst helper exited before readiness');
+      return trace;
+    }, { timeout: 120_000 }).toBeTruthy();
+    await page.addInitScript(traceId => {
+      window.traceBurstChanges = new Map();
+      window.traceBurstSockets = [];
+      window.traceBurstReadErrors = 0;
+      const remember = change => window.traceBurstChanges.set(change.cursor, change.mode);
+      const NativeSocket = window.WebSocket;
+      window.WebSocket = class extends NativeSocket {
+        constructor(url, protocols) {
+          super(url, protocols);
+          if (new URL(url).pathname !== `/ws/traces/${traceId}`) return;
+          window.traceBurstSockets.push(this);
+          this.addEventListener('message', event => {
+            const message = JSON.parse(event.data);
+            if (message.kind === 'trace_change') remember(message.change);
+          });
+        }
+      };
+      const fetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await fetch(...args);
+        if (new URL(response.url).pathname === `/api/traces/${traceId}/changes`) {
+          // Count replay as well as socket delivery without exposing signed cursors.
+          response.clone().json().then(value => value.changes?.forEach(remember)).catch(() => { window.traceBurstReadErrors++; });
+        }
+        return response;
+      };
+    }, trace);
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('request', request => {
+      const url = new URL(request.url());
+      if (released && url.pathname === `/api/traces/${trace}`) graphRequests.push(url.pathname);
+      if (url.pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.method());
+    });
+    await page.goto(`/#execution?run=${trace}`);
+    await connect(page);
+    await expect(page.getByRole('option', { name: 'All owners (502)', exact: true })).toHaveCount(1, { timeout: 30_000 });
+    await expect.poll(() => page.evaluate(() => window.traceBurstSockets.some(socket => socket.readyState === 1))).toBe(true);
+    await page.evaluate(() => window.traceBurstChanges.clear());
+    const started = performance.now();
+    released = true;
+    ssh(`touch ${directory}/burst-ready`);
+    await page.getByLabel('Find a step').fill(`run:${trace}`);
+    await expect(page.locator(`[data-node-id="run:${trace}"]`)).toHaveClass(/state-completed/, { timeout: 60_000 });
+    const releaseToFinalDisplayMs = performance.now() - started;
+    await expect(page.getByRole('option', { name: 'All owners (602)', exact: true })).toHaveCount(1);
+    await expect.poll(() => report, { timeout: 60_000 }).toBeTruthy();
+    expect(await finished).toBe(0);
+    expect(processError).toBe(false);
+    expect(report.event_count).toBe(1202);
+    expect(report.source_core_exact).toBe(true);
+    expect(report.owned_connector_revoked).toBe(true);
+    const modes = await page.evaluate(() => [...window.traceBurstChanges.values()]);
+    expect(await page.evaluate(() => window.traceBurstReadErrors)).toBe(0);
+    expect(modes.length).toBeGreaterThanOrEqual(201);
+    expect(modes.every(mode => mode === 'patch')).toBe(true);
+    expect(graphRequests).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(errors).toEqual([]);
+    await page.getByLabel('Find a step').fill('');
+    const seen = new Set();
+    while (true) {
+      const nodes = await page.locator('[data-node-id]').evaluateAll(items => items.map(item => ({ id: item.dataset.nodeId, state: item.querySelector('.trace-node-state').textContent })));
+      for (const node of nodes) {
+        expect(seen.has(node.id)).toBe(false);
+        expect(['finished', 'completed']).toContain(node.state);
+        seen.add(node.id);
+      }
+      const next = page.getByRole('button', { name: 'Next steps', exact: true });
+      if (await next.isDisabled()) break;
+      await next.click();
+      await expect(page.locator('[data-node-id]').first()).not.toHaveAttribute('data-node-id', nodes[0].id);
+    }
+    expect(seen.size).toBe(602);
+    const { span_ids, ...summary } = report;
+    expect(span_ids).toHaveLength(600);
+    writeFileSync(path.join(evidence, `${artifactPrefix}-live-burst.json`), JSON.stringify({ ...summary,
+      distinct_patch_commits: modes.length, graph_refetches: graphRequests.length,
+      all_final_nodes_reachable: true, release_to_final_display_ms: releaseToFinalDisplayMs,
+      timing_scope: 'single harness release-to-final-render sample including emission, collection, projection, transport and observer overhead; not commit-to-render p95',
+    }, null, 2) + '\n');
+  } finally {
+    ssh(`touch ${directory}/burst-ready`);
+    await finished;
+    lines.close();
+  }
+});

@@ -86,17 +86,22 @@ try:
             },
         )
 
+    burst = "--burst-update" in sys.argv[2:]
+    focus = "--focus-update" in sys.argv[2:]
+    assert not (burst and focus)
+    initial_operations = 500 if burst else 600
+    burst_seconds = None
     spans = []
     started = time.monotonic()
-    for index in range(600):
+    for index in range(initial_operations):
         span = str(uuid4())
         spans.append(span)
         attrs = {"name": "synthetic.large.operation"}
         for phase in ["started", "finished"]:
             reply = append(attrs, span, phase)
             assert reply["status"] == "ok", reply.get("code")
-    if "--focus-update" in sys.argv[2:]:
-        # Isolate the focus transition from initial catch-up of 1,201 events.
+    if focus or burst:
+        # Start the controlled live transition after initial projection readiness.
         # Read the active generation and its event membership in one DB snapshot.
         deadline = time.monotonic() + 90
         while True:
@@ -111,46 +116,62 @@ try:
                     (trace_id,),
                 ).fetchone()[0]
             db.close()
-            if count == 1201:
+            if count == 2 * initial_operations + 1:
                 break
             assert time.monotonic() < deadline, "initial projection readiness timeout"
             time.sleep(0.25)
         print(json.dumps({"stage": "ready", "trace_id": trace_id}), flush=True)
         deadline = time.monotonic() + 90
-        target_file = OUT / "focused-step"
+        target_file = OUT / ("burst-ready" if burst else "focused-step")
         while not target_file.exists():
             assert time.monotonic() < deadline, "browser focus handshake timeout"
             time.sleep(0.1)
-        target = target_file.read_text().strip()
-        assert target.startswith("span:") and len(target) == 69
-        event = json.loads(rows(trace_id)[0][-1])
-        # Choose a valid new span whose canonical ID precedes the focused step.
-        # This makes the page-boundary movement deterministic, not probabilistic.
-        for _ in range(10000):
-            candidate = str(uuid4())
-            parts = [
-                event["node_id"],
-                event["source_epoch"],
-                trace_id,
-                event["execution_attempt_id"] or "",
-                candidate,
-            ]
-            identity = (
-                "span:"
-                + hashlib.sha256(
-                    json.dumps(parts, separators=(",", ":")).encode()
-                ).hexdigest()
-            )
-            if identity < target:
-                break
+        if burst:
+            burst_started = time.monotonic()
+            for _ in range(100):
+                candidate = str(uuid4())
+                for phase in ["started", "finished"]:
+                    assert (
+                        append({"name": "synthetic.burst.operation"}, candidate, phase)[
+                            "status"
+                        ]
+                        == "ok"
+                    )
+                spans.append(candidate)
+            burst_seconds = time.monotonic() - burst_started
         else:
-            raise AssertionError("could not choose preceding span")
-        for phase in ["started", "finished"]:
-            assert (
-                append({"name": "synthetic.focus.insert"}, candidate, phase)["status"]
-                == "ok"
-            )
-        spans.append(candidate)
+            target = target_file.read_text().strip()
+            assert target.startswith("span:") and len(target) == 69
+            event = json.loads(rows(trace_id)[0][-1])
+            # Choose a valid new span whose canonical ID precedes the focused step.
+            # This makes the page-boundary movement deterministic, not probabilistic.
+            for _ in range(10000):
+                candidate = str(uuid4())
+                parts = [
+                    event["node_id"],
+                    event["source_epoch"],
+                    trace_id,
+                    event["execution_attempt_id"] or "",
+                    candidate,
+                ]
+                identity = (
+                    "span:"
+                    + hashlib.sha256(
+                        json.dumps(parts, separators=(",", ":")).encode()
+                    ).hexdigest()
+                )
+                if identity < target:
+                    break
+            else:
+                raise AssertionError("could not choose preceding span")
+            for phase in ["started", "finished"]:
+                assert (
+                    append({"name": "synthetic.focus.insert"}, candidate, phase)[
+                        "status"
+                    ]
+                    == "ok"
+                )
+            spans.append(candidate)
     assert (
         client.call(
             "trace.finish",
@@ -192,6 +213,8 @@ try:
         "fixture": "synthetic_large_run_not_execution",
         "trace_id": trace_id,
         "operation_count": len(spans),
+        "burst_operations": 100 if burst else 0,
+        "burst_emission_seconds": burst_seconds,
         "span_ids": spans,
         "emission_and_settlement_seconds": time.monotonic() - started,
         "source_core_exact": True,
