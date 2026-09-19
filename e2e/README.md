@@ -171,7 +171,7 @@ A 1,000-terminal-state fixed-rate diagnostic is also verified; full-duration
 baseline, stress, soak and observer-overhead qualification remain open.
 
 The pilot consists of `trace-latency-pilot.py`, `trace-latency-core.py`,
-`trace-latency-fixture.py`, `trace-latency-browser.js`, `trace_render_receiver.py`,
+`trace-latency-fixture.py`, `trace-latency-browser.js`, `trace-browser-diagnostics.js`, `trace_render_receiver.py`,
 `trace_commit_observer.py`, `trace_latency_workload.py`, `trace-baseline-fixture.py`
 and `trace-clock-probe.py`
 in `helpers/`. Copy this set
@@ -256,3 +256,15 @@ markers remain on the host. Run this after measurement; its full database reads
 should not compete with the timed workload. Recheck current collector readiness
 and backlog separately. The audit proves its listed cohort/storage/restoration
 properties, not observer overhead, stress/soak or the entire acceptance plan.
+
+The latency browser writes a private `browser-failure.json` on failure, containing
+the active sample/lane/stage, per-lane acknowledgment counts, fixed-size transport
+counters and a bounded DOM check of session mode, target state and filter match.
+No HTTP/socket bodies, URLs, credentials or arbitrary error text enter this report.
+An unavailable or hung page produces a null view after at most two seconds per
+lane; the original failure still propagates. This artifact is diagnostic and
+cannot substitute for `browser.json` or a complete cohort. Counters include
+ordinary navigation cancellations and do not alone establish a transport fault.
+Run its component checks with `node --test helpers/trace-browser-diagnostics.spec.js`;
+real browser verification belongs on jim-eq. Include the diagnostics module when
+copying/freezing the browser helper.

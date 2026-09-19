@@ -231,3 +231,21 @@ layer on jim-eq. Keep all predeclared samples and the original failure evidence;
 do not increase timeouts or trim the cohort to turn this run into a pass. Then
 repeat the full profile and run the completion auditor, followed by the remaining
 overhead, stress, soak and broader acceptance gates.
+
+### Reproduced historical coverage read timeout
+
+Bounded browser failure diagnostics are now implemented and exercised on jim-eq.
+The updated two-minute preflight failed with both lanes reconnecting, HTTP 503s,
+no page errors and no execution writes. Normal Core startup and cleanup were
+verified after cancellation (560 settled events; ten revoked connectors and no
+active owned sessions). A retained replay of the failed changes URL also returns
+503 after 5.026 seconds, independently of the temporary observer.
+
+Read-only profiling on the existing Core image places 4.798 seconds across 55
+queries to historical `trace_projection_scope_progress` by exact source key.
+This dominates the five-second read budget before the 64-commit page finishes.
+The earlier exact-key query change does not bound work across many versions of
+the same key. Next inspect the historical-view query plan and implement bounded
+latest-version lookup while preserving the exact requested cursor, deletion and
+generation semantics. Verify identical retained snapshots and replay before
+redeploying, then rerun preflight/full baseline without widening timeouts.
