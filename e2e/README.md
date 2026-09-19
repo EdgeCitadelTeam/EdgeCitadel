@@ -33,5 +33,15 @@ when recording a new milestone, preserving earlier evidence artifacts.
 Screenshots and sanitized results go under the local architecture execution
 evidence directory; browser trace/video capture remain off. Credentials are not
 stored in screenshots, browser storage or URLs. Server diagnostics stay private
-on jim-eq. These focused checks do not replace the full S1/S4/S6, fault, security,
+on jim-eq. These focused checks do not replace the remaining S1/S6, fault, security,
 performance and deterministic regression gates.
+
+The S4 denial case uses `helpers/trace-denied-dispatch.py` with a temporary native
+connector that has tracing permission but no delegation grant. It verifies the
+real durable rejection, retry without additional observations, absence of child
+tasks on both sources, and exact Core event/export settlement, then checks the
+deployed map and observation inspector. It does not require a running Hermes
+worker: authorization rejects the request before delivery. Run only this case
+with `--grep 'S4 denied'` added to the direct Playwright command above. The helper
+always closes its session and revokes its own connector; private server evidence
+stays under `/root/edgecitadel-s4-20260919/`.

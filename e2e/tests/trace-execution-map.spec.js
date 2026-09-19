@@ -230,3 +230,36 @@ test('server history discovers unvisited snapshots, preserves selection on refre
   expect(page.url()).toBe(frozen);
   expect(writes).toEqual([]);
 });
+
+test('S4 denied dispatch has permission evidence and no child execution', async ({ page }) => {
+  test.setTimeout(180_000);
+  const directory = `/root/edgecitadel-s4-20260919/run-${Date.now()}`;
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `install -d -m 700 ${directory}`]);
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-denial.py`], {
+    input: readFileSync(path.resolve(__dirname, '../helpers/trace-denied-dispatch.py')),
+  });
+  const result = JSON.parse(execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
+    `/root/.edgecitadel/supervisor/bin/python ${directory}/verify-denial.py ${directory}`],
+  { encoding: 'utf8', timeout: 150_000 }));
+  expect(result.denied_before_child_creation).toBe(true);
+  expect(result.no_tasks_on_core_or_leaf).toBe(true);
+  expect(result.retry_no_new_events).toBe(true);
+  expect(result.all_core_settled).toBe(true);
+  expect(result.session_closed_and_connector_revoked).toBe(true);
+  writeFileSync(path.join(evidence, `${artifactPrefix}-denied-dispatch.json`), JSON.stringify(result, null, 2) + '\n');
+  await page.goto(`/#execution?run=${result.trace_id}`);
+  await connect(page);
+  const permission = page.locator('[data-node-id^="permission:"]');
+  const dispatch = page.locator('[data-node-id^="dispatch:"]');
+  await expect(permission).toHaveClass(/state-denied/);
+  await expect(dispatch).toHaveClass(/state-denied/);
+  await expect(page.locator('[data-node-id^="task:"]')).toHaveCount(0);
+  await permission.click();
+  await expect(page.getByLabel('Selected step details')).toBeVisible();
+  await page.locator('.trace-observations button').first().click();
+  await page.getByText('Structured evidence', { exact: true }).click();
+  await expect(page.getByLabel('Observation details')).toContainText(result.dispatch_id);
+  await expect(page.getByLabel('Observation details')).toContainText('native_connector_capability');
+  await expect(page.getByLabel('Observation details')).toContainText('permission_denied');
+  await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-denial.png`) });
+});
