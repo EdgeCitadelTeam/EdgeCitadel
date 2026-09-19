@@ -60,7 +60,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -605,6 +605,17 @@ class AgentdStore:
             self._connection.execute("PRAGMA main.user_version=28")
             self._connection.execute("PRAGMA task_state.user_version=28")
 
+        if version < 29:
+            from .trace_completed import install_views
+            from .trace_local_completion import install
+
+            for view in ("trace_journal_all", "trace_storage_usage_all"):
+                self._connection.execute(f"DROP VIEW {view}")
+            install_views(self._connection)
+            install(self._connection)
+            self._connection.execute("PRAGMA main.user_version=29")
+            self._connection.execute("PRAGMA task_state.user_version=29")
+
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.
 
@@ -783,6 +794,12 @@ class AgentdStore:
                     now,
                 ),
             )
+            if self._connection.workspace is not None:
+                from .trace_reservations import Obligation, reserve
+
+                reserve(
+                    self._connection, Obligation("connector", connector_id, "revoke")
+                )
             self._record_event_locked(
                 event_type="connector.registered",
                 agent_id=agent_id,
@@ -980,10 +997,10 @@ class AgentdStore:
             rows = self._connection.execute(
                 """
                 SELECT p.agent_id, p.state, p.reason, p.observed_at_ms
-                FROM presence_history p
+                FROM presence_history_all p
                 JOIN (
                     SELECT agent_id, MAX(presence_id) AS latest_id
-                    FROM presence_history GROUP BY agent_id
+                    FROM presence_history_all GROUP BY agent_id
                 ) latest ON latest.latest_id = p.presence_id
                 ORDER BY p.agent_id
                 """
@@ -1050,18 +1067,26 @@ class AgentdStore:
             )
             for session in sessions:
                 self._recover_session_tasks_locked(str(session["session_id"]), now)
+                self._record_session_closure_locked(
+                    str(session["session_id"]), now, None
+                )
             agent_id = self._connection.execute(
                 "SELECT agent_id FROM connectors WHERE connector_id = ?",
                 (connector_id,),
             ).fetchone()["agent_id"]
-            self._record_event_locked(
-                event_type="connector.revoked",
-                agent_id=str(agent_id),
-                task_id=None,
-                trace_id=None,
-                attributes={"connector_id": connector_id},
-                now=now,
-            )
+            if self._connection.workspace is not None:
+                from .trace_local_completion import revoke_connector
+
+                revoke_connector(self._connection, connector_id, str(agent_id), now)
+            else:
+                self._record_event_locked(
+                    event_type="connector.revoked",
+                    agent_id=str(agent_id),
+                    task_id=None,
+                    trace_id=None,
+                    attributes={"connector_id": connector_id},
+                    now=now,
+                )
 
     def reissue_managed_connector(self, connector_id: str, agent_id: str) -> str:
         """Issue a new token only for an explicitly restarted Managed Agent."""
@@ -1080,6 +1105,20 @@ class AgentdStore:
                 raise StoreError("Managed Agent connector cannot be reissued")
             if self._has_active_session_locked(connector_id, now):
                 raise StoreError("active Managed Agent connector cannot be reissued")
+            if self._connection.workspace is not None:
+                if not self._connection.in_transaction:
+                    self._connection.execute("BEGIN IMMEDIATE")
+                from .trace_completed import materialize
+                from .trace_reservations import Obligation, reserve
+
+                obligation = Obligation("connector", connector_id, "revoke")
+                previous = self._connection.execute(
+                    "SELECT slot_id FROM trace_completion_slots WHERE owner_kind=? AND owner_id=? AND purpose=? AND filled=1",
+                    obligation.key,
+                ).fetchone()
+                if previous is not None:
+                    materialize(self._connection, previous[0])
+                reserve(self._connection, obligation)
             self._connection.execute(
                 """
                 UPDATE connectors SET token_hash = ?, revoked_at_ms = NULL,
@@ -1229,6 +1268,10 @@ class AgentdStore:
                 """,
                 (session_id, connector_id, now, expires),
             )
+            if self._connection.workspace is not None:
+                from .trace_reservations import Obligation, reserve
+
+                reserve(self._connection, Obligation("session", session_id, "close"))
         return {"session_id": session_id, "lease_expires_at_ms": expires}
 
     def renew_session(
@@ -1256,7 +1299,7 @@ class AgentdStore:
         return expires
 
     def close_session(self, *, connector_id: str, token: str, session_id: str) -> None:
-        connector = self.authenticate(connector_id, token)
+        self.authenticate(connector_id, token)
         now = _now_ms()
         with self._lock, self._connection:
             changed = self._connection.execute(
@@ -1269,10 +1312,13 @@ class AgentdStore:
             if not changed:
                 raise StoreError("active session was not found")
             self._recover_session_tasks_locked(session_id, now)
-            if not self._has_active_session_locked(connector_id, now):
-                self._record_presence_locked(
-                    connector["agent_id"], "unavailable", "native_session_closed", now
-                )
+            self._record_session_closure_locked(
+                session_id,
+                now,
+                "native_session_closed"
+                if not self._has_active_session_locked(connector_id, now)
+                else None,
+            )
 
     def create_task(
         self,
@@ -2003,7 +2049,7 @@ class AgentdStore:
         with self._lock, self._connection:
             latest = self._connection.execute(
                 """
-                SELECT state FROM presence_history
+                SELECT state FROM presence_history_all
                 WHERE agent_id = ? ORDER BY observed_at_ms DESC, presence_id DESC LIMIT 1
                 """,
                 (agent_id,),
@@ -2161,10 +2207,13 @@ class AgentdStore:
                     )
                     self._recover_session_tasks_locked(str(row["session_id"]), now)
                     expired_sessions += 1
-                    if not self._has_active_session_locked(row["connector_id"], now):
-                        self._record_presence_locked(
-                            row["agent_id"], "unavailable", "session_lease_expired", now
-                        )
+                    self._record_session_closure_locked(
+                        str(row["session_id"]),
+                        now,
+                        "session_lease_expired"
+                        if not self._has_active_session_locked(row["connector_id"], now)
+                        else None,
+                    )
                 tasks = self._connection.execute(
                     """
                     SELECT task_id, trace_id, sender_id FROM tasks
@@ -2396,10 +2445,14 @@ class AgentdStore:
             telemetry_records = {
                 table: int(
                     self._connection.execute(
-                        f"SELECT COUNT(*) FROM {'events_all' if table == 'events' else table}"  # noqa: S608 - fixed tuple.
+                        f"SELECT COUNT(*) FROM {read_table}"  # noqa: S608 - fixed tuple.
                     ).fetchone()[0]
                 )
-                for table in ("events", "spans", "presence_history")
+                for table, read_table in (
+                    ("events", "events_all"),
+                    ("spans", "spans"),
+                    ("presence_history", "presence_history_all"),
+                )
             }
             database_bytes = sum(
                 candidate.stat().st_size
@@ -2508,15 +2561,33 @@ class AgentdStore:
             f".{milliseconds:03d}Z"
         )
 
+    def _record_session_closure_locked(
+        self, session_id: str, now: int, reason: str | None
+    ) -> None:
+        if self._connection.workspace is not None:
+            from .trace_local_completion import finish_session
+
+            finish_session(self._connection, session_id, now, reason)
+        elif reason is not None:
+            agent_id = self._connection.execute(
+                "SELECT c.agent_id FROM sessions s JOIN connectors c USING(connector_id) WHERE s.session_id=?",
+                (session_id,),
+            ).fetchone()[0]
+            self._record_presence_locked(agent_id, "unavailable", reason, now)
+
     def _record_presence_locked(
         self, agent_id: str, state: str, reason: str, now: int
     ) -> None:
+        from .trace_local_completion import next_presence_id
+
+        # Reserve the integer identity with fixed-width state, including ordinary
+        # writes, so later local completions need no sqlite_sequence allocation.
+        if not self._connection.in_transaction:
+            self._connection.execute("BEGIN IMMEDIATE")
+        presence_id = next_presence_id(self._connection)
         self._connection.execute(
-            """
-            INSERT INTO presence_history (agent_id, state, reason, observed_at_ms)
-            VALUES (?, ?, ?, ?)
-            """,
-            (agent_id, state, reason, now),
+            "INSERT INTO presence_history(presence_id,agent_id,state,reason,observed_at_ms) VALUES (?,?,?,?,?)",
+            (presence_id, agent_id, state, reason, now),
         )
 
     def _record_event_locked(

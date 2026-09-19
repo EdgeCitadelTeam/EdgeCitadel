@@ -123,7 +123,7 @@ def test_v16_migration_preserves_rows_and_reconcile_compacts(recorded):
         recorded._connection.execute("PRAGMA user_version=16")
     reopened = AgentdStore(recorded.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 28
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 29
         assert snapshot(reopened) == before
         plan = reopened._connection.execute(
             "EXPLAIN QUERY PLAN SELECT event_id FROM trace_journal WHERE node_id=? "

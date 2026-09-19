@@ -42,8 +42,8 @@ def attach_tasks(db: sqlite3.Connection, path: Path, *, existing: bool) -> None:
     db.execute("PRAGMA task_state.synchronous=EXTRA")
 
 
-def verify_pair(db: sqlite3.Connection, *, version: int = 28) -> None:
-    if version not in (24, 25, 26, 27, 28):
+def verify_pair(db: sqlite3.Connection, *, version: int = 29) -> None:
+    if version not in (24, 25, 26, 27, 28, 29):
         raise sqlite3.DatabaseError("unsupported storage pair schema")
     ids = []
     for schema in ("main", "task_state"):

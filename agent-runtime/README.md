@@ -213,11 +213,26 @@ Later offered/accepted events use ordinary admission capacity, while execution
 start/requeue and eventual terminal evidence use their reserved slots. Terminal
 materialization releases unused attempt slots. The owned
 `tests/agentd/test_trace_task_requeue_native.py` gate exercises accepted-task
-recovery at quota, independently of session/presence closure. Ancillary recovery
-writes, existing-work seeding, production installation and complete physical
-bounds remain open.
+recovery at quota, independently of session/presence closure. The additional local recovery writes are handled by schema 29 below.
+Existing-work seeding, production installation and complete physical bounds
+remain open.
 
-For a stopped, clean schema-28 DELETE pair already owned by the dedicated UID,
+Schema 29 includes reserved local session/presence and connector-revocation
+records in the same fixed slot pool. Connector/session admission reserves those
+obligations, and close, expiry and revocation fill them alongside task/run/operation
+recovery. Local records never receive canonical trace/export positions.
+`events_all` and `presence_history_all` expose their exact local rows until ordinary
+materialization. A fixed-width presence counter preserves monotonic IDs without
+allocation-prone counter growth during completion. Reissuing a managed connector
+materializes its prior revocation and reserves the next one atomically.
+
+`tests/agentd/test_trace_session_recovery_native.py` exercises actual reconciliation
+and revocation at user-quota pressure, with accepted tasks and an open run/operation,
+including SIGKILL before commit and after commit/before reserve refill. Production
+workspace installation remains disabled until existing-work seeding, bounded
+maintenance, geometry/memory/journal and sequence-headroom qualification are complete.
+
+For a stopped, clean schema-29 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with
 `no_new_privs` enabled and no capabilities:
 

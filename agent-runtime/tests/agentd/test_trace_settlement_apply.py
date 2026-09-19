@@ -215,7 +215,7 @@ def test_schema_18_upgrade_is_atomic(source):
     }
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 28
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 29
         assert states(reopened) == [("pending", None, None)] * 5
     finally:
         reopened.close()

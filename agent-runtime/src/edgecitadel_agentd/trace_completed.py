@@ -69,6 +69,20 @@ def fill_completed(
 def _references():
     return (
         (
+            "local_session",
+            "sessions",
+            ("session_id", "connector_id"),
+            ("local.session_id", "local.connector_id"),
+            "json_extract(CAST({record} AS TEXT),'$.local.session_id') IS NOT NULL",
+        ),
+        (
+            "local_connector",
+            "connectors",
+            ("connector_id", "agent_id"),
+            ("local.connector_id", "local.agent_id"),
+            "json_extract(CAST({record} AS TEXT),'$.local') IS NOT NULL",
+        ),
+        (
             "task",
             "tasks",
             ("task_id", "trace_id"),
@@ -80,7 +94,7 @@ def _references():
             "trace_sources",
             ("node_id", "source_epoch"),
             ("event.node_id", "event.source_epoch"),
-            "1",
+            "json_extract(CAST({record} AS TEXT),'$.event') IS NOT NULL",
         ),
         (
             "generation",
@@ -194,7 +208,12 @@ def install_views(db: sqlite3.Connection) -> None:
         for name in RECEIPT_COLUMNS
     ]
     for name, columns, projection, condition in (
-        ("journal", JOURNAL_COLUMNS, journal, ""),
+        (
+            "journal",
+            JOURNAL_COLUMNS,
+            journal,
+            " AND json_extract(CAST(record AS TEXT),'$.event') IS NOT NULL",
+        ),
         (
             "spool",
             SPOOL_COLUMNS,
@@ -267,7 +286,7 @@ def install_views(db: sqlite3.Connection) -> None:
     db.execute("""CREATE VIEW IF NOT EXISTS trace_storage_usage_all AS
         SELECT singleton,event_bytes+(SELECT COALESCE(SUM(json_extract(CAST(record AS TEXT),'$.event_bytes')),0)
             FROM trace_completion_slots WHERE filled=1) AS event_bytes,
-            event_count+(SELECT count(*) FROM trace_completion_slots WHERE filled=1) AS event_count
+            event_count+(SELECT count(*) FROM trace_completion_slots WHERE filled=1 AND json_extract(CAST(record AS TEXT),'$.event') IS NOT NULL) AS event_count
         FROM trace_storage_usage""")
 
 
@@ -417,41 +436,47 @@ def materialize(db: sqlite3.Connection, slot_id: int) -> bool:
     if record is None:
         return False
     value = json.loads(record[0])
-    event = value["event"]
-    journal = {
-        **event,
-        **{
-            key: value[key] for key in ("event_sha256", "event_bytes", "received_at_ms")
-        },
-        "event_json": canonical_bytes(event).decode(),
-    }
-    db.execute(
-        f"INSERT INTO trace_journal({','.join(JOURNAL_COLUMNS)}) VALUES ({','.join('?' for _ in JOURNAL_COLUMNS)})",
-        tuple(journal[key] for key in JOURNAL_COLUMNS),
-    )
-    if value["export_seq"] is not None:
-        spool = {
-            **value,
-            "node_id": event["node_id"],
-            "source_epoch": event["source_epoch"],
-            "event_id": event["event_id"],
-            "journal_event_id": event["event_id"],
+    if "local" in value:
+        from .trace_local_completion import materialize as materialize_local
+
+        materialize_local(db, value)
+    else:
+        event = value["event"]
+        journal = {
+            **event,
+            **{
+                key: value[key]
+                for key in ("event_sha256", "event_bytes", "received_at_ms")
+            },
+            "event_json": canonical_bytes(event).decode(),
         }
         db.execute(
-            f"INSERT INTO trace_spool({','.join(SPOOL_COLUMNS)}) VALUES ({','.join('?' for _ in SPOOL_COLUMNS)})",
-            tuple(spool[key] for key in SPOOL_COLUMNS),
+            f"INSERT INTO trace_journal({','.join(JOURNAL_COLUMNS)}) VALUES ({','.join('?' for _ in JOURNAL_COLUMNS)})",
+            tuple(journal[key] for key in JOURNAL_COLUMNS),
         )
-    if "receipt" in value:
-        db.execute(
-            f"INSERT INTO trace_requests({','.join(RECEIPT_COLUMNS)}) VALUES ({','.join('?' for _ in RECEIPT_COLUMNS)})",
-            tuple(value["receipt"][key] for key in RECEIPT_COLUMNS),
-        )
-    from .trace_terminal import materialize as materialize_terminal
+        if value["export_seq"] is not None:
+            spool = {
+                **value,
+                "node_id": event["node_id"],
+                "source_epoch": event["source_epoch"],
+                "event_id": event["event_id"],
+                "journal_event_id": event["event_id"],
+            }
+            db.execute(
+                f"INSERT INTO trace_spool({','.join(SPOOL_COLUMNS)}) VALUES ({','.join('?' for _ in SPOOL_COLUMNS)})",
+                tuple(spool[key] for key in SPOOL_COLUMNS),
+            )
+        if "receipt" in value:
+            db.execute(
+                f"INSERT INTO trace_requests({','.join(RECEIPT_COLUMNS)}) VALUES ({','.join('?' for _ in RECEIPT_COLUMNS)})",
+                tuple(value["receipt"][key] for key in RECEIPT_COLUMNS),
+            )
+        from .trace_terminal import materialize as materialize_terminal
 
-    materialize_terminal(db, value)
-    from .trace_task_completion import materialize as materialize_task_event
+        materialize_terminal(db, value)
+        from .trace_task_completion import materialize as materialize_task_event
 
-    materialize_task_event(db, value)
+        materialize_task_event(db, value)
     db.execute(
         "UPDATE trace_completion_slots SET owner_kind='',owner_id='',purpose='',filled=0,record=? WHERE slot_id=?",
         (b"{}".ljust(SLOT_BYTES, b" "), slot_id),

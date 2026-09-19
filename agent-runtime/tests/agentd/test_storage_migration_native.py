@@ -159,7 +159,7 @@ def main(output=None):
     report["scratch_removed"] = not root.exists()
     report["test_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     report["scope"] = (
-        "Owned schema-28 migration only; no live rollout or completion-capacity claim."
+        "Owned schema-29 migration only; no live rollout or completion-capacity claim."
     )
     value = json.dumps(report, indent=2, sort_keys=True)
     if output:

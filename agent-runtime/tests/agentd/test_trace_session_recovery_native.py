@@ -1,7 +1,7 @@
-"""Owned jim-eq accepted-task requeue transaction at Linux user quota.
+"""Owned jim-eq full session reconciliation at Linux user quota.
 
-Exercises the production task-recovery helper. Session/presence closure and
-production workspace installation are explicitly outside this gate.
+Closes a session with accepted tasks, an open run and an open operation,
+including local presence in the same paired transaction. Workspace is fixture-installed.
 """
 
 import ctypes
@@ -17,14 +17,14 @@ import subprocess
 import sys
 import time
 from collections import Counter
-from uuid import UUID
+from uuid import UUID, uuid4
 
 
-def worker(state, operation, fixture):
+def worker(state, operation, fixture, mode):
     os.umask(0o077)
     state.chmod(0o700)
     assert ctypes.CDLL(None).prctl(38, 1, 0, 0, 0) == 0
-    from edgecitadel_agentd.store import AgentdStore
+    from edgecitadel_agentd.store import AgentdStore, StoreError
     from edgecitadel_agentd.storage_workspace import CompletionWorkspace
     from edgecitadel_agentd.trace_contract import canonical_bytes
     from edgecitadel_agentd.trace_exporter import ExportScope, selected_batch
@@ -57,11 +57,30 @@ def worker(state, operation, fixture):
         ]
 
         def recover():
-            session = db.execute("SELECT session_id FROM sessions").fetchone()[0]
-            store._recover_session_tasks_locked(session, time.time_ns() // 1_000_000)
+            if mode == "revoke":
+                return store.revoke_connector("native")
+            return store.reconcile(now_ms=time.time_ns() // 1_000_000 + 600_000)
 
         def snapshot():
             return {
+                "connector_revoked": db.execute(
+                    "SELECT revoked_at_ms IS NOT NULL FROM connectors WHERE connector_id='native'"
+                ).fetchone()[0],
+                "closed_sessions": db.execute(
+                    "SELECT count(*) FROM sessions WHERE closed_at_ms IS NOT NULL"
+                ).fetchone()[0],
+                "presence": [
+                    list(row)
+                    for row in db.execute(
+                        "SELECT presence_id,state,reason FROM presence_history_all ORDER BY presence_id"
+                    )
+                ],
+                "run_closed": db.execute(
+                    "SELECT closed_at_ms IS NOT NULL FROM trace_bindings_all"
+                ).fetchone()[0],
+                "operation_phase": db.execute(
+                    "SELECT phase FROM trace_operations_all"
+                ).fetchone()[0],
                 "claimed": db.execute(
                     "SELECT count(*) FROM tasks WHERE claimed_session_id IS NOT NULL"
                 ).fetchone()[0],
@@ -105,7 +124,7 @@ def worker(state, operation, fixture):
                 connector_id="native",
                 host_type="codex",
                 agent_id="worker",
-                capabilities=[],
+                capabilities=["edgecitadel_trace"],
             )
             session = store.open_session(
                 connector_id="native", token=token, lease_seconds=300
@@ -123,6 +142,38 @@ def worker(state, operation, fixture):
                     )["task_id"]
                     == task_id
                 )
+            binding = store.bind_trace(
+                node_id="edge-a",
+                connector_id="native",
+                token=token,
+                params={
+                    "schema_version": 1,
+                    "request_id": str(uuid4()),
+                    "session_id": session,
+                    "task_id": None,
+                    "context_id": None,
+                },
+            )["result"]
+            store.append_trace(
+                node_id="edge-a",
+                connector_id="native",
+                token=token,
+                params={
+                    "schema_version": 1,
+                    "binding_id": binding["binding_id"],
+                    "observation_id": str(uuid4()),
+                    "observation": {
+                        "schema_version": 1,
+                        "kind": "tool",
+                        "phase": "started",
+                        "span_id": str(uuid4()),
+                        "parent_span_id": None,
+                        "occurred_at": "2026-09-19T12:00:00.000Z",
+                        "duration_ms": None,
+                        "attributes": {"name": "owned-operation"},
+                    },
+                },
+            )
             with db:
                 db.execute("BEGIN IMMEDIATE")
                 db.execute(
@@ -171,32 +222,43 @@ def worker(state, operation, fixture):
                     restore()
 
                 physical.restore = pause_refill
-            with db:
-                db.execute("BEGIN IMMEDIATE")
-                pages = db.execute("PRAGMA page_count").fetchone()[0]
-                recover()
-                assert db.execute("PRAGMA page_count").fetchone()[0] == pages
-                if operation == "before_commit":
-                    journal = trace / "agentd.sqlite3-journal"
-                    print(
-                        json.dumps(
-                            {
-                                "barrier": "before_commit",
-                                "journal_allocated": journal.stat().st_blocks * 512,
-                                **snapshot(),
-                            }
-                        ),
-                        flush=True,
-                    )
-                    assert sys.stdin.readline().strip() == "resume"
+            if operation == "before_commit":
+                commit = db.commit
+
+                def pause_commit():
+                    if physical.borrowed:
+                        print(
+                            json.dumps(
+                                {
+                                    "barrier": "before_commit",
+                                    "journal_allocated": (
+                                        trace / "agentd.sqlite3-journal"
+                                    )
+                                    .stat()
+                                    .st_blocks
+                                    * 512,
+                                    **snapshot(),
+                                }
+                            ),
+                            flush=True,
+                        )
+                        assert sys.stdin.readline().strip() == "resume"
+                    commit()
+
+                db.commit = pause_commit
+            recover()
         else:
             result = snapshot()
             complete = operation == "verify_complete"
-            expected = task_count * (4 if complete else 3)
-            assert result["filled"] == task_count * (3 if complete else 2)
+            expected = task_count * (4 if complete else 3) + (4 if complete else 2)
+            assert result["filled"] == task_count * (3 if complete else 2) + (
+                (4 if mode == "revoke" else 3) if complete else 0
+            )
             assert result["events"] == expected
-            assert result["legacy_events"] == expected + 1
-            assert result["indexed_events"] == task_count
+            assert result["legacy_events"] == task_count * (
+                4 if complete else 3
+            ) + 1 + int(complete and mode == "revoke")
+            assert result["indexed_events"] == task_count + 2
             assert result["indexed_legacy_events"] == task_count + 1
             assert result["task_states"] == {
                 "queued" if complete else "accepted": task_count
@@ -204,6 +266,17 @@ def worker(state, operation, fixture):
             assert result["claimed"] == (0 if complete else task_count)
             assert result["attempts"] == task_count * 2
             assert result["outbox"] == 0
+            assert result["connector_revoked"] == int(complete and mode == "revoke")
+            assert result["closed_sessions"] == int(complete)
+            assert result["run_closed"] == int(complete)
+            assert result["operation_phase"] == (
+                "interrupted" if complete else "started"
+            )
+            assert result["presence"] == [[1, "online", "native_session_opened"]] + (
+                [[2, "unavailable", "session_lease_expired"]]
+                if complete and mode == "reconcile"
+                else []
+            )
             assert (
                 result["next_source_seq"] == result["next_export_seq"] == expected + 1
             )
@@ -229,7 +302,8 @@ def worker(state, operation, fixture):
                         assert canonical_bytes(decoded) == canonical_bytes(
                             json.loads(wanted[after][0])
                         )
-                        observed.append((decoded["task_id"], decoded["phase"]))
+                        if decoded["kind"] == "task":
+                            observed.append((decoded["task_id"], decoded["phase"]))
                         assert decoded["source_seq"] == after + 1
                         assert record.export_seq == after + 1
                         after += 1
@@ -239,8 +313,14 @@ def worker(state, operation, fixture):
                     for task_id in task_ids
                     for phase in ("queued", "offered", "accepted", "queued")
                 )
-                with db:
-                    db.execute("BEGIN IMMEDIATE")
+                if mode == "revoke":
+                    try:
+                        recover()
+                    except StoreError as error:
+                        assert "already revoked" in str(error)
+                    else:
+                        raise AssertionError("revoked connector was revoked twice")
+                else:
                     recover()
                 assert snapshot() == result
                 result["exact_exported_events"] = after
@@ -259,15 +339,16 @@ def worker(state, operation, fixture):
             physical.close()
 
 
-def main(output=None):
+def main(output=None, mode="reconcile"):
+    assert mode in {"reconcile", "revoke"}
     from test_trace_linux_quota import owned_volume
 
     report = {
-        "scope": "Production accepted-task requeue helper consumes reserved execution capacity at Linux user quota; paired task/evidence recovery and exact export. Fixture-installed workspace; no ancillary session/presence closure or live deployment."
+        "scope": f"Production {mode} recovery at Linux user quota: accepted-task requeue, run/operation closure and local presence/audit in one paired commit. Fixture-installed workspace; no live deployment."
     }
     fixture = Path(__file__).resolve().parents[1] / "fixtures/traces/events.v1.json"
     with owned_volume() as (root, state, _, _):
-        script = root / "task-requeue-probe.py"
+        script = root / "session-recovery-probe.py"
         shutil.copyfile(__file__, script)
         children = []
 
@@ -280,6 +361,7 @@ def main(output=None):
                     str(state),
                     operation,
                     str(fixture),
+                    mode,
                 ],
                 user=65534,
                 group=65534,
@@ -339,7 +421,7 @@ def main(output=None):
     print(value)
 
 
-def test_native_task_requeue():
+def test_native_session_recovery():
     import pytest
 
     if os.environ.get("RUN_AGENTD_USER_QUOTA") != "1":
@@ -347,8 +429,19 @@ def test_native_task_requeue():
     main()
 
 
+def test_native_connector_recovery():
+    import pytest
+
+    if os.environ.get("RUN_AGENTD_USER_QUOTA") != "1":
+        pytest.skip("requires explicitly owned jim-eq quota fixture")
+    main(mode="revoke")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
-        worker(Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]))
+        worker(Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), sys.argv[5])
     else:
-        main(sys.argv[1] if len(sys.argv) > 1 else None)
+        main(
+            sys.argv[1] if len(sys.argv) > 1 else None,
+            sys.argv[2] if len(sys.argv) > 2 else "reconcile",
+        )

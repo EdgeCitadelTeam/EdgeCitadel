@@ -21,13 +21,13 @@ def installed(tmp_path, monkeypatch):
         )
     (tmp_path / "node.json").write_text('{"agent_id":"owned-edge"}')
     store = AgentdStore(tmp_path / "agentd/agentd.sqlite3")
+    store._connection.install_workspace(
+        storage_workspace.CompletionWorkspace(store.path.parent / "completion.reserve")
+    )
     token = store.register_connector(
         connector_id="native", host_type="codex", agent_id="worker", capabilities=[]
     )
     session = store.open_session(connector_id="native", token=token)["session_id"]
-    store._connection.install_workspace(
-        storage_workspace.CompletionWorkspace(store.path.parent / "completion.reserve")
-    )
     try:
         yield store, token, session
     finally:
@@ -77,7 +77,7 @@ def snapshot(store):
 
 def test_task_admission_refusal_leaves_no_task_or_transport(installed, monkeypatch):
     store, _, _ = installed
-    monkeypatch.setattr(trace_reservations, "MAX_SLOTS", 4)
+    monkeypatch.setattr(trace_reservations, "MAX_SLOTS", 6)
     store.create_task(sender_id="origin", recipient_id="remote", payload={})
     before = snapshot(store)
     with pytest.raises(StoreError, match="quota_exceeded"):
@@ -127,7 +127,7 @@ def test_terminal_state_event_and_delivery_survive_materialization_and_retry(ins
     trace = store.get_trace(task["trace_id"])
     with db:
         db.execute("BEGIN IMMEDIATE")
-        for slot_id in range(1, 5):
+        for slot_id in range(3, 7):
             assert materialize(db, slot_id)
     assert store.get_trace(task["trace_id"]) == trace
     assert complete(installed, task) == result
@@ -233,13 +233,13 @@ def test_materializing_early_terminal_reclaims_only_unused_future_slots(
     installed, monkeypatch
 ):
     store, _, _ = installed
-    monkeypatch.setattr(trace_reservations, "MAX_SLOTS", 4)
+    monkeypatch.setattr(trace_reservations, "MAX_SLOTS", 6)
     task = store.create_task(sender_id="origin", recipient_id="remote", payload={})
     store.transition_task(task_id=task["task_id"], state="cancelled", actor_id="origin")
     trace = store.get_trace(task["trace_id"])
     with store._connection as db:
         db.execute("BEGIN IMMEDIATE")
-        assert materialize(db, 4)
+        assert materialize(db, 6)
     assert store.get_trace(task["trace_id"]) == trace
     assert (
         store.create_task(sender_id="origin", recipient_id="remote", payload={})[
@@ -256,7 +256,7 @@ def test_requeue_consumes_execution_capacity_and_next_acceptance_needs_new_slot(
 
     store, token, first_session = installed
     db = store._connection
-    monkeypatch.setattr(trace_reservations, "MAX_SLOTS", 4)
+    monkeypatch.setattr(trace_reservations, "MAX_SLOTS", 7)
     task = store.create_task(sender_id="origin", recipient_id="worker", payload={})
     store.claim_next_task(connector_id="native", token=token, session_id=first_session)
     # Exercise the production task-recovery transaction at its fixed page ceiling.
@@ -288,7 +288,7 @@ def test_requeue_consumes_execution_capacity_and_next_acceptance_needs_new_slot(
     assert snapshot(store) == before
     with db:
         db.execute("BEGIN IMMEDIATE")
-        for slot_id in (1, 2, 3):
+        for slot_id in (3, 4, 5):
             assert materialize(db, slot_id)
     assert (
         store.claim_next_task(connector_id="native", token=token, session_id=second)[

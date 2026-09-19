@@ -16,6 +16,8 @@ def legacy_counters(path, task_path):
     with sqlite3.connect(path) as db:
         db.execute("ATTACH DATABASE ? AS task_state", (str(task_path),))
         db.execute("BEGIN IMMEDIATE")
+        db.execute("DROP VIEW presence_history_all")
+        db.execute("DROP TABLE trace_presence_counter")
         for table in ("trace_sources", "trace_export_generations"):
             sql = next(
                 part.strip()
@@ -145,7 +147,7 @@ def test_v24_paired_snapshot_restores_then_migrates_before_rotation(tmp_path):
     )
     assert marker["source_epoch"] != original["source_epoch"]
     with sqlite3.connect(destination / "agentd.sqlite3") as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 28
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 29
         assert (
             db.execute(
                 "SELECT source_seq FROM trace_journal WHERE event_id=?",

@@ -1,4 +1,4 @@
-"""Offline, identity-preserving move of a closed schema-28 trace database."""
+"""Offline, identity-preserving move of a closed schema-29 trace database."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def migrate_storage(state_dir: Path) -> dict[str, str]:
     """Move only trace main; retain exact task/key bytes and all source identities.
 
     Run as the dedicated service UID with agentd stopped and the target trace
-    filesystem already provisioned. Only a clean schema-28 DELETE pair is accepted.
+    filesystem already provisioned. Only a clean schema-29 DELETE pair is accepted.
     The durable barrier fences old and new daemons before any copy. A retry with
     the same unchanged inputs replaces a partial copy or finishes an interrupted
     handoff. Malformed barriers/changed inputs require operator investigation.
