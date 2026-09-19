@@ -38,12 +38,17 @@ async function main() {
     await page.locator('[data-node-id]').first().waitFor();
     await request('/ready', '');
     const seen = new Set();
-    const deadline = performance.now() + 180000;
+    const deadline = performance.now() + config.workload.browser_timeout_s * 1000;
     while (seen.size < config.samples) {
       if (performance.now() > deadline) throw new Error('pilot browser timeout');
       const next = await request('/next');
       if (!next) { await new Promise(resolve => setTimeout(resolve, 25)); continue; }
       if (seen.has(next.event_id)) throw new Error('receiver repeated acknowledged identity');
+      // Predeclared terminal samples remain eligible even after pagination grows.
+      // Include reveal/filter cost in the conservative display-latency bound.
+      if (config.workload.mode === 'open_loop_terminal') {
+        await page.getByLabel('Find a step', { exact: true }).fill(next.node_id);
+      }
       const node = page.locator(`[data-node-id="${next.node_id}"].state-${next.state}`);
       await node.waitFor({ state: 'visible', timeout: 20000 });
       await node.scrollIntoViewIfNeeded();

@@ -1,8 +1,9 @@
 # Controlled Core commit-to-display qualification
 
-Status: clock prerequisite, bounded observers and a ten-observation jim-eq pilot
-are verified. The >=1,000-observation qualification, observer-overhead comparison
-and baseline/stress/soak workload remain open. This does not close M6 or M7.
+Status: clock prerequisite, bounded observers, pilot and a 1,000-terminal-state
+fixed-rate jim-eq diagnostic are verified. Its conservative p95 is 1.706 s.
+Observer-overhead comparison and the full baseline/stress/soak workload remain
+open. This does not close M6 or M7.
 
 ## Observed boundaries
 
@@ -155,3 +156,36 @@ Next generalize fixture scheduling and sample eligibility without dropping
 missing/coalesced observations, characterize full observer overhead, and run the
 >=1,000-observation workload. Preserve separate small/large graph, retained-volume,
 network/topology and sustained-load qualifications. A fast pilot cannot waive them.
+
+## Fixed-rate terminal-state diagnostic
+
+The runner now accepts an explicit open-loop cohort (up to 1,500 operations).
+It schedules starts and finishes at absolute monotonic offsets and records
+scheduler wakeup lateness before lease renewal/RPC preparation; this is not the
+complete RPC start delay. Acknowledgments never pace emission. The eligible cohort is
+all declared terminal observations, with span identities recorded before the
+first append. RPC receipts supply canonical event identities without repeatedly
+scanning the source journal in the timing path. Exact source/Core reconciliation
+is still required after the render cohort drains.
+
+The browser reveals each expected node with the normal exact-ID filter. This
+keeps off-page nodes in the denominator as the graph grows, and includes that
+reveal cost in the upper bound. It measures terminal-step discovery/display, not
+a guarantee that short-lived running states were painted. A missing correlation
+invalidates the cohort. Nearest-rank p95 requires >=1,000 complete observations;
+it does not by itself qualify the separate five-minute warmup, thirty-minute
+baseline, stress, soak, retained volume or observer-overhead requirements.
+
+The first complete 1,000-sample diagnostic emitted 2,000 tool observations in
+239.889 seconds at a declared 8.333/s, without waiting for rendered acknowledgments.
+All 2,002 source/Core events settled exactly. Nearest-rank p95 of conservative
+display upper bounds was 1,706.434 ms; median 1,258.421 ms and maximum 2,120.200 ms
+(three samples above 2,000 ms). This establishes the numerical target for that
+terminal/reveal cohort only. Normal Core startup was restored and all eight
+helper hashes matched the tested source.
+
+Next implement the adopted five-minute warmup and thirty-minute baseline with
+explicit source/run/operation distribution and bounded observer storage over the
+whole schedule. Keep the 1,000-sample diagnostic separate: one growing synthetic
+run on host loopback does not establish the full baseline population, long-lived
+resource bounds, distributed topology or execution overhead.

@@ -1,16 +1,18 @@
 """Own one jim-eq pilot and always restore the normal Core launcher."""
 
+import argparse
 import json
 import os
 import platform
 import signal
-import statistics
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+
+from trace_latency_workload import summarize_latencies, workload
 
 
 BASE = [
@@ -67,9 +69,16 @@ def stop_owned(process):
 def main():
     if platform.node().lower() != "jim-eq":
         raise RuntimeError("jim-eq only")
-    out = Path(sys.argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--open-loop-samples", type=int)
+    parser.add_argument("--event-rate", type=float, default=25 / 3)
+    args = parser.parse_args()
+    declared = workload(args.open_loop_samples, args.event_rate)
+    out = args.directory
     if not out.is_absolute() or not out.is_dir() or list(out.iterdir()):
         raise ValueError("empty private absolute pilot directory required")
+    (out / "workload.json").write_text(json.dumps(declared))
     helpers = Path(__file__).resolve().parent
     inspect = json.loads(run(["docker", "inspect", "edgecitadel-aggregator-1"]).stdout)[
         0
@@ -148,7 +157,7 @@ def main():
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-        if browser.wait(timeout=180) != 0:
+        if browser.wait(timeout=declared["browser_timeout_s"] + 30) != 0:
             raise RuntimeError("browser pilot failed; see private browser.log")
         if fixture.wait(timeout=70) != 0:
             raise RuntimeError("fixture pilot failed; see private fixture.log")
@@ -215,7 +224,7 @@ def main():
         len(render["expected"])
         == len(render["acks"])
         == browser_report["samples"]
-        == 10
+        == declared["samples"]
     )
     upper = []
     widths = []
@@ -226,18 +235,19 @@ def main():
         widths.append((marker["after_ns"] - marker["before_ns"]) / 1_000_000)
     report.update(
         trace_id=fixture_report["trace_id"],
-        samples=10,
+        samples=declared["samples"],
+        workload=declared,
+        emission=fixture_report["emission"],
         source_core_exact=True,
         all_core_settled=True,
-        event_count=12,
+        event_count=fixture_report["event_count"],
         owned_connector_revoked=True,
         commit_bracket_max_ms=max(widths),
         observer_callback_max_ms=commits["max_callback_ns"] / 1_000_000,
         latency_upper_bounds_ms=upper,
-        median_upper_bound_ms=statistics.median(upper),
-        maximum_upper_bound_ms=max(upper),
+        **summarize_latencies(upper, declared["samples"]),
         browser=browser_report,
-        scope="Ten-sample closed-loop synthetic pilot; insufficient for p95, not baseline/stress or actual tools. Bounds include render ACK transport; callback metric is not total observer overhead.",
+        scope="Declared synthetic diagnostic, not full-duration baseline/stress or actual tools. Bounds include step reveal and render ACK transport; callback metric is not total observer overhead. P95 applies only to the complete declared cohort when >=1000 samples.",
     )
     (out / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report), flush=True)

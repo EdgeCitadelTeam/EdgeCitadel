@@ -167,11 +167,13 @@ This read-only probe requires the existing running Core container. Its twenty
 clock comparisons do not measure display latency. The bounded commit observer
 component is implemented and tested in `helpers/trace_commit_observer.py`; the
 service launcher and rendered acknowledgments now have a ten-sample jim-eq pilot.
-The >=1,000-observation and sustained-load qualification remains open.
+A 1,000-terminal-state fixed-rate diagnostic is also verified; full-duration
+baseline, stress, soak and observer-overhead qualification remain open.
 
 The pilot consists of `trace-latency-pilot.py`, `trace-latency-core.py`,
 `trace-latency-fixture.py`, `trace-latency-browser.js`, `trace_render_receiver.py`,
-`trace_commit_observer.py` and `trace-clock-probe.py` in `helpers/`. Copy this set
+`trace_commit_observer.py`, `trace_latency_workload.py` and `trace-clock-probe.py`
+in `helpers/`. Copy this set
 into `/root/edgecitadel-latency-20260919/helpers` on jim-eq. The browser helper
 requires the pinned local `playwright` and `playwright-core` packages in the
 adjacent `node_modules` directory and the existing `/snap/bin/chromium`; use the
@@ -197,3 +199,18 @@ raw commit/ack reports and process logs on the server. `result.json`, `clock.jso
 and `pilot.png` are the sanitized qualification artifacts. `restoration.json`
 records exact image/command/config restoration and collector readiness, including
 on a failed pilot. Ten samples must never be labeled p95 qualification.
+
+For a predeclared fixed-rate terminal-state diagnostic, add
+`--open-loop-samples 1000` (default rate `25/3` exported tool events/s). The
+source emits one start/finish pair per operation without waiting for the browser,
+renews its session and reports schedule lateness. `--event-rate` explicitly
+changes the requested rate. Sample counts are capped at 1,500 to remain within
+the commit observer's bound; this is not the 30-minute baseline runner.
+
+Only terminal observations are eligible in this mode; the plan is written before
+emission. The browser reveals each canonical step through the existing filter,
+so conservative bounds include selection/filtering and acknowledgment overhead.
+All declared samples must correlate before a nearest-rank p95 is reported, and
+fewer than 1,000 samples yield no p95. Missing events or a timed-out browser fail
+the run; they are not discarded. This does not qualify transient start-state
+display, the adopted full-duration baseline/stress/soak schedule, or actual tools.

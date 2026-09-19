@@ -1,4 +1,4 @@
-"""Closed-loop synthetic pilot; not baseline traffic or actual tool execution."""
+"""Declared synthetic display workload; not the full-duration baseline or actual tools."""
 
 import hashlib
 import json
@@ -31,6 +31,7 @@ def main():
     out = Path(sys.argv[1])
     if not out.is_absolute() or not out.is_dir():
         raise ValueError("private absolute output directory required")
+    workload = json.loads((out / "workload.json").read_text())
     root = Path("/root/.edgecitadel/agentd")
     core = Path("/root/.edgecitadel/core/data/openclaw.db")
     admin = AgentdClient(
@@ -54,7 +55,10 @@ def main():
     signal.signal(signal.SIGTERM, terminate)
     session = None
     receiver = None
-    report = {"fixture": "closed_loop_synthetic_pilot_not_baseline_or_execution"}
+    report = {
+        "fixture": "synthetic_display_diagnostic_not_full_baseline_or_execution",
+        "workload": workload,
+    }
     try:
         session = client.call("session.open", lease_seconds=300)["session_id"]
         response = client.call(
@@ -77,7 +81,7 @@ def main():
             )
 
         initial = json.loads(rows()[0][-1])
-        receiver = RenderReceiver(capacity=10)
+        receiver = RenderReceiver(capacity=workload["samples"])
         config = {
             "scope": {
                 "node_id": initial["node_id"],
@@ -85,7 +89,8 @@ def main():
                 "trace_id": trace_id,
             },
             "receiver": {"url": receiver.url, "token": receiver.token},
-            "samples": 10,
+            "samples": workload["samples"],
+            "workload": workload,
         }
         with os.fdopen(
             os.open(out / "scope.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
@@ -95,8 +100,18 @@ def main():
         print(json.dumps({"stage": "scope_ready", "trace_id": trace_id}), flush=True)
         if not receiver.ready.wait(150):
             raise TimeoutError("browser readiness timeout")
-        for _ in range(5):
-            span = str(uuid4())
+        spans = [str(uuid4()) for _ in range(workload["operations"])]
+        (out / "sample-plan.json").write_text(
+            json.dumps(
+                {"span_ids": spans, "eligible_phases": workload["eligible_phases"]}
+            )
+        )
+        emitted = 0
+        started = time.monotonic()
+        next_renewal = started + 60
+        lateness = []
+        expected = []
+        for span in spans:
             parts = [
                 initial["node_id"],
                 initial["source_epoch"],
@@ -111,6 +126,13 @@ def main():
                 ).hexdigest()
             )
             for phase, state in [("started", "running"), ("finished", "finished")]:
+                if workload["mode"] == "open_loop_terminal":
+                    scheduled = started + emitted / workload["event_rate"]
+                    time.sleep(max(0, scheduled - time.monotonic()))
+                    lateness.append(max(0, time.monotonic() - scheduled))
+                if time.monotonic() >= next_renewal:
+                    client.call("session.renew", session_id=session, lease_seconds=300)
+                    next_renewal = time.monotonic() + 60
                 response = client.call(
                     "trace.append",
                     schema_version=1,
@@ -130,10 +152,20 @@ def main():
                     },
                 )
                 assert response["status"] == "ok"
-                event = json.loads(rows()[-1][-1])
-                assert event["span_id"] == span and event["phase"] == phase
-                receiver.expect(event["event_id"], identity, state)
-                receiver.wait(event["event_id"], 30)
+                emitted += 1
+                if phase in workload["eligible_phases"]:
+                    event_id = response["result"]["event_id"]
+                    receiver.expect(event_id, identity, state)
+                    expected.append(event_id)
+                    if workload["mode"] == "closed_loop":
+                        receiver.wait(event_id, 30)
+        report["emission"] = {
+            "events": emitted,
+            "seconds": time.monotonic() - started,
+            "max_schedule_lateness_ms": max(lateness, default=0) * 1000,
+            "target_event_rate": workload["event_rate"],
+            "waited_for_render_during_emission": workload["mode"] == "closed_loop",
+        }
         response = client.call(
             "trace.finish",
             schema_version=1,
@@ -143,8 +175,11 @@ def main():
             reason="unknown",
         )
         assert response["status"] == "ok"
+        drain_deadline = time.monotonic() + 120
+        for event_id in expected:
+            receiver.wait(event_id, max(0.01, drain_deadline - time.monotonic()))
         source = rows()
-        assert len(source) == 12
+        assert len(source) == workload["expected_events"]
         deadline = time.monotonic() + 60
         while True:
             central = []
@@ -163,7 +198,7 @@ def main():
             )
             if (
                 sorted(source) == sorted(central)
-                and len(states) == 12
+                and len(states) == workload["expected_events"]
                 and all(s == ("core_settled",) for s in states)
             ):
                 break
@@ -174,7 +209,7 @@ def main():
             trace_id=trace_id,
             source_core_exact=True,
             all_core_settled=True,
-            event_count=12,
+            event_count=len(source),
         )
     finally:
         try:
@@ -189,7 +224,10 @@ def main():
                 admin.call("connector.revoke", connector_id=name)
                 report["owned_connector_revoked"] = True
                 (out / "fixture.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps({"stage": "complete", "event_count": 12}), flush=True)
+    print(
+        json.dumps({"stage": "complete", "event_count": report["event_count"]}),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
