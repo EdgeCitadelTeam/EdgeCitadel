@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .trace_contract import TraceContractError, canonical_bytes
+from .trace_headroom import admit_reservation
 
 SLOT_BYTES = 32 * 1024
 MAX_SLOTS = 512
@@ -72,7 +73,9 @@ def reserve(db: sqlite3.Connection, obligation: Obligation) -> int:
     if current is not None:
         if current[1]:
             raise TraceContractError("completion_obligation_already_filled")
+        admit_reservation(db, obligation.kind, new=False)
         return int(current[0])
+    admit_reservation(db, obligation.kind, new=True)
     empty = db.execute(
         "SELECT slot_id FROM trace_completion_slots WHERE owner_id='' "
         "ORDER BY slot_id LIMIT 1"

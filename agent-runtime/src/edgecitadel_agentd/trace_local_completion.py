@@ -9,6 +9,7 @@ from typing import Any
 
 from .trace_contract import TraceContractError
 from .trace_counters import MAX_COUNTER, encode_counter
+from .trace_headroom import pending, presence_counter, require
 from .trace_reservations import Obligation, fill
 from .trace_task_completion import EVENT_COLUMNS
 
@@ -51,15 +52,12 @@ def install(db: sqlite3.Connection) -> None:
         UNION ALL SELECT {presence} FROM trace_completion_slots WHERE filled=1 AND json_extract(CAST(record AS TEXT),'$.local.presence') IS NOT NULL""")
 
 
-def next_presence_id(db: sqlite3.Connection) -> int:
+def next_presence_id(db: sqlite3.Connection, *, completion: bool = False) -> int:
     if not db.in_transaction:
         raise TraceContractError("trace_transaction_required")
-    row = db.execute(
-        "SELECT next_id FROM trace_presence_counter WHERE singleton=1"
-    ).fetchone()
-    if row is None:
-        raise TraceContractError("presence_counter_missing")
-    value = int(row[0])
+    value = presence_counter(db)
+    _, presence_pending = pending(db)
+    require(value, presence_pending + int(not completion))
     db.execute(
         "UPDATE trace_presence_counter SET next_id=? WHERE singleton=1",
         (encode_counter(value + 1),),
@@ -86,7 +84,7 @@ def finish_session(
         if reason not in {"native_session_closed", "session_lease_expired"}:
             raise TraceContractError("invalid_session_completion")
         local["presence"] = {
-            "presence_id": next_presence_id(db),
+            "presence_id": next_presence_id(db, completion=True),
             "agent_id": row[1],
             "state": "unavailable",
             "reason": reason,

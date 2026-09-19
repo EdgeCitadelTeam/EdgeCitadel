@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 
-def worker(state):
+def worker(state, near_limit=False):
     os.umask(0o077)
     state.chmod(0o700)
     assert ctypes.CDLL(None).prctl(38, 1, 0, 0, 0) == 0
@@ -20,6 +20,7 @@ def worker(state):
     from edgecitadel_agentd.store import AgentdStore
     from edgecitadel_agentd.trace_seed import seed_existing_work
     from edgecitadel_agentd.trace_quota import verify_trace_quota
+    from edgecitadel_agentd.trace_counters import MAX_COUNTER, encode_counter
 
     trace = (state / "trace").resolve(strict=True)
     (state / "agentd").mkdir(mode=0o700)
@@ -105,6 +106,22 @@ def worker(state):
         }
         assert facts() == before
         assert seed_existing_work(store)["newly_reserved"] == 0
+        if near_limit:
+            # Synthetic near-exhaustion identities isolate the arithmetic bound;
+            # quota, allocation and all recovery transactions remain native.
+            with db:
+                db.execute(
+                    "UPDATE trace_sources SET next_source_seq_bytes=?",
+                    (encode_counter(MAX_COUNTER - 32),),
+                )
+                db.execute(
+                    "UPDATE trace_export_generations SET next_export_seq_bytes=?",
+                    (encode_counter(MAX_COUNTER - 32),),
+                )
+                db.execute(
+                    "UPDATE trace_presence_counter SET next_id=?",
+                    (encode_counter(MAX_COUNTER - 1),),
+                )
         at_recovery = fill()
         pages = db.execute("PRAGMA page_count").fetchone()[0]
         store.close_session(connector_id="native", token=token, session_id=session)
@@ -124,6 +141,33 @@ def worker(state):
         assert (
             db.execute("SELECT count(*) FROM presence_history_all").fetchone()[0] == 2
         )
+        positions = None
+        if near_limit:
+            for row in db.execute("SELECT task_id FROM tasks").fetchall():
+                store.transition_task(
+                    task_id=row[0], state="cancelled", actor_id="origin"
+                )
+            positions = {
+                "source": db.execute(
+                    "SELECT next_source_seq FROM trace_sources"
+                ).fetchone()[0],
+                "export": db.execute(
+                    "SELECT next_export_seq FROM trace_export_generations"
+                ).fetchone()[0],
+                "presence": int(
+                    db.execute("SELECT next_id FROM trace_presence_counter").fetchone()[
+                        0
+                    ]
+                ),
+            }
+            assert set(positions.values()) == {MAX_COUNTER}
+            assert (
+                db.execute(
+                    "SELECT count(*) FROM tasks WHERE state='cancelled'"
+                ).fetchone()[0]
+                == 16
+            )
+            assert db.execute("PRAGMA page_count").fetchone()[0] == pages
         for schema in ("main", "task_state"):
             assert db.execute(f"PRAGMA {schema}.integrity_check").fetchone()[0] == "ok"
         print(
@@ -133,7 +177,8 @@ def worker(state):
                     "quota_at_recovery": at_recovery,
                     "seeded": seeded,
                     "recovered_tasks": 16,
-                    "filled": 17,
+                    "filled": 33 if near_limit else 17,
+                    "exhausted_positions": positions,
                     "integrity": "ok",
                 }
             )
@@ -145,14 +190,14 @@ def worker(state):
             physical.close()
 
 
-def main(output=None):
+def main(output=None, near_limit=False):
     from test_trace_linux_quota import owned_volume
 
     with owned_volume() as (root, state, _, _):
         script = root / "seed-probe.py"
         shutil.copyfile(__file__, script)
         result = subprocess.run(
-            [sys.executable, str(script), "--worker", str(state)],
+            [sys.executable, str(script), "--worker", str(state), str(int(near_limit))],
             user=65534,
             group=65534,
             extra_groups=[],
@@ -188,6 +233,9 @@ def test_native_existing_work_seed():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
-        worker(Path(sys.argv[2]))
+        worker(Path(sys.argv[2]), bool(int(sys.argv[3])))
     else:
-        main(sys.argv[1] if len(sys.argv) > 1 else None)
+        main(
+            sys.argv[1] if len(sys.argv) > 1 else None,
+            near_limit=len(sys.argv) > 2 and sys.argv[2] == "headroom",
+        )

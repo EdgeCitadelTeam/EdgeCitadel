@@ -5,6 +5,7 @@ import pytest
 
 from edgecitadel_agentd import storage_workspace as workspace
 from edgecitadel_agentd.storage_sqlite import configure_scratch
+from edgecitadel_agentd.trace_journal import TRACE_SCHEMA_SQL
 from edgecitadel_agentd.trace_reservations import (
     SCHEMA_SQL,
     Obligation,
@@ -29,7 +30,7 @@ def db(tmp_path, monkeypatch):
         tmp_path / "trace.sqlite3", factory=workspace.ReservedConnection
     )
     configure_scratch(connection)
-    connection.executescript(SCHEMA_SQL)
+    connection.executescript(TRACE_SCHEMA_SQL + SCHEMA_SQL)
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         reserve(connection, Obligation("run", "owned", "terminal"))

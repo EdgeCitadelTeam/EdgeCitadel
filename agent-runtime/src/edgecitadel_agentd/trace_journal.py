@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from .trace_counters import MAX_COUNTER, encode_counter
+from .trace_headroom import pending, require
 from .trace_reservations import Obligation
 from .trace_completed import fill_completed
 from .storage_workspace import ReservedConnection
@@ -179,6 +180,15 @@ class TraceJournal:
             if previous[1] != digest:
                 raise TraceContractError("idempotency_conflict")
             return stamped
+        canonical_pending, _ = pending(self.connection)
+        needed = canonical_pending + int(completion is None)
+        require(sequence, needed)
+        if selected:
+            export_next = self.connection.execute(
+                "SELECT next_export_seq FROM trace_export_generations WHERE node_id=? AND source_epoch=? AND export_generation=?",
+                (node_id, epoch, generation),
+            ).fetchone()[0]
+            require(export_next, needed)
         if completion is not None:
             db = self.connection
             if not isinstance(db, ReservedConnection) or db.workspace is None:

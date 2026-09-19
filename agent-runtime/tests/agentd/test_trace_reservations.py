@@ -4,15 +4,19 @@ import sqlite3
 import pytest
 
 from edgecitadel_agentd import trace_reservations as reservations
+from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.storage_sqlite import configure_scratch
 from edgecitadel_agentd.trace_contract import TraceContractError
 
 
 @pytest.fixture
 def db(tmp_path):
+    store = AgentdStore(tmp_path / "trace.sqlite3")
+    store.close()
+    # Exercise the slot primitive with the real counter schema, without the
+    # store-level canonical-record guards used by higher-level writer tests.
     connection = sqlite3.connect(tmp_path / "trace.sqlite3")
     configure_scratch(connection)
-    connection.executescript(reservations.SCHEMA_SQL)
     try:
         yield connection
     finally:
