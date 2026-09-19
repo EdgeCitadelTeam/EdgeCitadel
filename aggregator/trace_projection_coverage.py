@@ -321,15 +321,24 @@ def run_coverage(db: ProjectionTables, trace_id: str, *, unresolved: bool) -> di
     """
     if not db.in_transaction:
         raise ValueError("projection_transaction_required")
-    scopes = db.execute(
-        "SELECT s.node_id,s.source_epoch,s.export_generation,s.required_through,COALESCE(p.through_seq,0),COALESCE(p.has_loss,0),COALESCE(p.has_rejection,0) "
-        "FROM {trace_projection_run_scopes} s LEFT JOIN {trace_projection_scope_progress} p "
-        "USING(node_id,source_epoch,export_generation) WHERE s.trace_id=? "
-        "ORDER BY s.node_id,s.source_epoch,s.export_generation LIMIT 1001",
+    required = db.execute(
+        "SELECT node_id,source_epoch,export_generation,required_through "
+        "FROM {trace_projection_run_scopes} WHERE trace_id=? "
+        "ORDER BY node_id,source_epoch,export_generation LIMIT 1001",
         (trace_id,),
     ).fetchall()
-    if len(scopes) > 1000:
+    if len(required) > 1000:
         raise ValueError("projection_coverage_expansion_required")
+    scopes = []
+    for node, epoch, generation, through in required:
+        # The historical LEFT JOIN can scan other sources using only the index's
+        # table-name prefix. Exact-key reads share the caller's DB snapshot.
+        progress = db.execute(
+            "SELECT through_seq,has_loss,has_rejection FROM {trace_projection_scope_progress} "
+            "WHERE node_id=? AND source_epoch=? AND export_generation=?",
+            (node, epoch, generation),
+        ).fetchone()
+        scopes.append((node, epoch, generation, through, *(progress or (0, 0, 0))))
     saved = db.execute(
         "SELECT unknown,unpositioned_loss,unsupported_json FROM {trace_projection_run_coverage} WHERE trace_id=?",
         (trace_id,),
