@@ -164,5 +164,6 @@ ssh -o BatchMode=yes root@jim-eq /usr/bin/python3 - < /Users/yefanzhang/workplac
 ```
 
 This read-only probe requires the existing running Core container. Its twenty
-clock comparisons do not measure display latency. The commit/render observer
-and qualification run remain to be implemented.
+clock comparisons do not measure display latency. The bounded commit observer
+component is implemented and tested in `helpers/trace_commit_observer.py`; the
+service launcher, rendered acknowledgments and qualification run remain open.

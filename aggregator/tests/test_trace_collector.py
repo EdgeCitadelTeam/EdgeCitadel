@@ -262,13 +262,15 @@ async def test_aggregator_stops_inbox_even_if_fetch_converts_cancellation_to_tim
     app._stopping = False
     nc = SimpleNamespace(is_closed=False, drain=AsyncMock())
     app.router = SimpleNamespace(nc=nc)
-    app._inbox_task = asyncio.create_task(
-        app._drain_own_inbox(SimpleNamespace(fetch=fetch))
-    )
+    subscription = SimpleNamespace(fetch=fetch, unsubscribe=AsyncMock())
+    app._inbox_subscription = subscription
+    app._inbox_task = asyncio.create_task(app._drain_own_inbox(subscription))
     await entered.wait()
     await asyncio.wait_for(app.stop(), timeout=2)
+    subscription.unsubscribe.assert_awaited_once()
     nc.drain.assert_awaited_once()
     assert app._inbox_task is None
+    assert app._inbox_subscription is None
 
 
 @pytest.mark.asyncio

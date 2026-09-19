@@ -1,7 +1,8 @@
 # Controlled Core commit-to-display qualification
 
-Status: measurement design and clock prerequisite verified; the latency harness
-and acceptance run are not implemented. This does not close M6 or M7.
+Status: clock prerequisite and bounded commit-observer component verified.
+The jim-eq launcher, render acknowledgments and latency acceptance run remain
+unimplemented. This does not close M6 or M7.
 
 ## Observed boundaries
 
@@ -100,3 +101,25 @@ ACKs, duplicates, heartbeats or hidden graph updates. Start with small graphs to
 validate the measurement, then exercise large graphs and the adopted baseline,
 stress and soak schedule. A small-graph or same-host-network pass does not cover
 large-run catch-up, multi-host topology, retained-volume reads or the full M7 gate.
+
+## Commit observer implementation checkpoint
+
+`helpers/trace_commit_observer.py` now supplies a collector-only SQLite facade,
+transaction-exit brackets and a scoped in-memory observer (default 4,096 records,
+explicit cap 100,000). It never writes a per-event diagnostic file in the ingest
+path. Report serialization is outside the callback; maximum callback duration is
+recorded but does not include every instrumentation cost or qualify overhead.
+Capacity exhaustion or observer errors invalidate the report without suppressing
+the original collector callback or broker ACK. A replay with no transaction
+writes cannot create a fresh marker; identities keep their first bracket.
+
+The instrumentation context restores module wiring on exit, including exceptions
+and rejected nested installation. It does not manage the service: the future
+launcher must start and stop the collector inside the context and export its
+report only after shutdown. Production does not import this helper. No global
+SQLite monkeypatch, persistence schema or event payload change is introduced.
+
+Local component tests exercise real commit visibility, rollback, deferred
+constraint COMMIT failure, idle/multiple transactions, real ingest replay,
+observer failure, ingestion rollback/no ACK, scope filtering, capacity overflow
+and wiring restoration. Live deployment and browser measurement remain next.
