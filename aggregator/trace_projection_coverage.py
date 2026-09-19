@@ -313,6 +313,31 @@ def project_facts(
     }
 
 
+def _scope_progress(db: ProjectionTables, scope: tuple) -> tuple | None:
+    if db.history_cursor is None:
+        return db.execute(
+            "SELECT through_seq,has_loss,has_rejection FROM {trace_projection_scope_progress} "
+            "WHERE node_id=? AND source_epoch=? AND export_generation=?",
+            scope,
+        ).fetchone()
+    # The historical view scans every older version of this heavily updated key.
+    # Seek its latest version directly in the same transaction/generation. Select
+    # the tombstone before filtering it, or a deleted row would be resurrected.
+    row = db.execute(
+        "SELECT deleted,row_json FROM main.{trace_projection_history_rows} "
+        "WHERE table_name='trace_projection_scope_progress' AND row_key=? AND cursor<=? "
+        "ORDER BY cursor DESC LIMIT 1",
+        (
+            json.dumps(scope, separators=(",", ":"), ensure_ascii=False),
+            db.history_cursor,
+        ),
+    ).fetchone()
+    if row is None or row[0]:
+        return None
+    value = json.loads(row[1])
+    return tuple(value[key] for key in ("through_seq", "has_loss", "has_rejection"))
+
+
 def run_coverage(db: ProjectionTables, trace_id: str, *, unresolved: bool) -> dict:
     """Read coverage from the caller's projection snapshot, with honest scope.
 
@@ -333,11 +358,7 @@ def run_coverage(db: ProjectionTables, trace_id: str, *, unresolved: bool) -> di
     for node, epoch, generation, through in required:
         # The historical LEFT JOIN can scan other sources using only the index's
         # table-name prefix. Exact-key reads share the caller's DB snapshot.
-        progress = db.execute(
-            "SELECT through_seq,has_loss,has_rejection FROM {trace_projection_scope_progress} "
-            "WHERE node_id=? AND source_epoch=? AND export_generation=?",
-            (node, epoch, generation),
-        ).fetchone()
+        progress = _scope_progress(db, (node, epoch, generation))
         scopes.append((node, epoch, generation, through, *(progress or (0, 0, 0))))
     saved = db.execute(
         "SELECT unknown,unpositioned_loss,unsupported_json FROM {trace_projection_run_coverage} WHERE trace_id=?",

@@ -19,6 +19,8 @@ class ProjectionTables:
             raise ValueError("invalid_projection_namespace")
         self.connection = connection
         self.namespace = namespace
+        # Owned by history.at_cursor, alongside its connection-local views.
+        self.history_cursor: int | None = None
 
     @property
     def in_transaction(self) -> bool:

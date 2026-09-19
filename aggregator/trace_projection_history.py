@@ -165,6 +165,8 @@ def at_cursor(
         raise ValueError("projection_history_unavailable")
     history = tables.identifier("trace_projection_history_rows")
     created = []
+    if tables.history_cursor is not None:
+        raise ValueError("projection_history_context_nested")
     try:
         for name in READ_TABLES:
             columns = _columns(tables, name)
@@ -179,8 +181,10 @@ def at_cursor(
                 AND NOT EXISTS(SELECT 1 FROM main.{history} n WHERE n.table_name=h.table_name
                     AND n.row_key=h.row_key AND n.cursor>h.cursor AND n.cursor<={cursor})""")
             created.append(view)
+        tables.history_cursor = cursor
         yield replace(state, change_cursor=cursor, ingest_cursor=position[0])
     finally:
+        tables.history_cursor = None
         for view in reversed(created):
             tables.connection.execute(f"DROP VIEW temp.{view}")
 

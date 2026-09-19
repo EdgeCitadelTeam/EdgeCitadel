@@ -9,11 +9,81 @@ from test_trace_projection_coverage import put
 from test_trace_projection_store import core as core_fixture, event, ingest
 
 from aggregator import trace_projection_history as history
+from aggregator import trace_projection_coverage as coverage
 from aggregator import trace_projection_rebuild as rebuild
 from aggregator import trace_projection_store as projection
 from aggregator.trace_projection_tables import select_tables
 
 core = core_fixture
+
+
+@pytest.mark.parametrize("rebuilt", [False, True])
+def test_scope_progress_seeks_version_and_preserves_tombstones(core, rebuilt):
+    if rebuilt:
+        candidate = rebuild.begin(core)
+        projection.project_batch(core, build_generation=candidate.generation)
+        rebuild.activate(core, generation=candidate.generation)
+    scope = ('source-雪"', str(uuid4()), str(uuid4()))
+    with core:
+        core.execute("BEGIN IMMEDIATE")
+        tables = select_tables(core)
+        for cursor in range(1, 3001):
+            history.start_change(tables, cursor, 0, received_at_ms=cursor)
+            tables.execute(
+                "INSERT INTO {trace_projection_scope_progress} VALUES(?,?,?,?,0,0) "
+                "ON CONFLICT(node_id,source_epoch,export_generation) DO UPDATE SET through_seq=excluded.through_seq",
+                (*scope, cursor),
+            )
+        history.start_change(tables, 3001, 0, received_at_ms=3001)
+        tables.execute("DELETE FROM {trace_projection_scope_progress}")
+        history.start_change(tables, 3002, 0, received_at_ms=3002)
+        tables.execute(
+            "INSERT INTO {trace_projection_scope_progress} VALUES(?,?,?,?,1,1)",
+            (*scope, 4000),
+        )
+        tables.execute("UPDATE {trace_projection_state} SET change_cursor=3002")
+        history.finish_changes(tables)
+    with core:
+        core.execute("BEGIN")
+        tables = select_tables(core)
+        state = projection._state(tables)
+        for cursor, expected in [
+            (0, None),
+            (1, (1, 0, 0)),
+            (2999, (2999, 0, 0)),
+            (3001, None),
+            (3002, (4000, 1, 1)),
+        ]:
+            with history.at_cursor(
+                tables, state, generation=state.generation, cursor=cursor
+            ):
+                # A SQLite work budget catches an accidental return to scanning
+                # thousands of versions without depending on host timing.
+                core.set_progress_handler(lambda: 1, 1000)
+                try:
+                    assert coverage._scope_progress(tables, scope) == expected
+                    assert (
+                        coverage._scope_progress(tables, (*scope[:2], "missing"))
+                        is None
+                    )
+                finally:
+                    core.set_progress_handler(None, 0)
+            assert tables.history_cursor is None
+        assert coverage._scope_progress(tables, scope) == (4000, 1, 1)
+        with history.at_cursor(tables, state, generation=state.generation, cursor=1):
+            with pytest.raises(ValueError, match="projection_history_context_nested"):
+                with history.at_cursor(
+                    tables, state, generation=state.generation, cursor=2
+                ):
+                    pytest.fail("nested snapshot accepted")
+            assert coverage._scope_progress(tables, scope) == (1, 0, 0)
+        with pytest.raises(RuntimeError, match="caller failure"):
+            with history.at_cursor(
+                tables, state, generation=state.generation, cursor=1
+            ):
+                raise RuntimeError("caller failure")
+        assert tables.history_cursor is None
+        assert coverage._scope_progress(tables, scope) == (4000, 1, 1)
 
 
 def graph(db, state=None):
