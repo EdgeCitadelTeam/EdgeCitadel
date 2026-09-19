@@ -86,6 +86,16 @@ export function readResponse(value, { kind, traceId, generation } = {}) {
   if (value.kind === 'trace_changes') {
     requireProtocol(value.next_cursor === null || value.next_cursor === value.through_cursor)
   }
+  if (value.kind === 'trace_history') {
+    requireProtocol(value.retained_from <= value.upper_position)
+    let previous = value.upper_position + 1
+    for (const item of value.items) {
+      requireProtocol(item.position >= value.retained_from && item.position < previous)
+      requireProtocol((item.trace_state === 'present') === (item.at !== null))
+      requireProtocol(item.is_retained_base === (item.position === value.retained_from))
+      previous = item.position
+    }
+  }
   if (value.kind === 'trace_events') {
     requireProtocol(value.events.every(event => event.trace_id === value.trace_id))
   }

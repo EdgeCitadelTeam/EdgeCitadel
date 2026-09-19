@@ -16,7 +16,13 @@ from urllib.parse import urlsplit
 
 from edgecitadel_agentd.trace_cursor import cursor_scope_hash
 
-from . import trace_change_pages, trace_event_pages, trace_graph_pages, trace_list_pages
+from . import (
+    trace_change_pages,
+    trace_event_pages,
+    trace_graph_pages,
+    trace_list_pages,
+    trace_history_pages,
+)
 from .trace_event_pages import TraceReadError
 from .trace_read_key import load_or_create_key
 from .trace_projection_store import _state
@@ -150,6 +156,7 @@ class TraceReadService:
                     "graph": trace_graph_pages.read_graph,
                     "events": trace_event_pages.read_events,
                     "changes": trace_change_pages.read_changes,
+                    "history": trace_history_pages.read_history,
                 }
                 return readers[kind](
                     connection,

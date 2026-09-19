@@ -91,6 +91,7 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
                 "graph": {"at", "expand"},
                 "events": {"as_of", "after", "node_id", "limit"},
                 "changes": {"after", "limit"},
+                "history": {"cursor", "limit"},
             }[kind]
             required = (
                 {"as_of"}
@@ -121,6 +122,10 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
     @router.get("/api/traces/{trace_id}/changes")
     async def trace_changes(request: Request, trace_id: str):
         return await http(request, "changes", trace_id)
+
+    @router.get("/api/traces/{trace_id}/history")
+    async def trace_history(request: Request, trace_id: str):
+        return await http(request, "history", trace_id)
 
     @router.websocket("/ws/traces/{trace_id}")
     async def trace_socket(socket: WebSocket, trace_id: str):

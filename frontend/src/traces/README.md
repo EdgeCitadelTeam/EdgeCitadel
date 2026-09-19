@@ -68,12 +68,19 @@ React effect ownership recreates API/session resources under StrictMode replay.
 The credential belongs to Layout so tab changes preserve it in memory; page
 reload, disconnect and authorization denial remove access. A view change aborts
 its inspector and clears page state. The graph remains frozen while historical
-mode indicates newer evidence. The visited-snapshot menu contains at most the
-last 100 snapshots encountered in this view, not every retained server version;
-full retained-history discovery remains required for M6 acceptance.
+mode indicates newer evidence. Browse retained history discovers server snapshots, including versions never
+visited in this browser. The paginated index freezes its newest boundary and
+retention floor; new arrivals require Refresh history and floor changes return
+an explicit expiry error. Relevant observation/coverage changes and the retained
+base remain reachable, including past versions of a currently retired run.
+Selecting a row opens its exact graph cursor and preserves step selection;
+retired/absent boundaries are labeled with no available graph. Times use the
+Core clock rather than asserting cross-host execution ordering. The index owns
+only its current metadata page; navigating or refreshing it does not change the
+graph until the user selects a snapshot.
 
 Verification includes component/protocol fixtures and real jim-eq browser
 checks; see the milestone evidence for exact revision and scope. Full multi-branch
-S1/S4/S6, retained-history discovery, large-run render/memory measurements and
+S1/S4/S6, retained-volume/history read-cost qualification, large-run render/memory measurements and
 full deterministic regression remain open. A 501-step component fixture proves
 reachability, not production stress performance or a completed M6 gate.

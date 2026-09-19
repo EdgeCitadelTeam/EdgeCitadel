@@ -3,6 +3,7 @@ import { createTraceApi } from './api'
 import { createTraceSession } from './session'
 import { navigateTrace, useTraceRoute } from './navigation'
 import ExecutionMap from './ExecutionMap'
+import HistoryBrowser from './HistoryBrowser'
 import ObservationInspector, { traceErrorText } from './ObservationInspector'
 import { readable } from './layout'
 import './trace.css'
@@ -59,7 +60,7 @@ function RunList({ api, route, onDenied }) {
 
 function RunView({ api, route, onDenied }) {
   const [session, setSession] = useState(null)
-  const [versions, setVersions] = useState([])
+  const [historyOpen, setHistoryOpen] = useState(false)
   useEffect(() => {
     const next = createTraceSession(api)
     setSession(next)
@@ -70,10 +71,6 @@ function RunView({ api, route, onDenied }) {
   const relevant = state.traceId === route.run && state.historicalAt === route.at
   const graph = relevant ? state.graph : null
   useEffect(() => { if (state.error?.code === 'not_authorized') onDenied() }, [state.error, onDenied])
-  useEffect(() => {
-    if (!graph) return
-    setVersions(old => old.some(version => version.at === graph.at) ? old : [...old, { at: graph.at, label: `Snapshot ${old.length ? old.at(-1).number + 1 : 1}`, number: old.length ? old.at(-1).number + 1 : 1 }].slice(-100))
-  }, [graph])
   const selected = graph?.nodes.find(node => node.id === route.step)
   const select = id => navigateTrace({ ...route, step: id, event: null })
   return <section className="trace-run-view" aria-label="Selected run">
@@ -81,12 +78,10 @@ function RunView({ api, route, onDenied }) {
     <div className="trace-controls">
       {route.at ? <button onClick={() => navigateTrace({ ...route, at: null, event: null })}>Resume live</button>
         : <button disabled={!graph} onClick={() => navigateTrace({ ...route, at: graph.at, event: null })}>Pause live</button>}
-      <label>Visited snapshots<select value={route.at ?? ''} onChange={event => navigateTrace({ ...route, at: event.target.value || null, event: null })}>
-        <option value="">Live</option>{versions.map(version => <option key={version.at} value={version.at}>{version.label}</option>)}
-      </select></label>
-      <span className="trace-muted">Last 100 snapshots seen in this visit; saved links reopen retained history.</span>
+      <button aria-expanded={historyOpen} onClick={() => setHistoryOpen(!historyOpen)}>{historyOpen ? 'Hide retained history' : 'Browse retained history'}</button>
       {state.newerAvailable && <strong>Newer evidence available</strong>}
     </div>
+    {historyOpen && <HistoryBrowser api={api} route={route} onDenied={onDenied} />}
     {state.error && <div className="trace-error" role="alert"><p>{traceErrorText(state.error)}</p>
       <button onClick={() => route.at ? navigateTrace({ ...route, at: null, event: null }) : session?.resume()}>Open latest snapshot</button>
       {route.at && state.error.retryable && <button onClick={() => session?.open(route.run, { at: route.at })}>Retry this snapshot</button>}

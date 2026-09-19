@@ -25,7 +25,8 @@
         "graph",
         "events",
         "changes",
-        "expansion"
+        "expansion",
+        "history"
       ]
     },
     "trace_id": {
@@ -142,6 +143,23 @@
         "properties": {
           "key": {
             "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "history"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^(start|before):[0-9]{1,16}$(?![\\s\\S])"
           }
         }
       }

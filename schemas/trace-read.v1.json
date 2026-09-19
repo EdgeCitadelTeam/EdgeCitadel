@@ -841,6 +841,120 @@
         "retained_from",
         "retryable"
       ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
+        },
+        "projection_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?![\\s\\S])"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "const": "trace_history"
+        },
+        "snapshot_cursor": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+        },
+        "upper_position": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retained_from": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "position": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$(?![\\s\\S])"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "trace_state": {
+                "enum": [
+                  "present",
+                  "expired",
+                  "absent"
+                ]
+              },
+              "received_at_ms": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "is_retained_base": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "position",
+              "at",
+              "trace_state",
+              "received_at_ms",
+              "is_retained_base"
+            ]
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "trace_id",
+        "projection_generation",
+        "next_cursor",
+        "kind",
+        "snapshot_cursor",
+        "upper_position",
+        "retained_from",
+        "items"
+      ]
     }
   ]
 }

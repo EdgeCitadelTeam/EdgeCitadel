@@ -134,10 +134,11 @@ These fixtures specify expected behavior; a production reducer is still M5 work.
 
 | Interface | Request and response contract |
 |---|---|
-| `GET /api/traces` | Optional `cursor`, `agent_id`, `outcome`, `limit` (default/max 100); `trace_list`. Order by immutable creation projection position descending, then trace ID; freeze membership/filter evaluation at snapshot. |
+| `GET /api/traces` | Optional `cursor`, `agent_id`, `outcome`, `task_id`, `limit` (default/max 100); `trace_list`. Order by immutable creation projection position descending, then trace ID; freeze membership/filter evaluation at snapshot. Task filtering includes child task evidence. |
 | `GET /api/traces/{trace_id}` | Optional `at` graph cursor or `expand` expansion cursor; `trace_graph`. Expansion must use the token's historical snapshot and generation. |
-| `GET /api/traces/{trace_id}/events` | `as_of` graph cursor, optional `after` event cursor and `limit` (default 200/max 500); `trace_events`. Page only observations through that graph snapshot's ingestion watermark. |
+| `GET /api/traces/{trace_id}/events` | `as_of` graph cursor, optional `after` event cursor, graph `node_id` and `limit` (default 200/max 500); `trace_events`. Page only observations through that graph snapshot's ingestion watermark. Node membership uses projector identities and is cursor-scope-bound; sparse pages can have a continuation. |
 | `GET /api/traces/{trace_id}/changes` | `after` change cursor and optional `limit` (default 200/max 500); `trace_changes`. Return retained atomic upserts/tombstones and coverage. |
+| `GET /api/traces/{trace_id}/history` | Optional `cursor` and `limit` (default 20/max 100); `trace_history`. Discover relevant retained snapshots newest first, including current and retained base. Scan at most 64 global projection clocks per request, allowing empty continuation pages. |
 | `/ws/traces/{trace_id}` | `after` change cursor; the same durable changes as HTTP catch-up, plus heartbeat/error. Heartbeats advertise availability and do not acknowledge unapplied changes. |
 | NATS settlement | Source/epoch/export-generation request and persisted checkpoint response; exact request/error schema remains an open M2 deliverable. |
 
@@ -170,7 +171,19 @@ invalidate old tokens; projection rebuild changes generation.
 | graph | `position=snapshot` is the retained graph projection position; `upper` is its covered ingestion watermark. |
 | events | `snapshot` is graph projection position; `position` is last ingestion row, bounded by ingestion `upper`. |
 | changes | `position` is last delivered/scanned projection position; `snapshot=upper` is the known high watermark. New requests can catch up beyond the old high watermark. |
+| history | `snapshot=upper` freezes the browse ceiling. `key=start:<floor>`, `position=snapshot` reopens its initial page; `key=before:<floor>` continues strictly before `position`. Any advance of the authoritative floor expires the old range. |
 | expansion | `snapshot` is historical graph position; `position` is branch offset; `key` identifies branch and `upper` is covered ingestion watermark. |
+
+History discovery uses the same authorized read snapshot and projection generation
+as graph reads. Entries include a projection position, `trace_state`, nullable
+exact graph `at`, nullable `received_at_ms` and `is_retained_base`. The time is the
+Core receipt/maintenance clock, not a cross-host execution ordering claim.
+Present entries have graph tokens; expired/absent boundaries have none. Direct
+run observations remain discoverable even if the visible node state is unchanged;
+source-wide coverage changes attributed to another run must also be included.
+New commits do not move an in-progress history range. Refresh explicitly starts
+a new range, independently of the selected historical graph. Graph history does
+not promise that separately retained raw payloads remain readable forever.
 
 A token from another kind/trace/filter/access scope returns HTTP 400
 `cursor_scope_mismatch`; bad signature/encoding returns 400 `invalid_cursor`.

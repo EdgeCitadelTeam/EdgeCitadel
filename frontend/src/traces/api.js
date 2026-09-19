@@ -177,6 +177,7 @@ export function createTraceApi(credential, {
   return Object.freeze({
     list: (params = {}, signal) => request('', params, { kind: 'trace_list' }, signal),
     graph: (traceId, params = {}, signal) => request('/' + encodeURIComponent(traceId), params, { kind: 'trace_graph', traceId }, signal),
+    history: (traceId, params = {}, signal) => request('/' + encodeURIComponent(traceId) + '/history', params, { kind: 'trace_history', traceId }, signal),
     events: (traceId, params, signal) => request('/' + encodeURIComponent(traceId) + '/events', params, { kind: 'trace_events', traceId }, signal),
     changes: (traceId, after, signal) => request('/' + encodeURIComponent(traceId) + '/changes', { after }, { kind: 'trace_changes', traceId }, signal),
     subscribe, dispose,

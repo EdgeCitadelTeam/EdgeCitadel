@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createTraceApi } from './api'
 import { MAX_RESPONSE_BYTES } from './protocol'
-import { deferred, graph, heartbeat, readError, token, traceId } from './testFixtures'
+import { deferred, fixture, graph, heartbeat, readError, token, traceId } from './testFixtures'
 
 const CREDENTIAL = 'private-fleet-test-credential-123456789'
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status })
@@ -131,5 +131,19 @@ it('rejects malformed URL run identities before making any authenticated request
   await expect(api.subscribe('../private', token('cursor')).next()).rejects.toThrow('invalid_request')
   expect(fetchImpl).not.toHaveBeenCalled()
   expect(Socket.instances).toHaveLength(0)
+  api.dispose()
+})
+
+
+it('loads retained history through the same authenticated read-only boundary', async () => {
+  const value = fixture.responses.find(item => item.kind === 'trace_history')
+  const fetchImpl = vi.fn().mockResolvedValue(json(value))
+  const api = apiWith({ fetchImpl })
+  expect(await api.history(traceId, { cursor: value.snapshot_cursor, limit: 20 })).toEqual(value)
+  const [url, options] = fetchImpl.mock.calls[0]
+  expect(new URL(url).pathname).toBe(`/api/traces/${traceId}/history`)
+  expect(new URL(url).searchParams.get('cursor')).toBe(value.snapshot_cursor)
+  expect(options.method).toBe('GET')
+  expect(options.headers.Authorization).toBe(`Bearer ${CREDENTIAL}`)
   api.dispose()
 })

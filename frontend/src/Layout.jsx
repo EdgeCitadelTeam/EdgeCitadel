@@ -46,7 +46,7 @@ export default function Layout() {
       case 'chat':
         return <ChatHistory />
       case 'flow':
-        return <><div className="flex items-center justify-between gap-3 px-4 py-2 text-xs text-gray-400"><span>Communication topology</span><button className="text-accent-light" onClick={() => setActiveTab('execution')}>Open execution map</button></div><CommFlow /></>
+        return <><div className="flex items-center justify-between gap-3 px-4 py-2 text-xs text-gray-400"><span>Communication topology · broker links are illustrative</span><button className="text-accent-light" onClick={() => setActiveTab('execution')}>Open execution map</button></div><CommFlow /></>
       case 'logs':
         return <LogViewer />
       case 'tasks':

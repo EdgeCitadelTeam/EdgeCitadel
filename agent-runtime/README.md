@@ -788,9 +788,10 @@ Use the trusted private/encrypted deployment perimeter: this credential grants
 fleet-wide trace access, and does not isolate individual users. The dashboard's
 Execution tab accepts this credential in memory, and Flow/Tasks link into the
 explorer. Reloading the page requires entering it again. Saved run/step/event
-and historical snapshot links contain no credential. The visited-snapshot menu
-covers snapshots seen in the current visit; full retained-history discovery and
-M6 acceptance remain incomplete.
+and historical snapshot links contain no credential. Browse retained history
+loads server versions, including snapshots never visited in the browser. This
+supports exact retained playback; full M6 scenario/performance acceptance remains
+incomplete.
 
 `GET /api/traces` accepts an optional UUIDv4 `task_id` filter matching any
 observed task in the run, not only its root task. The normalized filter is part
@@ -800,6 +801,18 @@ with the projector's rules. Supply the displayed graph's `as_of` on every page.
 Filtered scans are bounded and can return an empty page with a continuation;
 continue until `next_cursor` is null. Event cursors are bound to the node filter
 and cannot be reused for another step or an unfiltered request.
+
+`GET /api/traces/{id}/history?cursor=...&limit=...` discovers snapshots newest
+first. A request scans at most 64 retained Core clocks and returns at most 100
+short entries (default 20); a sparse page may have no entries and a continuation.
+Each page includes the current upper boundary, relevant run observation/coverage
+changes and, if present, its retained base. Retired/absent boundaries carry no
+`at`; present entries carry the exact graph cursor. The `received_at_ms` clock is
+Core receipt/maintenance time, not source execution time. History cursors freeze
+the browse ceiling and retention floor; compaction invalidates an old range with
+`history_expired` rather than silently skipping it. Rebuild and credential scope
+changes use the existing explicit error contract. Refresh starts a new range.
+These response/scan bounds are not a fleet-scale SQL latency qualification.
 
 The Core creates `trace-cursor.key` beside its database, owned by the process
 with mode 0600. Preserve it in private backups to retain cursor validity across

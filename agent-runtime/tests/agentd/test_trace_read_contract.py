@@ -173,3 +173,20 @@ def test_change_modes_cannot_mix_replacement_clear_and_patch(updates):
     response["change"].update(updates)
     with pytest.raises(TraceContractError, match="invalid_read"):
         validate_read_response(response)
+
+
+@pytest.mark.parametrize("mutation", ["order", "scope", "state", "base"])
+def test_history_entries_preserve_order_retention_and_snapshot_semantics(mutation):
+    value = deepcopy(
+        next(item for item in FIXTURE["responses"] if item["kind"] == "trace_history")
+    )
+    if mutation == "order":
+        value["items"].reverse()
+    elif mutation == "scope":
+        value["retained_from"] = 9
+    elif mutation == "state":
+        value["items"][0]["at"] = None
+    else:
+        value["items"][0]["is_retained_base"] = True
+    with pytest.raises(TraceContractError):
+        validate_read_response(value)

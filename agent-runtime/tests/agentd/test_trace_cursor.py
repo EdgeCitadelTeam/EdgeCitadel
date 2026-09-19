@@ -34,8 +34,10 @@ def claims(kind: str) -> dict:
         "projection_generation": GENERATION,
         "snapshot": 8,
         "position": 8 if kind == "graph" else 5,
-        "upper": 8 if kind in {"list", "changes"} else 20,
-        "key": "c" * 32
+        "upper": 8 if kind in {"list", "changes", "history"} else 20,
+        "key": "before:2"
+        if kind == "history"
+        else "c" * 32
         if kind == "list"
         else "task:child"
         if kind == "expansion"
@@ -52,7 +54,9 @@ def scope(value: dict) -> CursorScope:
     )
 
 
-@pytest.mark.parametrize("kind", ["list", "graph", "events", "changes", "expansion"])
+@pytest.mark.parametrize(
+    "kind", ["list", "graph", "events", "changes", "expansion", "history"]
+)
 def test_cursor_roundtrip_keeps_distinct_positions_and_snapshot(kind: str) -> None:
     value = claims(kind)
     token = encode_cursor(value, KEY)
@@ -133,3 +137,18 @@ def test_invalid_cursor_claims_are_not_signed(
 def test_short_signing_key_is_configuration_error() -> None:
     with pytest.raises(ValueError, match="at least 32 bytes"):
         encode_cursor(claims("events"), b"short")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"key": "start:2"},
+        {"key": "before:6"},
+        {"key": "before:9"},
+        {"key": None},
+        {"upper": 9},
+    ],
+)
+def test_history_cursor_cannot_misrepresent_its_frozen_range(overrides: dict) -> None:
+    with pytest.raises(TraceContractError):
+        encode_cursor({**claims("history"), **overrides}, KEY)

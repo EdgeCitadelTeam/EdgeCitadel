@@ -28,3 +28,11 @@ describe('canonical trace response contract', () => {
     expect(() => readResponse({ ...readError('history_expired'), resnapshot_required: false })).toThrow('invalid_response')
   })
 })
+
+it('rejects history that changes ordering, retention or available graph semantics', () => {
+  const original = fixture.responses.find(value => value.kind === 'trace_history')
+  for (const mutate of [value => value.items.reverse(), value => { value.retained_from = 9 }, value => { value.items[0].at = null }, value => { value.items[0].is_retained_base = true }]) {
+    const value = clone(original); mutate(value)
+    expect(() => readResponse(value)).toThrow('invalid_response')
+  }
+})

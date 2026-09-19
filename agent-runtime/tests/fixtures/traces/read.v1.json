@@ -541,6 +541,39 @@
       "resnapshot_required": true,
       "retained_from": 7,
       "retryable": false
+    },
+    {
+      "schema_version": 1,
+      "kind": "trace_history",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "projection_generation": "00000000-0000-4000-8000-000000000900",
+      "snapshot_cursor": "eyJrZXkiOiJzdGFydDoyIiwia2luZCI6Imhpc3RvcnkiLCJwb3NpdGlvbiI6OCwicHJvamVjdGlvbl9nZW5lcmF0aW9uIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwOTAwIiwic2NoZW1hX3ZlcnNpb24iOjEsInNjb3BlX2hhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwic25hcHNob3QiOjgsInRyYWNlX2lkIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJ1cHBlciI6OH0.QrHCHP8tCWgvAQhqm6eFN-0MXVhupXd5I3k4WWggdVI",
+      "upper_position": 8,
+      "retained_from": 2,
+      "items": [
+        {
+          "position": 8,
+          "at": "eyJrZXkiOm51bGwsImtpbmQiOiJncmFwaCIsInBvc2l0aW9uIjo4LCJwcm9qZWN0aW9uX2dlbmVyYXRpb24iOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDA5MDAiLCJzY2hlbWFfdmVyc2lvbiI6MSwic2NvcGVfaGFzaCI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJzbmFwc2hvdCI6OCwidHJhY2VfaWQiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInVwcGVyIjoyMH0.hrAAPYiie_H3mTOi4XO81DmtNQGB5g60iskOIwGCR0A",
+          "trace_state": "present",
+          "received_at_ms": 1700000000008,
+          "is_retained_base": false
+        },
+        {
+          "position": 7,
+          "at": null,
+          "trace_state": "expired",
+          "received_at_ms": 1700000000007,
+          "is_retained_base": false
+        },
+        {
+          "position": 2,
+          "at": "eyJrZXkiOm51bGwsImtpbmQiOiJncmFwaCIsInBvc2l0aW9uIjoyLCJwcm9qZWN0aW9uX2dlbmVyYXRpb24iOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDA5MDAiLCJzY2hlbWFfdmVyc2lvbiI6MSwic2NvcGVfaGFzaCI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJzbmFwc2hvdCI6MiwidHJhY2VfaWQiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInVwcGVyIjoyfQ.hxmcuMkIcUFomEf42fGaZre4LCGcnn4c7n8IAYBcJz4",
+          "trace_state": "present",
+          "received_at_ms": 1700000000002,
+          "is_retained_base": true
+        }
+      ],
+      "next_cursor": null
     }
   ]
 }

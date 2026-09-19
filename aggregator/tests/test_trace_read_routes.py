@@ -68,6 +68,7 @@ def test_every_http_read_requires_credential_before_lookup(core, tmp_path, monke
             "/api/traces/PRIVATE_SENTINEL",
             "/api/traces/PRIVATE_SENTINEL/events",
             "/api/traces/PRIVATE_SENTINEL/changes",
+            "/api/traces/PRIVATE_SENTINEL/history",
         ):
             response = client.get(
                 path,
@@ -333,3 +334,32 @@ def test_websocket_rebuild_between_replay_and_heartbeat_requires_resnapshot(
                 socket.receive_json()
             assert closed.value.code == 1008
         assert switched
+
+
+def test_history_route_discovers_graph_versions_under_same_authorization(
+    core, tmp_path
+):
+    seed(core)
+    with client_for(core, tmp_path) as (client, _):
+        response = client.get(
+            f"/api/traces/{TRACE}/history", headers=auth(), params={"limit": 1}
+        )
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        retained = client.get(
+            f"/api/traces/{TRACE}", headers=auth(), params={"at": item["at"]}
+        )
+        assert retained.status_code == 200
+        assert retained.json()["ingest_high_watermark"] == 1
+        assert response.headers["cache-control"] == "no-store"
+        denied = client.get(
+            f"/api/traces/{TRACE}/history",
+            headers={**auth(), "Origin": "https://wrong.example"},
+        )
+        assert denied.status_code == 403
+        assert (
+            client.get(
+                f"/api/traces/{TRACE}/history?limit=1&limit=2", headers=auth()
+            ).status_code
+            == 400
+        )

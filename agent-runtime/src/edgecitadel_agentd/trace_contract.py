@@ -384,10 +384,18 @@ def validate_settlement_reply(
 def validate_cursor_claims(claims: dict[str, Any]) -> bytes:
     encoded = _validate("cursor", claims, 2048)
     kind = claims["kind"]
-    if kind in {"list", "changes"} and not (
+    if kind in {"list", "changes", "history"} and not (
         claims["position"] <= claims["snapshot"] == claims["upper"]
     ):
         raise TraceContractError("invalid_cursor")
+    if kind == "history":
+        marker, floor = claims["key"].split(":")
+        if (
+            int(floor) > claims["snapshot"]
+            or (marker == "start" and claims["position"] != claims["snapshot"])
+            or (marker == "before" and claims["position"] <= int(floor))
+        ):
+            raise TraceContractError("invalid_cursor")
     if kind == "graph" and claims["position"] != claims["snapshot"]:
         raise TraceContractError("invalid_cursor")
     if kind == "events" and claims["position"] > claims["upper"]:
@@ -421,6 +429,20 @@ def validate_read_response(response: dict[str, Any]) -> bytes:
             )
         ):
             raise TraceContractError("invalid_read")
+    if kind == "trace_history":
+        previous = response["upper_position"] + 1
+        if response["retained_from"] > response["upper_position"]:
+            raise TraceContractError("invalid_read")
+        for item in response["items"]:
+            if not response["retained_from"] <= item["position"] < previous:
+                raise TraceContractError("invalid_read")
+            if (item["trace_state"] == "present") != (item["at"] is not None):
+                raise TraceContractError("invalid_read")
+            if item["is_retained_base"] != (
+                item["position"] == response["retained_from"]
+            ):
+                raise TraceContractError("invalid_read")
+            previous = item["position"]
     if kind == "trace_events":
         for event in response["events"]:
             validate_event(event)

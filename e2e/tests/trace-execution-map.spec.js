@@ -8,6 +8,8 @@ const { createInterface } = require('node:readline');
 test.skip(process.env.EDGECITADEL_TRACE_UI_E2E !== '1', 'Requires the jim-eq trace deployment');
 let run, task;
 const evidence = path.resolve(__dirname, '../../local-docs/architecture-reviews/end-to-end-flow/execution');
+const artifactPrefix = process.env.EDGECITADEL_TRACE_UI_EVIDENCE_PREFIX || 'm6-ui';
+if (!/^[a-z0-9-]{1,64}$/.test(artifactPrefix)) throw new Error('Invalid trace UI evidence prefix');
 let credential;
 test.beforeAll(async () => {
   expect(new URL(process.env.APP_URL).hostname).toBe('jim-eq');
@@ -77,15 +79,15 @@ test('real retained run: selection, exact observation URL, history reload, theme
       await page.locator('.trace-explorer').evaluate(element => { element.scrollTop = 0; });
       const bounds = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
       expect(bounds.document).toBeLessThanOrEqual(bounds.viewport);
-      await page.screenshot({ path: path.join(evidence, `m6-ui-${theme}-${width}.png`) });
+      await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-${theme}-${width}.png`) });
     }
     await selected.scrollIntoViewIfNeeded();
     const size = await selected.boundingBox();
     expect(size.width).toBe(204);
     await selected.click();
-    await page.screenshot({ path: path.join(evidence, `m6-ui-map-${width}.png`) });
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-map-${width}.png`) });
     await page.getByLabel('Selected step details').scrollIntoViewIfNeeded();
-    await page.screenshot({ path: path.join(evidence, `m6-ui-inspector-${width}.png`) });
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-inspector-${width}.png`) });
   }
   const storage = await page.evaluate(() => [...Object.values(localStorage), ...Object.values(sessionStorage)].join(''));
   expect(storage.includes(credential)).toBe(false);
@@ -175,6 +177,56 @@ test('fresh Hermes execution updates the real browser, reconnects and preserves 
     await expect(page.locator('[data-node-id]')).toHaveCount(original.length);
     await page.getByRole('button', { name: 'Resume live' }).click();
     await expect(completed).toHaveClass(/state-completed/);
-    writeFileSync(path.join(evidence, 'm6-ui-live-jim-eq.json'), JSON.stringify({ target: 'jim-eq', trace_id: trace, task_id: settled.task_id, event_count: settled.event_count, exact_source_core_settlement: true, browser_live_completed: true, existing_positions_stable: true, frozen_history: true, newer_indicator: true, explicit_resume: true, closed_socket_reconnected_live: true }, null, 2) + '\n');
+    writeFileSync(path.join(evidence, `${artifactPrefix}-live-jim-eq.json`), JSON.stringify({ target: 'jim-eq', trace_id: trace, task_id: settled.task_id, event_count: settled.event_count, exact_source_core_settlement: true, browser_live_completed: true, existing_positions_stable: true, frozen_history: true, newer_indicator: true, explicit_resume: true, closed_socket_reconnected_live: true }, null, 2) + '\n');
   } finally { lines.close(); }
+});
+
+test('server history discovers unvisited snapshots, preserves selection on refresh and reloads read-only', async ({ page }) => {
+  const writes = [];
+  page.on('request', request => {
+    if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.method());
+  });
+  await openRun(page);
+  const liveCount = await page.locator('[data-node-id]').count();
+  await page.getByRole('button', { name: 'Browse retained history' }).click();
+  const history = page.getByRole('region', { name: 'Retained history' });
+  await expect(history.getByRole('button', { name: /Snapshot/ }).first()).toBeVisible();
+  let pages = 0;
+  for (;;) {
+    const snapshots = history.locator('.trace-history-list button:enabled');
+    if (await snapshots.count()) {
+      await snapshots.last().click();
+      await expect(page.locator('.trace-run-heading > strong')).toHaveText('historical');
+    }
+    const older = history.getByRole('button', { name: 'Older history page' });
+    if (await older.isDisabled()) break;
+    expect(++pages).toBeLessThan(30);
+    await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname === `/api/traces/${run}/history` && response.status() === 200),
+      older.click(),
+    ]);
+    await expect(history.getByText(/Loading retained history/)).toHaveCount(0);
+    await expect(history.getByRole('button', { name: 'Older history page' })).toBeVisible();
+  }
+  await expect(page.locator('[data-node-id]')).toHaveCount(2);
+  expect(liveCount).toBeGreaterThan(2);
+  await expect(page.getByText('Newer evidence available', { exact: true })).toBeVisible();
+  const frozen = page.url();
+  await history.getByRole('button', { name: 'Refresh history' }).click();
+  await expect(history.getByRole('button', { name: /Snapshot/ }).first()).toBeVisible();
+  expect(page.url()).toBe(frozen);
+  await expect(page.locator('[data-node-id]')).toHaveCount(2);
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    if (width < 768) await expect(page.getByText('All Agents', { exact: true })).not.toBeInViewport();
+    await history.scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: path.join(evidence, `m6-history-${width}.png`) });
+  }
+  await page.reload();
+  await connect(page);
+  await expect(page.locator('.trace-run-heading > strong')).toHaveText('historical');
+  await expect(page.locator('[data-node-id]')).toHaveCount(2);
+  expect(page.url()).toBe(frozen);
+  expect(writes).toEqual([]);
 });

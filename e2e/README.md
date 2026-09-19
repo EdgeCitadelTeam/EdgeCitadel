@@ -24,6 +24,12 @@ its temporary connector and closes its session; it checks exact source/Core
 event tuples and export settlement. It requires the configured Core and Leaf
 agentd runtimes and `jim-eq-hermes` to be running. It never starts a local stack.
 
+The history check discovers an earlier server snapshot in a fresh browser,
+refreshes metadata without moving the graph, reloads the frozen URL, and asserts
+that browsing sent no execution requests. Set
+`EDGECITADEL_TRACE_UI_EVIDENCE_PREFIX` to a distinct lowercase filename prefix
+when recording a new milestone, preserving earlier evidence artifacts.
+
 Screenshots and sanitized results go under the local architecture execution
 evidence directory; browser trace/video capture remain off. Credentials are not
 stored in screenshots, browser storage or URLs. Server diagnostics stay private
