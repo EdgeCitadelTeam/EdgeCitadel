@@ -64,9 +64,10 @@ def admit_event(
 
 
 def physical_storage(db: sqlite3.Connection) -> dict[str, int]:
-    """Observe all attached stores and their named SQLite sidecar files.
+    """Observe trace-owned stores and their named SQLite sidecar files.
 
-    Includes legacy task pages and reusable pages conservatively. Pressure uses
+    Excludes the declared task_state database; reusable trace pages still count.
+    Unknown attached schemas remain conservatively included. Pressure uses
     the larger of file length, filesystem allocation and pending database pages.
     This is not a reservation: super-journals, unlinked temporary files and future
     transaction growth are not covered by this named-file observation.
@@ -85,6 +86,8 @@ def physical_storage(db: sqlite3.Connection) -> dict[str, int]:
         0,
     )
     for _, schema, filename in db.execute("PRAGMA database_list").fetchall():
+        if schema == "task_state":
+            continue
         # Schema names are SQLite-owned identifiers, not SQL value parameters.
         identifier = '"' + schema.replace('"', '""') + '"'
         page_size = int(db.execute(f"PRAGMA {identifier}.page_size").fetchone()[0])
@@ -139,7 +142,7 @@ def reclaim_wal_pressure(db: sqlite3.Connection) -> bool:
     timeout = int(db.execute("PRAGMA busy_timeout").fetchone()[0])
     try:
         db.execute("PRAGMA busy_timeout=0")
-        checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        checkpoint = db.execute("PRAGMA main.wal_checkpoint(TRUNCATE)").fetchone()
         return checkpoint[0] == 0
     finally:
         db.execute(f"PRAGMA busy_timeout={timeout}")

@@ -21,6 +21,14 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from edgecitadel_plugin_runtime.validator import ValidationError, default_validator
 
+from .storage_pair import (
+    attach_tasks,
+    install_reference_guards,
+    migrate_pair,
+    task_database_path,
+    verify_pair,
+    verify_references,
+)
 from .trace_append import OPERATION_SCHEMA_SQL, append_trace
 from .trace_bindings import BINDING_SCHEMA_SQL, bind_trace
 from .trace_capacity import (
@@ -51,7 +59,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -156,11 +164,18 @@ def _reject_sensitive(value: object, path: str = "metadata") -> None:
 class AgentdStore:
     """The single-writer local state boundary used by the agentd service."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, task_path: Path | None = None) -> None:
         self.path = path
+        self.task_path = task_path or task_database_path(path)
+        if path.resolve() == self.task_path.resolve() or (
+            path.exists() and self.task_path.exists() and path.samefile(self.task_path)
+        ):
+            raise StoreError("task and trace database files must differ")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.parent.chmod(0o700)
-        self._connection = sqlite3.connect(path, check_same_thread=False)
+        self._connection = sqlite3.connect(
+            path.resolve().as_uri(), check_same_thread=False, uri=True
+        )
         try:
             self._connection.row_factory = sqlite3.Row
             # Rollback journals are required for the task/trace attached-database
@@ -181,14 +196,25 @@ class AgentdStore:
             schema_version = int(
                 self._connection.execute("PRAGMA user_version").fetchone()[0]
             )
+            if schema_version > SCHEMA_VERSION:
+                raise StoreError(
+                    f"agentd database schema {schema_version} is newer than supported {SCHEMA_VERSION}"
+                )
             payload_key = path.parent / "payload.key"
             if schema_version >= 5 and not payload_key.exists():
                 raise StoreError(
                     "agentd payload key is missing; restore agentd.sqlite3 and payload.key from the same backup"
                 )
             self._content_cipher = self._load_content_cipher(payload_key)
+            attach_tasks(
+                self._connection, self.task_path, existing=schema_version >= 24
+            )
             self._migrate()
+            verify_pair(self._connection)
+            verify_references(self._connection)
+            install_reference_guards(self._connection)
             path.chmod(0o600)
+            self.task_path.chmod(0o600)
         except BaseException:
             self._connection.close()
             raise
@@ -199,13 +225,16 @@ class AgentdStore:
 
     def _migrate(self) -> None:
         with self._lock:
-            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.execute("PRAGMA foreign_keys=OFF")
             try:
+                self._connection.execute("BEGIN IMMEDIATE")
                 self._migrate_locked()
-            except Exception:
+                self._connection.commit()
+            except BaseException:
                 self._connection.rollback()
                 raise
-            self._connection.commit()
+            finally:
+                self._connection.execute("PRAGMA foreign_keys=ON")
 
     def _migrate_locked(self) -> None:
         version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
@@ -519,6 +548,9 @@ class AgentdStore:
                     "ALTER TABLE trace_sources ADD COLUMN test_run_id TEXT"
                 )
             self._connection.execute("PRAGMA user_version=23")
+
+        if version < 24:
+            migrate_pair(self._connection)
 
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.

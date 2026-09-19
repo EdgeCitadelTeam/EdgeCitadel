@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd import trace_capacity
@@ -244,6 +246,7 @@ def test_v22_upgrade_keeps_existing_data_normal(tmp_path):
             store._connection.execute(
                 "ALTER TABLE trace_sources DROP COLUMN test_run_id"
             )
+            flatten_connection(store._connection)
             store._connection.execute("PRAGMA user_version=22")
     finally:
         store.close()

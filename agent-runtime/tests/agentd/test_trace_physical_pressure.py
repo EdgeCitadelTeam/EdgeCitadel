@@ -29,8 +29,8 @@ def test_pinned_wal_stops_optional_admission_preserves_retry_and_recovers(
     try:
         original = tool()
         committed = write(store, original)
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        db.execute("PRAGMA journal_mode=WAL").fetchall()
+        db.execute("PRAGMA main.wal_checkpoint(TRUNCATE)")
         baseline = trace_capacity.physical_storage(db)
         limit = baseline["pressure_bytes"] + 192 * 1024
         monkeypatch.setattr(trace_capacity, "PHYSICAL_PRESSURE_BYTES", limit)
@@ -63,7 +63,7 @@ def test_pinned_wal_stops_optional_admission_preserves_retry_and_recovers(
         # Mandatory lifecycle data retains its existing quota/failure semantics.
         mandatory = write(store, event())
         assert mandatory["kind"] == "task"
-        checkpoint = db.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        checkpoint = db.execute("PRAGMA main.wal_checkpoint(PASSIVE)").fetchone()
         assert checkpoint[1] > checkpoint[2]
         with pytest.raises(TraceContractError, match="quota_exceeded"):
             write(store, tool())
@@ -114,27 +114,27 @@ def test_pending_pages_and_free_pages_remain_accounted_without_checkpoint(tmp_pa
     store = AgentdStore(tmp_path / "agentd.sqlite3")
     db = store._connection
     try:
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        db.execute("PRAGMA journal_mode=WAL").fetchall()
+        db.execute("PRAGMA main.wal_checkpoint(TRUNCATE)")
         baseline = trace_capacity.physical_storage(db)
         with db:
             db.execute("CREATE TABLE owned_bulk(value BLOB)")
             db.execute("INSERT INTO owned_bulk VALUES (zeroblob(262144))")
             pending = trace_capacity.physical_storage(db)
             assert (
-                pending["allocated_page_bytes"]
+                pending["allocated_page_bytes"] + baseline["reusable_page_bytes"]
                 >= baseline["allocated_page_bytes"] + 262144
             )
             assert pending["pressure_bytes"] >= pending["allocated_page_bytes"]
             assert db.in_transaction  # Measurement does not commit or checkpoint.
         with db:
             db.execute("DELETE FROM owned_bulk")
-        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        db.execute("PRAGMA main.wal_checkpoint(TRUNCATE)")
         freed = trace_capacity.physical_storage(db)
         assert freed["reusable_page_bytes"] >= 262144
         assert (
             freed["pressure_bytes"]
-            == freed["database_file_bytes"] + freed["shm_file_bytes"]
+            >= freed["database_file_bytes"] + freed["shm_file_bytes"]
         )
         # Reusable pages still occupy disk; reporting must not subtract them.
         assert freed["pressure_bytes"] >= freed["allocated_page_bytes"]
@@ -167,17 +167,17 @@ def test_pinned_checkpoint_does_not_defer_task_expiry(tmp_path, monkeypatch):
             payload={},
             deadline_at_ms=deadline,
         )
-        store._connection.execute("PRAGMA journal_mode=WAL")
-        store._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        store._connection.execute("PRAGMA journal_mode=WAL").fetchall()
+        store._connection.execute("PRAGMA main.wal_checkpoint(TRUNCATE)")
         reader.execute("BEGIN")
-        reader.execute("SELECT state FROM tasks").fetchall()
+        reader.execute("SELECT event_id FROM events").fetchall()
         monkeypatch.setattr(trace_capacity, "PHYSICAL_PRESSURE_BYTES", 1)
         result = store.reconcile(now_ms=deadline + 1)
         assert result["expired_tasks"] == 1
         assert store.get_task(task["task_id"])["state"] == "expired"
         assert store.health()["cache_maintenance"] == "checkpoint_blocked"
         # A separate connection sees committed recovery despite deferred cleanup.
-        with sqlite3.connect(store.path) as observer:
+        with sqlite3.connect(store.task_path) as observer:
             assert (
                 observer.execute("SELECT state FROM tasks").fetchone()[0] == "expired"
             )

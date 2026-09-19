@@ -130,7 +130,7 @@ def test_health_and_authenticated_connector_session(
     assert health == {
         "status": "ready",
         "database": "ok",
-        "schema_version": 23,
+        "schema_version": 24,
         "active_sessions": 0,
         "database_bytes": health["database_bytes"],
         "physical_storage": health["physical_storage"],

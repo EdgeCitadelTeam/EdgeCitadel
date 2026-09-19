@@ -5,6 +5,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from storage_test_support import flatten_connection, paired_connect
+
 import pytest
 
 import edgecitadel_agentd.store as store_module
@@ -30,7 +32,7 @@ def register(store: AgentdStore, connector_id: str = "pi-local") -> str:
 def test_store_initializes_private_rollback_database(store: AgentdStore) -> None:
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.path.parent.stat().st_mode & 0o777 == 0o700
-    with sqlite3.connect(store.path) as connection:
+    with paired_connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA synchronous").fetchone()[0] == 3
@@ -40,7 +42,7 @@ def test_version_five_database_migrates_context_id_atomically(tmp_path: Path) ->
     path = tmp_path / "private" / "agentd.sqlite3"
     original = AgentdStore(path)
     original.close()
-    with sqlite3.connect(path) as connection:
+    with paired_connect(path) as connection:
         for table in (
             "trace_task_contexts",
             "trace_operations",
@@ -55,11 +57,12 @@ def test_version_five_database_migrates_context_id_atomically(tmp_path: Path) ->
         connection.execute("ALTER TABLE tasks DROP COLUMN context_id")
         connection.execute("DROP TABLE IF EXISTS trace_import_records")
         connection.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(connection)
         connection.execute("PRAGMA user_version=5")
 
     migrated = AgentdStore(path)
     try:
-        with sqlite3.connect(path) as connection:
+        with paired_connect(path) as connection:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
             assert (
                 connection.execute("PRAGMA user_version").fetchone()[0]
@@ -438,7 +441,7 @@ def test_unchanged_connector_reconciliation_does_not_emit_audit_noise(
         capabilities=capabilities,
     )
 
-    with sqlite3.connect(store.path) as connection:
+    with paired_connect(store.path) as connection:
         assert (
             connection.execute(
                 "SELECT COUNT(*) FROM events WHERE event_type IN "
@@ -452,16 +455,17 @@ def test_unchanged_connector_reconciliation_does_not_emit_audit_noise(
 def test_schema_migration_rolls_back_all_statements_on_failure(tmp_path: Path) -> None:
     path = tmp_path / "private" / "agentd.sqlite3"
     path.parent.mkdir(parents=True)
-    with sqlite3.connect(path) as connection:
+    with paired_connect(path) as connection:
         connection.execute("CREATE TABLE connectors (connector_id TEXT PRIMARY KEY)")
         connection.execute("DROP TABLE IF EXISTS trace_import_records")
         connection.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(connection)
         connection.execute("PRAGMA user_version=1")
 
     with pytest.raises(sqlite3.OperationalError):
         AgentdStore(path)
 
-    with sqlite3.connect(path) as connection:
+    with paired_connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         tables = {
             row[0]
@@ -523,7 +527,7 @@ def test_conflicting_terminal_result_is_rejected_and_audited(
         )
 
     assert store.get_task(task_id)["result"] == {"body": "first"}
-    with sqlite3.connect(store.path) as connection:
+    with paired_connect(store.path) as connection:
         assert (
             connection.execute(
                 "SELECT COUNT(*) FROM events WHERE event_type = 'task.result_conflict'"
@@ -737,7 +741,7 @@ def test_transport_rejects_conflicting_duplicate_task_id(
         store.ingest_transport_envelope(conflicting)
 
     assert store.get_task(str(envelope["task_id"]))["payload"] == envelope["payload"]
-    with sqlite3.connect(store.path) as connection:
+    with paired_connect(store.path) as connection:
         row = connection.execute(
             "SELECT attributes_json FROM events "
             "WHERE event_type = 'task.duplicate_conflict'"
@@ -817,7 +821,7 @@ def test_reconcile_applies_incremental_record_caps(
 def test_wal_conversion_preserves_committed_task_and_trace_rows(tmp_path):
     path = tmp_path / "agentd.sqlite3"
     original = AgentdStore(path)
-    original._connection.execute("PRAGMA journal_mode=WAL")
+    original._connection.execute("PRAGMA journal_mode=WAL").fetchall()
     original._connection.execute("PRAGMA wal_autocheckpoint=0")
     original.create_task(
         sender_id="sender", recipient_id="worker", payload={"body": "saved"}
@@ -841,8 +845,8 @@ def test_pinned_legacy_wal_refuses_startup_and_closes_failed_connection(
 ):
     path = tmp_path / "agentd.sqlite3"
     original = AgentdStore(path)
-    original._connection.execute("PRAGMA journal_mode=WAL")
-    reader = sqlite3.connect(path)
+    original._connection.execute("PRAGMA journal_mode=WAL").fetchall()
+    reader = paired_connect(path)
     reader.execute("BEGIN")
     reader.execute("SELECT * FROM tasks").fetchall()
     original.create_task(sender_id="sender", recipient_id="worker", payload={})
@@ -878,7 +882,7 @@ def test_pinned_legacy_wal_refuses_startup_and_closes_failed_connection(
 
 
 def test_pinned_rollback_reader_rolls_back_task_trace_and_export_together(store):
-    reader = sqlite3.connect(store.path)
+    reader = paired_connect(store.path)
     db = store._connection
     before = list(db.iterdump())
     db.execute("PRAGMA busy_timeout=0")

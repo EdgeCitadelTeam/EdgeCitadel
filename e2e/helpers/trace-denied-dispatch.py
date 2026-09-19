@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from edgecitadel_agentd.client import AgentdClient
+from edgecitadel_agentd.storage_pair import attach_task_snapshot
 from edgecitadel_agentd.service import socket_path_for
 
 assert platform.node().lower() == "jim-eq", "Run real E2E on jim-eq only"
@@ -22,6 +23,9 @@ assert output.is_absolute() and output.is_dir(), "Use an existing owned director
 def read(path, sql, args):
     db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
+        db.execute("BEGIN")
+        if path.name == "agentd.sqlite3":
+            attach_task_snapshot(db, path)
         return db.execute(sql, args).fetchall()
     finally:
         db.close()

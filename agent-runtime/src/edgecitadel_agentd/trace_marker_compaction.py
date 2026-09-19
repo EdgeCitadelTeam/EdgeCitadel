@@ -191,7 +191,10 @@ def coalesce_loss_markers(db: sqlite3.Connection, *, now_ms: int) -> int:
                 removed += len(candidates) - replacement_count
             db.execute("RELEASE trace_marker_coalescing")
         except Exception:
-            db.execute("ROLLBACK TO trace_marker_coalescing")
-            db.execute("RELEASE trace_marker_coalescing")
+            # SQLITE_FULL can roll back the whole attached transaction, including
+            # its savepoints. Preserve the original failure in that case.
+            if db.in_transaction:
+                db.execute("ROLLBACK TO trace_marker_coalescing")
+                db.execute("RELEASE trace_marker_coalescing")
             raise
     return removed

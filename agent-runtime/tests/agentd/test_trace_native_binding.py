@@ -7,6 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+from storage_test_support import paired_connect
+
 import pytest
 
 from edgecitadel_agentd.client import AgentdClient
@@ -42,7 +44,7 @@ class CandidateNativeServer(NativeMcpServer):
 
     def authority(self):
         path = self.state_dir / "agentd/agentd.sqlite3"
-        with sqlite3.connect(path) as db:
+        with paired_connect(path) as db:
             db.row_factory = sqlite3.Row
             row = db.execute(
                 "SELECT c.connector_id, c.agent_id, c.revoked_at_ms, c.capabilities_json, "
@@ -375,7 +377,7 @@ def test_production_native_roots_retry_isolation_and_session_replacement(native_
     finally:
         for server in servers:
             server.close()
-    with sqlite3.connect(prototype.state_dir / "agentd/agentd.sqlite3") as db:
+    with paired_connect(prototype.state_dir / "agentd/agentd.sqlite3") as db:
         bindings = db.execute(
             "SELECT task_id, closed_at_ms FROM trace_bindings"
         ).fetchall()

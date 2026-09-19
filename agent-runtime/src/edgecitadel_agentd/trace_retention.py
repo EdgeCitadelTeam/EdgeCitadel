@@ -87,8 +87,11 @@ def maintain_capacity(
             removed = 0
         db.execute("RELEASE trace_reclamation")
     except Exception:
-        db.execute("ROLLBACK TO trace_reclamation")
-        db.execute("RELEASE trace_reclamation")
+        # SQLITE_FULL can roll back the whole attached transaction, including
+        # its savepoints. Preserve the original failure in that case.
+        if db.in_transaction:
+            db.execute("ROLLBACK TO trace_reclamation")
+            db.execute("RELEASE trace_reclamation")
         raise
     return removed
 

@@ -3,6 +3,8 @@ import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd.store import AgentdStore
@@ -202,6 +204,7 @@ def test_schema_19_upgrade_failure_preserves_existing_settlement(settled):
     store, scope, old = settled
     with store._connection:
         store._connection.execute("DROP TABLE trace_collector_recovery")
+        flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=19")
     before = list(store._connection.iterdump())
     captured = []
@@ -223,7 +226,7 @@ def test_schema_19_upgrade_failure_preserves_existing_settlement(settled):
     assert list(store._connection.iterdump()) == before
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert page_request(reopened, scope)["collector_epoch"] == old
         assert page_request(reopened, scope)["after_export_seq"] == 130
     finally:

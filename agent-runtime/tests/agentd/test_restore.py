@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from storage_test_support import flatten_connection, paired_connect
+
 import pytest
 
 from edgecitadel_agentd.restore import (
@@ -47,7 +49,7 @@ def seed(directory):
 
 
 def rows(directory):
-    with sqlite3.connect(directory / "agentd.sqlite3") as db:
+    with paired_connect(directory / "agentd.sqlite3") as db:
         return {
             t: db.execute(f"SELECT * FROM {t}").fetchall()
             for t in ("sessions", "tasks", "transport_outbox")
@@ -145,6 +147,37 @@ def test_wrong_key_keeps_old_directory_usable_and_failed_copy_barred(tmp_path):
     assert not (previous / RESTORE_BARRIER).exists()
     assert rows(previous) == before
     rejected_start(destination)
+
+
+@pytest.mark.parametrize("damage", ["missing", "mismatched"])
+def test_incomplete_pair_keeps_previous_authority_and_destination_barred(
+    tmp_path, damage
+):
+    previous, snapshot, unrelated, destination = [
+        tmp_path / n for n in ("old", "snapshot", "unrelated", "new")
+    ]
+    epoch = seed(previous)
+    shutil.copytree(previous, snapshot)
+    task_file = snapshot / "agentd-tasks.sqlite3"
+    if damage == "missing":
+        task_file.unlink()
+    else:
+        seed(unrelated)
+        shutil.copyfile(unrelated / task_file.name, task_file)
+    before = rows(previous)
+    with pytest.raises(sqlite3.DatabaseError):
+        stage_restore(
+            snapshot_dir=snapshot,
+            previous_state_dir=previous,
+            destination_dir=destination,
+            node_id="edge-a",
+            expected_source_epoch=epoch,
+        )
+    assert not (previous / RESTORE_BARRIER).exists()
+    assert rows(previous) == before
+    rejected_start(destination)
+    if damage == "missing":
+        assert not task_file.exists()
 
 
 def test_incomplete_barrier_fails_closed_before_store_open(tmp_path):
@@ -257,9 +290,9 @@ def test_hold_failure_rolls_back_sessions_and_keeps_old_directory_unretired(tmp_
     previous, destination = tmp_path / "old", tmp_path / "new"
     epoch = seed(previous)
     before = rows(previous)
-    with sqlite3.connect(previous / "agentd.sqlite3") as db:
+    with paired_connect(previous / "agentd.sqlite3") as db:
         db.execute(
-            "CREATE TRIGGER owned_hold_failure BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT, 'owned hold fault'); END"
+            "CREATE TRIGGER task_state.owned_hold_failure BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT, 'owned hold fault'); END"
         )
     with pytest.raises(sqlite3.IntegrityError, match="owned hold fault"):
         stage_restore(
@@ -271,7 +304,7 @@ def test_hold_failure_rolls_back_sessions_and_keeps_old_directory_unretired(tmp_
         )
     assert not (previous / RESTORE_BARRIER).exists()
     assert rows(previous) == rows(destination) == before
-    with sqlite3.connect(destination / "agentd.sqlite3") as db:
+    with paired_connect(destination / "agentd.sqlite3") as db:
         assert db.execute("SELECT COUNT(*) FROM restore_holds").fetchone()[0] == 0
     rejected_start(destination)
 
@@ -279,14 +312,15 @@ def test_hold_failure_rolls_back_sessions_and_keeps_old_directory_unretired(tmp_
 def test_v12_upgrade_preserves_work_and_creates_empty_holds(tmp_path):
     seed(tmp_path)
     before = rows(tmp_path)
-    with sqlite3.connect(tmp_path / "agentd.sqlite3") as db:
+    with paired_connect(tmp_path / "agentd.sqlite3") as db:
         db.execute("DROP TABLE restore_holds")
         db.execute("DROP TABLE IF EXISTS trace_import_records")
         db.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(db)
         db.execute("PRAGMA user_version=12")
     store = AgentdStore(tmp_path / "agentd.sqlite3")
     try:
-        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert (
             store._connection.execute("SELECT COUNT(*) FROM restore_holds").fetchone()[
                 0

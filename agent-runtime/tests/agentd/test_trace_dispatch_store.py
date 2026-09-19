@@ -3,6 +3,8 @@ import sqlite3
 from contextlib import closing
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd.store import AgentdStore
@@ -143,8 +145,8 @@ def test_dispatch_pinned_wal_pressure_and_recovery(configured, monkeypatch, allo
             )
     original = request(binding)
     committed = dispatch(store, token, original)
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    db.execute("PRAGMA journal_mode=WAL").fetchall()
+    db.execute("PRAGMA main.wal_checkpoint(TRUNCATE)")
     limit = trace_capacity.physical_storage(db)["pressure_bytes"] + 192 * 1024
     monkeypatch.setattr(trace_capacity, "PHYSICAL_PRESSURE_BYTES", limit)
     with closing(sqlite3.connect(store.path)) as reader:
@@ -402,9 +404,10 @@ def test_v9_migration_preserves_existing_journal(configured):
         store._connection.execute("DROP TABLE trace_task_contexts")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_records")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=9")
     with closing(AgentdStore(path)) as migrated:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert [
             tuple(row)
             for row in migrated._connection.execute("SELECT * FROM trace_journal")
@@ -419,7 +422,7 @@ def test_claim_acceptance_failure_rolls_back_offering_and_claim(configured):
     before = snapshot(store)
     events = [tuple(row) for row in store._connection.execute("SELECT * FROM events")]
     store._connection.execute(
-        "CREATE TRIGGER owned_claim_fail BEFORE INSERT ON task_attempts "
+        "CREATE TRIGGER task_state.owned_claim_fail BEFORE INSERT ON task_attempts "
         "WHEN NEW.state='accepted' BEGIN SELECT RAISE(ABORT, 'owned claim failure'); END"
     )
     with pytest.raises(sqlite3.IntegrityError, match="owned claim failure"):

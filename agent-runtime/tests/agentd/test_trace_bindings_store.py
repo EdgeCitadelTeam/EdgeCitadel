@@ -2,6 +2,8 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd.store import AgentdStore, StoreError
@@ -190,6 +192,7 @@ def test_v7_journal_survives_binding_migration_and_injected_failure(configured):
         store._connection.execute("DROP TABLE trace_bindings")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_records")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=7")
     captured = []
 
@@ -214,7 +217,7 @@ def test_v7_journal_survives_binding_migration_and_injected_failure(configured):
         assert db.execute("SELECT * FROM trace_spool").fetchall() == spool
     migrated = AgentdStore(path)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert (
             migrated._connection.execute(
                 "SELECT COUNT(*) FROM trace_bindings"
@@ -331,8 +334,8 @@ def test_reused_binding_receipts_hit_real_pinned_wal_pressure(configured, monkey
         )
     original = request(session, task["task_id"])
     committed = bind(store, token, original)
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    db.execute("PRAGMA journal_mode=WAL").fetchall()
+    db.execute("PRAGMA main.wal_checkpoint(TRUNCATE)")
     baseline = trace_capacity.physical_storage(db)
     limit = baseline["pressure_bytes"] + 64 * 1024
     monkeypatch.setattr(trace_capacity, "PHYSICAL_PRESSURE_BYTES", limit)

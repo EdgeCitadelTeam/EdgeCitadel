@@ -248,10 +248,12 @@ connector/session cleanup, then recomputes every reported bound/statistic. It
 rejects a missing result or a Core still using the qualification launcher.
 
 ```bash
-ssh -o BatchMode=yes root@jim-eq '/usr/bin/python3 /root/edgecitadel-latency-20260919/baseline-code-28c03be/trace_baseline_audit.py /root/edgecitadel-latency-20260919/baseline-full-2'
+ssh -o BatchMode=yes root@jim-eq '/root/.edgecitadel/supervisor/bin/python /root/edgecitadel-latency-20260919/helpers/trace_baseline_audit.py /root/edgecitadel-latency-20260919/baseline-new'
 ```
 
-Its stdout is a sanitized audit summary. Source payloads, receiver tokens and raw
+Use the matching installed Agentd runtime: the auditor validates and reads the
+paired task/trace source snapshot. Historical frozen auditors require their
+original storage layout. Its stdout is a sanitized audit summary. Source payloads, receiver tokens and raw
 markers remain on the host. Run this after measurement; its full database reads
 should not compete with the timed workload. Recheck current collector readiness
 and backlog separately. The audit proves its listed cohort/storage/restoration

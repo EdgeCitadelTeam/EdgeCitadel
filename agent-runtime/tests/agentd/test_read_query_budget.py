@@ -44,7 +44,7 @@ def test_read_interruption_is_explicit_and_connection_recovers(
 
 def test_busy_reader_reports_unavailable_and_restores_policy(tmp_path):
     store = AgentdStore(tmp_path / "agentd.sqlite3")
-    other = sqlite3.connect(store.path, timeout=0)
+    other = sqlite3.connect(store.task_path, timeout=0)
     try:
         store._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         assert (

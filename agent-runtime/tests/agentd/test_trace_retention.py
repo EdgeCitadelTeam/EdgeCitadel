@@ -5,6 +5,8 @@ from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd import trace_capacity
@@ -247,11 +249,12 @@ def test_v11_upgrade_preserves_event_hashes_and_starts_conservative_age(recorded
         )
         store._connection.execute("DROP TABLE IF EXISTS trace_import_records")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=11")
     started = int(time.time() * 1000)
     migrated = AgentdStore(store.path)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert [
             tuple(r)
             for r in migrated._connection.execute(

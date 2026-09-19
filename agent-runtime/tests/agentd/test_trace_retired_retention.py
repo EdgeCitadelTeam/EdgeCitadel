@@ -3,6 +3,8 @@ import sqlite3
 import time
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 from test_trace_retention import recorded as retention_fixture
 
@@ -249,10 +251,11 @@ def test_v15_reference_index_migration_preserves_spool_and_uses_event_key(record
         store._connection.execute("DROP INDEX trace_spool_journal")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_records")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=15")
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert [
             tuple(r) for r in reopened._connection.execute("SELECT * FROM trace_spool")
         ] == before

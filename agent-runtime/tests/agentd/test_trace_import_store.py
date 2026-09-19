@@ -8,6 +8,8 @@ from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
+from storage_test_support import flatten_connection, paired_connect
+
 import pytest
 
 from edgecitadel_agentd import trace_capacity
@@ -206,6 +208,7 @@ def test_migration_from_v17_and_atomic_migration_failure(store):
     with db:
         db.execute("DROP TABLE trace_import_records")
         db.execute("DROP TABLE trace_import_grants")
+        flatten_connection(db)
         db.execute("PRAGMA user_version=17")
     captured = []
 
@@ -232,7 +235,7 @@ def test_migration_from_v17_and_atomic_migration_failure(store):
     )
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         grant(reopened)
         record(reopened, request())
     finally:
@@ -364,7 +367,7 @@ def test_import_over_owned_socket_survives_service_restart(tmp_path):
             stop.set()
             thread.join(timeout=10)
             assert not thread.is_alive()
-    with sqlite3.connect(state / "agentd.sqlite3") as db:
+    with paired_connect(state / "agentd.sqlite3") as db:
         assert (
             db.execute("SELECT count(*) FROM trace_import_records").fetchone()[0] == 1
         )

@@ -70,6 +70,8 @@ def test_backup_rotation_preserves_replay_and_retry_across_restart(tmp_path):
             before = snapshot(original._connection, epoch)
             with sqlite3.connect(restored_dir / "agentd.sqlite3") as target:
                 original._connection.backup(target)
+            with sqlite3.connect(restored_dir / "agentd-tasks.sqlite3") as target:
+                original._connection.backup(target, name="task_state")
             shutil.copy2(original_dir / "payload.key", restored_dir / "payload.key")
         finally:
             original.close()

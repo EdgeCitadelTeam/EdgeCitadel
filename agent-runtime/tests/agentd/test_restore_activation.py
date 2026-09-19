@@ -1,5 +1,7 @@
 import sqlite3
 
+from storage_test_support import flatten_connection, paired_connect
+
 import pytest
 from test_restore import rejected_start, seed
 from test_writer_lock import start, stop
@@ -75,7 +77,7 @@ def test_activated_daemon_accepts_fresh_work_and_keeps_old_work_held(tmp_path):
             "task.create", recipient_id="remote", payload={"body": "owned fresh work"}
         )
         assert fresh["state"] == "queued" and "restore_status" not in fresh
-        with sqlite3.connect(new / "agentd.sqlite3") as db:
+        with paired_connect(new / "agentd.sqlite3") as db:
             old_task = db.execute(
                 "SELECT object_id FROM restore_holds WHERE kind='task'"
             ).fetchone()[0]
@@ -117,7 +119,7 @@ def test_post_commit_failure_retries_one_coverage_event(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="owned barrier"):
         activate(old, new, marker, review)
     rejected_start(new)
-    with sqlite3.connect(new / "agentd.sqlite3") as db:
+    with paired_connect(new / "agentd.sqlite3") as db:
         before = db.execute(
             "SELECT event_id,event_json FROM trace_journal WHERE json_extract(event_json,'$.kind')='coverage'"
         ).fetchall()
@@ -125,7 +127,7 @@ def test_post_commit_failure_retries_one_coverage_event(tmp_path, monkeypatch):
         assert db.execute("SELECT COUNT(*) FROM restore_activations").fetchone()[0] == 1
     monkeypatch.setattr(restore_activation, "_remove_barrier", remove)
     assert activate(old, new, marker, review)["event_id"] == before[0][0]
-    with sqlite3.connect(new / "agentd.sqlite3") as db:
+    with paired_connect(new / "agentd.sqlite3") as db:
         assert (
             db.execute(
                 "SELECT event_id,event_json FROM trace_journal WHERE json_extract(event_json,'$.kind')='coverage'"
@@ -136,14 +138,14 @@ def test_post_commit_failure_retries_one_coverage_event(tmp_path, monkeypatch):
 
 def test_coverage_failure_preserves_barrier_and_has_no_activation_receipt(tmp_path):
     old, new, marker, review = staged(tmp_path)
-    with sqlite3.connect(new / "agentd.sqlite3") as db:
+    with paired_connect(new / "agentd.sqlite3") as db:
         db.execute(
             "CREATE TRIGGER owned_activation_failure BEFORE INSERT ON trace_spool BEGIN SELECT RAISE(ABORT,'owned activation fault'); END"
         )
     with pytest.raises(sqlite3.IntegrityError, match="owned activation fault"):
         activate(old, new, marker, review)
     rejected_start(new)
-    with sqlite3.connect(new / "agentd.sqlite3") as db:
+    with paired_connect(new / "agentd.sqlite3") as db:
         assert db.execute("SELECT COUNT(*) FROM restore_activations").fetchone()[0] == 0
         assert (
             db.execute(
@@ -179,15 +181,16 @@ def test_unheld_execution_state_prevents_activation(tmp_path, kind):
 
 def test_v13_migration_preserves_holds_and_adds_empty_activation_receipts(tmp_path):
     _old, new, _marker, review = staged(tmp_path)
-    with sqlite3.connect(new / "agentd.sqlite3") as db:
+    with paired_connect(new / "agentd.sqlite3") as db:
         before = db.execute("SELECT * FROM restore_holds").fetchall()
         db.execute("DROP TABLE restore_activations")
         db.execute("DROP TABLE IF EXISTS trace_import_records")
         db.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(db)
         db.execute("PRAGMA user_version=13")
     store = AgentdStore(new / "agentd.sqlite3")
     try:
-        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert [
             tuple(r) for r in store._connection.execute("SELECT * FROM restore_holds")
         ] == before

@@ -4,6 +4,8 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 import edgecitadel_agentd.trace_sync_manager as scheduling
@@ -233,6 +235,7 @@ def test_schema_20_migration_rolls_back_atomically(store):
         store._connection.execute(
             "ALTER TABLE trace_export_generations DROP COLUMN sync_fault"
         )
+        flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=20")
     before = list(store._connection.iterdump())
     connections = []
@@ -253,7 +256,7 @@ def test_schema_20_migration_rolls_back_atomically(store):
     assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 20
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert (
             reopened._connection.execute(
                 "SELECT sync_fault FROM trace_export_generations"

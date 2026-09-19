@@ -3,10 +3,11 @@
 import asyncio
 import json
 import runpy
-import sqlite3
 import threading
 from pathlib import Path
 from uuid import uuid4
+
+from storage_test_support import paired_connect
 
 import pytest
 
@@ -221,7 +222,7 @@ async def exercise(socket, directory, recipient_services=None):
     events = []
     persisted_task_ids = set()
     for database_dir in {directory, *(endpoint[1] for endpoint in endpoints.values())}:
-        db = sqlite3.connect(
+        db = paired_connect(
             (database_dir / "agentd.sqlite3").as_uri() + "?mode=ro", uri=True
         )
         try:

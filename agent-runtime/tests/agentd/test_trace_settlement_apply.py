@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd.store import AgentdStore
@@ -189,6 +191,7 @@ def test_schema_18_upgrade_is_atomic(source):
     with store._connection:
         store._connection.execute("DROP TABLE trace_source_settlements")
         store._connection.execute("ALTER TABLE trace_spool DROP COLUMN core_outcome")
+        flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=18")
     captured = []
 
@@ -211,7 +214,7 @@ def test_schema_18_upgrade_is_atomic(source):
     }
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert states(reopened) == [("pending", None, None)] * 5
     finally:
         reopened.close()

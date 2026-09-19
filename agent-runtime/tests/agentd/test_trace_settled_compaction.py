@@ -2,6 +2,8 @@ import json
 import sqlite3
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 from test_trace_settlement_apply import reply, source  # noqa: F401
 from test_trace_sync import core  # noqa: F401
@@ -135,10 +137,11 @@ def test_upgrade_preserves_rows_and_uses_partial_index(source):  # noqa: F811
     rows = [tuple(r) for r in db.execute("SELECT * FROM trace_spool")]
     with db:
         db.execute("DROP INDEX trace_spool_settled_empty")
+        flatten_connection(db)
         db.execute("PRAGMA user_version=21")
     reopened = AgentdStore(store.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert [
             tuple(r) for r in reopened._connection.execute("SELECT * FROM trace_spool")
         ] == rows

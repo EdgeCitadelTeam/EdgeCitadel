@@ -3,19 +3,25 @@
 import shutil
 import sqlite3
 
+from storage_test_support import flatten_connection, paired_connect
+
 import pytest
 
 from edgecitadel_agentd.store import SCHEMA_VERSION, AgentdStore, StoreError
 
 
 def snapshot(path):
-    with sqlite3.connect(path) as db:
-        tables = [
-            row[0]
-            for row in db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'trace_%' ORDER BY name"
+    with paired_connect(path) as db:
+        tables = []
+        for _, schema, _ in db.execute("PRAGMA database_list"):
+            if schema == "temp":
+                continue
+            tables.extend(
+                row[0]
+                for row in db.execute(
+                    f"SELECT name FROM {schema}.sqlite_schema WHERE type='table' AND name NOT LIKE 'trace_%' AND name<>'storage_pair' ORDER BY name"
+                )
             )
-        ]
         result = {}
         for table in tables:
             # Names come exclusively from this owned database's sqlite_master.
@@ -64,7 +70,7 @@ def populated_v5(tmp_path):
         expected = [store.get_task(t["task_id"]) for t in (completed, pending)]
     finally:
         store.close()
-    with sqlite3.connect(path) as db:
+    with paired_connect(path) as db:
         for table in (
             "trace_task_contexts",
             "trace_operations",
@@ -79,6 +85,7 @@ def populated_v5(tmp_path):
         db.execute("ALTER TABLE tasks DROP COLUMN context_id")
         db.execute("DROP TABLE IF EXISTS trace_import_records")
         db.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(db)
         db.execute("PRAGMA user_version=5")
         assert (
             db.execute(
@@ -124,7 +131,7 @@ def test_failure_after_migration_statements_rolls_back_every_change(populated_v5
     finally:
         for db in connections:
             db.close()
-    with sqlite3.connect(path) as db:
+    with paired_connect(path) as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == 5
         assert "context_id" not in {
             r[1] for r in db.execute("PRAGMA table_info(tasks)")
@@ -143,14 +150,16 @@ def test_fenced_matched_backup_restores_pending_work_and_exact_results(
     backup = tmp_path / "backup"
     backup.mkdir()
     try:
-        with sqlite3.connect(backup / "agentd.sqlite3") as destination:
+        with paired_connect(backup / "agentd.sqlite3") as destination:
             store._connection.backup(destination)
+        with sqlite3.connect(backup / "agentd-tasks.sqlite3") as destination:
+            store._connection.backup(destination, name="task_state")
         shutil.copy2(path.parent / "payload.key", backup / "payload.key")
         before = snapshot(path)
     finally:
         store.close()
     # A version fence exercises old-binary behavior, not a real future migration.
-    with sqlite3.connect(path) as db:
+    with paired_connect(path) as db:
         db.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
     refused = AgentdStore.__new__(AgentdStore)
     try:

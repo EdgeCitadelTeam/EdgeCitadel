@@ -4,6 +4,8 @@ from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd.store import AgentdStore
@@ -227,6 +229,7 @@ def test_v8_operation_migration_preserves_bindings_and_rolls_back_failure(setup)
         db.execute("DROP TABLE trace_operations")
         db.execute("DROP TABLE IF EXISTS trace_import_records")
         db.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(db)
         db.execute("PRAGMA user_version=8")
     captured = []
 
@@ -248,7 +251,7 @@ def test_v8_operation_migration_preserves_bindings_and_rolls_back_failure(setup)
     ).fetchall()
     migrated = AgentdStore(store.path)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert [
             tuple(row)
             for row in migrated._connection.execute("SELECT * FROM trace_bindings")

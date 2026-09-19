@@ -1,6 +1,8 @@
 import sqlite3
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 from test_trace_crash import append_request, prepare
 
@@ -239,10 +241,11 @@ def test_v14_index_migration_preserves_receipts_and_operations(tmp_path):
             db.execute(f"DROP INDEX {name}")
         db.execute("DROP TABLE IF EXISTS trace_import_records")
         db.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(db)
         db.execute("PRAGMA user_version=14")
     reopened = AgentdStore(path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert {
             t: [tuple(r) for r in reopened._connection.execute(f"SELECT * FROM {t}")]
             for t in before

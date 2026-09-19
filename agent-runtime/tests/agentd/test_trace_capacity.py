@@ -4,6 +4,8 @@ from io import BytesIO
 from types import SimpleNamespace
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd import service, trace_capacity
@@ -161,6 +163,7 @@ def test_v10_upgrade_accounts_existing_payload_and_transaction_rollback(tmp_path
         store._connection.execute("DROP TABLE trace_storage_usage")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_records")
         store._connection.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=10")
     store.close()
     store = AgentdStore(path)

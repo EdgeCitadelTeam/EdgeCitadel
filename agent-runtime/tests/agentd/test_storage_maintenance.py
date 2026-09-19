@@ -110,7 +110,7 @@ def test_sqlite_interrupt_during_vacuum_preserves_reopen_and_retry(
 
     class InterruptVacuum(sqlite3.Connection):
         def execute(self, sql, *args, **kwargs):
-            if sql != "VACUUM":
+            if not sql.startswith("VACUUM"):
                 return super().execute(sql, *args, **kwargs)
             self.set_progress_handler(lambda: 1, 1)
             try:

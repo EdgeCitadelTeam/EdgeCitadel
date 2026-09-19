@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+
+from storage_test_support import paired_connect
 
 import pytest
 from nats.aio.msg import Msg
@@ -200,7 +201,7 @@ async def test_max_delivery_diagnostic_uses_real_advisory_subject_shape(
 
     await transport._observe_advisory(message)
 
-    with sqlite3.connect(store.path) as connection:
+    with paired_connect(store.path) as connection:
         row = connection.execute(
             "SELECT agent_id, attributes_json FROM events "
             "WHERE event_type = 'transport.max_deliveries'"
@@ -231,7 +232,7 @@ async def test_malformed_max_delivery_advisory_is_ignored(tmp_path: Path) -> Non
 
     await transport._observe_advisory(message)
 
-    with sqlite3.connect(store.path) as connection:
+    with paired_connect(store.path) as connection:
         count = connection.execute(
             "SELECT COUNT(*) FROM events WHERE event_type = 'transport.max_deliveries'"
         ).fetchone()[0]

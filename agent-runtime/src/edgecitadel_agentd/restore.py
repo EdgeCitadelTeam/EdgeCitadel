@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .store import AgentdStore, StoreError
+from .storage_pair import attach_task_snapshot, task_database_path
 from .trace_restore import rotate_restored_source
 from .writer_lock import exclusive_writer
 
@@ -94,17 +95,30 @@ def stage_restore(
             ) as source,
             closing(sqlite3.connect(destination / "agentd.sqlite3")) as target,
         ):
+            source.execute("BEGIN")
+            paired = attach_task_snapshot(source, snapshot / "agentd.sqlite3")
+            # Hold both read locks until both backups finish. A live source
+            # transaction cannot commit between the two snapshots.
+            source.execute("SELECT count(*) FROM sqlite_schema").fetchone()
             source.backup(target)
+            if paired:
+                with closing(
+                    sqlite3.connect(task_database_path(destination / "agentd.sqlite3"))
+                ) as task_target:
+                    source.backup(task_target, name="task_state")
+            source.rollback()
         shutil.copyfile(snapshot / "payload.key", destination / "payload.key")
         (destination / "payload.key").chmod(0o600)
         store = AgentdStore(destination / "agentd.sqlite3")
         try:
             db = store._connection
-            if (
-                db.execute("PRAGMA integrity_check").fetchone()[0] != "ok"
-                or db.execute("PRAGMA foreign_key_check").fetchone() is not None
-            ):
-                raise StoreError("restored database integrity check failed")
+            for schema in ("main", "task_state"):
+                if (
+                    db.execute(f"PRAGMA {schema}.integrity_check").fetchone()[0] != "ok"
+                    or db.execute(f"PRAGMA {schema}.foreign_key_check").fetchone()
+                    is not None
+                ):
+                    raise StoreError("restored database integrity check failed")
             # Validate every saved encrypted payload against the supplied key,
             # without emitting contents or assuming that a syntactically valid
             # key belongs to this snapshot.

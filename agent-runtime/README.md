@@ -125,9 +125,25 @@ through SQLite; an outstanding WAL reader refuses startup rather than leaving th
 service in WAL mode. Initialization failures close the connection. Operator and
 inspection readers must release snapshots promptly: pinned rollback readers can
 block a writer commit, whose entire task/trace/export transaction then rolls back.
-No sidecar is deleted manually. This does not yet split storage or implement
-Linux user-quota admission checks, physical completion reservations or paired
-migration/restore. Prior WAL workload measurements do not qualify the new mode.
+No sidecar is deleted manually. Prior WAL workload measurements do not qualify
+the new mode.
+
+Schema 24 splits the source into trace-owned `agentd.sqlite3` (SQLite main) and
+attached `agentd-tasks.sqlite3`, containing connectors, sessions, tasks, attempts,
+transport outbox, managed agents and restore holds. Both files retain the same
+transaction boundary for task state, mandatory trace evidence and export intent.
+Pair identities, versions and cross-store references are checked on startup;
+a missing or mismatched task member refuses admission. Shared-schema migration
+copies rows transactionally and requires space for copies and rollback journals.
+Freed pages in the trace file still count toward trace allocation.
+
+Backups must retain both database files and `payload.key` from one consistent
+snapshot. Copying only `agentd.sqlite3` is incomplete. Restore staging locks both
+members while backing them up, checks the pair and references, and preserves its
+activation barrier until reconciliation. Offline compaction processes both files.
+The current daemon uses sibling files; separating them on the same filesystem
+does not isolate a user quota. Provisioning a separate trace filesystem, dedicated
+UID, fail-closed quota checks and physical completion reservations remain open.
 
 The runtime suite includes owned child-process SIGKILL tests at journal commit
 and side-effect boundaries, plus restore staging/activation boundaries. They use temporary stores and do not stop a running
@@ -264,11 +280,12 @@ source/editable layout for now.
 
 
 Physical trace pressure is visible through health's `physical_storage` byte
-counters. At 256 MiB of conservative shared DB/page allocation plus WAL/SHM,
+counters. At 256 MiB of conservative trace DB/page allocation plus journal files,
 optional model/tool records report `quota_exceeded`; health reports degraded with
 `trace_storage: physical_pressure` when sampled usage reaches that threshold.
-Task/content and free pages count, so optional tracing can stop before its JSON
-quota is exhausted. Mandatory records retain existing persistence semantics.
+Trace free pages count, while the attached task database is excluded, so optional
+tracing can stop before its JSON quota is exhausted. Mandatory records retain
+existing persistence semantics.
 Legacy WAL pressure diagnostics retain nonblocking checkpoint support for owned
 fixtures. The production source writer now uses rollback journals; a pinned
 reader can prevent its whole transaction from committing.

@@ -4,6 +4,8 @@ from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 
 from edgecitadel_agentd.store import AgentdStore
@@ -146,6 +148,7 @@ def test_populated_v6_upgrade_is_additive_and_failure_rolls_back(tmp_path):
             db.execute(f"DROP TABLE {table}")
         db.execute("DROP TABLE IF EXISTS trace_import_records")
         db.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(db)
         db.execute("PRAGMA user_version=6")
         outbox_before = db.execute("SELECT * FROM transport_outbox").fetchall()
     captured = []
@@ -172,7 +175,7 @@ def test_populated_v6_upgrade_is_additive_and_failure_rolls_back(tmp_path):
     try:
         assert migrated.get_task(task["task_id"]) == task
         assert counts(migrated._connection) == (0, 0, 0)
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert migrated._connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (
             migrated._connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

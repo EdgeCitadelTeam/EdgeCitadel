@@ -4,6 +4,8 @@ import sqlite3
 import time
 from uuid import uuid4
 
+from storage_test_support import flatten_connection
+
 import pytest
 from test_trace_crash import snapshot
 from test_trace_retention import prune
@@ -117,10 +119,11 @@ def test_v16_migration_preserves_rows_and_reconcile_compacts(recorded):
         recorded._connection.execute("DROP INDEX trace_loss_scope")
         recorded._connection.execute("DROP TABLE IF EXISTS trace_import_records")
         recorded._connection.execute("DROP TABLE IF EXISTS trace_import_grants")
+        flatten_connection(recorded._connection)
         recorded._connection.execute("PRAGMA user_version=16")
     reopened = AgentdStore(recorded.path)
     try:
-        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 23
+        assert reopened._connection.execute("PRAGMA user_version").fetchone()[0] == 24
         assert snapshot(reopened) == before
         plan = reopened._connection.execute(
             "EXPLAIN QUERY PLAN SELECT event_id FROM trace_journal WHERE node_id=? "

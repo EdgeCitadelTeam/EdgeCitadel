@@ -11,6 +11,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from edgecitadel_agentd.storage_pair import attach_task_snapshot
+
 if __package__:
     from .trace_live_control import cpu_summary, source_display_summary
     from .trace_latency_workload import (
@@ -259,6 +261,7 @@ def main():
     )
     try:
         db.execute("BEGIN")
+        attach_task_snapshot(db, Path("/root/.edgecitadel/agentd/agentd.sqlite3"))
         rows = db.execute(
             f"SELECT node_id,source_epoch,event_id,source_seq,event_sha256,event_json FROM trace_journal WHERE agent_id IN ({placeholders}) ORDER BY source_seq LIMIT ?",
             (*agents, declared["expected_events"] + 1),
