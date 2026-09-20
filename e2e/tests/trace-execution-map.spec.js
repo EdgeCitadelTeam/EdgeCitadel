@@ -46,6 +46,64 @@ async function openRun(page) {
   await expect(page.locator('[data-node-id]').first()).toBeVisible();
 }
 
+test('archive import retries safely and replays historical evidence in the browser', async ({ page }) => {
+  test.setTimeout(180_000);
+  const directory = `/var/tmp/edgecitadel-import-e2e-${Date.now()}`;
+  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8', timeout: 130_000 });
+  ssh(`install -d -m 755 ${directory}`);
+  for (const [local, remote] of [['../helpers/trace-import-replay.py', 'verify.py'], ['../fixtures/trace-import.jsonl', 'archive.jsonl']]) {
+    execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/${remote}`], { input: readFileSync(path.resolve(__dirname, local)) });
+  }
+  const result = JSON.parse(ssh(`/var/lib/edgecitadel-leaf/state/supervisor/bin/python ${directory}/verify.py ${directory}`));
+  const writes = [], errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => {
+    if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.method());
+  });
+  await page.goto(`/#execution?run=${result.trace_id}`);
+  await connect(page);
+  const tool = page.locator('[data-node-id]').filter({ hasText: 'archive-tool' });
+  await expect(tool).toHaveClass(/state-finished/, { timeout: 30_000 });
+  await expect(page.locator('[data-node-id]').filter({ hasText: 'Unresolved step' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Browse retained history' }).click();
+  const history = page.getByRole('region', { name: 'Retained history' });
+  const snapshots = history.locator('.trace-history-list button:enabled');
+  await expect.poll(() => snapshots.count()).toBeGreaterThan(1);
+  await snapshots.last().click();
+  await expect(page.locator('.trace-run-heading > strong')).toHaveText('historical');
+  await expect(tool).toHaveCount(0);
+  await expect(page.getByText('Newer evidence available', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Resume live' }).click();
+  await expect(tool).toHaveClass(/state-finished/);
+  await tool.click();
+  await expect(page.getByLabel('Selected step details').getByText('historical import', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Pause live' }).click();
+  await page.locator('.trace-observations button').first().click();
+  await expect(page.getByLabel('Observation details')).toBeVisible();
+  const frozen = page.url();
+  expect(new URLSearchParams(new URL(frozen).hash.slice(11)).get('event')).toBeTruthy();
+  expect(new URLSearchParams(new URL(frozen).hash.slice(11)).get('at')).toBeTruthy();
+  await page.reload();
+  await connect(page);
+  await expect(page.getByLabel('Observation details')).toBeVisible();
+  expect(page.url()).toBe(frozen);
+  await expect(page.getByRole('button', { name: 'Resume live' })).toBeVisible();
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    if (width < 768) await expect(page.getByText('All Agents', { exact: true })).not.toBeInViewport();
+    await page.getByLabel('Selected step details').scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-import-${width}.png`) });
+  }
+  await page.getByRole('button', { name: 'Resume live' }).click();
+  await expect(tool).toHaveClass(/state-finished/);
+  await page.getByRole('button', { name: 'Text view', exact: true }).click();
+  await expect(page.getByRole('list', { name: 'Execution step list' })).toContainText('archive-tool');
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+  writeFileSync(path.join(evidence, `${artifactPrefix}-import-jim-eq.json`), JSON.stringify({ ...result, browser_historical_evidence: true, replay_before_tool: true, exact_event_reload: true, frozen_reload: true, resume_live: true, read_only_viewer: true }, null, 2) + '\n');
+});
+
 test('real retained run: selection, exact observation URL, history reload, themes and narrow panning', async ({ page }) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));

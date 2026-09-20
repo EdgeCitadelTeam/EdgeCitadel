@@ -677,6 +677,36 @@ measurement, so the preceding 994-pass full regression still covers current code
 
 ## Historical import persistence (schema 18)
 
+Import a saved metadata archive on the Edge that owns the local Agent service:
+
+```sh
+edgecitadel trace import /absolute/path/trace.jsonl --source-id my-saved-session
+```
+
+The command uses the local administrator credential and enables an import grant
+for each archive agent. It validates the entire file before importing records,
+then prints JSON with `records` and `trace_ids`. Open a returned ID at
+`http://<your-core>/#execution?run=<trace-id>` and connect with the fleet read
+credential. The existing map, text view, observation inspector and retained
+snapshots display these records as `historical import`; importing never executes
+the recorded tasks or tools.
+
+The input is UTF-8 JSONL, up to 16 MiB per file and 16 KiB per line. Each nonblank
+line has exactly `agent_id`, `historical_run_id`, `record_id` and `observation`.
+The two IDs are stable UUIDv4 values; `observation` follows the observation object
+in [the import request schema](../schemas/trace-import-request.v1.json). See the
+[eight-record replay archive](../e2e/fixtures/trace-import.jsonl) for a complete
+run/task/tool example. Raw Codex or Hermes session logs require conversion to this
+metadata format; this command does not parse their native log formats.
+
+Keep the same source ID, agent IDs, run IDs, record IDs and contents when retrying.
+Accepted records are deduplicated, including after a partially completed import;
+changing an accepted record under the same identity is rejected. Separate files
+from the same archive can use the same source ID. Historical identities are
+isolated per source and agent; cross-agent graph linking is not reconstructed.
+The command leaves the source grants enabled; an administrator can revoke them
+through `trace.import.configure` with `enabled=false` when imports are finished.
+
 The private agentd service now implements administrator-only `trace.import.configure`
 (`import_source_id`, `agent_id`, boolean `enabled`) and `trace.import` using the
 frozen v1 request. Each source/agent grant retains a daemon-generated namespace

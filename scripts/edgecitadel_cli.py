@@ -2703,6 +2703,29 @@ def command_trace(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_trace_import(args: argparse.Namespace) -> int:
+    state_dir = _state_dir(args.state_dir)
+    archive = Path(args.archive).expanduser().resolve()
+    if not archive.is_file():
+        raise UserError("Trace archive file was not found")
+    _start_agentd(state_dir)
+    result = subprocess.run(
+        [
+            str(_toolkit_python(state_dir)),
+            "-m",
+            "edgecitadel_agentd.trace_archive",
+            str(archive),
+            "--source-id",
+            args.source_id,
+            "--state-dir",
+            str(_agentd_state_dir(state_dir)),
+        ],
+        cwd=INSTALL_ROOT,
+        check=False,
+    )
+    return result.returncode
+
+
 def command_native_mcp(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
     _start_agentd(state_dir)
@@ -4450,6 +4473,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     trace = subparsers.add_parser("trace", help="Inspect local metadata-only traces")
     trace_commands = trace.add_subparsers(dest="trace_action", required=True)
+    trace_import = trace_commands.add_parser(
+        "import", help="Import a JSONL historical trace archive for read-only replay"
+    )
+    trace_import.add_argument("archive")
+    trace_import.add_argument(
+        "--source-id",
+        required=True,
+        help="Stable archive source ID; reuse it when retrying",
+    )
+    trace_import.add_argument("--state-dir", help=argparse.SUPPRESS)
+    trace_import.set_defaults(func=command_trace_import)
     trace_list = trace_commands.add_parser("list", help="List local traces")
     trace_list.add_argument("--connector-id", required=True)
     trace_list.add_argument("--limit", type=int, default=100)

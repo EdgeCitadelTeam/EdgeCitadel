@@ -95,6 +95,8 @@ def test_reply_matches_request_and_operation(operation):
             "execution_attempt_id": str(uuid4()),
         }
     )
+    if operation == "import":
+        result = {**result, "trace_id": "a" * 32}
     reply = {
         "schema_version": 1,
         "request_id": request_id,
