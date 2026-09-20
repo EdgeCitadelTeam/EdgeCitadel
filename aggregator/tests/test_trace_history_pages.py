@@ -88,6 +88,21 @@ def test_sparse_unrelated_clocks_are_bounded_and_continue_without_skipping(
     assert [item["position"] for item in all_pages(core, first)] == [8, 1]
 
 
+def test_history_stops_at_run_creation_after_older_fleet_traffic(core, monkeypatch):
+    for seq in range(1, 9):
+        put(core, event(seq=seq, trace_id="b" * 32), str(uuid4()), 1)
+    project_all(core)
+    add(core, 9)
+    add(core, 10, "completed")
+    monkeypatch.setattr(pages, "SCAN_LIMIT", 2)
+    page = read(core)
+    assert [item["position"] for item in page["items"]] == [10, 9]
+    assert page["next_cursor"] is None
+    assert page["retained_from"] == 0
+    assert not any(item["is_retained_base"] for item in page["items"])
+    assert graph(core, at=page["items"][-1]["at"])["nodes"][0]["state"] == "running"
+
+
 def test_compaction_returns_retained_base_and_expires_inflight_range(core):
     for seq in range(1, 5):
         add(core, seq)

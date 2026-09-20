@@ -107,13 +107,17 @@ def read_history(
                 before = ceiling + 1 if marker == "start" else claims["position"]
                 if before <= floor:
                     raise TraceReadError("invalid_cursor")
-            exists = tables.execute(
-                "SELECT 1 FROM {trace_projection_history_rows} WHERE table_name='trace_projection_runs' "
-                "AND json_extract(row_json,'$.trace_id')=? AND cursor<=? LIMIT 1",
+            first_run_cursor = tables.execute(
+                "SELECT min(cursor) FROM {trace_projection_history_rows} WHERE table_name='trace_projection_runs' "
+                "AND json_extract(row_json,'$.trace_id')=? AND cursor<=?",
                 (trace_id, ceiling),
-            ).fetchone()
-            if exists is None:
+            ).fetchone()[0]
+            if first_run_cursor is None:
                 raise TraceReadError("not_found")
+            # Before its first retained header the run is absent, so neither
+            # graph nor source-wide coverage has a run snapshot to change.
+            # Keep the global retention floor in tokens for compaction fencing.
+            run_floor = max(floor, first_run_cursor)
 
             def history_token(position: int, *, start: bool = False) -> str:
                 return encode_cursor(
@@ -145,7 +149,7 @@ def read_history(
             rows = tables.execute(
                 "SELECT cursor,ingest_seq,received_at_ms FROM {trace_projection_history_cursors} "
                 "WHERE cursor<? AND cursor>=? ORDER BY cursor DESC LIMIT ?",
-                (before, floor, SCAN_LIMIT + 1),
+                (before, run_floor, SCAN_LIMIT + 1),
             ).fetchall()
             current = None
             scanned = before
@@ -198,7 +202,7 @@ def read_history(
                     )
                 current = previous
                 scanned = position
-            if scanned > floor:
+            if scanned > run_floor:
                 if not rows:
                     raise TraceReadError("history_expired", retained_from=floor)
                 response["next_cursor"] = history_token(scanned)
