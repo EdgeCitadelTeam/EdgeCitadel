@@ -72,6 +72,19 @@ def test_fixture_cleanup_preserves_real_trace_and_receipts(core):
         "SELECT kind FROM trace_projection_changes ORDER BY cursor DESC LIMIT 1"
     ).fetchone() == ("trace_expired",)
 
+    cursor = core.execute(
+        "SELECT change_cursor FROM trace_projection_state"
+    ).fetchone()[0]
+    assert cleanup.purge_core(core, [fixture], ["fixture"]) == {
+        "agents": 0,
+        "messages": 0,
+        "payloads": 0,
+    }
+    assert (
+        core.execute("SELECT change_cursor FROM trace_projection_state").fetchone()[0]
+        == cursor
+    )
+
 
 @pytest.mark.parametrize("boundary", ["active_task", "open_binding", "unsettled"])
 def test_source_cleanup_refuses_protected_trace(boundary):

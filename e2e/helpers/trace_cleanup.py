@@ -157,13 +157,17 @@ def purge_core(db, traces, agents):
             "SELECT 1 FROM trace_projection_generations WHERE status='building'"
         ).fetchone():
             raise ValueError("fixture_cleanup_during_rebuild")
-    db.execute("CREATE TEMP TABLE owned_tasks(task_id TEXT PRIMARY KEY)")
+    db.execute("CREATE TEMP TABLE IF NOT EXISTS owned_tasks(task_id TEXT PRIMARY KEY)")
+    db.execute("DELETE FROM owned_tasks")
     with db:
         tables.execute(
             "INSERT INTO owned_tasks SELECT DISTINCT task_id FROM {trace_projected_tasks} WHERE trace_id IN (SELECT id FROM owned_traces)"
         )
     payloads = trace_payloads.is_prepared(db)
-    db.execute("CREATE TEMP TABLE owned_payloads(ingest_seq INTEGER PRIMARY KEY)")
+    db.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS owned_payloads(ingest_seq INTEGER PRIMARY KEY)"
+    )
+    db.execute("DELETE FROM owned_payloads")
     with db:
         db.execute(
             "INSERT INTO owned_payloads SELECT ingest_seq FROM "
@@ -172,7 +176,12 @@ def purge_core(db, traces, agents):
         )
     count = db.execute("SELECT count(*) FROM owned_payloads").fetchone()[0]
     # Each trace retirement publishes a durable change before erasing its history.
-    for trace in traces:
+    retained = tables.execute(
+        "SELECT trace_id FROM {trace_projection_runs} WHERE trace_id IN (SELECT id FROM owned_traces) "
+        "UNION SELECT json_extract(row_json,'$.trace_id') FROM {trace_projection_history_rows} "
+        "WHERE json_extract(row_json,'$.trace_id') IN (SELECT id FROM owned_traces)"
+    ).fetchall()
+    for (trace,) in retained:
         with db:
             db.execute("BEGIN IMMEDIATE")
             tables = select_tables(db)
