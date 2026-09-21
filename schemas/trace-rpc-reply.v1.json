@@ -206,17 +206,12 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 9007199254740991
-            },
-            "trace_id": {
-              "type": "string",
-              "pattern": "^(?!.*[\\r\\n])[0-9a-f]{32}$"
             }
           },
           "required": [
             "event_id",
             "source_epoch",
-            "source_seq",
-            "trace_id"
+            "source_seq"
           ],
           "additionalProperties": false
         }

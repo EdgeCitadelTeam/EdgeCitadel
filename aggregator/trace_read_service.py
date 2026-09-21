@@ -1,11 +1,8 @@
-"""Bounded read-only query workers and trusted-fleet credential scope."""
+"""Bounded read-only query workers and dashboard access scope."""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import re
-import secrets
 import sqlite3
 import threading
 import time
@@ -13,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from edgecitadel_agentd.trace_cursor import cursor_scope_hash
 
@@ -39,42 +35,14 @@ class TraceReadService:
         db_path: Path,
         key_path: Path,
         *,
-        read_token: str,
-        allowed_origins: set[str],
         collector_status: Callable[[], dict] | None = None,
     ):
-        if (
-            not isinstance(read_token, str)
-            or re.fullmatch(r"[A-Za-z0-9_-]{32,256}", read_token) is None
-        ):
-            raise ValueError("trace_read_configuration_unavailable")
-        for origin in allowed_origins:
-            try:
-                parsed = urlsplit(origin)
-                parsed.port
-            except ValueError:
-                raise ValueError("trace_read_configuration_unavailable") from None
-            if (
-                not origin.isascii()
-                or re.search(r"\s", origin)
-                or parsed.scheme not in {"http", "https"}
-                or not parsed.hostname
-                or parsed.username is not None
-                or parsed.password is not None
-                or parsed.path
-                or parsed.query
-                or parsed.fragment
-            ):
-                raise ValueError("trace_read_configuration_unavailable")
         self._collector_status = collector_status
         self.db_path = db_path.resolve()
-        self._read_token = read_token
-        self.allowed_origins = frozenset(allowed_origins)
         self._key = load_or_create_key(key_path)
         self._policy = {
             "mode": "trusted_fleet",
-            "policy_version": 1,
-            "credential_generation": hashlib.sha256(read_token.encode()).hexdigest(),
+            "policy_version": 2,
         }
         self._scope = cursor_scope_hash({}, self._policy)
         self._slots = threading.BoundedSemaphore(MAX_READERS)
@@ -83,18 +51,6 @@ class TraceReadService:
         self._pool = ThreadPoolExecutor(
             max_workers=MAX_READERS, thread_name_prefix="trace-read"
         )
-
-    def authorized(self, token: str | None) -> bool:
-        return (
-            isinstance(token, str)
-            and len(token) <= 256
-            and token.isascii()
-            and secrets.compare_digest(token, self._read_token)
-        )
-
-    def origin_allowed(self, origin: str | None) -> bool:
-        # CLI clients may omit Origin; browsers must match explicit configuration.
-        return origin is None or origin in self.allowed_origins
 
     async def query(self, kind: str, **parameters) -> dict:
         canceled = threading.Event()

@@ -1,10 +1,11 @@
+import TaskCommunication from './TaskCommunication'
 import { useEffect, useState } from 'react'
 import { navigateTrace } from './navigation'
 import { nodeTitle, readable } from './layout'
 
 export const eventKey = event => `${event.node_id}/${event.source_epoch}/${event.event_id}`
 export const traceErrorText = error => ({
-  not_authorized: 'Access denied. Check the fleet read credential and this dashboard’s allowed address.',
+  not_authorized: 'Access denied. Check access to this dashboard.',
   not_found: 'This run is not available in the selected snapshot.',
   history_expired: 'This snapshot is outside the retained history. Open the latest run to continue.',
   generation_changed: 'The Core rebuilt its projection. Open a new snapshot to continue.',
@@ -50,6 +51,7 @@ export default function ObservationInspector({ api, graph, node, route, onDenied
     <p className="trace-owner">{node.agent_id ?? 'Owner not observed'}</p>
     <p className={`trace-state state-${node.state}`}>{readable(node.state)}{node.conflict ? ' · conflicting terminal evidence' : ''}</p>
     {['permission', 'dispatch'].includes(node.kind) && <p className="trace-note">An allowed decision is authorization evidence, not proof that a tool or task executed.</p>}
+    <TaskCommunication taskId={node.task_id} historical={Boolean(route.at)} />
     <dl>
       <dt>Evidence</dt><dd>{readable(node.evidence_kind)}</dd>
       <dt>Operation / policy</dt><dd>{node.operation ?? 'Not reported'}</dd>

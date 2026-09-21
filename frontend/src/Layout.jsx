@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense } from 'react'
 import { MessageSquare, GitBranch, FileText, ListTodo, Server } from 'lucide-react'
 import clsx from 'clsx'
 import useAppStore from './stores/appStore'
@@ -23,7 +23,6 @@ const TABS = [
 ]
 
 export default function Layout() {
-  const [traceCredential, setTraceCredential] = useState(null)
   const activeTab = useAppStore((s) => s.activeTab)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
   const selectedAgent = useAppStore((s) => s.selectedAgent)
@@ -52,7 +51,7 @@ export default function Layout() {
       case 'tasks':
         return <TaskBoard />
       case 'execution':
-        return <Suspense fallback={<p role="status" className="p-4">Loading execution map…</p>}><TraceExplorer credential={traceCredential} onCredential={setTraceCredential} /></Suspense>
+        return <Suspense fallback={<p role="status" className="p-4">Loading execution map…</p>}><TraceExplorer /></Suspense>
       case 'registry':
         return <AgentRegistry />
       default:

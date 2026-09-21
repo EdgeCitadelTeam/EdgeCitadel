@@ -99,17 +99,15 @@ class MessageRouter:
         db.update_heartbeat(env["sender_id"], env["timestamp"])
 
     def _deployment_for(self, env: dict) -> str:
-        """Resolve the deployment ('default' | 'test' | ...) for this envelope
-        by looking up the sender's cached A2A card. Falls back to recipient,
-        then 'default'. Lets the dashboard filter test traffic via the
-        existing showTestAgents toggle even for messages sent TO production
-        agents from a test runner that registered with runtime.deployment=test."""
-        for who in (env.get("sender_id"), env.get("recipient_id")):
-            card = self.cache.get(who) if who else None
-            dep = (card or {}).get("metadata", {}).get("runtime.deployment")
-            if dep:
-                return dep
-        return "default"
+        """Test traffic stays test traffic in either direction."""
+        deployments = [
+            (self.cache.get(who) or {}).get("metadata", {}).get("runtime.deployment")
+            for who in (env.get("sender_id"), env.get("recipient_id"))
+            if who
+        ]
+        if "test" in deployments:
+            return "test"
+        return next((deployment for deployment in deployments if deployment), "default")
 
     async def on_status(self, msg: Msg) -> None:
         env = self._parse_and_validate(msg.data)

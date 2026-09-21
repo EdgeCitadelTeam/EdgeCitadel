@@ -54,7 +54,7 @@ describe('applyRealtimeEvent', () => {
       event: 'message',
       data: { type: 'task.progress', task_id: 'task-1', sender_id: 'shell-1', payload: { message: 'part', skill_id: 'echo' } },
     }, next)
-    expect(next.appendStreamDelta).toHaveBeenCalledWith('task-1', 'shell-1', 'part', 'echo')
+    expect(next.appendStreamDelta).toHaveBeenCalledWith('task-1', 'shell-1', 'part', 'echo', undefined)
     expect(next.addRealtimeMessage).not.toHaveBeenCalled()
   })
 

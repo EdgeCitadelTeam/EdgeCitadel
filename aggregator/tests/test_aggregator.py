@@ -219,3 +219,13 @@ async def test_stop_releases_canceled_pull_inbox_before_connection_drain(
     js.delete_consumer.assert_not_called()
     await app.stop()
     nc.drain.assert_awaited_once()
+
+
+@pytest.mark.parametrize("sender,recipient", [("real", "fixture"), ("fixture", "real")])
+def test_test_deployment_wins_in_both_directions(router, sender, recipient):
+    router.cache["real"] = {"metadata": {"runtime.deployment": "default"}}
+    router.cache["fixture"] = {"metadata": {"runtime.deployment": "test"}}
+    assert (
+        router._deployment_for({"sender_id": sender, "recipient_id": recipient})
+        == "test"
+    )

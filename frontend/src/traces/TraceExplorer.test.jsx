@@ -1,4 +1,4 @@
-import { StrictMode, useState } from 'react'
+import { StrictMode } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import TraceExplorer from './TraceExplorer'
@@ -29,15 +29,8 @@ beforeEach(() => {
     return api
   })
 })
-function Owner() {
-  const [credential, setCredential] = useState(null)
-  return <TraceExplorer credential={credential} onCredential={setCredential} />
-}
-async function connect() {
-  fireEvent.change(screen.getByLabelText('Fleet read credential'), { target: { value: 'a'.repeat(40) } })
-  fireEvent.click(screen.getByRole('button', { name: 'Connect read access' }))
-  await screen.findByText('Test owner')
-}
+function Owner() { return <TraceExplorer /> }
+async function connect() { await screen.findByText('Test owner') }
 
 it('recreates owned resources under StrictMode and freezes/restores a saved view without persisting access', async () => {
   const storage = vi.spyOn(Storage.prototype, 'setItem')
@@ -56,17 +49,8 @@ it('recreates owned resources under StrictMode and freezes/restores a saved view
   view.unmount()
   expect(instances.at(-1).dispose).toHaveBeenCalled()
   render(<Owner />)
-  expect(screen.getByLabelText('Fleet read credential')).toBeInTheDocument()
-})
-
-it('drops credential and protected view on inspector authorization denial', async () => {
-  render(<Owner />)
-  await connect()
-  instances.at(-1).events.mockRejectedValue({ code: 'not_authorized' })
-  act(() => navigateTrace({ run: traceId, step: graph().nodes[0].id }))
-  await screen.findByLabelText('Fleet read credential')
-  expect(screen.queryByLabelText('Selected step details')).not.toBeInTheDocument()
-  expect(instances.at(-1).dispose).toHaveBeenCalled()
+  await screen.findByText('Test owner')
+  expect(screen.queryByLabelText('Fleet read credential')).not.toBeInTheDocument()
 })
 
 it('rejects malformed history links instead of silently opening live evidence', async () => {

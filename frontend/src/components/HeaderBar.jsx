@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import useAppStore from '../stores/appStore'
 import { api } from '../api/client'
 import StatusBadge from './StatusBadge'
+import { visibleAgents } from '../stores/agentVisibility'
 
 export default function HeaderBar() {
   const wsConnected = useAppStore((s) => s.wsConnected)
@@ -14,7 +15,8 @@ export default function HeaderBar() {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const setSidebarOpen = useAppStore((s) => s.setSidebarOpen)
 
-  const agents = useAppStore((s) => s.agents)
+  const allAgents = useAppStore((s) => s.agents)
+  const agents = visibleAgents(allAgents, showTestAgents)
 
   useEffect(() => {
     const fetchStatus = async () => {

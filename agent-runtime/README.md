@@ -677,36 +677,6 @@ measurement, so the preceding 994-pass full regression still covers current code
 
 ## Historical import persistence (schema 18)
 
-Import a saved metadata archive on the Edge that owns the local Agent service:
-
-```sh
-edgecitadel trace import /absolute/path/trace.jsonl --source-id my-saved-session
-```
-
-The command uses the local administrator credential and enables an import grant
-for each archive agent. It validates the entire file before importing records,
-then prints JSON with `records` and `trace_ids`. Open a returned ID at
-`http://<your-core>/#execution?run=<trace-id>` and connect with the fleet read
-credential. The existing map, text view, observation inspector and retained
-snapshots display these records as `historical import`; importing never executes
-the recorded tasks or tools.
-
-The input is UTF-8 JSONL, up to 16 MiB per file and 16 KiB per line. Each nonblank
-line has exactly `agent_id`, `historical_run_id`, `record_id` and `observation`.
-The two IDs are stable UUIDv4 values; `observation` follows the observation object
-in [the import request schema](../schemas/trace-import-request.v1.json). See the
-[eight-record replay archive](../e2e/fixtures/trace-import.jsonl) for a complete
-run/task/tool example. Raw Codex or Hermes session logs require conversion to this
-metadata format; this command does not parse their native log formats.
-
-Keep the same source ID, agent IDs, run IDs, record IDs and contents when retrying.
-Accepted records are deduplicated, including after a partially completed import;
-changing an accepted record under the same identity is rejected. Separate files
-from the same archive can use the same source ID. Historical identities are
-isolated per source and agent; cross-agent graph linking is not reconstructed.
-The command leaves the source grants enabled; an administrator can revoke them
-through `trace.import.configure` with `enabled=false` when imports are finished.
-
 The private agentd service now implements administrator-only `trace.import.configure`
 (`import_source_id`, `agent_id`, boolean `enabled`) and `trace.import` using the
 frozen v1 request. Each source/agent grant retains a daemon-generated namespace
@@ -1028,24 +998,16 @@ RUN_AGENTD_NATS_INTEGRATION=1 PYTHONPATH=.:agent-runtime/src \
 
 Set `EDGECITADEL_TRACE_READS=1` alongside `EDGECITADEL_TRACE_COLLECTOR=1`
 in the Core Compose environment to start the projector and mount `/api/traces`
-and `/ws/traces/{trace_id}`. Set a separate `EDGECITADEL_TRACE_READ_TOKEN` to
-32–256 URL-safe characters (generate with `secrets.token_urlsafe(32)`); do not
-reuse the NATS or administrator credential. Set `EDGECITADEL_TRACE_ORIGINS` to a
-JSON array of exact dashboard origins, such as `["https://core.example.com"]`.
-The empty array allows native clients without Origin, but no browser origin.
-Invalid enabled configuration fails startup before connecting services.
+and `/ws/traces/{trace_id}`. Execution uses the same trusted private-network
+access policy as the rest of the dashboard, with no separate read credential,
+Origin allowlist or WebSocket authentication frame. Administrator credentials
+are still required for protected mutation routes. Disabled reads create no
+projector, read routes or cursor key.
 
-HTTP clients send `Authorization: Bearer TOKEN`. WebSocket clients send
-`{"type":"authenticate","token":"TOKEN"}` as their first text frame within
-five seconds; put the durable replay cursor in `after`, never the credential.
-Use the trusted private/encrypted deployment perimeter: this credential grants
-fleet-wide trace access, and does not isolate individual users. The dashboard's
-Execution tab accepts this credential in memory, and Flow/Tasks link into the
-explorer. Reloading the page requires entering it again. Saved run/step/event
-and historical snapshot links contain no credential. Browse retained history
-loads server versions, including snapshots never visited in the browser. This
-supports exact retained playback; full M6 scenario/performance acceptance remains
-incomplete.
+Flow and Tasks link into the explorer. Reloads reconnect automatically, including
+saved run/step/event and historical snapshot links. Browse retained history loads
+server versions, including snapshots never visited in the browser. This supports
+exact retained playback; full M6 scenario/performance acceptance remains incomplete.
 
 `GET /api/traces` accepts an optional UUIDv4 `task_id` filter matching any
 observed task in the run, not only its root task. The normalized filter is part

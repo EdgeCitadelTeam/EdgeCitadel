@@ -9,6 +9,8 @@ from pathlib import Path
 from uuid import uuid4
 from urllib.request import Request, urlopen
 
+from trace_test_support import test_card
+
 from edgecitadel_agentd.client import AgentdClient
 from edgecitadel_agentd.service import socket_path_for
 
@@ -99,6 +101,7 @@ registration = admin.call(
     connector_id=name,
     host_type="codex",
     agent_id=name,
+    card=test_card(name),
     capabilities=[
         "edgecitadel_trace",
         "edgecitadel_delegate",
@@ -124,7 +127,12 @@ try:
     )
     assert bound["status"] == "ok"
     binding = bound["result"]
-    print(json.dumps({"stage": "bound", "trace_id": binding["trace_id"]}), flush=True)
+    print(
+        json.dumps(
+            {"stage": "bound", "trace_id": binding["trace_id"], "agent_id": name}
+        ),
+        flush=True,
+    )
     ready = OUTPUT_DIRECTORY / "client-ready"
     deadline = time.monotonic() + 60
     while not ready.exists():

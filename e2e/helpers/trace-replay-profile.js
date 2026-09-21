@@ -1,5 +1,4 @@
 // Read-only jim-eq diagnostic. Reports never include credentials or signed cursors.
-const { execFileSync } = require('node:child_process');
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
@@ -7,13 +6,11 @@ const [trace, output, windowPath] = process.argv.slice(2);
 if (!/^[0-9a-f]{32}$/.test(trace) || !output || !path.isAbsolute(output)) {
   throw new Error('Expected retained trace ID and absolute report path');
 }
-const credential = execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq',
-  `python3 -c 'from pathlib import Path; print(next(line.split("=",1)[1] for line in Path("/root/.edgecitadel/core/.env").read_text().splitlines() if line.startswith("EDGECITADEL_TRACE_READ_TOKEN=")))'`], { encoding: 'utf8' }).trim();
 const timings = [];
 async function read(suffix, kind) {
   const start = performance.now();
   const response = await fetch(`http://jim-eq/api/traces/${trace}${suffix}`, {
-    headers: { Authorization: `Bearer ${credential}` }, signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(20_000),
   });
   const value = await response.json();
   timings.push({ kind, status: response.status, milliseconds: performance.now() - start });

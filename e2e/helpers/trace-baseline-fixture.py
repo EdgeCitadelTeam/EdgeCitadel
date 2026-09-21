@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from trace_test_support import test_card
+
 from edgecitadel_agentd.client import AgentdClient
 from edgecitadel_agentd.service import socket_path_for
 from trace_latency_workload import baseline_slot
@@ -63,6 +65,7 @@ def main():
                 connector_id=name,
                 host_type="codex",
                 agent_id=name,
+                card=test_card(name),
                 capabilities=["edgecitadel_trace"],
             )
             actor = {"name": name, "session": None}

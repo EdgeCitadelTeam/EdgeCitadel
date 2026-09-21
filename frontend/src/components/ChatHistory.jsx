@@ -139,6 +139,7 @@ export default function ChatHistory() {
         content,
         sorted[0].payload?.skill_id,
         last.timestamp,
+        last.deployment,
       )
     }
   }, [historicalMessages, messageTypeFilter, seedStreamFromHistory])
@@ -189,9 +190,10 @@ export default function ChatHistory() {
   // below — it seeds a single synthetic streaming bubble in zustand from
   // any persisted task.progress chunks, so subsequent live deltas extend
   // the same bubble (rather than racing a separate reconstructed view).
-  const merged = historicalMessages.filter(dropProgress)
+  const visibleMessage = (m) => dropProgress(m) && (showTestAgents || m.deployment !== 'test')
+  const merged = historicalMessages.filter(visibleMessage)
   const realtimeFiltered = realtimeMessages.filter((m) => {
-    if (!dropProgress(m)) return false
+    if (!visibleMessage(m)) return false
     if (selectedAgent) {
       return m.sender_id === selectedAgent || m.recipient_id === selectedAgent
     }

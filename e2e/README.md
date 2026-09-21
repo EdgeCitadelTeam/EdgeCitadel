@@ -15,14 +15,28 @@ WS_BASE_URL=ws://jim-eq/ws \
   /Users/yefanzhang/workplace/edge-research/e2e/tests/keyboard-shortcuts.spec.js
 ```
 
-The opt-in trace spec checks the jim-eq hostname, obtains the separate read
-credential over authorized SSH into process memory, discovers a retained
-completed Hermes task, and exercises the deployed browser UI. It also uploads
-the tracked `helpers/trace-live-task.py` into a unique private server directory
-and drives one fresh real Hermes acknowledgment task. The helper owns/revokes
-its temporary connector and closes its session; it checks exact source/Core
-event tuples and export settlement. It requires the configured Core and Leaf
-agentd runtimes and `jim-eq-hermes` to be running. It never starts a local stack.
+The opt-in trace spec checks the jim-eq hostname and opens the dashboard directly,
+without a separate Execution credential. It creates its own completed Hermes task
+for retained replay and drives a fresh task while the browser watches. Helpers
+register explicit `runtime.deployment: test` cards, close their sessions and revoke
+their connectors. The spec verifies exact source/Core events and settlement.
+
+After the suite (including failure), `trace-cleanup-jim-eq.py` removes closed,
+settled fixtures and compacts their source/Core storage. This briefly stops and
+restores the trace writers. It validates all sources before deletion, preserves
+real agent registrations, active work and receipt identities, and does not purge
+shared broker streams. Each cleanup produces a separate sanitized report. Source
+compaction runs under the dedicated quota-enforced service UID. Tests no longer
+depend on fixtures left behind by previous runs.
+
+When copying a trace helper manually, copy `trace_test_support.py` beside it.
+After browser verification, run `trace-cleanup-jim-eq.py` with `trace_cleanup.py`
+beside it on jim-eq as the operator. The latency pilot calls this cleanup in its
+outer finally block after restoring the normal Core launcher. Copy both cleanup
+helpers and `trace_baseline_audit.py` alongside the pilot. Baseline audits run
+before reclamation and save `audit.json`; raw database evidence is then removed.
+A failed eligibility check leaves active or
+unsettled traces intact and fails the test cleanup; inspect the reported failure.
 
 The history check discovers an earlier server snapshot in a fresh browser,
 refreshes metadata without moving the graph, reloads the frozen URL, and asserts

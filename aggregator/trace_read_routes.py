@@ -1,9 +1,8 @@
-"""Explicitly mounted fleet-authenticated HTTP/WS reads; no default app wiring."""
+"""Explicitly mounted dashboard HTTP/WS reads; no default app wiring."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import time
 from contextlib import asynccontextmanager, suppress
@@ -17,7 +16,6 @@ from edgecitadel_agentd.trace_contract import validate_read_response
 from .trace_event_pages import TraceReadError
 from .trace_read_service import TraceReadService
 
-AUTH_TIMEOUT_SECONDS = 5.0
 SEND_TIMEOUT_SECONDS = 2.0
 POLL_SECONDS = 0.25
 HEARTBEAT_SECONDS = 15.0
@@ -75,16 +73,6 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
     async def http(
         request: Request, kind: str, trace_id: str | None = None
     ) -> Response:
-        credentials = request.headers.getlist("authorization")
-        authorization = credentials[0] if len(credentials) == 1 else ""
-        scheme, _, token = authorization.partition(" ")
-        if scheme.lower() != "bearer" or not service.authorized(token):
-            return _response(TraceReadError("not_authorized").response, 401)
-        origins = request.headers.getlist("origin")
-        if len(origins) > 1 or not service.origin_allowed(
-            origins[0] if origins else None
-        ):
-            return _response(TraceReadError("not_authorized").response, 403)
         try:
             allowed = {
                 "list": {"cursor", "agent_id", "outcome", "task_id", "limit"},
@@ -129,12 +117,6 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
 
     @router.websocket("/ws/traces/{trace_id}")
     async def trace_socket(socket: WebSocket, trace_id: str):
-        origins = socket.headers.getlist("origin")
-        if len(origins) > 1 or not service.origin_allowed(
-            origins[0] if origins else None
-        ):
-            await socket.close(code=4403)
-            return
         if stopping.is_set() or sockets.locked():
             await socket.close(code=1013)
             return
@@ -146,29 +128,6 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
         close_code = 1000
         try:
             await socket.accept()
-            # Browser WebSockets cannot set Authorization. The opening frame is
-            # the only credential transport; credentials never enter URLs/cursors.
-            frame = await asyncio.wait_for(socket.receive(), AUTH_TIMEOUT_SECONDS)
-            text = frame.get("text")
-            if frame["type"] == "websocket.disconnect":
-                return
-            try:
-                credentials = (
-                    json.loads(text)
-                    if isinstance(text, str) and len(text) <= 512
-                    else None
-                )
-            except json.JSONDecodeError:
-                credentials = None
-            if (
-                not isinstance(credentials, dict)
-                or set(credentials) != {"type", "token"}
-                or credentials["type"] != "authenticate"
-                or not service.authorized(credentials["token"])
-            ):
-                await _send(socket, TraceReadError("not_authorized").response)
-                close_code = 4401
-                return
             parameters = _parameters(socket.query_params, {"after"}, {"after"})
             after = parameters["after"]
             disconnected = asyncio.create_task(socket.receive())
@@ -254,7 +213,7 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
         await asyncio.to_thread(service.close)
         if sessions:
             _, pending = await asyncio.wait(
-                tuple(sessions), timeout=AUTH_TIMEOUT_SECONDS + SEND_TIMEOUT_SECONDS
+                tuple(sessions), timeout=SEND_TIMEOUT_SECONDS
             )
             for task in pending:
                 task.cancel()

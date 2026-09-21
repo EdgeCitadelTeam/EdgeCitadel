@@ -121,19 +121,9 @@ def make_app(for_testing: bool = False) -> FastAPI:
 
         if os.environ.get("EDGECITADEL_TRACE_COLLECTOR") != "1":
             raise ValueError("trace_read_collector_required")
-        try:
-            origins = json.loads(os.environ.get("EDGECITADEL_TRACE_ORIGINS", "[]"))
-        except json.JSONDecodeError:
-            raise ValueError("trace_read_configuration_unavailable") from None
-        if not isinstance(origins, list) or any(
-            not isinstance(origin, str) for origin in origins
-        ):
-            raise ValueError("trace_read_configuration_unavailable")
         reads = TraceReadService(
             Path(db_path),
             Path(db_path).parent / "trace-cursor.key",
-            read_token=os.environ.get("EDGECITADEL_TRACE_READ_TOKEN", ""),
-            allowed_origins=set(origins),
             collector_status=lambda: state["trace_collector"].status()
             if state.get("trace_collector")
             else {"state": "disabled", "connected": False},

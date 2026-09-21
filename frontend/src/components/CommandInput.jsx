@@ -3,16 +3,19 @@ import { Send } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { api } from '../api/client'
 import toast from 'react-hot-toast'
+import { visibleAgents } from '../stores/agentVisibility'
 
 export default function CommandInput() {
-  const agents = useAppStore((s) => s.agents)
+  const allAgents = useAppStore((s) => s.agents)
+  const showTestAgents = useAppStore((s) => s.showTestAgents)
+  const agents = visibleAgents(allAgents, showTestAgents)
   const selectedAgent = useAppStore((s) => s.selectedAgent)
   const [target, setTarget] = useState('')
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const lastTaskId = useAppStore((s) => s.trackedTaskId)
 
-  const effectiveTarget = target || selectedAgent || ''
+  const effectiveTarget = (agents.some((agent) => agent.agent_id === target) ? target : '') || selectedAgent || ''
   const selectedRow = agents.find((row) => row.agent_id === effectiveTarget)
   const selectedState = selectedRow?.agent_state || 'offline'
 

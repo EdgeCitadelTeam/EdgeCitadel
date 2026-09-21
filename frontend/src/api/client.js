@@ -36,12 +36,12 @@ export const api = {
 
   // Messages — accepts {agent_id, task_id, context_id, type, deployment,
   //                     exclude_deployment, since_ts, limit}
-  queryMessages: (params = {}) => {
+  queryMessages: (params = {}, signal) => {
     const filtered = Object.fromEntries(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
     )
     const qs = new URLSearchParams(filtered).toString()
-    return req(`/messages${qs ? `?${qs}` : ''}`)
+    return req(`/messages${qs ? `?${qs}` : ''}`, { signal })
   },
 
   // Poison events — agent_id optional

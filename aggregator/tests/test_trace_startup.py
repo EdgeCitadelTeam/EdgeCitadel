@@ -20,7 +20,6 @@ from aggregator import (
 )
 
 core = core_fixture
-TOKEN = "owned-startup-read-fixture-token-32bytes"
 
 
 @pytest.fixture
@@ -28,8 +27,6 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "core.db"))
     monkeypatch.setenv("EDGECITADEL_TRACE_READS", "1")
     monkeypatch.setenv("EDGECITADEL_TRACE_COLLECTOR", "1")
-    monkeypatch.setenv("EDGECITADEL_TRACE_READ_TOKEN", TOKEN)
-    monkeypatch.setenv("EDGECITADEL_TRACE_ORIGINS", '["http://testserver"]')
     return tmp_path
 
 
@@ -48,19 +45,6 @@ def test_default_has_no_read_routes_key_or_projector(configured, monkeypatch):
     [
         ("EDGECITADEL_TRACE_READS", "yes", "trace_read_configuration_unavailable"),
         ("EDGECITADEL_TRACE_COLLECTOR", "0", "trace_read_collector_required"),
-        ("EDGECITADEL_TRACE_READ_TOKEN", "", "trace_read_configuration_unavailable"),
-        (
-            "EDGECITADEL_TRACE_ORIGINS",
-            "not-json",
-            "trace_read_configuration_unavailable",
-        ),
-        (
-            "EDGECITADEL_TRACE_ORIGINS",
-            '"http://testserver"',
-            "trace_read_configuration_unavailable",
-        ),
-        ("EDGECITADEL_TRACE_ORIGINS", "[null]", "trace_read_configuration_unavailable"),
-        ("EDGECITADEL_TRACE_ORIGINS", '["*"]', "trace_read_configuration_unavailable"),
     ],
 )
 def test_invalid_configuration_fails_before_services(
@@ -100,12 +84,10 @@ def test_enabled_app_projects_and_serves_then_closes_readers_before_writer(
     monkeypatch.setattr(trace_read_service.TraceReadService, "close", close_reads)
     monkeypatch.setattr(trace_projector.TraceProjectorService, "close", close_projector)
     with TestClient(main.make_app(for_testing=True)) as client:
-        assert client.get("/api/traces").status_code == 401
+        assert client.get("/api/traces").status_code == 200
         deadline = time.monotonic() + 5
         while True:
-            response = client.get(
-                "/api/traces", headers={"Authorization": "Bearer " + TOKEN}
-            )
+            response = client.get("/api/traces")
             if response.status_code == 200 and response.json()["items"]:
                 break
             assert time.monotonic() < deadline, response.text

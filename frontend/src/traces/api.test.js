@@ -15,9 +15,9 @@ class Socket {
   end(code = 1006) { this.onclose?.({ code }) }
 }
 afterEach(() => { Socket.instances = []; vi.useRealTimers() })
-const apiWith = (options = {}) => createTraceApi(CREDENTIAL, { origin: 'https://core.example', WebSocketImpl: Socket, ...options })
+const apiWith = (options = {}) => createTraceApi({ origin: 'https://core.example', WebSocketImpl: Socket, ...options })
 
-it('uses read-only authenticated same-origin requests without URL/storage credentials', async () => {
+it('uses dashboard read-only same-origin requests without URL/storage credentials', async () => {
   const fetchImpl = vi.fn().mockResolvedValue(json(graph()))
   const stored = vi.spyOn(Storage.prototype, 'setItem')
   const api = apiWith({ fetchImpl })
@@ -25,12 +25,12 @@ it('uses read-only authenticated same-origin requests without URL/storage creden
   const [url, options] = fetchImpl.mock.calls[0]
   expect(url).toBe(`https://core.example/api/traces/${traceId}`)
   expect(url).not.toContain(CREDENTIAL)
-  expect(options).toMatchObject({ method: 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store', headers: { Authorization: `Bearer ${CREDENTIAL}` } })
+  expect(options).toMatchObject({ method: 'GET', credentials: 'same-origin', redirect: 'error', cache: 'no-store' })
   expect(stored).not.toHaveBeenCalled()
   api.dispose()
 })
 
-it('clears credentials and aborts other requests on denial, without revealing response content', async () => {
+it('disposes and aborts other requests on denial, without revealing response content', async () => {
   const pending = deferred()
   const fetchImpl = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValueOnce(new Response('PRIVATE_SENTINEL', { status: 403 }))
   const api = apiWith({ fetchImpl })
@@ -63,7 +63,7 @@ it('uses fixed errors for malformed content and proxy failures', async () => {
   }
 })
 
-it('authenticates WS in its first frame and preserves a queued server error across close', async () => {
+it('opens WS without an authentication frame and preserves a queued server error across close', async () => {
   const api = apiWith()
   const iterator = api.subscribe(traceId, token('resume'))
   const next = iterator.next()
@@ -71,7 +71,7 @@ it('authenticates WS in its first frame and preserves a queued server error acro
   socket.open()
   expect(socket.url).toContain('wss://core.example/ws/traces/')
   expect(socket.url).not.toContain(CREDENTIAL)
-  expect(JSON.parse(socket.sent[0])).toEqual({ type: 'authenticate', token: CREDENTIAL })
+  expect(socket.sent).toEqual([])
   socket.receive(readError('history_expired'))
   socket.end(1008)
   await expect(next).rejects.toMatchObject({ code: 'history_expired', resnapshotRequired: true })
@@ -123,7 +123,7 @@ it('terminates silent sockets and cancels ownership on abort', async () => {
 })
 
 
-it('rejects malformed URL run identities before making any authenticated request', async () => {
+it('rejects malformed URL run identities before making any dashboard request', async () => {
   const fetchImpl = vi.fn()
   const api = apiWith({ fetchImpl })
   await expect(api.graph('..')).rejects.toThrow('invalid_request')
@@ -135,7 +135,7 @@ it('rejects malformed URL run identities before making any authenticated request
 })
 
 
-it('loads retained history through the same authenticated read-only boundary', async () => {
+it('loads retained history through the same dashboard read-only boundary', async () => {
   const value = fixture.responses.find(item => item.kind === 'trace_history')
   const fetchImpl = vi.fn().mockResolvedValue(json(value))
   const api = apiWith({ fetchImpl })
@@ -144,6 +144,6 @@ it('loads retained history through the same authenticated read-only boundary', a
   expect(new URL(url).pathname).toBe(`/api/traces/${traceId}/history`)
   expect(new URL(url).searchParams.get('cursor')).toBe(value.snapshot_cursor)
   expect(options.method).toBe('GET')
-  expect(options.headers.Authorization).toBe(`Bearer ${CREDENTIAL}`)
+  expect(options.headers).toBeUndefined()
   api.dispose()
 })

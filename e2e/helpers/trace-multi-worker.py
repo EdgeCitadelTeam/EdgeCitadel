@@ -17,6 +17,8 @@ from uuid import uuid4
 
 import yaml
 
+from trace_test_support import test_card
+
 from edgecitadel_agentd.client import AgentdClient
 from edgecitadel_agentd.service import socket_path_for
 
@@ -168,6 +170,7 @@ try:
             connector_id=connector,
             host_type="managed-agent",
             agent_id=agent,
+            card=test_card(agent),
             capabilities=["reasoning.chat"],
         )
         credential = STATE / "connectors" / (connector + ".token")
@@ -233,6 +236,7 @@ try:
         connector_id=name,
         host_type="codex",
         agent_id=name,
+        card=test_card(name),
         capabilities=[
             "edgecitadel_trace",
             "edgecitadel_delegate",

@@ -158,14 +158,6 @@ def import_trace(
             source_id=params["import_source_id"],
             agent_id=params["agent_id"],
         )
-        run = historical_identity(
-            namespace_id=grant["namespace_id"],
-            import_source_id=params["import_source_id"],
-            agent_id=params["agent_id"],
-            historical_run_id=params["historical_run_id"],
-            kind="run",
-            original_id=params["historical_run_id"],
-        ).replace("-", "")
         key = (grant["namespace_id"], params["historical_run_id"], params["record_id"])
         previous = db.execute(
             "SELECT request_sha256,receipt_json FROM trace_import_records "
@@ -192,6 +184,14 @@ def import_trace(
                 )
 
             observation = params["observation"]
+            run = historical_identity(
+                namespace_id=grant["namespace_id"],
+                import_source_id=params["import_source_id"],
+                agent_id=params["agent_id"],
+                historical_run_id=params["historical_run_id"],
+                kind="run",
+                original_id=params["historical_run_id"],
+            ).replace("-", "")
             attributes = dict(observation["attributes"])
             # Archive references do not resolve to this daemon's encrypted content.
             if "local_content_ref" in attributes or "content_available" in attributes:
@@ -243,7 +243,7 @@ def import_trace(
             "operation": "import",
             "request_id": params["request_id"],
             "status": "ok",
-            "result": {**receipt, "trace_id": run},
+            "result": receipt,
         }
         validate_rpc_reply(reply, operation="import", request_id=params["request_id"])
         return reply

@@ -4,9 +4,10 @@ import clsx from 'clsx'
 import useAppStore from '../stores/appStore'
 import { api } from '../api/client'
 import AgentCard from './AgentCard'
+import { visibleAgents } from '../stores/agentVisibility'
 
 export default function AgentSidebar() {
-  const agents = useAppStore((s) => s.agents)
+  const allAgents = useAppStore((s) => s.agents)
   const selectedAgent = useAppStore((s) => s.selectedAgent)
   const setAgents = useAppStore((s) => s.setAgents)
   const setSelectedAgent = useAppStore((s) => s.setSelectedAgent)
@@ -16,20 +17,7 @@ export default function AgentSidebar() {
   useEffect(() => {
     const fetchAgents = async () => {
       try {
-        const isOperatorAgent = (a) => {
-          const roles = a.card?.metadata?.['runtime.roles'] || []
-          return !roles.some((r) => r === 'aggregator')
-        }
-        const items = await api.listAgents()
-        const operators = (items || []).filter(isOperatorAgent)
-        const filtered = showTestAgents
-          ? operators
-          : operators.filter((a) => {
-              const meta = a.card?.metadata || {}
-              const deployment = meta['runtime.deployment'] || a.deployment
-              return deployment !== 'test'
-            })
-        setAgents(filtered || [])
+        setAgents(await api.listAgents() || [])
       } catch {
         // Will retry on next interval
       }
@@ -37,7 +25,9 @@ export default function AgentSidebar() {
     fetchAgents()
     const interval = setInterval(fetchAgents, 10000)
     return () => clearInterval(interval)
-  }, [setAgents, showTestAgents])
+  }, [setAgents])
+
+  const agents = visibleAgents(allAgents, showTestAgents)
 
   const handleSelect = (agentId) => {
     setSelectedAgent(selectedAgent === agentId ? null : agentId)

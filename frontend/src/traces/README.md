@@ -6,20 +6,17 @@ in the repository's `schemas/` directory; Ajv validates those same files rather
 than a separately maintained frontend schema. Dashboard Docker builds therefore
 use the repository root as context (`frontend/Dockerfile`).
 
-Create one `createTraceApi(credential)` per entered fleet read credential, then
-one `createTraceSession(api)` per visible run. Both default to the current Core
-origin. The API uses GET and an authenticated read WebSocket only. Credentials
-stay in memory, travel in the HTTP Authorization header or first WS frame, and
-never enter trace URLs, browser storage, cookies or response diagnostics.
+Create one `createTraceApi()` for the mounted explorer and one
+`createTraceSession(api)` per visible run. Both default to the current Core
+origin. GET and read WebSocket access follow the dashboard's trusted-network
+access policy; Execution requires no separate credential or login.
 
 React can use the session's `subscribe` and `getSnapshot` with
 `useSyncExternalStore`. Call `open(traceId)` for live data or
 `open(traceId, { at })` for a retained snapshot. `pause()` selects the currently
 displayed graph's exact historical cursor; `resume()` requests a fresh snapshot.
-Dispose the session when its owner unmounts and dispose the API when replacing
-or clearing its credential. The UI must also clear its separately owned run
-list/inspector data on credential denial or replacement. Do not mutate published
-snapshots.
+Dispose the session and API when their owner unmounts. A denied request clears
+session data. Do not mutate published snapshots.
 
 A session owns one abortable run/view and one ordered update loop. Switching
 runs or history mode invalidates earlier work. Initial graphs and snapshot-mode
@@ -65,8 +62,7 @@ when restoring an exact event link. An event cursor cannot move between node
 filters. Arbitrary references are displayed as text and never auto-opened.
 
 React effect ownership recreates API/session resources under StrictMode replay.
-The credential belongs to Layout so tab changes preserve it in memory; page
-reload, disconnect and authorization denial remove access. A view change aborts
+Reloads and tab changes reconnect automatically. A view change aborts
 its inspector and clears page state. The graph remains frozen while historical
 mode indicates newer evidence. Browse retained history discovers server snapshots, including versions never
 visited in this browser. The paginated index freezes its newest boundary and
@@ -114,3 +110,9 @@ step if its sorted position crosses a page boundary. The page changes before DOM
 commit so that the keyed step stays mounted and keyboard focus is retained.
 Moving focus to a different control ends that behavior; ordinary pagination and
 filter controls retain ownership of the requested page.
+
+Selecting a task shows its retained command, progress and result messages beside
+the canvas, including sender and recipient. Live reads are bounded to the latest
+100 messages and stop polling after the result arrives. Frozen graph snapshots do
+not fetch current communication messages; returning to live restores that panel.
+This is live agent communication visualization, not an archive import workflow.

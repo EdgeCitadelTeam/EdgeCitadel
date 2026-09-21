@@ -10,8 +10,6 @@ async function main() {
   const directory = process.argv[2];
   if (!path.isAbsolute(directory)) throw new Error('absolute output directory required');
   const config = JSON.parse(readFileSync(path.join(directory, 'scope.json')));
-  const token = readFileSync('/root/.edgecitadel/core/.env', 'utf8').split('\n')
-    .find(line => line.startsWith('EDGECITADEL_TRACE_READ_TOKEN=')).split('=')[1];
   const request = async (suffix, body) => {
     const response = await fetch(config.receiver.url + suffix, {
       method: body === undefined ? 'GET' : 'POST',
@@ -41,9 +39,7 @@ async function main() {
       });
       const trace = config.scope.trace_id || null;
       await page.goto('http://127.0.0.1/#execution' + (trace ? '?run=' + trace : ''));
-      await page.getByLabel('Fleet read credential').fill(token);
-      await page.getByRole('button', { name: 'Connect read access', exact: true }).click();
-      await page.getByRole('button', { name: 'Disconnect read access', exact: true }).waitFor();
+      await page.locator('.trace-heading h1').waitFor();
       if (trace) await page.locator('[data-node-id]').first().waitFor();
     }
     stage = 'ready';

@@ -111,42 +111,29 @@ function RunView({ api, route, onDenied }) {
   </section>
 }
 
-function ConnectedExplorer({ credential, route, onDenied }) {
+function ConnectedExplorer({ route, onDenied }) {
   const [api, setApi] = useState(null)
   useEffect(() => {
-    const next = createTraceApi(credential); setApi(next)
+    const next = createTraceApi(); setApi(next)
     return () => next.dispose()
-  }, [credential])
+  }, [])
   if (!api) return <p role="status">Connecting read access…</p>
   return <div className="trace-content"><RunList api={api} route={route} onDenied={onDenied} />
     {route.run && !route.invalid ? <RunView key={route.run} api={api} route={route} onDenied={onDenied} /> : <section className="trace-empty"><h2>Select a run</h2><p>{route.invalid ? 'The saved address contains an invalid run, step or snapshot. Select a retained run from the list.' : 'Open a run to follow its observed steps and inspect the evidence.'}</p></section>}
   </div>
 }
 
-export default function TraceExplorer({ credential, onCredential }) {
+export default function TraceExplorer() {
   const route = useTraceRoute()
-  const [draft, setDraft] = useState('')
   const [error, setError] = useState(null)
   const [theme, setTheme] = useState('dark')
-  const onDenied = useCallback(() => {
-    onCredential(current => current === credential ? null : current)
-    setError('Access denied. Check the fleet read credential and ask your operator to allow this dashboard’s address.')
-  }, [credential, onCredential])
-  function connect(event) {
-    event.preventDefault()
-    if (!/^[A-Za-z0-9_-]{32,256}$(?![\s\S])/.test(draft)) { setError('Enter a valid fleet read credential.'); return }
-    onCredential(draft); setDraft(''); setError(null)
-  }
+  const onDenied = useCallback(() => setError('Execution data is unavailable. Check access to this dashboard.'), [])
   return <div className="trace-explorer" data-theme={theme}>
     <header className="trace-heading"><div><h1>Execution map</h1><p>Follow observed execution across the fleet.</p></div><div className="trace-header-actions">
       <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? 'Light map theme' : 'Dark map theme'}</button>
-      {credential && <button onClick={() => { onCredential(null); setError(null) }}>Disconnect read access</button>}
     </div></header>
-    <p className="trace-access-note">Fleet-wide read access. Detailed records remain on their source Edges.</p>
-    {credential ? <ConnectedExplorer key={credential} credential={credential} route={route} onDenied={onDenied} /> : <form className="trace-connect" onSubmit={connect}>
-      <h2>Connect to execution evidence</h2><p>Use the fleet read credential supplied by your operator. Access stays in memory; enter it again after reloading this page.</p>
-      <label>Fleet read credential<input type="password" autoComplete="off" spellCheck={false} value={draft} maxLength={256} onChange={event => setDraft(event.target.value)} required /></label>
-      <button type="submit">Connect read access</button>{error && <p role="alert">{error}</p>}
-    </form>}
+    <p className="trace-access-note">Detailed records remain on their source Edges.</p>
+    {error && <p role="alert">{error}</p>}
+    <ConnectedExplorer route={route} onDenied={onDenied} />
   </div>
 }

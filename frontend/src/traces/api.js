@@ -38,23 +38,21 @@ async function boundedJSON(response) {
   catch { throw new TraceReadError('invalid_response') }
 }
 
-// One instance per entered credential. It never uses browser storage or cookies,
-// follows redirects, or sends credentials to URLs supplied by trace records.
-export function createTraceApi(credential, {
+// Trace reads use the same dashboard boundary as the other tabs.
+export function createTraceApi({
   fetchImpl = globalThis.fetch,
   WebSocketImpl = globalThis.WebSocket,
   origin = globalThis.location.origin,
   requestTimeout = 10000,
   heartbeatTimeout = 25000,
 } = {}) {
-  requireProtocol(typeof credential === 'string' && /^[A-Za-z0-9_-]{32,256}$(?![\s\S])/.test(credential))
   const base = new URL(origin)
   requireProtocol(['http:', 'https:'].includes(base.protocol) && !base.username && !base.password)
-  let token = credential
+  let disposed = false
   const active = new Set()
 
   function own(signal) {
-    if (!token) throw new TraceReadError('not_authorized')
+    if (disposed) throw new TraceReadError('not_authorized')
     const controller = new AbortController()
     const abort = () => controller.abort()
     if (signal?.aborted) controller.abort()
@@ -67,7 +65,7 @@ export function createTraceApi(credential, {
   }
 
   function dispose() {
-    token = null
+    disposed = true
     for (const controller of active) controller.abort()
     active.clear()
   }
@@ -82,8 +80,8 @@ export function createTraceApi(credential, {
         if (value !== null && value !== undefined) url.searchParams.set(key, String(value))
       }
       const response = await fetchImpl(url.href, {
-        method: 'GET', headers: { Authorization: `Bearer ${token}` },
-        credentials: 'omit', cache: 'no-store', redirect: 'error', signal: controller.signal,
+        method: 'GET',
+        credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal,
       })
       if (response.status === 401 || response.status === 403) {
         await response.body?.cancel()
@@ -102,7 +100,7 @@ export function createTraceApi(credential, {
     } catch (error) {
       if (error instanceof TraceReadError) throw error
       if (signal?.aborted) throw abortError()
-      if (!token) throw new TraceReadError('not_authorized')
+      if (disposed) throw new TraceReadError('not_authorized')
       throw unavailable()
     } finally { clearTimeout(timer); release() }
   }
@@ -124,7 +122,7 @@ export function createTraceApi(credential, {
       socket?.close()
       notify()
     }
-    const aborted = () => stop(token ? abortError() : new TraceReadError('not_authorized'))
+    const aborted = () => stop(disposed ? new TraceReadError('not_authorized') : abortError())
     const arm = () => { clearTimeout(timer); timer = setTimeout(() => stop(unavailable()), heartbeatTimeout) }
     controller.signal.addEventListener('abort', aborted, { once: true })
     try {
@@ -132,7 +130,6 @@ export function createTraceApi(credential, {
       socket = new WebSocketImpl(url.href)
       socket.onopen = () => {
         if (failure) return
-        socket.send(JSON.stringify({ type: 'authenticate', token }))
         arm()
       }
       socket.onmessage = ({ data }) => {

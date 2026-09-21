@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from test_trace_projection_store import core as core_fixture
-from test_trace_read_routes import TOKEN, ORIGIN
 
 from aggregator import trace_read_service as module
 from aggregator.trace_event_pages import TraceReadError
@@ -17,8 +16,6 @@ def service(core, tmp_path):
     return module.TraceReadService(
         Path(core.execute("PRAGMA database_list").fetchone()[2]),
         tmp_path / "key",
-        read_token=TOKEN,
-        allowed_origins={ORIGIN},
     )
 
 
@@ -104,33 +101,10 @@ def test_query_deadline_interrupts_sql_and_does_not_poison_reader(
 
 def test_absent_core_is_unavailable_without_creating_a_database(tmp_path):
     path = tmp_path / "missing.db"
-    reader = module.TraceReadService(
-        path, tmp_path / "key", read_token=TOKEN, allowed_origins={ORIGIN}
-    )
+    reader = module.TraceReadService(path, tmp_path / "key")
     try:
         with pytest.raises(TraceReadError, match="^unavailable$"):
             asyncio.run(reader.query("list"))
         assert not path.exists()
     finally:
         reader.close()
-
-
-@pytest.mark.parametrize(
-    "origin",
-    [
-        "http://[bad",
-        "https://user:PRIVATE_SENTINEL@example.com",
-        "https://example.com/path",
-        "null",
-        "https://example.com:bad",
-    ],
-)
-def test_invalid_origin_configuration_has_fixed_diagnostic(tmp_path, origin):
-    with pytest.raises(ValueError, match="^trace_read_configuration_unavailable$"):
-        module.TraceReadService(
-            tmp_path / "db",
-            tmp_path / "key",
-            read_token=TOKEN,
-            allowed_origins={origin},
-        )
-    assert not (tmp_path / "key").exists()

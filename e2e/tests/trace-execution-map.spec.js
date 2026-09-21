@@ -10,33 +10,48 @@ let run, task;
 const evidence = path.resolve(__dirname, '../../local-docs/architecture-reviews/end-to-end-flow/execution');
 const artifactPrefix = process.env.EDGECITADEL_TRACE_UI_EVIDENCE_PREFIX || 'm6-ui';
 if (!/^[a-z0-9-]{1,64}$/.test(artifactPrefix)) throw new Error('Invalid trace UI evidence prefix');
-let credential;
 test.beforeAll(async () => {
   expect(new URL(process.env.APP_URL).hostname).toBe('jim-eq');
   mkdirSync(evidence, { recursive: true });
-  credential = execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `python3 -c 'from pathlib import Path; print(next(line.split("=",1)[1] for line in Path("/root/.edgecitadel/core/.env").read_text().splitlines() if line.startswith("EDGECITADEL_TRACE_READ_TOKEN=")))'`], { encoding: 'utf8' }).trim();
+});
+function prepareDirectory(ssh, directory) {
+  ssh(`install -d -m 755 ${directory}`);
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/trace_test_support.py`], {
+    input: readFileSync(path.resolve(__dirname, '../helpers/trace_test_support.py')),
+  });
+}
+test.afterAll(() => {
+  test.setTimeout(240_000);
+  if (process.env.EDGECITADEL_TRACE_UI_E2E !== '1') return;
+  const directory = `/var/tmp/edgecitadel-suite-cleanup-${Date.now()}`;
+  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8', timeout: 240_000 });
+  ssh(`install -d -m 755 ${directory}`);
+  for (const name of ['trace_cleanup.py', 'trace-cleanup-jim-eq.py']) {
+    execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/${name}`], {
+      input: readFileSync(path.resolve(__dirname, '../helpers', name)),
+    });
+  }
+  const report = JSON.parse(ssh(`python3 ${directory}/trace-cleanup-jim-eq.py`));
+  writeFileSync(path.join(evidence, `${artifactPrefix}-cleanup-${Date.now()}.json`), JSON.stringify(report, null, 2) + '\n');
 });
 async function requireRetainedRun() {
   if (run) return;
-  // Discover an existing completed Hermes run rather than pinning an expiring ID.
-  const read = async suffix => {
-    const response = await fetch(`${process.env.APP_URL}/api/traces${suffix}`, { headers: { Authorization: `Bearer ${credential}` } });
-    if (!response.ok) throw new Error('jim-eq trace fixture read unavailable');
-    return response.json();
-  };
-  const list = await read('?agent_id=jim-eq-hermes&limit=100');
-  for (const item of list.items) {
-    const graph = await read('/' + item.trace_id);
-    const match = graph.nodes.find(node => node.kind === 'task' && node.agent_id === 'jim-eq-hermes' && node.state === 'completed');
-    if (match) { run = item.trace_id; task = match.task_id; break; }
-  }
-  if (!run) throw new Error('The jim-eq fixture needs a retained completed Hermes trace');
+  test.setTimeout(180_000);
+  const directory = `/var/tmp/edgecitadel-owned-replay-${Date.now()}`;
+  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8', timeout: 150_000 });
+  prepareDirectory(ssh, directory);
+  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/fixture.py`], {
+    input: readFileSync(path.resolve(__dirname, '../helpers/trace-live-task.py')),
+  });
+  ssh(`touch ${directory}/client-ready`);
+  const output = ssh(`/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/fixture.py ${directory}`);
+  const result = output.trim().split('\n').map(line => JSON.parse(line)).find(value => value.acknowledgment_exact);
+  if (!result) throw new Error('Owned Hermes replay fixture did not settle');
+  run = result.trace_id; task = result.task_id;
 }
-test.afterAll(() => { credential = null; });
 async function connect(page) {
-  await page.getByLabel('Fleet read credential').fill(credential);
-  await page.getByRole('button', { name: 'Connect read access', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Disconnect read access' })).toBeVisible();
+  await expect(page.getByLabel('Fleet read credential')).toHaveCount(0);
+  await expect(page.locator('.trace-heading h1')).toBeVisible();
 }
 async function openRun(page) {
   await requireRetainedRun();
@@ -45,64 +60,6 @@ async function openRun(page) {
   await expect(page.getByRole('button', { name: 'Pause live' })).toBeEnabled();
   await expect(page.locator('[data-node-id]').first()).toBeVisible();
 }
-
-test('archive import retries safely and replays historical evidence in the browser', async ({ page }) => {
-  test.setTimeout(180_000);
-  const directory = `/var/tmp/edgecitadel-import-e2e-${Date.now()}`;
-  const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8', timeout: 130_000 });
-  ssh(`install -d -m 755 ${directory}`);
-  for (const [local, remote] of [['../helpers/trace-import-replay.py', 'verify.py'], ['../fixtures/trace-import.jsonl', 'archive.jsonl']]) {
-    execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/${remote}`], { input: readFileSync(path.resolve(__dirname, local)) });
-  }
-  const result = JSON.parse(ssh(`/var/lib/edgecitadel-leaf/state/supervisor/bin/python ${directory}/verify.py ${directory}`));
-  const writes = [], errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => {
-    if (new URL(request.url()).pathname.startsWith('/api/') && request.method() !== 'GET') writes.push(request.method());
-  });
-  await page.goto(`/#execution?run=${result.trace_id}`);
-  await connect(page);
-  const tool = page.locator('[data-node-id]').filter({ hasText: 'archive-tool' });
-  await expect(tool).toHaveClass(/state-finished/, { timeout: 30_000 });
-  await expect(page.locator('[data-node-id]').filter({ hasText: 'Unresolved step' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Browse retained history' }).click();
-  const history = page.getByRole('region', { name: 'Retained history' });
-  const snapshots = history.locator('.trace-history-list button:enabled');
-  await expect.poll(() => snapshots.count()).toBeGreaterThan(1);
-  await snapshots.last().click();
-  await expect(page.locator('.trace-run-heading > strong')).toHaveText('historical');
-  await expect(tool).toHaveCount(0);
-  await expect(page.getByText('Newer evidence available', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Resume live' }).click();
-  await expect(tool).toHaveClass(/state-finished/);
-  await tool.click();
-  await expect(page.getByLabel('Selected step details').getByText('historical import', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Pause live' }).click();
-  await page.locator('.trace-observations button').first().click();
-  await expect(page.getByLabel('Observation details')).toBeVisible();
-  const frozen = page.url();
-  expect(new URLSearchParams(new URL(frozen).hash.slice(11)).get('event')).toBeTruthy();
-  expect(new URLSearchParams(new URL(frozen).hash.slice(11)).get('at')).toBeTruthy();
-  await page.reload();
-  await connect(page);
-  await expect(page.getByLabel('Observation details')).toBeVisible();
-  expect(page.url()).toBe(frozen);
-  await expect(page.getByRole('button', { name: 'Resume live' })).toBeVisible();
-  for (const width of [1440, 320]) {
-    await page.setViewportSize({ width, height: 1000 });
-    if (width < 768) await expect(page.getByText('All Agents', { exact: true })).not.toBeInViewport();
-    await page.getByLabel('Selected step details').scrollIntoViewIfNeeded();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-import-${width}.png`) });
-  }
-  await page.getByRole('button', { name: 'Resume live' }).click();
-  await expect(tool).toHaveClass(/state-finished/);
-  await page.getByRole('button', { name: 'Text view', exact: true }).click();
-  await expect(page.getByRole('list', { name: 'Execution step list' })).toContainText('archive-tool');
-  expect(writes).toEqual([]);
-  expect(errors).toEqual([]);
-  writeFileSync(path.join(evidence, `${artifactPrefix}-import-jim-eq.json`), JSON.stringify({ ...result, browser_historical_evidence: true, replay_before_tool: true, exact_event_reload: true, frozen_reload: true, resume_live: true, read_only_viewer: true }, null, 2) + '\n');
-});
 
 test('real retained run: selection, exact observation URL, history reload, themes and narrow panning', async ({ page }) => {
   const errors = [];
@@ -121,7 +78,7 @@ test('real retained run: selection, exact observation URL, history reload, theme
   const frozen = page.url();
   expect(new URLSearchParams(new URL(frozen).hash.slice(11)).get('at')).toBeTruthy();
   await page.reload();
-  await expect(page.getByLabel('Fleet read credential')).toBeVisible();
+  await expect(page.getByLabel('Fleet read credential')).toHaveCount(0);
   await connect(page);
   await expect(page.getByLabel('Selected step details')).toBeVisible();
   expect(page.url()).toBe(frozen);
@@ -151,9 +108,6 @@ test('real retained run: selection, exact observation URL, history reload, theme
     await page.getByLabel('Selected step details').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(evidence, `${artifactPrefix}-inspector-${width}.png`) });
   }
-  const storage = await page.evaluate(() => [...Object.values(localStorage), ...Object.values(sessionStorage)].join(''));
-  expect(storage.includes(credential)).toBe(false);
-  expect(page.url().includes(credential)).toBe(false);
   expect(errors).toEqual([]);
 });
 
@@ -173,26 +127,26 @@ test('task lookup, Flow entry, tab shortcuts and browser back preserve navigatio
   await page.goBack();
   await expect(page.getByLabel('Selected step details')).toBeVisible();
   await expect(page.getByLabel('Fleet read credential')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Disconnect read access' }).click();
-  await expect(page.getByLabel('Fleet read credential')).toBeVisible();
-  await expect(page.getByLabel('Selected step details')).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByLabel('Fleet read credential')).toHaveCount(0);
+  await expect(page.getByLabel('Selected step details')).toBeVisible();
 });
 
 test('fresh Hermes execution updates the real browser, reconnects and preserves exact frozen history', async ({ page }) => {
   test.setTimeout(180_000);
   const directory = `/root/edgecitadel-m6-ui-20260918/run-${Date.now()}`;
   const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
-  ssh(`install -d -m 700 ${directory}`);
+  prepareDirectory(ssh, directory);
   const source = readFileSync(path.resolve(__dirname, '../helpers/trace-live-task.py'), 'utf8');
   execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-task.py`], { input: source });
   const child = spawn('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `/var/lib/edgecitadel-core/state/supervisor/bin/python ${directory}/verify-task.py ${directory}`], { stdio: ['ignore', 'pipe', 'pipe'] });
-  let trace, settled, processError = false;
+  let trace, fixtureAgent, settled, processError = false;
   child.stderr.on('data', () => { processError = true; });
   const finished = new Promise(resolve => child.on('exit', resolve));
   const lines = createInterface({ input: child.stdout });
   lines.on('line', line => {
     const value = JSON.parse(line);
-    if (value.stage === 'bound') trace = value.trace_id;
+    if (value.stage === 'bound') { trace = value.trace_id; fixtureAgent = value.agent_id; }
     if (value.acknowledgment_exact) settled = value;
   });
   try {
@@ -210,6 +164,12 @@ test('fresh Hermes execution updates the real browser, reconnects and preserves 
     await page.goto(`/#execution?run=${trace}`);
     await connect(page);
     await expect(page.getByRole('button', { name: 'Pause live' })).toBeEnabled();
+    const fixtureCard = page.getByRole('button', { name: `Select agent ${fixtureAgent}`, exact: true });
+    await expect(fixtureCard).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show test data', exact: true }).click();
+    await expect(fixtureCard).toBeVisible();
+    await page.getByRole('button', { name: 'Hide test data', exact: true }).click();
+    await expect(fixtureCard).toHaveCount(0);
     const original = await page.locator('[data-node-id]').evaluateAll(nodes => nodes.map(node => ({ id: node.dataset.nodeId, left: node.style.left, top: node.style.top })));
     await page.getByRole('button', { name: 'Pause live' }).click();
     const frozen = page.url();
@@ -223,6 +183,10 @@ test('fresh Hermes execution updates the real browser, reconnects and preserves 
     expect(settled.all_core_settled).toBe(true);
     const completed = page.locator(`[data-node-id="task:${settled.task_id}"]`);
     await expect(completed).toHaveClass(/state-completed/);
+    await completed.click();
+    const communication = page.getByLabel('Task communication');
+    await expect(communication).toContainText('Reply with exactly JIM_EQ_TRACE_ACK_');
+    await expect(communication.getByText('result · completed', { exact: true })).toBeVisible();
     for (const node of original) {
       const current = await page.locator(`[data-node-id="${node.id}"]`).evaluate(element => ({ left: element.style.left, top: element.style.top }));
       expect(current).toEqual({ left: node.left, top: node.top });
@@ -297,7 +261,7 @@ test('server history discovers unvisited snapshots, preserves selection on refre
 test('S4 denied dispatch has permission evidence and no child execution', async ({ page }) => {
   test.setTimeout(180_000);
   const directory = `/root/edgecitadel-s4-20260919/run-${Date.now()}`;
-  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `install -d -m 700 ${directory}`]);
+  prepareDirectory(command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command]), directory);
   execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-denial.py`], {
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-denied-dispatch.py')),
   });
@@ -331,7 +295,7 @@ test('S6 collector outage leaves execution running and recovers retained evidenc
   test.setTimeout(240_000);
   const directory = `/root/edgecitadel-s6-20260919/run-${Date.now()}`;
   const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
-  ssh(`install -d -m 700 ${directory}`);
+  prepareDirectory(ssh, directory);
   execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-task.py`], {
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-live-task.py')),
   });
@@ -397,7 +361,7 @@ test('S1 three real Hermes workers show parallel activity and explicit root comp
   test.setTimeout(360_000);
   const directory = `/root/edgecitadel-s1-20260919/browser-${Date.now()}`;
   const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
-  ssh(`install -d -m 700 ${directory}`);
+  prepareDirectory(ssh, directory);
   execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-workers.py`], {
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-multi-worker.py')),
   });
@@ -439,7 +403,7 @@ test('S1 three real Hermes workers show parallel activity and explicit root comp
     expect(settled.owned_workers_removed).toBe(true);
     await expect(page.locator('[data-node-id^="task:"].state-completed')).toHaveCount(3);
     await expect(page.locator(`[data-node-id="run:${trace}"]`)).toHaveClass(/state-completed/);
-    const response = await fetch(`${process.env.APP_URL}/api/traces/${trace}`, { headers: { Authorization: `Bearer ${credential}` } });
+    const response = await fetch(`${process.env.APP_URL}/api/traces/${trace}`);
     expect(response.ok).toBe(true);
     const graph = await response.json();
     expect(graph.expansions).toEqual([]);
@@ -464,7 +428,7 @@ test('S1 three real Hermes workers show parallel activity and explicit root comp
 
 test('retained branches group repeated operations and reveal exact steps read-only', async ({ page }) => {
   const read = async suffix => {
-    const response = await fetch(`${process.env.APP_URL}/api/traces${suffix}`, { headers: { Authorization: `Bearer ${credential}` } });
+    const response = await fetch(`${process.env.APP_URL}/api/traces${suffix}`);
     expect(response.ok).toBe(true);
     return response.json();
   };
@@ -515,7 +479,7 @@ test('retained branches group repeated operations and reveal exact steps read-on
 test('hostile metadata is rejected or inert and local references are never fetched', async ({ page }) => {
   test.setTimeout(180_000);
   const directory = `/root/edgecitadel-hostile-20260919/run-${Date.now()}`;
-  execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `install -d -m 700 ${directory}`]);
+  prepareDirectory(command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command]), directory);
   execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-metadata.py`], {
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-hostile-metadata.py')),
   });
@@ -575,7 +539,7 @@ test('large retained run expands beyond 500 nodes and exposes every step', async
   if (retained && !/^\/root\/edgecitadel-large-20260919\/run-[0-9]+$/.test(retained)) throw new Error('Invalid large fixture directory');
   const directory = retained || `/root/edgecitadel-large-20260919/run-${Date.now()}`;
   if (!retained) {
-    execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `install -d -m 700 ${directory}`]);
+    prepareDirectory(command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command]), directory);
     execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-large.py`], {
       input: readFileSync(path.resolve(__dirname, '../helpers/trace-large-run.py')),
     });
@@ -664,7 +628,7 @@ test('keyboard focus survives a real live insertion across a map page boundary',
   test.setTimeout(240_000);
   const directory = `/root/edgecitadel-large-20260919/run-${Date.now()}`;
   const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
-  ssh(`install -d -m 700 ${directory}`);
+  prepareDirectory(ssh, directory);
   execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-large.py`], {
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-large-run.py')),
   });
@@ -727,7 +691,7 @@ test('live burst above 500 nodes catches up through ordered patches without grap
   test.setTimeout(240_000);
   const directory = `/root/edgecitadel-large-20260919/run-${Date.now()}`;
   const ssh = command => execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', command], { encoding: 'utf8' });
-  ssh(`install -d -m 700 ${directory}`);
+  prepareDirectory(ssh, directory);
   execFileSync('ssh', ['-o', 'BatchMode=yes', 'root@jim-eq', `cat > ${directory}/verify-large.py`], {
     input: readFileSync(path.resolve(__dirname, '../helpers/trace-large-run.py')),
   });

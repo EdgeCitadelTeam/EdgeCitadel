@@ -16,6 +16,8 @@ from trace_latency_workload import baseline_workload, summarize_latencies, workl
 from trace_live_control import cpu_summary, source_display_summary
 
 
+cleanup_required = False
+
 BASE = [
     "docker",
     "compose",
@@ -68,6 +70,7 @@ def stop_owned(process):
 
 
 def main():
+    global cleanup_required
     if platform.node().lower() != "jim-eq":
         raise RuntimeError("jim-eq only")
     parser = argparse.ArgumentParser()
@@ -142,6 +145,7 @@ def main():
         signal.signal(stop_signal, terminate)
     try:
         with (out / "fixture.log").open("w") as log:
+            cleanup_required = True
             fixture = subprocess.Popen(
                 [
                     "/var/lib/edgecitadel-core/state/supervisor/bin/python",
@@ -250,6 +254,20 @@ def main():
                             json.dumps(report, indent=2) + "\n"
                         )
                         assert report["normal_launcher_restored"]
+
+    def audit_before_cleanup():
+        if declared["mode"] != "baseline":
+            return
+        result = run(
+            [
+                "/var/lib/edgecitadel-core/state/supervisor/bin/python",
+                str(Path(__file__).with_name("trace_baseline_audit.py")),
+                str(out),
+                *(["--observer-control"] if args.observer_control else []),
+            ]
+        )
+        (out / "audit.json").write_text(result.stdout)
+
     commits = json.loads((out / "commits.json").read_text())
     fixture_report = json.loads((out / "fixture.json").read_text())
     browser_report = json.loads((out / "browser.json").read_text())
@@ -287,6 +305,7 @@ def main():
             scope="Matched commit-observer control; source-append-to-display and Core CPU only. No commit-to-render measurement, browser-observer or actual execution overhead claim.",
         )
         (out / "control-result.json").write_text(json.dumps(report, indent=2) + "\n")
+        audit_before_cleanup()
         print(json.dumps(report), flush=True)
         return
     assert commits["enabled"] is True and commits["valid"]
@@ -319,8 +338,13 @@ def main():
         scope="Declared synthetic workload on one source host; no actual tools or multi-host topology. Bounds include step reveal and render ACK transport; callback metric is not total observer overhead. Warmup is excluded from statistics, never from required correlations; profile declares whether full baseline duration ran.",
     )
     (out / "result.json").write_text(json.dumps(report, indent=2) + "\n")
+    audit_before_cleanup()
     print(json.dumps(report), flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        if cleanup_required:
+            run(["python3", str(Path(__file__).with_name("trace-cleanup-jim-eq.py"))])

@@ -5,7 +5,7 @@ export function applyRealtimeEvent(frame, actions) {
   if (frame.event === 'message') {
     if (data.type === 'task.progress') {
       const delta = data.payload?.message ?? data.payload?.delta ?? ''
-      actions.appendStreamDelta(data.task_id, data.sender_id, delta, data.payload?.skill_id)
+      actions.appendStreamDelta(data.task_id, data.sender_id, delta, data.payload?.skill_id, data.deployment)
       return
     }
     if (data.type === 'result' && data.task_id) actions.finalizeStream(data.task_id, data)

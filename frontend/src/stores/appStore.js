@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
+import { isTestAgent } from './agentVisibility'
 
 const MAX_REALTIME_MESSAGES = 500
 
@@ -126,7 +127,7 @@ const useAppStore = create((set, get) => ({
   // Synthetic streaming bubbles live in the existing realtimeMessages array
   // with streaming: true. When the canonical result envelope arrives,
   // finalizeStream swaps the synthetic for the real one.
-  appendStreamDelta: (taskId, senderId, delta, skillId) => set((state) => {
+  appendStreamDelta: (taskId, senderId, delta, skillId, deployment) => set((state) => {
     const idx = state.realtimeMessages.findIndex(
       (m) => m.task_id === taskId && m.streaming === true
     )
@@ -151,6 +152,7 @@ const useAppStore = create((set, get) => ({
       type: 'result',
       streaming: true,
       skill_id: skillId,
+      deployment,
       content: delta,
       timestamp: new Date().toISOString(),
       last_delta_at: Date.now(),
@@ -166,7 +168,7 @@ const useAppStore = create((set, get) => ({
   // realtimeMessages, so subsequent live deltas extend the same bubble via
   // appendStreamDelta. `lastDeltaIso` is the timestamp of the freshest
   // chunk used for stall detection.
-  seedStreamFromHistory: (taskId, senderId, content, skillId, lastDeltaIso) =>
+  seedStreamFromHistory: (taskId, senderId, content, skillId, lastDeltaIso, deployment) =>
     set((state) => {
       const exists = state.realtimeMessages.some(
         (m) => m.task_id === taskId && m.streaming === true
@@ -179,6 +181,7 @@ const useAppStore = create((set, get) => ({
         type: 'result',
         streaming: true,
         skill_id: skillId,
+      deployment,
         content,
         timestamp: lastDeltaIso || new Date().toISOString(),
         last_delta_at: lastDeltaIso ? new Date(lastDeltaIso).getTime() : Date.now(),
@@ -210,7 +213,10 @@ const useAppStore = create((set, get) => ({
 
   setShowTestAgents: (show) => {
     localStorage.setItem('showTestAgents', JSON.stringify(show))
-    set({ showTestAgents: show })
+    set((state) => ({
+      showTestAgents: show,
+      selectedAgent: !show && state.agents.some((agent) => agent.agent_id === state.selectedAgent && isTestAgent(agent)) ? null : state.selectedAgent,
+    }))
   },
 
   setSidebarOpen: (open) => set({ sidebarOpen: open }),

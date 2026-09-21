@@ -2932,31 +2932,20 @@ These are not authenticated HTTP/WS or frontend acceptance tests. Replacement
 loading/backpressure, actual origin/proxy access, slow clients, retained-volume
 SQL/storage costs and jim-eq E2E remain integration/qualification work.
 
-### Explicit fleet-authenticated HTTP and WebSocket router
+### Dashboard HTTP and WebSocket router
 
 `make_trace_router(TraceReadService(...))` mounts list, graph/expansion, event and
 change GET routes plus `/ws/traces/{trace_id}`. Default Aggregator startup does
 not construct or mount it yet. Explicit construction owns the Core cursor key,
 read workers and shutdown; no read request initializes or migrates a database.
 
-The selected deployment remains one trusted operator fleet, not per-user
-isolation. A separate read-only fleet credential strengthens the application
-boundary while the actual private/encrypted network perimeter is qualified.
-HTTP uses `Authorization: Bearer <credential>`; forwarded IP/admin headers cannot
-substitute for it. Missing/bad credentials fail before trace lookup with the fixed
-`not_authorized` error. Authenticated HTTP Origin, when present, must exactly
-match a configured frontend origin. Responses use canonical bounded JSON,
+The selected deployment is one trusted operator fleet. Trace reads follow the
+same private-network access policy as the dashboard: no separate read token,
+Origin allowlist or opening WebSocket authentication frame. Protected mutation
+routes retain their administrator authentication. Responses use bounded JSON,
 `Cache-Control: no-store` and `X-EdgeCitadel-Access-Mode: trusted-fleet`.
-
-Browser WebSockets authenticate in one opening JSON frame:
-`{"type":"authenticate","token":"<credential>"}`. Never put credentials in
-URLs, cursor claims or content references. Origin is checked before acceptance;
-non-browser clients may omit it but still must authenticate. Opening authentication
-has a five-second deadline and accepts at most 512 text characters after transport
-reassembly. Actual transport-frame limits remain part of startup qualification.
-At most eight sockets, including unauthenticated ones, are admitted. Query parsing
-rejects unknown/repeated/oversized parameters and emits fixed errors without
-reflecting caller input.
+At most eight sockets are admitted. Query parsing rejects unknown, repeated and
+oversized parameters and emits fixed errors without reflecting caller input.
 
 The socket tails the same durable change reader and sends ordered `trace_change`
 messages, with periodic `trace_heartbeat` availability/freshness messages. It keeps
@@ -2980,13 +2969,12 @@ links it into place without replacing a concurrent creator's key, then fsyncs th
 directory. Existing keys must be regular, owned by the service UID and mode 0600;
 symlinks, FIFOs, public or malformed keys fail closed and are never regenerated.
 Back up this secret as private Core configuration, never as research evidence.
-Service restart preserves cursor signatures. Fleet credential rotation changes
-access scope and invalidates old cursors; configuration changes require service
-replacement/shutdown, not implicit environment hot reload.
+Service restart preserves cursor signatures. Access-policy version changes
+invalidate old cursors; configuration changes require service replacement.
 
 ASGI HTTP/WS and SQLite component tests verify the direct route boundary,
-credential/origin rejection before lookup, restart/rotation, replay/reconnect,
-auth timeout, socket admission, stalled sends, rebuild races, actual worker-slot
+dashboard reads without a separate credential, restart, replay/reconnect,
+socket admission, stalled sends, rebuild races, actual worker-slot
 ownership/cancellation, SQL deadlines and concurrent key creation. Default app,
 proxy routing, deployment secret provisioning, transport-frame limits and live
 jim-eq verification remain next. These local tests do not accept M4/M5–M7 rollout,
@@ -2994,13 +2982,11 @@ full access-perimeter security, fleet-scale performance or frontend behavior.
 
 ### Opt-in Core startup and transport ownership
 
-`EDGECITADEL_TRACE_READS=1` requires the collector flag and a separate URL-safe
-32–256-character `EDGECITADEL_TRACE_READ_TOKEN`. `EDGECITADEL_TRACE_ORIGINS` is a
-JSON array of exact HTTP(S) origins; the empty array permits native clients with
-no Origin only. Disabled reads create no key, projector or read routes. Enabled
-invalid configuration fails before service connections. The Core persists the
-private cursor key beside its database as `trace-cursor.key` and preserves it
-across restart; a malformed existing key is never silently replaced.
+`EDGECITADEL_TRACE_READS=1` requires the collector flag. Disabled reads create no
+key, projector or read routes. The Core persists the private cursor key beside
+its database as `trace-cursor.key` across restarts; a malformed existing key is
+never silently replaced. Cursors remain signed and scoped despite removing the
+separate read login.
 
 The application lifespan owns command, memory, collector and projector startup;
 partial startup closes acquired owners. The nested read-router lifespan drains
@@ -3012,14 +2998,11 @@ explicitly; process startup alone is not readiness.
 
 The packaged Uvicorn websockets transport bounds incoming messages to 64 KiB and
 queues to four messages, with compression disabled. This bound applies to every
-WebSocket route; terminal clients must split larger input. Trace authentication
-still enforces its 512-character frame after transport reassembly. The dedicated
-nginx `/ws/traces/` location preserves URI, disables buffering, and uses 60-second
-read and 10-second send timeouts. Credentials travel in the HTTP authorization
-header or first WS authentication frame, never query strings. Deployment still
-requires its private/encrypted network perimeter; a fleet credential is not
-individual user authorization. These opt-in routes do not close the storage,
-retained-volume, frontend or full M4–M7 qualification gates.
+WebSocket route; terminal clients must split larger input. The dedicated nginx
+`/ws/traces/` location preserves URI, disables buffering, and uses 60-second read
+and 10-second send timeouts. Deployment requires its private-network perimeter.
+These opt-in routes do not close the storage, retained-volume, frontend or full
+M4–M7 qualification gates.
 
 ### Collector availability in read freshness
 
@@ -3049,3 +3032,20 @@ recipient perspective. Outgoing queue observations remain sender evidence. This
 keeps the initial transport receipt from competing indefinitely with the actual
 worker's current state in the projection. Existing immutable observations are
 not rewritten; corrected attribution applies to newly received commands.
+
+### Live communication workflow correction (2026-09-20)
+
+The user-facing workflow is Mac Pro Codex dispatching work to jim-eq Hermes and
+viewing the communication and task lifecycle in the canvas. There is no archive
+import step. The saved-archive CLI and demonstration added on September 20 were
+removed. Existing protocol internals are not a request to build an import product.
+
+Execution opens under the dashboard access policy. Selecting a task shows up to
+100 retained messages, with sender, recipient, command, progress and result. The
+message panel is live/current; frozen graph replay does not fetch newer messages.
+
+E2E connectors declare test deployment in their cards. Closed and fully settled
+fixtures are reclaimed after browser assertions; real agents, active tasks and
+ingestion receipts are preserved. The jim-eq maintenance helper stops writers,
+removes owned payloads and graph history, and compacts the databases. Source
+compaction retains the dedicated service UID and quota enforcement.
