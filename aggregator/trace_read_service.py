@@ -19,6 +19,7 @@ from . import (
     trace_graph_pages,
     trace_list_pages,
     trace_history_pages,
+    trace_infrastructure_pages,
 )
 from .trace_event_pages import TraceReadError
 from .trace_read_key import load_or_create_key
@@ -128,6 +129,7 @@ class TraceReadService:
                     "events": trace_event_pages.read_events,
                     "changes": trace_change_pages.read_changes,
                     "history": trace_history_pages.read_history,
+                    "infrastructure": trace_infrastructure_pages.read_infrastructure,
                 }
                 return readers[kind](
                     connection,

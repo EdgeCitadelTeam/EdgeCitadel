@@ -16,6 +16,11 @@ from edgecitadel_agentd.storage_layout import StorageLayout
 from edgecitadel_agentd.trace_quota import TraceQuotaError
 
 
+@pytest.fixture(autouse=True)
+def fixture_mount(monkeypatch):
+    monkeypatch.setattr(StorageLayout, "mount", lambda self: None)
+
+
 @pytest.fixture
 def verified_layout(tmp_path, monkeypatch):
     state = tmp_path / "state/agentd"
@@ -27,7 +32,7 @@ def verified_layout(tmp_path, monkeypatch):
         calls.append((trace_dir, task_dir))
         assert trace_dir == task_dir / "trace"
 
-    monkeypatch.setattr(storage_layout, "verify_trace_quota", verify)
+    monkeypatch.setattr(storage_layout, "verify_storage", verify)
     return StorageLayout(state), calls
 
 
@@ -37,7 +42,7 @@ def test_absent_enforcement_refuses_before_database_or_endpoint(tmp_path, monkey
     def refuse(*args):
         raise TraceQuotaError("owned enforcement refusal")
 
-    monkeypatch.setattr(storage_layout, "verify_trace_quota", refuse)
+    monkeypatch.setattr(storage_layout, "verify_storage", refuse)
     with pytest.raises(TraceQuotaError, match="owned enforcement refusal"):
         service.serve(state)
     assert {p.name for p in state.iterdir()} == {"writer.lock"}

@@ -2,7 +2,7 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "bfb05e7bb5d89bc88fcf444b310913c0cc3a40f50848ec28a1b8fa0aca040536"
+      "sha256": "1502056dd213efae7805aa558ff56e6d59a13ef7e5f71e34d5b4429cf1bec147"
     },
     {
       "path": "edgecitadel_hermes_plugin/__init__.py",
@@ -30,7 +30,7 @@
     },
     {
       "path": "edgecitadel_hermes_plugin/http_bridge.py",
-      "sha256": "52e439930bbe233775227ade723d73c81d022bd624ae72cd5f8879da0443f503"
+      "sha256": "448ddb79dff37688e1a12acf58058ab438b99e758ca1efe9ac6929187f619c71"
     },
     {
       "path": "edgecitadel_hermes_plugin/requirements.txt",
@@ -42,7 +42,7 @@
     },
     {
       "path": "edgecitadel_hermes_plugin/trace_hooks.py",
-      "sha256": "22049ad6bb3a5c595319df49c398e95123d16d5845c2674a9732b1fac0d66c63"
+      "sha256": "44b3ac05b8c38ab08eb0f55d4d94dd122529f82c4a38961c25e9d6b3dbc63ed3"
     },
     {
       "path": "plugin.yaml",

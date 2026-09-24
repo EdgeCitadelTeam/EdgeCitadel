@@ -59,3 +59,8 @@ bound execution entrypoints.
 Verification uses an owned provider endpoint and two concurrent executions with
 shared conversation identity against installed Hermes/runtime wheels. Production
 provider behavior and other Hermes versions still require integration checks.
+
+The bound wrapper now retains bounded, redacted model input/output and tool
+arguments/results in Core trace events. Exposed tool-call IDs link tools to their
+invoking model turn. See [detailed execution tracing](../../docs/architecture/detailed-execution-tracing.md)
+for content limits, redaction, retention and unavailable provider observations.

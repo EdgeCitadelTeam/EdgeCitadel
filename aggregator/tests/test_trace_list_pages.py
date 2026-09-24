@@ -343,3 +343,70 @@ def test_task_lookup_includes_child_observation_and_binds_list_scope(core):
         lambda: read(core, cursor=result["snapshot_cursor"], task_id=other["task_id"]),
     )
     assert read(core, task_id=str(uuid4()))["items"] == []
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"prompt": '"Review the deployment configuration for production"'},
+        {"body": '{"body":"Review the deployment configuration for production"}'},
+    ],
+)
+def test_task_names_use_request_content_and_remain_snapshot_bound(core, fields):
+    native = event(
+        "started",
+        kind="run",
+        seq=1,
+        task_id=None,
+        parent_task_id=None,
+        parent_run_id=None,
+        content={"status": "available", "fields": fields},
+    )
+    assert put(core, native, str(uuid4()), 1).outcome == "accepted"
+    project_all(core)
+    first = read(core)
+    assert (
+        first["items"][0]["task_name"]
+        == "Review the deployment configuration for production"
+    )
+    later = {
+        **native,
+        "event_id": str(uuid4()),
+        "source_seq": 2,
+        "phase": "completed",
+        "content": {
+            "status": "available",
+            "fields": {"body": '"Different result text"'},
+        },
+    }
+    put(core, later, str(uuid4()), 1)
+    project_all(core)
+    assert read(core)["items"][0]["task_name"] == first["items"][0]["task_name"]
+    assert read(core, cursor=first["snapshot_cursor"])["items"] == first["items"]
+
+
+def test_task_name_falls_back_without_request_and_bounds_long_names(core):
+    root = add(core, 1)
+    native = event(
+        "started",
+        kind="run",
+        seq=2,
+        trace_id="f" * 32,
+        task_id=None,
+        parent_task_id=None,
+        parent_run_id=None,
+        content={
+            "status": "available",
+            "fields": {
+                "request": '"Investigate why the production deployment fails after the database migration finishes"'
+            },
+        },
+    )
+    assert put(core, native, str(uuid4()), 1).outcome == "accepted"
+    project_all(core)
+    items = {item["trace_id"]: item for item in read(core)["items"]}
+    assert items[root["trace_id"]]["task_name"] == "Task " + root["task_id"][:8]
+    assert (
+        items[native["trace_id"]]["task_name"]
+        == "Investigate why the production deployment fails after the…"
+    )

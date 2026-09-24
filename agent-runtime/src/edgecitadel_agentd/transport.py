@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import uuid
 from collections.abc import Mapping
@@ -16,12 +17,15 @@ from nats.aio.client import Client as NATS
 from nats.aio.msg import Msg
 from nats.js import JetStreamContext
 
+from edgecitadel_plugin_runtime.agent_card import topology_metadata
 from edgecitadel_plugin_runtime.jetstream import ensure_consumer, ensure_stream
 from edgecitadel_plugin_runtime.validator import ValidationError, default_validator
 
 from .node_state import read_node
 from .store import AgentdStore, StoreError
 from .trace_contract import TraceContractError
+from .trace_monitor import BrokerMonitor
+from .trace_transport import TransportTrace, delivery_metadata, publication_metadata
 
 
 def _timestamp() -> str:
@@ -47,6 +51,8 @@ class AgentdNatsTransport:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._nc: NATS | None = None
         self._validator = default_validator()
+        self._trace: TransportTrace | None = None
+        self._broker_tracing = False
 
     def start(self) -> None:
         if self._thread is not None:
@@ -116,6 +122,10 @@ class AgentdNatsTransport:
         except Exception as error:  # NATS exposes several transport-specific errors.
             raise StoreError(f"NATS publish failed: {type(error).__name__}") from error
 
+    def _observe(self, phase: str, **values: Any) -> None:
+        if self._trace is not None:
+            self._trace.record(phase, **values)
+
     def _set_status(self, **values: object) -> None:
         with self._lock:
             self._status.update(values)
@@ -152,6 +162,7 @@ class AgentdNatsTransport:
             return
         assert isinstance(url, str)
         assert isinstance(token, str)
+        self._trace = TransportTrace(self.store, str(node["agent_id"]))
         mode = str(node.get("messaging_mode", "single-client"))
         self._set_status(
             configured=True,
@@ -160,13 +171,36 @@ class AgentdNatsTransport:
         )
 
         async def disconnected() -> None:
+            self._broker_tracing = False
             self._set_status(connected=False, detail="NATS disconnected")
+            self._observe("disconnected", kind="infrastructure")
 
         async def reconnected() -> None:
+            if self._nc is not None:
+                await self._configure_broker_trace(
+                    self._nc, str(node["agent_id"]), subscribe=False
+                )
             self._set_status(connected=True, detail="NATS connected")
+            self._observe("connected", kind="infrastructure")
 
         async def closed() -> None:
             self._set_status(connected=False, detail="NATS connection closed")
+            self._observe("closed", kind="infrastructure")
+
+        async def broker_error(error) -> None:
+            name = type(error).__name__
+            phase = (
+                "permission_denied"
+                if "Permission" in name or "permissions violation" in str(error).lower()
+                else "authentication_rejected"
+                if "Auth" in name
+                else "advisory"
+            )
+            self._observe(
+                phase,
+                kind="broker",
+                attributes={"provenance": "nats_client_error", "error_type": name},
+            )
 
         while not self._stop.is_set():
             nc = NATS()
@@ -180,12 +214,15 @@ class AgentdNatsTransport:
                     disconnected_cb=disconnected,
                     reconnected_cb=reconnected,
                     closed_cb=closed,
+                    error_cb=broker_error,
                 )
                 self._set_status(connected=True, detail="NATS connected")
+                self._observe("connected", kind="infrastructure")
                 with self._lock:
                     self._nc = nc
                 domain = node.get("jetstream_domain")
                 js = nc.jetstream(domain=domain if isinstance(domain, str) else None)
+                await self._configure_broker_trace(nc, str(node["agent_id"]))
                 await nc.subscribe("agents.*.register", cb=self._observe_presence)
                 await nc.subscribe("agents.*.heartbeat", cb=self._observe_presence)
                 await nc.subscribe("agents.*.status", cb=self._observe_presence)
@@ -211,6 +248,15 @@ class AgentdNatsTransport:
     async def _connected_loop(self, nc: NATS, js: JetStreamContext) -> None:
         consumers: dict[str, asyncio.Task[None]] = {}
         published_presence: set[str] = set()
+        monitor = (
+            asyncio.create_task(
+                BrokerMonitor(
+                    self._trace, os.environ.get("EDGECITADEL_NATS_MONITOR_URL")
+                ).run()
+            )
+            if self._trace
+            else None
+        )
         try:
             while not self._stop.is_set():
                 current_ids: set[str] = set()
@@ -249,10 +295,55 @@ class AgentdNatsTransport:
                         pending["envelope"], separators=(",", ":")
                     ).encode()
                     message_id = str(pending["message_id"])
-                    await js.publish(
-                        str(pending["subject"]),
-                        envelope,
-                        headers={"Nats-Msg-Id": message_id},
+                    observation = {
+                        "envelope": pending["envelope"],
+                        "attributes": {
+                            "subject": str(pending["subject"]),
+                            "publication_attempt_id": str(uuid.uuid4()),
+                        },
+                    }
+                    self._observe(
+                        "publish_started",
+                        content={
+                            "body": pending["envelope"]["payload"].get(
+                                "body", pending["envelope"]["payload"]
+                            )
+                        },
+                        **observation,
+                    )
+                    try:
+                        ack = await js.publish(
+                            str(pending["subject"]),
+                            envelope,
+                            headers={
+                                "Nats-Msg-Id": message_id,
+                                **(
+                                    {
+                                        "Nats-Trace-Dest": f"_EC.TRACE.{self._trace.node_id}.{message_id}.{observation['attributes']['publication_attempt_id']}",
+                                        "Nats-Trace-Only": "false",
+                                    }
+                                    if self._trace and self._broker_tracing
+                                    else {}
+                                ),
+                            },
+                        )
+                    except Exception as error:
+                        self._observe(
+                            "publish_failed",
+                            envelope=pending["envelope"],
+                            attributes={
+                                **observation["attributes"],
+                                "error_type": type(error).__name__,
+                            },
+                        )
+                        raise
+                    self._observe(
+                        "publish_accepted",
+                        envelope=pending["envelope"],
+                        attributes={
+                            **observation["attributes"],
+                            **publication_metadata(ack),
+                        },
                     )
                     await nc.publish(
                         f"agents.{pending['envelope']['sender_id']}.outbox",
@@ -261,6 +352,9 @@ class AgentdNatsTransport:
                     self.store.mark_transport_published(message_id)
                 await asyncio.sleep(1)
         finally:
+            if monitor is not None:
+                monitor.cancel()
+                await asyncio.gather(monitor, return_exceptions=True)
             for task in consumers.values():
                 task.cancel()
             await asyncio.gather(*consumers.values(), return_exceptions=True)
@@ -293,7 +387,25 @@ class AgentdNatsTransport:
                 raise StoreError("transport envelope must be an object")
             if envelope.get("recipient_id") != agent_id:
                 raise StoreError("transport recipient does not match consumer")
+            metadata = delivery_metadata(message)
+            self._observe(
+                "received",
+                envelope=envelope,
+                attributes=metadata,
+                content={
+                    "body": envelope.get("payload", {}).get(
+                        "body", envelope.get("payload", {})
+                    )
+                },
+            )
             self.store.ingest_transport_envelope(envelope)
+            self._observe(
+                "caller_accepted"
+                if envelope.get("type") == "result"
+                else "durably_accepted",
+                envelope=envelope,
+                attributes=metadata,
+            )
         except (UnicodeDecodeError, json.JSONDecodeError, StoreError) as error:
             cause = error.__cause__
             if isinstance(cause, TraceContractError) and cause.code in {
@@ -304,8 +416,116 @@ class AgentdNatsTransport:
                 # just as for SQLite failures, rather than terminating it as poison.
                 raise
             await message.term()
+            self._observe(
+                "terminated",
+                attributes={
+                    **delivery_metadata(message),
+                    "error_type": type(error).__name__,
+                },
+            )
             return
-        await message.ack()
+        try:
+            await message.ack()
+        except Exception as error:
+            self._observe(
+                "ack_failed",
+                envelope=envelope,
+                attributes={**metadata, "error_type": type(error).__name__},
+            )
+            raise
+        self._observe("ack_sent", envelope=envelope, attributes=metadata)
+
+    async def _configure_broker_trace(
+        self, nc: NATS, node_id: str, *, subscribe: bool = True
+    ) -> None:
+        self._broker_tracing = False
+        try:
+            version = nc.connected_server_version
+            if (version.major, version.minor) < (2, 11):
+                self._observe(
+                    "unavailable",
+                    kind="infrastructure",
+                    attributes={
+                        "provenance": "nats_trace_probe",
+                        "coverage_reason": "broker_tracing_unsupported",
+                    },
+                )
+                return
+            if subscribe:
+                await nc.subscribe(
+                    f"_EC.TRACE.{node_id}.>", cb=self._observe_broker_trace
+                )
+            # A real round trip checks both publish and subscribe permissions.
+            # Never discover a forbidden trace destination using a task message.
+            reply = await nc.request(f"_EC.TRACE.{node_id}.probe", b"", timeout=2)
+            self._broker_tracing = reply.data == b"trace-ready"
+        except Exception:  # noqa: BLE001 - telemetry permission is not task permission
+            pass
+        if not self._broker_tracing:
+            self._observe(
+                "unavailable",
+                kind="infrastructure",
+                attributes={
+                    "provenance": "nats_trace_probe",
+                    "coverage_reason": "trace_destination_unavailable",
+                },
+            )
+
+    async def _observe_broker_trace(self, message: Msg) -> None:
+        if self._trace and message.subject == f"_EC.TRACE.{self._trace.node_id}.probe":
+            if message.reply:
+                await message.respond(b"trace-ready")
+            return
+        # Destination identifies an actual durable publication, not a topology guess.
+        try:
+            parts = message.subject.split(".")
+            if len(parts) != 5 or len(message.data) > 65536:
+                return
+            message_id, attempt = parts[-2:]
+            uuid.UUID(message_id)
+            uuid.UUID(attempt)
+            with self.store._lock:
+                row = self.store._connection.execute(
+                    "SELECT envelope_json FROM transport_outbox WHERE message_id=?",
+                    (message_id,),
+                ).fetchone()
+                envelope = self.store._decode_content(row[0]) if row else None
+            if envelope is None:
+                return
+            document = json.loads(message.data)
+            header = document.get("request", {}).get("header", {})
+            if header.get("Nats-Msg-Id") != [message_id]:
+                return
+            server = document.get("server", {})
+            self._observe(
+                "observed",
+                kind="broker",
+                envelope=envelope,
+                attributes={
+                    "provenance": "nats_message_trace",
+                    "publication_attempt_id": attempt,
+                    **(
+                        {"server_id": server["id"]}
+                        if isinstance(server.get("id"), str)
+                        else {}
+                    ),
+                    **(
+                        {"server_name": server["name"]}
+                        if isinstance(server.get("name"), str)
+                        else {}
+                    ),
+                },
+                content={"boundaries": document.get("events", [])},
+            )
+        except (ValueError, TypeError, KeyError):
+            self._observe(
+                "unavailable",
+                kind="infrastructure",
+                attributes={
+                    "coverage_reason": "invalid_broker_trace",
+                    "provenance": "nats_message_trace",
+                },
+            )
 
     async def _observe_presence(self, message: Msg) -> None:
         try:
@@ -414,6 +634,18 @@ class AgentdNatsTransport:
                 },
             }
         )
+        node = self._node()
+        if node is not None:
+            metadata = dict(cast(Mapping[str, object], card.get("metadata", {})))
+            for name in (
+                "edgecitadel.leaf_id",
+                "edgecitadel.jetstream_domain",
+                "edgecitadel.nats_address",
+                "edgecitadel.core_address",
+            ):
+                metadata.pop(name, None)
+            metadata.update(topology_metadata(node))
+            card = {**card, "metadata": metadata}
         await self._publish_plain(
             nc, f"agents.{agent_id}.register", "register", agent_id, payload=card
         )

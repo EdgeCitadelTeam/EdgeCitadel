@@ -9,6 +9,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from .trace_content import fit_event_content, sanitize_event_content
 from .trace_counters import MAX_COUNTER, encode_counter
 from .trace_headroom import pending, require
 from .trace_reservations import Obligation
@@ -160,7 +161,7 @@ class TraceJournal:
         if not previous and sequence >= MAX_COUNTER:
             raise TraceContractError("trace_sequence_exhausted")
         stamped = {
-            **event,
+            **sanitize_event_content(event),
             "node_id": node_id,
             "source_epoch": epoch,
             "source_seq": sequence,
@@ -174,6 +175,7 @@ class TraceJournal:
         ).fetchone()[0]
         if test_run is not None:
             stamped["test_run_id"] = test_run
+        fit_event_content(stamped)
         encoded = validate_event(stamped)
         digest = hashlib.sha256(encoded).hexdigest()
         if previous:

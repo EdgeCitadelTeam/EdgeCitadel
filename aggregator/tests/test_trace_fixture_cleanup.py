@@ -37,7 +37,7 @@ def test_fixture_cleanup_preserves_real_trace_and_receipts(core):
         "SELECT * FROM trace_ingest_positions ORDER BY export_seq"
     ).fetchall()
     result = cleanup.purge_core(core, [fixture], ["fixture"])
-    assert result == {"agents": 1, "messages": 1, "payloads": 1}
+    assert result == {"agents": 0, "messages": 0, "payloads": 1}
     assert (
         core.execute(
             "SELECT node_id,source_epoch,event_id,event_sha256 FROM trace_raw_events ORDER BY ingest_seq"
@@ -67,7 +67,10 @@ def test_fixture_cleanup_preserves_real_trace_and_receipts(core):
         ).fetchone()[0]
         > 0
     )
-    assert core.execute("SELECT agent_id FROM agents").fetchall() == [("real",)]
+    assert core.execute("SELECT agent_id FROM agents").fetchall() == [
+        ("fixture",),
+        ("real",),
+    ]
     assert core.execute(
         "SELECT kind FROM trace_projection_changes ORDER BY cursor DESC LIMIT 1"
     ).fetchone() == ("trace_expired",)
@@ -111,3 +114,48 @@ def test_source_cleanup_refuses_protected_trace(boundary):
         cleanup.validate_source(db, ["owned"])
     assert db.execute("SELECT count(*) FROM trace_journal").fetchone()[0] == 1
     db.close()
+
+
+def test_cleanup_rejects_protected_run_before_mutation(core):
+    with pytest.raises(ValueError, match="protected_trace"):
+        cleanup.purge_core(core, ["protected"], [], protected=["protected"])
+    with pytest.raises(ValueError, match="protected_trace"):
+        cleanup.purge_source(core, ["protected"], [], protected=["protected"])
+
+
+def test_cleanup_deletes_only_messages_of_owned_tasks_for_shared_agent(core):
+    removed, kept = uuid4().hex, uuid4().hex
+    removed_task, kept_task = str(uuid4()), str(uuid4())
+    generation = str(uuid4())
+    for seq, (trace, task) in enumerate(
+        ((removed, removed_task), (kept, kept_task)), 1
+    ):
+        put(core, event(seq=seq, trace_id=trace, task_id=task), generation, seq)
+    project_all(core)
+    core.executescript(
+        "CREATE TABLE agents(agent_id TEXT PRIMARY KEY); CREATE TABLE messages(sender_id TEXT,recipient_id TEXT,task_id TEXT);"
+    )
+    core.execute("INSERT INTO agents VALUES('codex')")
+    core.executemany(
+        "INSERT INTO messages VALUES('codex','hermes',?)",
+        [(removed_task,), (kept_task,), (None,)],
+    )
+    core.commit()
+    cleanup.purge_core(core, [removed], ["codex"], protected=[kept])
+    assert core.execute("SELECT task_id FROM messages").fetchall() == [
+        (kept_task,),
+        (None,),
+    ]
+    assert core.execute("SELECT agent_id FROM agents").fetchall() == [("codex",)]
+
+
+def test_inventory_opens_consistent_read_transaction(core):
+    core.execute("CREATE TABLE messages(task_id TEXT)")
+    core.commit()
+    assert cleanup.core_inventory(core) == {
+        "run_ids": [],
+        "history_rows": 0,
+        "messages": 0,
+        "retained_payloads": 0,
+    }
+    assert not core.in_transaction

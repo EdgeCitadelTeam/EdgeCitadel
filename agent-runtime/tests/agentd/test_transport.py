@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -159,6 +161,19 @@ async def test_generated_native_card_declares_l1_transport_binding(
         async def publish(self, subject: str, payload: bytes) -> None:
             published.append((subject, payload))
 
+    (tmp_path / "node.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "mode": "edge",
+                "agent_id": "mac-host",
+                "messaging_mode": "nats_leaf",
+                "jetstream_domain": "mac_domain",
+                "plugin_nats_url": "nats://127.0.0.1:4222",
+                "plugin_nats_token": "secret-token",
+            }
+        )
+    )
     transport = AgentdNatsTransport(tmp_path, store)
     await transport._publish_register(cast(object, Connection()), connector)
 
@@ -166,6 +181,11 @@ async def test_generated_native_card_declares_l1_transport_binding(
     envelope = json.loads(published[0][1])
     card = envelope["payload"]
     assert card["metadata"]["runtime.conformance"] == "L1"
+    assert card["metadata"]["edgecitadel.node_id"] == "mac-host"
+    assert card["metadata"]["edgecitadel.messaging_mode"] == "nats_leaf"
+    assert card["metadata"]["edgecitadel.leaf_id"] == "edgecitadel-mac-host"
+    assert card["metadata"]["edgecitadel.jetstream_domain"] == "mac_domain"
+    assert "secret-token" not in json.dumps(card)
     assert card["capabilities"]["extensions"] == [
         {
             "uri": "https://edgecitadel.local/ext/nats-binding/v1",
@@ -312,5 +332,34 @@ async def test_trace_quota_failure_keeps_valid_result_unacknowledged(
         message.data = b"{}"
         await transport._ingest_message(message, "worker")
         assert acknowledgments == ["ack", "ack", "term"]
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_trace_destination_disables_headers_without_task_failure(
+    tmp_path,
+):
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    transport = AgentdNatsTransport(tmp_path, store)
+
+    from types import SimpleNamespace
+
+    requests = []
+
+    class Connection:
+        connected_server_version = SimpleNamespace(major=2, minor=14)
+
+        async def subscribe(self, subject, *, cb):
+            pass
+
+        async def request(self, subject, payload, *, timeout):
+            requests.append(subject)
+            raise asyncio.TimeoutError
+
+    try:
+        await transport._configure_broker_trace(Connection(), "owned-node")
+        assert transport._broker_tracing is False
+        assert requests == ["_EC.TRACE.owned-node.probe"]
     finally:
         store.close()

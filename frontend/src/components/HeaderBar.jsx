@@ -12,6 +12,7 @@ export default function HeaderBar() {
   const setSystemStatus = useAppStore((s) => s.setSystemStatus)
   const showTestAgents = useAppStore((s) => s.showTestAgents)
   const setShowTestAgents = useAppStore((s) => s.setShowTestAgents)
+  const activeTab = useAppStore((s) => s.activeTab)
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const setSidebarOpen = useAppStore((s) => s.setSidebarOpen)
 
@@ -36,13 +37,13 @@ export default function HeaderBar() {
     <header className="h-12 bg-surface-50 border-b border-surface-200 px-3 md:px-4 flex items-center justify-between shrink-0">
       <div className="flex items-center gap-2 md:gap-3 min-w-0">
         {/* Hamburger menu - mobile only */}
-        <button
+        {activeTab !== 'execution' && <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
           aria-label="Open agent list"
           className="p-1 hover:bg-surface-200 rounded transition-colors md:hidden"
         >
           <Menu size={18} className="text-gray-400" />
-        </button>
+        </button>}
 
         <Radio size={18} className="text-accent shrink-0" />
         <h1 className="text-sm font-semibold text-gray-100 truncate">

@@ -2112,3 +2112,57 @@ def test_task_show_calls_agentd_with_connector_authority(tmp_path, monkeypatch, 
         )
     ]
     assert json.loads(capsys.readouterr().out)["state"] == "queued"
+
+
+def test_storage_setup_stops_service_before_running_offline_upgrade(
+    tmp_path, monkeypatch
+):
+    calls = []
+    python = tmp_path / "runtime/bin/python"
+    monkeypatch.setenv("EDGECITADEL_SUPERVISOR_PYTHON", str(python))
+    monkeypatch.setattr(
+        cli, "_stop_agentd", lambda state: calls.append(("stop", state))
+    )
+    monkeypatch.setattr(cli, "_toolkit_python", lambda state: python)
+    monkeypatch.setattr(cli, "_run", lambda command: calls.append(("run", command)))
+    args = cli.argparse.Namespace(
+        state_dir=str(tmp_path), action="storage-setup", json=False
+    )
+    assert cli.command_service(args) == 0
+    assert calls == [
+        ("stop", tmp_path),
+        (
+            "run",
+            [
+                str(python),
+                "-m",
+                "edgecitadel_agentd.storage_setup",
+                "--state-dir",
+                str(tmp_path / "agentd"),
+            ],
+        ),
+    ]
+
+
+def test_service_start_refuses_migration_barrier_before_runtime_changes(
+    tmp_path, monkeypatch
+):
+    state = tmp_path / "agentd"
+    state.mkdir()
+    (state / "restore-barrier.json").write_text("interrupted")
+    monkeypatch.setattr(
+        cli, "_toolkit_python", lambda state: pytest.fail("must remain fenced")
+    )
+    with pytest.raises(cli.UserError, match="startup is fenced"):
+        cli._start_agentd(tmp_path)
+
+
+def test_launchd_preserves_explicit_trace_sync_opt_in(tmp_path, monkeypatch):
+    python = tmp_path / "python"
+    with monkeypatch.context() as context:
+        context.setenv("EDGECITADEL_TRACE_SYNC", "1")
+        cli._render_agentd_launchd(tmp_path, python)
+    monkeypatch.delenv("EDGECITADEL_TRACE_SYNC", raising=False)
+    cli._render_agentd_launchd(tmp_path, python)
+    value = plistlib.loads(cli._agentd_launchd_path(tmp_path).read_bytes())
+    assert value["EnvironmentVariables"]["EDGECITADEL_TRACE_SYNC"] == "1"

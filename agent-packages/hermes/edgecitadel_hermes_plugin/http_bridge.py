@@ -80,6 +80,7 @@ def bound_api_adapter(base_adapter: type) -> type:
                     cast(Any, chained)._edgecitadel_trace = (
                         trace,
                         asyncio.get_running_loop(),
+                        observer,
                     )
                     kwargs[name] = chained
             return await super()._run_agent(*args, **kwargs)

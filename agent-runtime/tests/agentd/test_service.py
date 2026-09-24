@@ -134,6 +134,7 @@ def test_health_and_authenticated_connector_session(
         "schema_version": 29,
         "active_sessions": 0,
         "database_bytes": health["database_bytes"],
+        "storage_backend": {"backend": "unverified", "mount_verified": False},
         "physical_storage": health["physical_storage"],
         "telemetry_records": {
             "events": 0,
@@ -221,3 +222,100 @@ def test_connector_cannot_escalate_or_call_undeclared_capability(
             agent_id="edge-one-pi",
             capabilities=["edgecitadel_agents", "edgecitadel_delegate"],
         )
+
+
+def test_local_rpc_records_real_message_bodies_without_nats_and_deduplicates_reads(
+    service,
+):
+    import json
+    import sqlite3
+
+    socket_path, state_dir, _ = service
+    (state_dir.parent / "node.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "mode": "edge",
+                "agent_id": "mac",
+                "messaging_mode": "single-client",
+                "plugin_nats_url": "nats://127.0.0.1:1",
+                "plugin_nats_token": "not-connected",
+            }
+        )
+    )
+    admin = AgentdClient(
+        socket_path, admin_token=(state_dir / "admin.token").read_text().strip()
+    )
+    clients = []
+    for name in ("codex", "reviewer"):
+        registration = admin.call(
+            "connector.register",
+            connector_id=name,
+            host_type="codex",
+            agent_id=name,
+            capabilities=[
+                "edgecitadel_delegate",
+                "edgecitadel_task_update",
+                "edgecitadel_task_status",
+            ],
+        )
+        client = AgentdClient(
+            socket_path, connector_id=name, token=registration["token"]
+        )
+        clients.append((client, client.call("session.open")["session_id"]))
+    sender, recipient = clients[0][0], clients[1][0]
+    task = sender.call(
+        "task.create",
+        recipient_id="reviewer",
+        payload={"body": "Review these actual materials"},
+    )
+    for state in ("accepted", "running", "completed"):
+        recipient.call(
+            "task.transition",
+            task_id=task["task_id"],
+            state=state,
+            session_id=clients[1][1],
+            **(
+                {"result": {"body": "Actual review result"}}
+                if state == "completed"
+                else {}
+            ),
+        )
+    for _ in range(3):
+        assert sender.call("task.get", task_id=task["task_id"])["state"] == "completed"
+    db = sqlite3.connect(state_dir / "agentd.sqlite3")
+    evidence = [
+        json.loads(row[0])
+        for row in db.execute(
+            "SELECT event_json FROM trace_journal WHERE json_extract(event_json,'$.kind')='transport'"
+        )
+    ]
+    assert len(evidence) == 3
+    assert len({row["attributes"]["message_id"] for row in evidence}) == 2
+    assert {row["attributes"]["provenance"] for row in evidence} == {"agentd_sqlite"}
+    assert evidence[-1]["phase"] == "caller_accepted"
+    assert "Actual review result" in json.dumps(evidence[-1]["content"])
+    db.execute(
+        "ATTACH DATABASE ? AS task_state", (str(state_dir / "agentd-tasks.sqlite3"),)
+    )
+    assert (
+        db.execute("SELECT count(*) FROM task_state.transport_outbox").fetchone()[0]
+        == 0
+    )
+    # Maintenance may remove payloads but retains source receipts. Re-reading a
+    # terminal task must not resurrect its deleted communication evidence.
+    db.execute("UPDATE trace_spool SET state='core_settled', journal_event_id=NULL")
+    db.execute(
+        "DELETE FROM trace_journal WHERE json_extract(event_json,'$.kind')='transport'"
+    )
+    db.commit()
+    sender.call("task.get", task_id=task["task_id"])
+    assert (
+        db.execute(
+            "SELECT count(*) FROM trace_journal WHERE json_extract(event_json,'$.kind')='transport'"
+        ).fetchone()[0]
+        == 0
+    )
+    db.close()
+    for client, session in clients:
+        client.call("session.close", session_id=session)

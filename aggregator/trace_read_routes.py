@@ -75,6 +75,14 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
     ) -> Response:
         try:
             allowed = {
+                "infrastructure": {
+                    "cursor",
+                    "source",
+                    "family",
+                    "since",
+                    "until",
+                    "limit",
+                },
                 "list": {"cursor", "agent_id", "outcome", "task_id", "limit"},
                 "graph": {"at", "expand"},
                 "events": {"as_of", "after", "node_id", "limit"},
@@ -98,6 +106,10 @@ def make_trace_router(service: TraceReadService) -> APIRouter:
     @router.get("/api/traces")
     async def trace_list(request: Request):
         return await http(request, "list")
+
+    @router.get("/api/trace-infrastructure")
+    async def infrastructure_events(request: Request):
+        return await http(request, "infrastructure")
 
     @router.get("/api/traces/{trace_id}")
     async def trace_graph(request: Request, trace_id: str):

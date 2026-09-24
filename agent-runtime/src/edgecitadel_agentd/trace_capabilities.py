@@ -20,6 +20,9 @@ TRACE_FAMILIES = frozenset(
         "source",
         "link",
         "security",
+        "transport",
+        "broker",
+        "infrastructure",
     }
 )
 

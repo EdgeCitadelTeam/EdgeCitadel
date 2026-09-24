@@ -3,10 +3,15 @@ import BranchBrowser from './BranchBrowser'
 import { causalContext, extendLayout, NODE_HEIGHT, NODE_WIDTH, nodeTitle, readable } from './layout'
 
 const PAGE_SIZE = 100
+const lane = node => ['transport', 'broker', 'infrastructure'].includes(node.kind) ? 'Messaging and brokers' :
+  ['model', 'tool'].includes(node.kind) ? 'Model and tools' :
+    ['permission', 'dispatch'].includes(node.kind) ? 'Authorization' : 'Agent execution'
+const lanes = ['Agent execution', 'Messaging and brokers', 'Model and tools', 'Authorization']
 export default function ExecutionMap({ graph, selected, onSelect }) {
   const [memory, setMemory] = useState(() => ({ graph, positions: extendLayout(new Map(), graph) }))
   const positions = memory.graph === graph ? memory.positions : extendLayout(memory.positions, graph)
   const [textView, setTextView] = useState(false)
+  const [expandedLanes, setExpandedLanes] = useState(() => new Set(lanes.filter(name => name !== 'Messaging and brokers')))
   const [filter, setFilter] = useState('')
   const [group, setGroup] = useState('all')
   const [requestedPage, setPage] = useState(0)
@@ -19,7 +24,7 @@ export default function ExecutionMap({ graph, selected, onSelect }) {
     for (const node of graph.nodes) counts.set(node.agent_id, (counts.get(node.agent_id) ?? 0) + 1)
     return [...counts].sort(([a], [b]) => (a ?? '').localeCompare(b ?? ''))
   }, [graph.nodes])
-  const filtered = ordered.filter(node => (group === 'all' || (node.agent_id ?? '') === group.slice(6)) &&
+  const filtered = ordered.filter(node => expandedLanes.has(lane(node)) && (group === 'all' || (node.agent_id ?? '') === group.slice(6)) &&
     `${nodeTitle(node, graph.trace_id)} ${node.agent_id ?? ''} ${node.state} ${node.id}`.toLowerCase().includes(filter.toLowerCase()))
   if (memory.graph !== graph) {
     setMemory({ graph, positions: extendLayout(memory.positions, graph) })
@@ -38,7 +43,7 @@ export default function ExecutionMap({ graph, selected, onSelect }) {
     onSelect(id)
   }
   const revealSelection = () => {
-    setFilter(''); setGroup('all')
+    setFilter(''); setGroup('all'); setExpandedLanes(new Set(lanes))
     setPage(Math.max(0, Math.floor(ordered.findIndex(node => node.id === selected) / PAGE_SIZE)))
   }
   const viewKey = `${page}/${group}/${filter}/${textView}`
@@ -66,6 +71,12 @@ export default function ExecutionMap({ graph, selected, onSelect }) {
     event.currentTarget.parentElement.querySelector(`[data-map-index="${next}"]`)?.focus()
   }
   return <section className="execution-map" aria-label="Execution steps">
+    <details className="trace-lanes"><summary>Evidence lanes</summary>
+      {lanes.map(name => <label key={name}><input type="checkbox" checked={expandedLanes.has(name)} onChange={event => {
+        setExpandedLanes(old => { const next = new Set(old); if (event.target.checked) next.add(name); else next.delete(name); return next }); setPage(0)
+      }} />{name} ({graph.nodes.filter(node => lane(node) === name).length})</label>)}
+      <p className="trace-muted">Lane counts describe retained observations in this snapshot. An empty lane does not prove success or complete coverage.</p>
+    </details>
     <div className="trace-map-tools">
       <label>Find a step<input value={filter} onChange={event => { setFilter(event.target.value); setPage(0) }} placeholder="Owner, operation, state or ID" /></label>
       <label>Step group<select value={group} onChange={event => { setGroup(event.target.value); setPage(0) }}>

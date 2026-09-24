@@ -70,7 +70,7 @@ async def test_http_binding_gate_and_parallel_callback_scope():
                     "same-id",
                     "owned-tool",
                     {},
-                    "private",
+                    {"secret": "private"},
                 )
             return "executed"
 

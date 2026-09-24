@@ -2,11 +2,49 @@
 
 from __future__ import annotations
 import os
+import socket
 from pathlib import Path
+from urllib.parse import urlsplit
 import yaml
 
 
 NATS_EXT_URI = "https://edgecitadel.local/ext/nats-binding/v1"
+
+
+def _nats_address(value: object) -> str | None:
+    """Publish only host/port, even when a supplied URL contains credentials."""
+    if not isinstance(value, str):
+        return None
+    try:
+        endpoint = urlsplit(value)
+        if endpoint.scheme not in {"nats", "tls"} or not endpoint.hostname:
+            return None
+        host = endpoint.hostname
+        port = endpoint.port or 4222
+    except ValueError:
+        return None
+    if any(character.isspace() or ord(character) < 32 for character in host):
+        return None
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
+
+def topology_metadata(node: dict) -> dict[str, str]:
+    """Expose configuration identity, never credentials or inferred liveness."""
+    values = {
+        "edgecitadel.node_id": str(node["agent_id"]),
+        "edgecitadel.host_name": socket.gethostname(),
+        "edgecitadel.messaging_mode": str(node.get("messaging_mode", "single-client")),
+    }
+    for field, source in (
+        ("edgecitadel.nats_address", "plugin_nats_url"),
+        ("edgecitadel.core_address", "upstream_nats_url"),
+    ):
+        if address := _nats_address(node.get(source)):
+            values[field] = address
+    if node.get("messaging_mode") == "nats_leaf":
+        values["edgecitadel.leaf_id"] = "edgecitadel-" + str(node["agent_id"])
+        values["edgecitadel.jetstream_domain"] = str(node["jetstream_domain"])
+    return values
 
 
 def build_card(config_path: str | Path) -> dict[str, object]:
@@ -40,6 +78,11 @@ def build_card(config_path: str | Path) -> dict[str, object]:
         metadata["runtime.upstream"] = runtime["upstream"]
     if node_id := os.environ.get("EDGECITADEL_NODE_ID"):
         metadata["edgecitadel.node_id"] = node_id
+    if state_dir := os.environ.get("EDGECITADEL_STATE_DIR"):
+        from edgecitadel_agentd.node_state import read_node
+
+        if node := read_node(Path(state_dir)):
+            metadata.update(topology_metadata(node))
     if plugin_id := os.environ.get("EDGECITADEL_PLUGIN_ID"):
         metadata["edgecitadel.plugin_id"] = plugin_id
 

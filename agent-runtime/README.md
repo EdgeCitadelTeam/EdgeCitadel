@@ -1047,3 +1047,32 @@ The nginx trace path preserves the URI and disables buffering. Shutdown drains
 readers before stopping projector, collector, memory and command services.
 These opt-in interfaces do not establish full M4–M7 acceptance or hard storage
 limits; retained-volume, network-perimeter and full scenario qualification remain.
+
+## Native macOS storage setup
+
+Native macOS uses a private, fully allocated 512 MiB journaled HFS+ disk image
+with the existing 256 MiB application admission thresholds. Task state and its
+key stay outside the trace volume. Run `edgecitadel service storage-setup` after
+installing matching runtime code; this stops the service and resumes any recorded
+schema-6/shared or schema-29/paired migration without creating another backup.
+Use `EDGECITADEL_TRACE_SYNC=1 edgecitadel service start` to persist the launchd
+export opt-in. See [native storage and migration](../docs/architecture/native-macos-trace-storage.md)
+for the trust boundary, crash recovery, diagnostics and qualification commands.
+
+### Communication topology and same-host evidence
+
+Agent Cards now include non-sensitive runtime-derived `edgecitadel.node_id`,
+`edgecitadel.host_name`, and `edgecitadel.messaging_mode`. Leaf configurations
+also expose `edgecitadel.leaf_id` (the configured NATS server name) and
+`edgecitadel.jetstream_domain`. These describe current configuration, not online
+state or historical message routing; credentials and endpoint tokens are excluded.
+
+After successful same-host task RPCs commit, optional `agentd_sqlite` transport
+observations record command availability, result availability, and a caller's
+first result read. Message and observation IDs derive from the task and boundary;
+repeated reads reuse them. Observations use a separate transaction and do not
+change task completion semantics or enqueue NATS delivery. Retained source spool
+receipts prevent deleted message evidence from reappearing on a later task read.
+NATS publish/receive observations separately retain bounded, redacted message
+bodies for snapshot inspection. Existing trace/event APIs and database schemas
+remain unchanged.

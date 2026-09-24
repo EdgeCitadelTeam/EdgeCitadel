@@ -135,7 +135,10 @@
         "coverage",
         "source",
         "link",
-        "security"
+        "security",
+        "transport",
+        "broker",
+        "infrastructure"
       ]
     },
     "phase": {
@@ -212,6 +215,39 @@
       "description": "Disposable test provenance assigned by the source daemon, never by an event caller. Absent means normal retention.",
       "type": "string",
       "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "available",
+            "truncated",
+            "unavailable"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "redaction_failed",
+            "not_reported",
+            "unsupported",
+            "binary_omitted"
+          ]
+        },
+        "fields": {
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 8192
+          }
+        }
+      },
+      "required": [
+        "status",
+        "fields"
+      ]
     }
   },
   "required": [
@@ -644,6 +680,41 @@
                     "type": "null"
                   }
                 ]
+              },
+              "provider_request_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "finish_reason": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "provider": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "reasoning_unavailable_reason": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "internal_attempts_unavailable_reason": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "cached_input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "reasoning_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "first_token_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             },
             "required": [
@@ -728,6 +799,18 @@
                     "type": "null"
                   }
                 ]
+              },
+              "tool_call_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "execution_target": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "approval_state": {
+                "type": "string",
+                "maxLength": 256
               }
             },
             "required": [
@@ -816,7 +899,10 @@
                     "coverage",
                     "source",
                     "link",
-                    "security"
+                    "security",
+                    "transport",
+                    "broker",
+                    "infrastructure"
                   ]
                 }
               },
@@ -1037,6 +1123,366 @@
             "required": [
               "reason",
               "count"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "transport"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "phase": {
+            "enum": [
+              "publish_started",
+              "publish_accepted",
+              "publish_failed",
+              "received",
+              "durably_accepted",
+              "caller_accepted",
+              "ack_sent",
+              "terminated",
+              "ack_failed"
+            ]
+          },
+          "attributes": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "publication_attempt_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "subject": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "sender_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "recipient_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "message_type": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "stream": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "domain": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "consumer": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "server_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "server_name": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "connection_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "error_type": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "provenance": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "coverage_reason": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "stream_sequence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "consumer_sequence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "delivery_attempt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "poll_interval_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "dropped_observations": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "duplicate": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "broker"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "phase": {
+            "enum": [
+              "observed",
+              "advisory",
+              "permission_denied",
+              "authentication_rejected"
+            ]
+          },
+          "attributes": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "publication_attempt_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "subject": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "sender_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "recipient_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "message_type": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "stream": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "domain": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "consumer": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "server_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "server_name": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "connection_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "error_type": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "provenance": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "coverage_reason": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "stream_sequence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "consumer_sequence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "delivery_attempt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "poll_interval_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "dropped_observations": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "duplicate": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "infrastructure"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "phase": {
+            "enum": [
+              "connected",
+              "disconnected",
+              "closed",
+              "changed",
+              "unavailable"
+            ]
+          },
+          "attributes": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "publication_attempt_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "subject": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "sender_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "recipient_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "message_type": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "stream": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "domain": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "consumer": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "server_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "server_name": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "connection_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "error_type": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "provenance": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "coverage_reason": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "stream_sequence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "consumer_sequence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "delivery_attempt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "poll_interval_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "dropped_observations": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "duplicate": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance"
             ],
             "additionalProperties": false
           }

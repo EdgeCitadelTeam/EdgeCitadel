@@ -5,7 +5,7 @@ from edgecitadel_hermes_plugin.trace_hooks import HermesToolObserver
 
 
 @pytest.mark.asyncio
-async def test_overlapping_runs_isolate_call_ids_and_omit_content():
+async def test_overlapping_runs_isolate_call_ids_and_redact_content():
     class Sink:
         def __init__(self):
             self.events = []
@@ -35,7 +35,8 @@ async def test_overlapping_runs_isolate_call_ids_and_omit_content():
         assert sink.events[0][0] != sink.events[1][0]
         assert sink.events[0][1]["span_id"] == sink.events[1][1]["span_id"]
         assert sink.events[1][1]["duration_ms"] >= 0
-        assert "private-" not in str(sink.events)
+        assert "private-arguments" not in str(sink.events)
+        assert "private-result" in sink.events[1][1]["content"]["fields"]["result"]
 
 
 @pytest.mark.asyncio
@@ -112,7 +113,8 @@ async def test_model_instance_wrapping_preserves_response_and_unknown_usage(
     assert attrs["usage_unavailable_reason"] == (
         None if all(v is not None for v in expected) else "not_reported"
     )
-    assert "private-" not in str(events)
+    assert "private-response" not in str(events)
+    assert "private-prompt" in str(events[0])
 
 
 @pytest.mark.asyncio
@@ -140,3 +142,41 @@ async def test_model_error_propagates_without_retry_or_error_text_export():
     assert effects == ["called"]
     assert [e["phase"] for e in events] == ["started", "failed"]
     assert "private-provider-error" not in str(events)
+
+
+@pytest.mark.asyncio
+async def test_responses_tool_ids_link_to_invoking_turn():
+    from types import SimpleNamespace as NS
+    from edgecitadel_hermes_plugin.trace_hooks import HermesModelObserver
+
+    events = []
+
+    class Sink:
+        async def observe(self, observation, *, observation_id):
+            events.append(observation)
+
+    class Agent:
+        model = "owned-model"
+
+        def _interruptible_api_call(self, kwargs):
+            return NS(
+                id="resp-owned",
+                usage={"input_tokens": 1, "output_tokens": 2},
+                status="completed",
+                output=[NS(type="function_call", call_id="call-owned")],
+            )
+
+    sink = Sink()
+    observer = HermesToolObserver(sink, asyncio.get_running_loop())
+    agent = Agent()
+    HermesModelObserver(sink, asyncio.get_running_loop(), observer).attach(agent)
+    await asyncio.to_thread(agent._interruptible_api_call, {})
+    await asyncio.to_thread(
+        observer.started, "call-owned", "terminal", {"command": "printf ok"}
+    )
+    await asyncio.to_thread(
+        observer.completed, "call-owned", "terminal", {}, {"output": "ok"}
+    )
+    assert events[2]["parent_span_id"] == events[0]["span_id"]
+    assert events[3]["parent_span_id"] == events[0]["span_id"]
+    assert events[1]["attributes"]["finish_reason"] == "completed"

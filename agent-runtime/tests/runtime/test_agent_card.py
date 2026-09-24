@@ -102,3 +102,58 @@ def test_card_rejects_invalid_conformance(tmp_path):
     p.write_text(yaml_bad)
     with pytest.raises(ValueError, match="runtime.conformance"):
         build_card(p)
+
+
+def test_card_uses_enrolled_topology_without_exposing_endpoint_credentials(
+    tmp_path, monkeypatch
+):
+    import json
+
+    (tmp_path / "node.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "mode": "edge",
+                "agent_id": "enrolled-host",
+                "messaging_mode": "nats_leaf",
+                "jetstream_domain": "edge_domain",
+                "plugin_nats_url": "nats://127.0.0.1:4223",
+                "plugin_nats_token": "private-token",
+            }
+        )
+    )
+    monkeypatch.setenv("EDGECITADEL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("EDGECITADEL_NODE_ID", "stale-host")
+    config = tmp_path / "config.yaml"
+    config.write_text(YAML)
+    card = build_card(config)
+    assert card["metadata"]["edgecitadel.node_id"] == "enrolled-host"
+    assert card["metadata"]["edgecitadel.leaf_id"] == "edgecitadel-enrolled-host"
+    assert card["metadata"]["edgecitadel.jetstream_domain"] == "edge_domain"
+    assert "private-token" not in json.dumps(card)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("nats://127.0.0.1:4223", "127.0.0.1:4223"),
+        ("tls://user:private-secret@[::1]:4224/path?token=secret", "[::1]:4224"),
+        ("nats://core.example", "core.example:4222"),
+        ("nats://host:invalid", None),
+        ("https://host:443", None),
+    ],
+)
+def test_topology_publishes_only_network_authority(url, expected):
+    from edgecitadel_plugin_runtime.agent_card import topology_metadata
+
+    metadata = topology_metadata(
+        {
+            "agent_id": "edge",
+            "plugin_nats_url": url,
+            "upstream_nats_url": "nats://private-token@core.example:4222",
+        }
+    )
+    assert metadata.get("edgecitadel.nats_address") == expected
+    assert metadata["edgecitadel.core_address"] == "core.example:4222"
+    assert "private" not in str(metadata)
+    assert "secret" not in str(metadata)

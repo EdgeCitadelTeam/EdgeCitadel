@@ -210,6 +210,7 @@
           "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "root_task_id": "00000000-0000-4000-8000-000000000300",
           "root_agent_id": "worker-a",
+          "task_name": "Task 00000000",
           "outcome": null,
           "created_projection_cursor": 1,
           "coverage": {

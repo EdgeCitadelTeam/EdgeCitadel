@@ -3049,3 +3049,12 @@ fixtures are reclaimed after browser assertions; real agents, active tasks and
 ingestion receipts are preserved. The jim-eq maintenance helper stops writers,
 removes owned payloads and graph history, and compacts the databases. Source
 compaction retains the dedicated service UID and quota enforcement.
+
+## Detailed evidence extension (2026-09-20)
+
+Optional redacted `content`, the `transport`/`broker`/`infrastructure` families,
+Core receipt-time maps and taskless infrastructure pagination extend the existing
+v1 pipeline. Historical content-free events remain valid. The earlier
+metadata-only restrictions are superseded for these bounded content fields;
+see [detailed execution tracing](detailed-execution-tracing.md) for the limits,
+provenance and deployment contract.

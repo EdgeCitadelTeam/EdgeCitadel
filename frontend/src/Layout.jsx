@@ -19,7 +19,7 @@ const TABS = [
   { key: 'logs', label: 'Logs', icon: FileText, shortcut: '3' },
   { key: 'tasks', label: 'Tasks', icon: ListTodo, shortcut: '4' },
   { key: 'registry', label: 'Registry', icon: Server, shortcut: '5' },
-  { key: 'execution', label: 'Execution', icon: GitBranch, shortcut: '6' },
+  { key: 'execution', label: 'Agent Flow', icon: GitBranch, shortcut: '6' },
 ]
 
 export default function Layout() {
@@ -64,7 +64,7 @@ export default function Layout() {
       <HeaderBar />
       <div className="flex flex-1 min-h-0">
         {/* Mobile sidebar backdrop */}
-        {sidebarOpen && (
+        {sidebarOpen && activeTab !== 'execution' && (
           <div
             className="fixed inset-0 bg-black/50 z-30 md:hidden"
             onClick={() => setSidebarOpen(false)}
@@ -72,7 +72,7 @@ export default function Layout() {
         )}
 
         {/* Sidebar: fixed overlay on mobile, static in flex on desktop */}
-        <div
+        {activeTab !== 'execution' && <div
           className={clsx(
             'fixed top-12 bottom-0 left-0 z-40 w-64 transition-transform duration-200 ease-in-out',
             'md:static md:w-60 md:translate-x-0 md:transition-none',
@@ -80,7 +80,7 @@ export default function Layout() {
           )}
         >
           <AgentSidebar />
-        </div>
+        </div>}
 
         {/* Main content */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">

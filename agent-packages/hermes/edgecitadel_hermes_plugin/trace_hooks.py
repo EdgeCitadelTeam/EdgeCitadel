@@ -1,8 +1,10 @@
-"""Request-scoped Hermes callbacks; never forward arguments or results."""
+"""Request-scoped Hermes callbacks with bounded redacted durable content."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+import inspect
 import threading
 import time
 from collections.abc import Mapping
@@ -12,6 +14,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from edgecitadel_agentd.trace_producer import RuntimeTrace
+from edgecitadel_agentd.trace_content import bounded_content
 
 
 @dataclass
@@ -19,6 +22,7 @@ class _Call:
     span_id: str
     name: str
     started_ns: int
+    parent_span_id: str | None = None
 
 
 class HermesToolObserver:
@@ -34,12 +38,23 @@ class HermesToolObserver:
         self._calls: dict[str, _Call] = {}
         self._lock = threading.Lock()
         self.dropped_callbacks = 0
+        self.model_calls: dict[str, str] = {}
 
     def _drop(self) -> None:
         with self._lock:
             self.dropped_callbacks = min(self.dropped_callbacks + 1, 2**31 - 1)
+            if isinstance(self.trace, RuntimeTrace):
+                self.trace.dropped_observations = min(
+                    self.trace.dropped_observations + 1, 2**31 - 1
+                )
 
-    def _emit(
+    def _emit(self, *args, **kwargs) -> None:
+        try:
+            self._emit_unchecked(*args, **kwargs)
+        except Exception:  # noqa: BLE001 - telemetry cannot change executable work
+            self._drop()
+
+    def _emit_unchecked(
         self,
         call: _Call,
         phase: str,
@@ -47,6 +62,7 @@ class HermesToolObserver:
         *,
         kind: str = "tool",
         attributes: dict[str, Any] | None = None,
+        content: dict[str, object] | None = None,
     ) -> None:
         try:
             if asyncio.get_running_loop() is self.loop:
@@ -59,13 +75,15 @@ class HermesToolObserver:
             "kind": kind,
             "phase": phase,
             "span_id": call.span_id,
-            "parent_span_id": None,
+            "parent_span_id": call.parent_span_id,
             "occurred_at": datetime.now(UTC)
             .isoformat(timespec="milliseconds")
             .replace("+00:00", "Z"),
             "duration_ms": duration,
             "attributes": attributes if attributes is not None else {"name": call.name},
         }
+        if content is not None:
+            observation["content"] = bounded_content(content)
         if self.loop.is_closed():
             self._drop()
             return
@@ -98,9 +116,36 @@ class HermesToolObserver:
                 self.dropped_callbacks = min(self.dropped_callbacks + 1, 2**31 - 1)
                 return
             call = _Call(str(uuid4()), name, time.monotonic_ns())
+            call.parent_span_id = self.model_calls.get(call_id)
             self._calls[call_id] = call
-        self._emit(call, "started", None)
+        self._emit(
+            call,
+            "started",
+            None,
+            attributes={
+                "name": name,
+                "tool_call_id": call_id,
+                "approval_state": "not_reported",
+                "execution_target": "hermes_host",
+            },
+            content={"arguments": _arguments},
+        )
         call.started_ns = time.monotonic_ns()
+
+    @staticmethod
+    def _failed(result: object) -> bool:
+        if isinstance(result, str) and len(result) <= 1_048_576:
+            try:
+                result = json.loads(result)
+            except ValueError:
+                return False
+        if not isinstance(result, Mapping):
+            return False
+        return bool(
+            result.get("error")
+            or result.get("is_error")
+            or (type(result.get("exit_code")) is int and result["exit_code"] != 0)
+        )
 
     def completed(
         self, call_id: str, _name: str, _arguments: object, _result: object
@@ -111,16 +156,23 @@ class HermesToolObserver:
             return
         self._emit(
             call,
-            "finished",
+            "failed" if self._failed(_result) else "finished",
             max(0, (time.monotonic_ns() - call.started_ns) // 1_000_000),
+            attributes={"name": call.name, "tool_call_id": call_id},
+            content={"result": _result},
         )
 
 
 class HermesModelObserver:
     """Per-agent logical model requests, not SDK-internal transport attempts."""
 
-    def __init__(self, trace: RuntimeTrace, loop: asyncio.AbstractEventLoop) -> None:
-        self._emitter = HermesToolObserver(trace, loop)
+    def __init__(
+        self,
+        trace: RuntimeTrace,
+        loop: asyncio.AbstractEventLoop,
+        tool_observer: HermesToolObserver | None = None,
+    ) -> None:
+        self._emitter = tool_observer or HermesToolObserver(trace, loop)
         self._depth = threading.local()
 
     @staticmethod
@@ -150,7 +202,14 @@ class HermesModelObserver:
             ):
                 continue
 
-            def measured(*args: Any, original: Any = original, **kwargs: Any) -> Any:
+            has_first_delta = "on_first_delta" in inspect.signature(original).parameters
+
+            def measured(
+                *args: Any,
+                original: Any = original,
+                has_first_delta: bool = has_first_delta,
+                **kwargs: Any,
+            ) -> Any:
                 if getattr(self._depth, "active", False):
                     return original(*args, **kwargs)
                 self._depth.active = True
@@ -166,8 +225,27 @@ class HermesModelObserver:
                         "output_tokens": None,
                         "usage_unavailable_reason": "not_reported",
                     },
+                    content={
+                        "messages": (
+                            args[0] if args and isinstance(args[0], dict) else kwargs
+                        ).get("messages", [])
+                    },
                 )
                 started = time.monotonic_ns()
+                first_delta_ms = None
+                if has_first_delta:
+                    previous_delta = kwargs.get("on_first_delta")
+
+                    def first_delta(*values, **options):
+                        nonlocal first_delta_ms
+                        if first_delta_ms is None:
+                            first_delta_ms = max(
+                                0, (time.monotonic_ns() - started) // 1_000_000
+                            )
+                        if previous_delta is not None:
+                            return previous_delta(*values, **options)
+
+                    kwargs["on_first_delta"] = first_delta
                 phase, reason, response = "finished", None, None
                 try:
                     response = original(*args, **kwargs)
@@ -192,10 +270,121 @@ class HermesModelObserver:
                             "interrupted" if phase == "interrupted" else "not_reported"
                         ),
                     }
+                    if first_delta_ms is not None:
+                        attrs["first_token_ms"] = first_delta_ms
                     if reason is not None:
                         attrs["reason"] = reason
+                    response_content = {}
+                    attrs.update(
+                        reasoning_unavailable_reason="not_reported",
+                        internal_attempts_unavailable_reason="unsupported",
+                    )
+                    # Link only explicit provider tool-call IDs, never temporal adjacency.
+                    try:
+                        usage = getattr(response, "usage", None)
+                        for source, target, field in (
+                            (
+                                "input_tokens_details",
+                                "cached_input_tokens",
+                                "cached_tokens",
+                            ),
+                            (
+                                "prompt_tokens_details",
+                                "cached_input_tokens",
+                                "cached_tokens",
+                            ),
+                            (
+                                "output_tokens_details",
+                                "reasoning_tokens",
+                                "reasoning_tokens",
+                            ),
+                            (
+                                "completion_tokens_details",
+                                "reasoning_tokens",
+                                "reasoning_tokens",
+                            ),
+                        ):
+                            detail = (
+                                usage.get(source)
+                                if isinstance(usage, Mapping)
+                                else getattr(usage, source, None)
+                            )
+                            value = (
+                                detail.get(field)
+                                if isinstance(detail, Mapping)
+                                else getattr(detail, field, None)
+                            )
+                            if (
+                                type(value) is int
+                                and 0 <= value <= 9_007_199_254_740_991
+                            ):
+                                attrs[target] = value
+                        request_id = getattr(response, "id", None)
+                        if isinstance(request_id, str) and len(request_id) <= 256:
+                            attrs["provider_request_id"] = request_id
+                        # Responses API exposes output items instead of chat choices.
+                        for item in getattr(response, "output", None) or []:
+                            item_type = getattr(item, "type", None)
+                            if item_type == "function_call":
+                                tool_id = getattr(item, "call_id", None)
+                                if isinstance(tool_id, str) and len(tool_id) <= 128:
+                                    with self._emitter._lock:
+                                        if len(self._emitter.model_calls) < 4096:
+                                            self._emitter.model_calls[tool_id] = (
+                                                call.span_id
+                                            )
+                            elif item_type == "message":
+                                texts = [
+                                    part.text
+                                    for part in getattr(item, "content", [])
+                                    if getattr(part, "type", None) == "output_text"
+                                    and isinstance(getattr(part, "text", None), str)
+                                ]
+                                if texts:
+                                    response_content["output"] = "\n".join(texts)
+                            elif item_type == "reasoning":
+                                summaries = [
+                                    part.text
+                                    for part in getattr(item, "summary", [])
+                                    if isinstance(getattr(part, "text", None), str)
+                                ]
+                                if summaries:
+                                    response_content["reasoning_summary"] = "\n".join(
+                                        summaries
+                                    )
+                                    attrs.pop("reasoning_unavailable_reason", None)
+                        status = getattr(response, "status", None)
+                        if isinstance(status, str):
+                            attrs["finish_reason"] = status[:256]
+                        for choice in getattr(response, "choices", None) or []:
+                            finish = getattr(choice, "finish_reason", None)
+                            if isinstance(finish, str) and len(finish) <= 256:
+                                attrs["finish_reason"] = finish
+                            message = getattr(choice, "message", None)
+                            output = getattr(message, "content", None)
+                            if isinstance(output, str):
+                                response_content["output"] = output
+                            summary = getattr(message, "reasoning_summary", None)
+                            if isinstance(summary, str):
+                                response_content["reasoning_summary"] = summary
+                                attrs.pop("reasoning_unavailable_reason", None)
+                            for tool in getattr(message, "tool_calls", None) or []:
+                                tool_id = getattr(tool, "id", None)
+                                if isinstance(tool_id, str) and len(tool_id) <= 128:
+                                    with self._emitter._lock:
+                                        if len(self._emitter.model_calls) < 4096:
+                                            self._emitter.model_calls[tool_id] = (
+                                                call.span_id
+                                            )
+                    except Exception:  # noqa: BLE001 - SDK metadata is optional
+                        self._emitter._drop()
                     self._emitter._emit(
-                        call, phase, duration, kind="model", attributes=attrs
+                        call,
+                        phase,
+                        duration,
+                        kind="model",
+                        attributes=attrs,
+                        content=response_content,
                     )
                     self._depth.active = False
 

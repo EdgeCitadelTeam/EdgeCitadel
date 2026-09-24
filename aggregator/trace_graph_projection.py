@@ -50,10 +50,23 @@ def entity_claims(event: dict) -> list[dict]:
     decisions have their own nodes, distinct from dispatch outcomes.
     """
     kind = event["kind"]
-    if kind not in {"run", "model", "tool", "dispatch", "permission"}:
+    if event["trace_id"] is None:
+        return []
+    if kind not in {
+        "run",
+        "model",
+        "tool",
+        "dispatch",
+        "permission",
+        "transport",
+        "broker",
+        "infrastructure",
+    }:
         return []
     attempt = event["execution_attempt_id"]
-    if kind == "run":
+    if kind in {"transport", "broker", "infrastructure"}:
+        identity = local_id(event, kind, event["event_id"])
+    elif kind == "run":
         identity = (
             local_id(event, "attempt", attempt)
             if attempt
@@ -76,6 +89,9 @@ def entity_claims(event: dict) -> list[dict]:
     # Dispatch 'allowed' is an authorization result, not proof of task execution.
     state = {"started": "running", "requested": "waiting"}.get(phase, phase)
     operation = event["attributes"].get("name")
+    if kind in {"transport", "broker", "infrastructure"}:
+        operation = event["attributes"].get("subject", kind)
+        state = "observed"
     if kind == "permission":
         operation = event["attributes"]["policy"]
     return [

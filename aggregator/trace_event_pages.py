@@ -163,6 +163,7 @@ def read_events(
                     "projection_generation": state.generation,
                     "as_of": as_of,
                     "events": [],
+                    "receipt_times": {},
                     "next_cursor": None,
                 }
 
@@ -188,7 +189,7 @@ def read_events(
                         response["next_cursor"] = continuation(last)
                         break
                     raw = connection.execute(
-                        "SELECT node_id,source_epoch,event_id,event_sha256,source_seq "
+                        "SELECT node_id,source_epoch,event_id,event_sha256,source_seq,received_at_ms "
                         "FROM trace_raw_events WHERE ingest_seq=?",
                         (seq,),
                     ).fetchone()
@@ -217,13 +218,16 @@ def read_events(
                         if node_id not in identities:
                             last = seq
                             continue
-                    additional = len(canonical_bytes(event)) + bool(response["events"])
+                    additional = (
+                        len(canonical_bytes(event)) + bool(response["events"]) + 256
+                    )
                     if size + additional > MAX_RESPONSE_BYTES:
                         if not response["events"]:
                             raise TraceReadError("oversize_response")
                         response["next_cursor"] = continuation(last)
                         break
                     response["events"].append(event)
+                    response["receipt_times"][f"{node}/{epoch}/{identity}"] = raw[5]
                     size += additional
                     last = seq
                 validate_read_response(response)

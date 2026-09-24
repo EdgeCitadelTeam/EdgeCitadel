@@ -107,6 +107,27 @@
                 "historical",
                 "unsupported"
               ]
+            },
+            "transport": {
+              "enum": [
+                "live",
+                "historical",
+                "unsupported"
+              ]
+            },
+            "broker": {
+              "enum": [
+                "live",
+                "historical",
+                "unsupported"
+              ]
+            },
+            "infrastructure": {
+              "enum": [
+                "live",
+                "historical",
+                "unsupported"
+              ]
             }
           },
           "additionalProperties": false

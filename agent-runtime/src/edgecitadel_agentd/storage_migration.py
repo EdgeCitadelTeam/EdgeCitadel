@@ -1,4 +1,4 @@
-"""Offline, identity-preserving move of a closed schema-29 trace database."""
+"""Offline, identity-preserving schema-6 upgrade or schema-29 layout move."""
 
 from __future__ import annotations
 
@@ -14,10 +14,9 @@ from pathlib import Path
 
 from .storage_sqlite import configure_scratch
 from .restore import RESTORE_BARRIER, _barrier
-from .storage_layout import StorageLayout
+from .storage_layout import StorageLayout, verify_storage
 from .storage_pair import verify_pair, verify_references
 from .store import StoreError
-from .trace_quota import verify_trace_quota
 from .writer_lock import exclusive_writer
 
 _MIGRATION_STATE = "quota_layout_migration"
@@ -97,7 +96,8 @@ def migrate_storage(state_dir: Path) -> dict[str, str]:
     """Move only trace main; retain exact task/key bytes and all source identities.
 
     Run as the dedicated service UID with agentd stopped and the target trace
-    filesystem already provisioned. Only a clean schema-29 DELETE pair is accepted.
+    filesystem already provisioned. Schema 6 uses the resumable shared-state
+    upgrade; schema 29 requires a clean DELETE pair.
     The durable barrier fences old and new daemons before any copy. A retry with
     the same unchanged inputs replaces a partial copy or finishes an interrupted
     handoff. Malformed barriers/changed inputs require operator investigation.
@@ -109,12 +109,40 @@ def migrate_storage(state_dir: Path) -> dict[str, str]:
     marker = directory / RESTORE_BARRIER
     with exclusive_writer(directory):
         # The ordinary layout verifier intentionally refuses the old source path.
-        verify_trace_quota(layout.trace_directory, directory)
+        verify_storage(layout.trace_directory, directory)
         with exclusive_writer(layout.trace_directory):
+            from .storage_upgrade import UPGRADE_STATE, upgrade_shared
+
+            shared = False
+            if marker.exists() and not marker.is_symlink():
+                try:
+                    shared = (
+                        json.loads(marker.read_text()).get("state") == UPGRADE_STATE
+                    )
+                except (ValueError, AttributeError):
+                    pass  # The strict barrier reader below reports invalid state.
+            elif old.exists():
+                try:
+                    with closing(
+                        sqlite3.connect(old.as_uri() + "?mode=ro", uri=True)
+                    ) as probe:
+                        shared = probe.execute("PRAGMA user_version").fetchone()[0] == 6
+                except sqlite3.Error as error:
+                    raise StoreError(
+                        "migration source requires offline SQLite recovery"
+                    ) from error
+            if shared:
+                return upgrade_shared(layout)
             expected = (
                 _read_marker(marker) if marker.exists() or marker.is_symlink() else None
             )
-            allowed = {"writer.lock"}
+            allowed = {
+                "writer.lock",
+                ".fseventsd",
+                ".Spotlight-V100",
+                ".Trashes",
+                ".metadata_never_index",
+            }
             if expected is not None:
                 allowed.add(layout.trace_path.name)
             if any(

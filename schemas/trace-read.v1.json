@@ -36,7 +36,10 @@
               "coverage",
               "source",
               "link",
-              "security"
+              "security",
+              "transport",
+              "broker",
+              "infrastructure"
             ]
           }
         },
@@ -99,7 +102,10 @@
             "tool",
             "dispatch",
             "permission",
-            "unresolved"
+            "unresolved",
+            "transport",
+            "broker",
+            "infrastructure"
           ]
         },
         "task_id": {
@@ -142,7 +148,8 @@
             "interrupted",
             "finished",
             "allowed",
-            "denied"
+            "denied",
+            "observed"
           ]
         },
         "original_state": {
@@ -263,6 +270,11 @@
           "type": "string",
           "pattern": "^[0-9a-f]{32}$(?![\\s\\S])"
         },
+        "task_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65
+        },
         "root_task_id": {
           "anyOf": [
             {
@@ -313,6 +325,7 @@
       },
       "required": [
         "trace_id",
+        "task_name",
         "root_task_id",
         "root_agent_id",
         "outcome",
@@ -669,6 +682,14 @@
               "type": "null"
             }
           ]
+        },
+        "receipt_times": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
         }
       },
       "required": [
@@ -964,6 +985,59 @@
         "retained_from",
         "items"
       ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "infrastructure_events"
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/event"
+          }
+        },
+        "receipt_times": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "expired_scanned": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "upper_position": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "events",
+        "receipt_times",
+        "expired_scanned",
+        "next_cursor",
+        "upper_position"
+      ],
+      "additionalProperties": false
     }
   ]
 }

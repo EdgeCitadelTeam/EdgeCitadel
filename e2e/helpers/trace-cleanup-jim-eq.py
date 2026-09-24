@@ -17,9 +17,10 @@ from trace_cleanup import purge_source, source_plan, validate_source
 
 
 def run(command):
-    return subprocess.run(
-        command, check=True, capture_output=True, text=True, timeout=180
-    )
+    result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    if result.returncode:
+        raise RuntimeError(f"maintenance_command_failed: {result.stderr}")
+    return result
 
 
 def source_db(root):
@@ -81,6 +82,8 @@ def main():
     parser.add_argument("--source", type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--trace-id", action="append", default=[])
+    parser.add_argument("--protect-trace-id", action="append", default=[])
+    parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
     if any(not re.fullmatch(r"[0-9a-f]{32}", trace) for trace in args.trace_id):
         parser.error("trace-id must be an explicitly owned canonical trace ID")
@@ -89,19 +92,29 @@ def main():
     if args.source:
         manifest = json.loads(args.manifest.read_text())
         db = source_db(args.source)
-        removed = purge_source(db, manifest["traces"], manifest["agents"])
+        before = db.execute("SELECT count(*) FROM trace_journal").fetchone()[0]
+        removed = purge_source(
+            db,
+            manifest["traces"],
+            manifest["agents"],
+            protected=manifest.get("protected", []),
+        )
         db.close()
         compact_source(args.source)
-        print(json.dumps({"source_events": removed}))
+        print(
+            json.dumps(
+                {"source_events": removed, "before": before, "after": before - removed}
+            )
+        )
         return
     if os.geteuid() != 0:
         raise RuntimeError("operator maintenance requires root")
     with open("/run/edgecitadel-e2e-cleanup.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        maintain(args.trace_id)
+        maintain(args.trace_id, args.protect_trace_id, plan_only=args.plan_only)
 
 
-def maintain(extra_traces):
+def maintain(extra_traces, protected=(), *, plan_only=False):
     roots = [
         Path(f"/var/lib/edgecitadel-{role}/state/agentd") for role in ("core", "leaf")
     ]
@@ -114,6 +127,8 @@ def maintain(extra_traces):
         tempfile.mkdtemp(prefix="edgecitadel-e2e-cleanup-", dir="/var/tmp")
     )
     directory.chmod(0o755)
+    backups = directory / "backups"
+    backups.mkdir(mode=0o700)
     try:
         for name in ("trace_cleanup.py", "trace-cleanup-jim-eq.py"):
             shutil.copyfile(Path(__file__).with_name(name), directory / name)
@@ -147,15 +162,49 @@ def maintain(extra_traces):
             key: sorted({value for plan in plans for value in plan[key]})
             for key in ("agents", "traces")
         }
-        manifest["traces"] = sorted(set(manifest["traces"]) | set(extra_traces))
+        if set(extra_traces) & set(protected):
+            raise ValueError("explicit_deletion_overlaps_protected_trace")
+        manifest["protected"] = sorted(set(protected))
+        manifest["traces"] = sorted(
+            (set(manifest["traces"]) | set(extra_traces)) - set(protected)
+        )
+        manifest["tasks"] = []
         for root in roots:
             db = source_db(root)
             validate_source(db, manifest["traces"])
+            manifest["tasks"].extend(
+                row[0]
+                for row in db.execute(
+                    "SELECT task_id FROM task_state.tasks WHERE trace_id IN (SELECT id FROM owned_traces)"
+                )
+            )
             db.close()
         (directory / "scope.json").write_text(json.dumps(manifest))
         (directory / "scope.json").chmod(0o644)
+        print(
+            json.dumps({"maintenance_directory": str(directory), "plan": manifest}),
+            flush=True,
+        )
+        if plan_only:
+            return
         run(["docker", "stop", "edgecitadel-aggregator-1"])
         core_stopped = True
+        # Writers are stopped. Preserve every attached payload/projection database,
+        # task terminal state and source receipts in a private, retryable backup.
+        for label, root in [
+            ("core", core.parent),
+            *[(f"source-{i}", root) for i, root in enumerate(roots)],
+        ]:
+            destination = backups / label
+            shutil.copytree(
+                root,
+                destination,
+                symlinks=True,
+                ignore=shutil.ignore_patterns("*.sock", "writer.lock"),
+            )
+        (directory / "phase.json").write_text(
+            json.dumps({"phase": "backed_up", "scope": manifest})
+        )
         result = run(
             [
                 "docker",
@@ -176,7 +225,13 @@ def maintain(extra_traces):
                 "/maintenance/scope.json",
             ]
         )
-        report = {"core": json.loads(result.stdout), "sources": []}
+        report = {
+            "core": [json.loads(line) for line in result.stdout.splitlines()],
+            "sources": [],
+        }
+        (directory / "phase.json").write_text(
+            json.dumps({"phase": "core_purged", "report": report})
+        )
         for root in roots:
             user = pwd.getpwuid(root.stat().st_uid).pw_name
             result = run(
@@ -202,6 +257,13 @@ def maintain(extra_traces):
             after_bytes=after,
             reclaimed_bytes=before - after,
         )
+        for path in paths:
+            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as check:
+                if check.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                    raise RuntimeError("cleanup_integrity_failed")
+        (directory / "phase.json").write_text(
+            json.dumps({"phase": "purged_pending_sync_verification", "report": report})
+        )
         print(json.dumps(report))
     finally:
         try:
@@ -212,7 +274,10 @@ def maintain(extra_traces):
                 for uid, name in reversed(stopped):
                     systemctl(uid, "start", name)
             finally:
-                shutil.rmtree(directory)
+                print(
+                    json.dumps({"retained_maintenance_directory": str(directory)}),
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":

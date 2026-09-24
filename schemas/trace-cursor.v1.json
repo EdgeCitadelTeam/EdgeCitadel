@@ -26,7 +26,8 @@
         "events",
         "changes",
         "expansion",
-        "history"
+        "history",
+        "infrastructure"
       ]
     },
     "trace_id": {
@@ -80,7 +81,10 @@
       "if": {
         "properties": {
           "kind": {
-            "const": "list"
+            "enum": [
+              "list",
+              "infrastructure"
+            ]
           }
         }
       },

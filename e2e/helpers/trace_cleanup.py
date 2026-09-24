@@ -1,7 +1,7 @@
 """Offline maintenance for explicitly owned, settled jim-eq E2E fixtures.
 
 Keep source/export identities, receipts and executable task state. Remove owned
-trace payloads, derived graph history, messages and revoked agent registrations.
+trace payloads, derived graph history and trace-owned messages; preserve registrations.
 The runner stops writers and validates all sources before calling these helpers.
 """
 
@@ -86,7 +86,14 @@ def validate_source(db, traces):
         raise ValueError("fixture_cleanup_requires_closed_settled_traces")
 
 
-def purge_source(db, traces, agents):
+def checked_scope(traces, protected):
+    if set(traces) & set(protected):
+        raise ValueError("fixture_cleanup_protected_trace")
+    return sorted(set(traces))
+
+
+def purge_source(db, traces, agents, *, protected=()):
+    traces = checked_scope(traces, protected)
     validate_source(db, traces)
     scope_table(db, "owned_agents", agents)
     deleted = 0
@@ -120,19 +127,13 @@ def purge_source(db, traces, agents):
     for table in ("events", "spans"):
         with db:
             db.execute(
-                f"DELETE FROM {table} WHERE trace_id IN (SELECT id FROM owned_traces) OR agent_id IN (SELECT id FROM owned_agents)"
+                f"DELETE FROM {table} WHERE trace_id IN (SELECT id FROM owned_traces)"
             )
-    with db:
-        db.execute(
-            "DELETE FROM presence_history WHERE agent_id IN (SELECT id FROM owned_agents)"
-        )
-        db.execute(
-            "UPDATE trace_import_grants SET enabled=0 WHERE import_source_id GLOB 'archive-e2e-*'"
-        )
     return deleted
 
 
-def purge_core(db, traces, agents):
+def purge_core(db, traces, agents, *, protected=(), task_ids=()):
+    traces = checked_scope(traces, protected)
     from aggregator import trace_payloads
     from aggregator import trace_projection_history as history
     from aggregator.trace_projection_retention import TRACE_TABLES, _finish
@@ -159,9 +160,12 @@ def purge_core(db, traces, agents):
             raise ValueError("fixture_cleanup_during_rebuild")
     db.execute("CREATE TEMP TABLE IF NOT EXISTS owned_tasks(task_id TEXT PRIMARY KEY)")
     db.execute("DELETE FROM owned_tasks")
+    db.executemany(
+        "INSERT OR IGNORE INTO owned_tasks VALUES(?)", [(task,) for task in task_ids]
+    )
     with db:
         tables.execute(
-            "INSERT INTO owned_tasks SELECT DISTINCT task_id FROM {trace_projected_tasks} WHERE trace_id IN (SELECT id FROM owned_traces)"
+            "INSERT OR IGNORE INTO owned_tasks SELECT DISTINCT task_id FROM {trace_projected_tasks} WHERE trace_id IN (SELECT id FROM owned_traces)"
         )
     payloads = trace_payloads.is_prepared(db)
     db.execute(
@@ -214,12 +218,41 @@ def purge_core(db, traces, agents):
             (now,),
         )
         messages = db.execute(
-            "DELETE FROM messages WHERE task_id IN (SELECT task_id FROM owned_tasks) OR sender_id IN (SELECT id FROM owned_agents) OR recipient_id IN (SELECT id FROM owned_agents)"
+            "DELETE FROM messages WHERE task_id IN (SELECT task_id FROM owned_tasks)"
         ).rowcount
-        cards = db.execute(
-            "DELETE FROM agents WHERE agent_id IN (SELECT id FROM owned_agents)"
-        ).rowcount
-    return {"payloads": count, "messages": messages, "agents": cards}
+    return {"payloads": count, "messages": messages, "agents": 0}
+
+
+def core_inventory(db):
+    from aggregator import trace_payloads
+    from aggregator.trace_projection_tables import select_tables
+
+    if trace_payloads.is_prepared(db):
+        trace_payloads.open_layout(db)
+    with db:
+        db.execute("BEGIN")
+        tables = select_tables(db)
+        return {
+            "run_ids": sorted(
+                row[0]
+                for row in tables.execute(
+                    "SELECT trace_id FROM {trace_projection_runs}"
+                )
+            ),
+            "history_rows": tables.execute(
+                "SELECT count(*) FROM {trace_projection_history_rows}"
+            ).fetchone()[0],
+            "messages": db.execute("SELECT count(*) FROM messages").fetchone()[0],
+            "retained_payloads": db.execute(
+                "SELECT count(*) FROM "
+                + (
+                    "trace_payloads"
+                    if trace_payloads.is_prepared(db)
+                    else "trace_raw_events"
+                )
+                + " WHERE event_json<>''"
+            ).fetchone()[0],
+        }
 
 
 if __name__ == "__main__":
@@ -229,7 +262,20 @@ if __name__ == "__main__":
     # Only invoked inside the stopped Core's disposable maintenance container.
     manifest = json.loads(Path(sys.argv[1]).read_text())
     connection = sqlite3.connect("/data/openclaw.db", timeout=30)
-    print(json.dumps(purge_core(connection, manifest["traces"], manifest["agents"])))
+    before = core_inventory(connection)
+    print(json.dumps({"before": before}), flush=True)
+    print(
+        json.dumps(
+            purge_core(
+                connection,
+                manifest["traces"],
+                manifest["agents"],
+                protected=manifest.get("protected", []),
+                task_ids=manifest.get("tasks", []),
+            )
+        )
+    )
+    print(json.dumps({"after": core_inventory(connection)}), flush=True)
     connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     connection.execute("VACUUM")
     connection.close()

@@ -23,7 +23,7 @@ from . import trace_projection_history as history
 from . import trace_projection_store as projection
 from .trace_event_pages import TraceReadError
 from .trace_projection_tables import select_tables
-from .trace_run_summary import OUTCOMES, root_summary
+from .trace_run_summary import OUTCOMES, root_summary, task_name
 
 SCAN_LIMIT = 256
 
@@ -187,6 +187,9 @@ def read_list(
                     item = {
                         "trace_id": trace_id,
                         **summary,
+                        "task_name": task_name(
+                            tables, trace_id, summary["root_task_id"]
+                        ),
                         "created_projection_cursor": created,
                         "coverage": coverage.run_coverage(
                             tables, trace_id, unresolved=False

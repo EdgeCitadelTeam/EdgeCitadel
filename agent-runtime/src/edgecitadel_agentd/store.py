@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -172,6 +172,7 @@ class AgentdStore:
         task_path: Path | None = None,
         payload_key_path: Path | None = None,
     ) -> None:
+        self.storage_status: Callable[[], dict[str, object]] | None = None
         self.path = path
         self.task_path = task_path or task_database_path(path)
         self.payload_key_path = payload_key_path or path.parent / "payload.key"
@@ -2500,6 +2501,9 @@ class AgentdStore:
             ),
             "database": integrity,
             "schema_version": schema,
+            "storage_backend": self.storage_status()
+            if self.storage_status
+            else {"backend": "unverified", "mount_verified": False},
             "active_sessions": active_sessions,
             "database_bytes": database_bytes,
             "physical_storage": storage,

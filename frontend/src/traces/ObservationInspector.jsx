@@ -18,7 +18,7 @@ export const traceErrorText = error => ({
 }[error?.code] || 'The evidence could not be loaded. Try again.')
 
 export default function ObservationInspector({ api, graph, node, route, onDenied, onSelect }) {
-  const [page, setPage] = useState({ events: [], next: null, loading: true, error: null })
+  const [page, setPage] = useState({ events: [], receiptTimes: {}, next: null, loading: true, error: null })
   const [loadCursor, setLoadCursor] = useState(null)
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
@@ -29,7 +29,7 @@ export default function ObservationInspector({ api, graph, node, route, onDenied
         const response = await api.events(graph.trace_id, { as_of: graph.at, node_id: node.id, after: loadCursor, limit: 100 }, controller.signal)
         if (controller.signal.aborted) return
         if (response.as_of !== graph.at || response.projection_generation !== graph.projection_generation) throw { code: 'invalid_response' }
-        setPage(old => ({ events: loadCursor ? [...old.events, ...response.events] : response.events, next: response.next_cursor, loading: false, error: null }))
+        setPage(old => ({ events: loadCursor ? [...old.events, ...response.events] : response.events, receiptTimes: { ...(loadCursor ? old.receiptTimes : {}), ...response.receipt_times }, next: response.next_cursor, loading: false, error: null }))
       } catch (error) {
         if (controller.signal.aborted) return
         if (error.code === 'not_authorized') onDenied()
@@ -66,7 +66,7 @@ export default function ObservationInspector({ api, graph, node, route, onDenied
       })}
     </ul></section>}
     <section><h3>Observations at this snapshot</h3>
-      <p className="trace-muted">Source times may differ across hosts. Detailed content stays on the source Edge.</p>
+      <p className="trace-muted">Source times may differ across hosts. Retained, redacted content is read from Core at this snapshot.</p>
       {page.loading && <p role="status">Loading observations…</p>}
       {page.error && <div role="alert"><p>{traceErrorText(page.error)}</p><button onClick={() => setAttempt(attempt + 1)}>Retry observations</button></div>}
       {!page.loading && page.events.length === 0 && !page.error && <p>{page.next ? 'No matching observations on this page.' : 'No retained observations for this step.'}</p>}
@@ -80,7 +80,7 @@ export default function ObservationInspector({ api, graph, node, route, onDenied
       {selectedEvent && <section className="trace-event-detail" aria-label="Observation details">
         <h3>{readable(selectedEvent.kind)} · {readable(selectedEvent.phase)}</h3>
         <dl><dt>Occurred at (source clock)</dt><dd>{selectedEvent.occurred_at}</dd>
-          <dt>Collection time</dt><dd>Not available</dd>
+          <dt>Collection time</dt><dd>{page.receiptTimes[eventKey(selectedEvent)] ? new Date(page.receiptTimes[eventKey(selectedEvent)]).toISOString() : 'Not available'}</dd>
           <dt>Duration</dt><dd>{selectedEvent.duration_ms === null ? 'Not reported' : `${selectedEvent.duration_ms} ms`}</dd>
           <dt>Execution attempt</dt><dd>{selectedEvent.execution_attempt_id ?? 'Not reported'}</dd>
           <dt>Source / epoch</dt><dd>{selectedEvent.node_id} / {selectedEvent.source_epoch}</dd>
@@ -91,6 +91,10 @@ export default function ObservationInspector({ api, graph, node, route, onDenied
           <dt>Usage</dt><dd>{selectedEvent.attributes.input_tokens !== undefined || selectedEvent.attributes.output_tokens !== undefined
             ? `Input: ${selectedEvent.attributes.input_tokens ?? 'unknown'}; output: ${selectedEvent.attributes.output_tokens ?? 'unknown'}` : 'Not reported'}</dd>
         </dl>
+        <section aria-label="Retained content"><h4>Content · {selectedEvent.content?.status ?? 'Not instrumented'}</h4>
+          {selectedEvent.content?.reason && <p>{readable(selectedEvent.content.reason)}</p>}
+          {Object.entries(selectedEvent.content?.fields ?? {}).map(([key, value]) => <details key={key}><summary>{readable(key)}</summary><pre>{value}</pre></details>)}
+        </section>
         <details><summary>Structured evidence</summary><pre>{JSON.stringify(selectedEvent, null, 2)}</pre></details>
       </section>}
     </section>

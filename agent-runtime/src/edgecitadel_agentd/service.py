@@ -142,6 +142,9 @@ class AgentdServer(socketserver.ThreadingUnixStreamServer):
         self.supervisor = supervisor
         self.admin_token = admin_token
         self.telemetry = telemetry
+        from .trace_local_communication import LocalCommunicationTrace
+
+        self.local_communication = LocalCommunicationTrace(store)
         super().__init__(str(socket_path), AgentdRequestHandler)
 
 
@@ -165,6 +168,7 @@ class AgentdRequestHandler(socketserver.StreamRequestHandler):
                 supervisor=self.server.supervisor,
                 admin_token=self.server.admin_token,
             )
+            self.server.local_communication.observe(request, response)
         except TraceContractError as error:
             self._write_error(error.code, "operation_failed")
             return
@@ -674,6 +678,7 @@ def serve(
         require_startable(state_dir)
         if open_store is None:
             layout = StorageLayout(state_dir.resolve())
+            layout.mount()
             layout.verify()
             ownership.enter_context(exclusive_writer(layout.trace_directory))
             open_store = layout.open

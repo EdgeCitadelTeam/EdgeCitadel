@@ -25,7 +25,7 @@ def source(tmp_path, monkeypatch):
     layout.trace_directory.mkdir(mode=0o700)
     for path in (state / "agentd.sqlite3", layout.task_path, layout.key_path):
         path.chmod(0o600)
-    monkeypatch.setattr(migration, "verify_trace_quota", lambda *args: None)
+    monkeypatch.setattr(migration, "verify_storage", lambda *args: None)
     return layout
 
 
@@ -49,7 +49,7 @@ def test_quota_refusal_precedes_any_migration_write(source, monkeypatch):
     def refuse(*args):
         raise RuntimeError("quota absent")
 
-    monkeypatch.setattr(migration, "verify_trace_quota", refuse)
+    monkeypatch.setattr(migration, "verify_storage", refuse)
     with pytest.raises(RuntimeError, match="quota absent"):
         migration.migrate_storage(source.state_directory)
     assert inventory(source) == before

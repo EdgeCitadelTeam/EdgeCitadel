@@ -2180,9 +2180,26 @@ def _render_agentd_systemd(state_dir: Path, python: Path) -> None:
 
 def _render_agentd_launchd(state_dir: Path, python: Path) -> None:
     service_dir = _agentd_state_dir(state_dir)
+    previous = _agentd_launchd_path(state_dir)
+    environment = {}
+    if previous.exists():
+        environment = plistlib.loads(previous.read_bytes()).get(
+            "EnvironmentVariables", {}
+        )
+        if not isinstance(environment, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in environment.items()
+        ):
+            raise UserError("Agent service launchd environment is invalid")
+    if "EDGECITADEL_TRACE_SYNC" in os.environ:
+        value = os.environ["EDGECITADEL_TRACE_SYNC"]
+        if value not in {"0", "1"}:
+            raise UserError("EDGECITADEL_TRACE_SYNC must be 0 or 1")
+        environment["EDGECITADEL_TRACE_SYNC"] = value
     payload = plistlib.dumps(
         {
             "Label": _agentd_launchd_label(state_dir),
+            **({"EnvironmentVariables": environment} if environment else {}),
             "ProgramArguments": [
                 str(python),
                 "-m",
@@ -2285,6 +2302,11 @@ def _agentd_process_detail(state_dir: Path) -> tuple[bool, str]:
 
 
 def _start_agentd(state_dir: Path) -> dict[str, Any]:
+    barrier = _agentd_state_dir(state_dir) / "restore-barrier.json"
+    if barrier.exists() or barrier.is_symlink():
+        raise UserError(
+            "Agent storage migration or restore is incomplete; startup is fenced"
+        )
     uses_systemd = _agentd_uses_systemd()
     if uses_systemd:
         _ensure_agentd_systemd_linger()
@@ -2502,6 +2524,25 @@ def _stop_agentd(state_dir: Path) -> None:
 
 def command_service(args: argparse.Namespace) -> int:
     state_dir = _state_dir(args.state_dir)
+    if args.action == "storage-setup":
+        _stop_agentd(state_dir)
+        python = _toolkit_python(state_dir)
+        if not os.environ.get("EDGECITADEL_SUPERVISOR_PYTHON"):
+            venv = state_dir / "supervisor"
+            _writable_runtime_copies(venv)
+            for name in ("runtime-source", "schemas"):
+                shutil.rmtree(venv / name)
+            _copy_runtime_sources(venv)
+        _run(
+            [
+                str(python),
+                "-m",
+                "edgecitadel_agentd.storage_setup",
+                "--state-dir",
+                str(_agentd_state_dir(state_dir)),
+            ]
+        )
+        return 0
     if args.action == "start":
         observation = _start_agentd(state_dir)
         _sync_managed_agent_state(state_dir, _load_plugins(state_dir))
@@ -4298,7 +4339,9 @@ def _build_parser() -> argparse.ArgumentParser:
     service = subparsers.add_parser(
         "service", help="Operate the host-local EdgeCitadel service"
     )
-    service.add_argument("action", choices=("start", "stop", "restart", "status"))
+    service.add_argument(
+        "action", choices=("start", "stop", "restart", "status", "storage-setup")
+    )
     service.add_argument("--json", action="store_true")
     service.add_argument("--state-dir", help=argparse.SUPPRESS)
     service.set_defaults(func=command_service)

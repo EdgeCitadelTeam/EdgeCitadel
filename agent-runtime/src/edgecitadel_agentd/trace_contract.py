@@ -196,6 +196,8 @@ def _ranges(ranges: list[dict[str, int]], through: int) -> None:
 
 def validate_event(event: dict[str, Any]) -> bytes:
     encoded = _validate("event", event, MAX_EVENT_BYTES)
+    if "content" in event:
+        canonical_bytes(event["content"]["fields"], limit=8192)
     if event["supersedes_event_id"] == event["event_id"]:
         raise TraceContractError("self_supersession")
     if event["task_id"] is not None and event["task_id"] == event["parent_task_id"]:
@@ -398,7 +400,7 @@ def validate_cursor_claims(claims: dict[str, Any]) -> bytes:
             raise TraceContractError("invalid_cursor")
     if kind == "graph" and claims["position"] != claims["snapshot"]:
         raise TraceContractError("invalid_cursor")
-    if kind == "events" and claims["position"] > claims["upper"]:
+    if kind in {"events", "infrastructure"} and claims["position"] > claims["upper"]:
         raise TraceContractError("invalid_cursor")
     return encoded
 

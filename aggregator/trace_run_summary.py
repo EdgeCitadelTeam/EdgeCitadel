@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+
+from .trace_payload_read import read_payload
 from .trace_projection_tables import ProjectionTables
 
 OUTCOMES = frozenset(
@@ -71,3 +74,53 @@ def root_summary(tables: ProjectionTables, trace_id: str) -> dict:
         if phase in OUTCOMES:
             result["outcome"] = phase
     return result
+
+
+def _request_text(value: object, depth: int = 0) -> str | None:
+    if depth > 4:
+        return None
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            return value.strip() or None
+        if isinstance(decoded, (dict, str)):
+            return _request_text(decoded, depth + 1)
+        return None
+    if isinstance(value, dict):
+        for field in ("title", "request", "body", "prompt", "input"):
+            text = _request_text(value.get(field), depth + 1)
+            if text:
+                return text
+    return None
+
+
+def task_name(tables: ProjectionTables, trace_id: str, root_task_id: str | None) -> str:
+    """Derive a bounded label from retained request evidence at this snapshot.
+
+    The initial request window keeps list reads bounded. Never label a run from
+    a result or tool output, and never retain a copy after payload expiry.
+    """
+    rows = tables.execute(
+        "SELECT ingest_seq FROM {trace_projection_run_events} WHERE trace_id=? "
+        "ORDER BY ingest_seq LIMIT 32",
+        (trace_id,),
+    ).fetchall()
+    for (seq,) in rows:
+        payload = read_payload(tables.connection, seq)
+        event = payload and payload["event"]
+        if not event:
+            continue
+        if root_task_id and event["task_id"] != root_task_id:
+            continue
+        command = event["attributes"].get("message_type") == "command"
+        native_request = event["kind"] == "run" and event["phase"] == "started"
+        if not (command or native_request):
+            continue
+        text = _request_text(event.get("content", {}).get("fields", {}))
+        if text:
+            words = text.split()
+            name = " ".join(words[:8])
+            shortened = len(words) > 8 or len(name) > 64
+            return name[:64].rstrip() + ("…" if shortened else "")
+    return "Task " + (root_task_id or trace_id)[:8]
