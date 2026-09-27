@@ -1,9 +1,11 @@
+import { isJevProgress } from '../utils/jev'
+
 export function applyRealtimeEvent(frame, actions) {
   const data = frame && frame.data
   if (!frame || !data) return
 
   if (frame.event === 'message') {
-    if (data.type === 'task.progress') {
+    if (data.type === 'task.progress' && !isJevProgress(data)) {
       const delta = data.payload?.message ?? data.payload?.delta ?? ''
       actions.appendStreamDelta(data.task_id, data.sender_id, delta, data.payload?.skill_id, data.deployment)
       return

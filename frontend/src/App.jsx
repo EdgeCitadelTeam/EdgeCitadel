@@ -16,7 +16,7 @@ export default function App() {
   useEffect(() => {
     const followAddress = () => {
       const tab = window.location.hash.slice(1).split('?')[0]
-      if (['chat', 'flow', 'logs', 'tasks', 'registry', 'execution'].includes(tab)) useAppStore.setState({ activeTab: tab })
+      if (['chat', 'flow', 'registry', 'execution'].includes(tab)) useAppStore.setState({ activeTab: tab })
       else if (!tab) useAppStore.setState({ activeTab: 'chat' })
     }
     followAddress()
@@ -31,7 +31,7 @@ export default function App() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Tab switching with 1-6
+      // Tab switching with 1-4
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         const target = e.target
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
@@ -45,15 +45,9 @@ export default function App() {
             setActiveTab('flow')
             break
           case '3':
-            setActiveTab('logs')
-            break
-          case '4':
-            setActiveTab('tasks')
-            break
-          case '6':
             setActiveTab('execution')
             break
-          case '5':
+          case '4':
             setActiveTab('registry')
             break
         }

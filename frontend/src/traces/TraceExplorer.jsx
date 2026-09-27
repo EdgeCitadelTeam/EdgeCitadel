@@ -54,7 +54,7 @@ function Freshness({ freshness }) {
   </div>
 }
 
-function RunList({ api, route, onDenied }) {
+function RunList({ api, route, onDenied, theme, setTheme }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [page, setPage] = useState({ items: [], next: null, loading: true, error: null })
   const request = useRef(null)
@@ -73,6 +73,7 @@ function RunList({ api, route, onDenied }) {
   }, [api, onDenied])
   useEffect(() => { void load(null); return () => request.current?.abort() }, [load])
   return <aside className="trace-run-browser" aria-label="Run browser">
+    <button className="flow-theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? 'Light map theme' : 'Dark map theme'}</button>
     <div className="trace-run-browser-head"><h2>Trace history</h2><button onClick={() => load(null)}>Refresh runs</button></div>
     <p className="trace-muted">Select a trace to follow its conversation.</p>
     {page.loading && <p role="status">Loading runs…</p>}
@@ -166,14 +167,14 @@ function RunView({ api, route, onDenied }) {
   </section>
 }
 
-function ConnectedExplorer({ route, onDenied }) {
+function ConnectedExplorer({ route, onDenied, theme, setTheme }) {
   const [api, setApi] = useState(null)
   useEffect(() => {
     const next = createTraceApi(); setApi(next)
     return () => next.dispose()
   }, [])
   if (!api) return <p role="status">Connecting read access…</p>
-  return <div className="trace-content flow-content"><RunList api={api} route={route} onDenied={onDenied} />
+  return <div className="trace-content flow-content"><RunList api={api} route={route} onDenied={onDenied} theme={theme} setTheme={setTheme} />
     {route.run && !route.invalid ? <RunView key={`${route.run}/${route.at ?? "live"}`} api={api} route={route} onDenied={onDenied} /> : <section className="trace-empty"><h2>Select a run</h2><p>{route.invalid ? 'The saved address contains an invalid run, step or snapshot. Select a retained run from the list.' : 'Open a run to follow its observed steps and inspect the evidence.'}</p></section>}
   </div>
 }
@@ -186,11 +187,8 @@ export default function TraceExplorer() {
   useEffect(() => { setHistoryVisible(false) }, [route.run, route.at])
   const onDenied = useCallback(() => setError('Execution data is unavailable. Check access to this dashboard.'), [])
   return <div className={`trace-explorer${historyVisible ? ' history-visible' : ''}`} data-theme={theme}>
-    <header className="trace-heading"><div><h1>Agent flow</h1></div><div className="trace-header-actions">
-      <button className="flow-history-toggle" aria-expanded={historyVisible} onClick={() => setHistoryVisible(!historyVisible)}>Trace history</button>
-      <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? 'Light map theme' : 'Dark map theme'}</button>
-    </div></header>
+    <div className="flow-mobile-tools"><button className="flow-history-toggle" aria-expanded={historyVisible} onClick={() => setHistoryVisible(!historyVisible)}>Trace history</button></div>
     {error && <p role="alert">{error}</p>}
-    {!error && <ConnectedExplorer route={route} onDenied={onDenied} />}
+    {!error && <ConnectedExplorer route={route} onDenied={onDenied} theme={theme} setTheme={setTheme} />}
   </div>
 }

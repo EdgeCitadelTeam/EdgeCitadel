@@ -27,11 +27,11 @@ export const api = {
     req(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // Commands (returns {task_id, recipient_id, accepted_at})
-  sendCommand: (agentId, body, args) =>
+  sendCommand: (agentId, body, args, skillId) =>
     req(`/command/${encodeURIComponent(agentId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body, ...(args ? { args } : {}) }),
+      body: JSON.stringify({ body, ...(args ? { args } : {}), ...(skillId ? { skill_id: skillId } : {}) }),
     }),
 
   // Messages — accepts {agent_id, task_id, context_id, type, deployment,

@@ -5,6 +5,7 @@ import { api } from '../api/client'
 import MessageBubble from './MessageBubble'
 import ConversationThread from './ConversationThread'
 import CommandInput from './CommandInput'
+import { isJevProgress } from '../utils/jev'
 
 const TYPE_OPTIONS = [
   'command',
@@ -121,7 +122,7 @@ export default function ChatHistory() {
     for (const m of historicalMessages) {
       if (!m.task_id) continue
       if (m.type === 'result') tasksWithResult.add(m.task_id)
-      else if (m.type === 'task.progress') {
+      else if (m.type === 'task.progress' && !isJevProgress(m)) {
         if (!progressByTask.has(m.task_id)) progressByTask.set(m.task_id, [])
         progressByTask.get(m.task_id).push(m)
       }
@@ -183,7 +184,7 @@ export default function ChatHistory() {
   // for ConversationThread / MessageInspector. Operators who want to inspect
   // the raw progress stream can pick task.progress from the type filter.
   const showProgressEnvelopes = messageTypeFilter === 'task.progress'
-  const dropProgress = (m) => showProgressEnvelopes || m.type !== 'task.progress'
+  const dropProgress = (m) => showProgressEnvelopes || m.type !== 'task.progress' || isJevProgress(m)
 
   // Combine historical + realtime, filter for selected agent.
   // Page-refresh recovery for in-flight streams is handled in a useEffect

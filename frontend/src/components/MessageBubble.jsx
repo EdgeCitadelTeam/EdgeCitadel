@@ -17,6 +17,7 @@ import {
 import { getAgentColor } from '../utils/agentColors'
 import { relativeTime, fullTimestamp } from '../utils/formatTime'
 import MessageInspector from './MessageInspector'
+import JevRun from './JevRun'
 
 const typeConfig = {
   command: { icon: Terminal, color: 'text-blue-400' },
@@ -38,6 +39,8 @@ const typeConfig = {
 const taskStateColors = {
   submitted: 'bg-gray-500/20 text-gray-300',
   working: 'bg-yellow-500/20 text-yellow-300',
+  running: 'bg-yellow-500/20 text-yellow-300',
+  interrupted: 'bg-amber-500/20 text-amber-300',
   'input-required': 'bg-purple-500/20 text-purple-300',
   completed: 'bg-green-500/20 text-green-300',
   failed: 'bg-red-500/20 text-red-300',
@@ -146,6 +149,7 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
   const senderColor = getAgentColor(message.sender_id)
   const content = extractContent(message.payload) ?? message.content ?? null
   const taskState = message.task_state
+  const displayedTaskState = message.sender_id === 'jev' ? (message.payload?.outcome || taskState) : taskState
 
   const { preview, isClipped, hiddenLabel } = buildPreview(content)
   const showFull = expanded || !isClipped
@@ -201,14 +205,14 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
           >
             {displayType}
           </span>
-          {taskState && (
+          {displayedTaskState && (
             <span
               className={clsx(
                 'text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
-                taskStateColors[taskState] || 'bg-surface-200 text-gray-400'
+                taskStateColors[displayedTaskState] || 'bg-surface-200 text-gray-400'
               )}
             >
-              {taskState}
+              {displayedTaskState}
             </span>
           )}
           {(message.skill_id || message.payload?.skill_id || commandSkillId) && (
@@ -326,6 +330,8 @@ export default function MessageBubble({ message, highlighted, onClick, commandSk
             </button>
           </div>
         )}
+
+        {message.sender_id === 'jev' && message.payload?.run_id && <JevRun run={message.payload} />}
 
         {/* Task / context badges */}
         {(message.task_id || message.context_id) && (

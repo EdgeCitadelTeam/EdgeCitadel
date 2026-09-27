@@ -34,7 +34,7 @@ export default function HeaderBar() {
   }, [setSystemStatus])
 
   return (
-    <header className="h-12 bg-surface-50 border-b border-surface-200 px-3 md:px-4 flex items-center justify-between shrink-0">
+    <header className="h-16 bg-surface-50 border-b border-surface-200 px-4 md:px-6 flex items-center justify-between shrink-0">
       <div className="flex items-center gap-2 md:gap-3 min-w-0">
         {/* Hamburger menu - mobile only */}
         {activeTab !== 'execution' && <button
@@ -45,8 +45,8 @@ export default function HeaderBar() {
           <Menu size={18} className="text-gray-400" />
         </button>}
 
-        <Radio size={18} className="text-accent shrink-0" />
-        <h1 className="text-sm font-semibold text-gray-100 truncate">
+        <Radio size={24} className="text-accent shrink-0" />
+        <h1 className="text-xl font-semibold tracking-tight text-gray-100 truncate">
           EdgeCitadel
         </h1>
         <StatusBadge

@@ -1,0 +1,80 @@
+{
+  "files": [
+    {
+      "path": ".env.example",
+      "sha256": "80f1e296c79bc3689b454555d3d302b931013c684c5eb2f5da7ba5f1266b0eba"
+    },
+    {
+      "path": "README.md",
+      "sha256": "772dfc38a6f1ebcdb932dec03b56694bb8bf3eca4488f67d82d7109397eb5ca0"
+    },
+    {
+      "path": "plugin.yaml",
+      "sha256": "2ce05f1b2051c6e1cb6cd3b512e871410659760effad84e8ad4d8cee2731b202"
+    },
+    {
+      "path": "runtime/__main__.py",
+      "sha256": "82db85079c7249d1f33df06de8937751410bcc32ea51020c0151235ca1d41045"
+    },
+    {
+      "path": "runtime/config.yaml",
+      "sha256": "c55084fb09b1604cbfd450f9404cd32f365229df985f965291fd9e558e8f0e91"
+    },
+    {
+      "path": "runtime/coordinator.py",
+      "sha256": "1e5bb9d9b1cc0b7e7b25a5d39769a7b2ede02def127c03134192b1543de5e8eb"
+    },
+    {
+      "path": "skills/jev-resume/SKILL.md",
+      "sha256": "69fa8df6f2a3d2453b70fe074190e946aeae492cecbbcda7e05ab514af0a371d"
+    },
+    {
+      "path": "skills/jev-resume/binding.yaml",
+      "sha256": "fed749fefa2865c22404124bb877e6e86a867235f5578da58cb1df6881453eb8"
+    },
+    {
+      "path": "skills/jev-resume/schemas/input.json",
+      "sha256": "aedf19b8baafffab25ab59f666f883dc2329e1e237a1f0027eebcf34d980c5fe"
+    },
+    {
+      "path": "skills/jev-resume/schemas/output.json",
+      "sha256": "229a01fa7cbdb8912bdfe58611730feb8991aaac765072b230a5f80c63b3b58e"
+    },
+    {
+      "path": "skills/jev-run/SKILL.md",
+      "sha256": "131dc2a00a73a2fa4c3c4019b9dc483367f094720e6f6e815d59c71acdbeda20"
+    },
+    {
+      "path": "skills/jev-run/binding.yaml",
+      "sha256": "560ce9f32ba8932ef241a1ffb8c1f02b9398a290e1776548f7bb97a3449ae76a"
+    },
+    {
+      "path": "skills/jev-run/schemas/input.json",
+      "sha256": "3d6b3b4d02a59bc49b33028815a8fe369c5820a6751b61c11e66fe825ba3589d"
+    },
+    {
+      "path": "skills/jev-run/schemas/output.json",
+      "sha256": "229a01fa7cbdb8912bdfe58611730feb8991aaac765072b230a5f80c63b3b58e"
+    }
+  ],
+  "lockVersion": 1,
+  "package": {
+    "id": "edgecitadel.jev",
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.1.1"
+  },
+  "skills": [
+    {
+      "contentSha256": "69fa8df6f2a3d2453b70fe074190e946aeae492cecbbcda7e05ab514af0a371d",
+      "name": "jev-resume",
+      "skillId": "jev.resume",
+      "version": "0.1.0"
+    },
+    {
+      "contentSha256": "131dc2a00a73a2fa4c3c4019b9dc483367f094720e6f6e815d59c71acdbeda20",
+      "name": "jev-run",
+      "skillId": "jev.run",
+      "version": "0.1.0"
+    }
+  ]
+}

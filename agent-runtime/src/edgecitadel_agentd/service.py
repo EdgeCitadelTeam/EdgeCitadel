@@ -225,6 +225,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
     capabilities = set(json.loads(connector["capabilities_json"])["items"])
     common = {"connector.update", "session.open", "session.renew", "session.close"}
     managed = {
+        "agent.list",
         "task.create",
         "task.get",
         "task.claim",

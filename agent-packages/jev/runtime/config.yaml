@@ -1,0 +1,23 @@
+agent_id: jev
+name: jev
+description: Bounded text coordination with explicit resume after interruption.
+version: 0.1.1
+runtime:
+  kind: native
+  roles: [orchestrator]
+  conformance: L1
+  heartbeat_interval_sec: 10
+  tags: [coordinator]
+capabilities:
+  streaming: false
+skills:
+  - id: jev.run
+    name: jev-run
+    description: Execute a text goal with a stable request ID.
+    tags: [coordination]
+  - id: jev.resume
+    name: jev-resume
+    description: Explicitly continue an existing run without repeating child tasks.
+    tags: [coordination]
+defaultInputModes: [text/plain]
+defaultOutputModes: [text/plain]

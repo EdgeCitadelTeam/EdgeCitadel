@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 import { api } from '../api/client'
 import MessageBubble from './MessageBubble'
+import { isJevProgress } from '../utils/jev'
 
 // Collapse multiple persisted task.progress envelopes for the same task_id
 // into a single synthetic STREAMING bubble. Without this, a streamed task
@@ -18,7 +19,7 @@ function collapseProgressChunks(messages) {
   }
   const progressByTask = new Map()
   for (const m of messages) {
-    if (m.task_id && m.type === 'task.progress' && !tasksWithResult.has(m.task_id)) {
+    if (m.task_id && m.type === 'task.progress' && !isJevProgress(m) && !tasksWithResult.has(m.task_id)) {
       if (!progressByTask.has(m.task_id)) progressByTask.set(m.task_id, [])
       progressByTask.get(m.task_id).push(m)
     }
@@ -26,7 +27,7 @@ function collapseProgressChunks(messages) {
   const collapsed = []
   const insertedTaskBubble = new Set()
   for (const m of messages) {
-    if (m.type === 'task.progress' && m.task_id) {
+    if (m.type === 'task.progress' && m.task_id && !isJevProgress(m)) {
       // Drop progress envelopes for tasks that have a result (the result
       // carries the full text already).
       if (tasksWithResult.has(m.task_id)) continue

@@ -45,11 +45,10 @@ test('operator observes one deterministic task lifecycle', async ({ page, reques
   expect(accepted.task_id).toMatch(UUID_V4)
   const taskId = accepted.task_id
 
-  await page.getByRole('button', { name: /^Tasks/ }).click()
-  await expect(page.locator(`[data-task-id="${taskId}"][data-task-state="submitted"], [data-task-id="${taskId}"][data-task-state="working"]`)).toBeVisible()
+  await expect(page.locator(`[data-task-id="${taskId}"][data-message-type="command"]`)).toBeVisible()
   const releasePath = path.join(TERMINAL_RELEASE_DIR, `${taskId}.release`)
   await fs.writeFile(releasePath, 'release\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-  await expect(page.locator(`[data-task-id="${taskId}"][data-task-state="completed"]`)).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator(`[data-task-id="${taskId}"][data-message-type="result"][data-task-state="completed"]`)).toBeVisible({ timeout: 15_000 })
   await Promise.all([fs.rm(holdPath, { force: true }), fs.rm(releasePath, { force: true })])
 
   await page.getByRole('button', { name: /^Chat/ }).click()

@@ -69,10 +69,14 @@ test('selected communication, deep links, finite motion and responsive panels', 
     await page.setViewportSize({ width, height: 900 });
     for (const theme of ['dark', 'light']) {
       const current = await page.locator('.trace-explorer').getAttribute('data-theme');
-      if (current !== theme) await page.getByRole('button', { name: theme === 'dark' ? 'Dark map theme' : 'Light map theme' }).click();
+      if (current !== theme) {
+        if (width <= 700) await page.getByRole('button', { name: 'Trace history', exact: true }).click();
+        await page.getByRole('button', { name: theme === 'dark' ? 'Dark map theme' : 'Light map theme' }).click();
+        if (width <= 700) await page.getByRole('button', { name: 'Trace history', exact: true }).click();
+      }
       await expect(map.locator('[data-arrow-id]')).toHaveCount(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      await page.locator('.trace-heading').scrollIntoViewIfNeeded();
+      await page.getByRole('navigation', { name: 'Main navigation' }).scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(artifacts, `${width}-${theme}.png`), fullPage: true });
       await first.click();
       await expect(page.getByRole('dialog')).toBeVisible();
