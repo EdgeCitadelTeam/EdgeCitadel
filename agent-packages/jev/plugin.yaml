@@ -1,0 +1,33 @@
+apiVersion: edgecitadel.io/v1alpha2
+kind: ManagedAgent
+metadata:
+  name: jev
+  displayName: JEV
+  description: Persistent bounded text workflow coordinator with explicit recovery.
+  version: 0.1.1
+  publisher: edgecitadel
+compatibility:
+  supervisorApi: ">=0.1.0,<0.2.0"
+  protocols: [edgecitadel.managed-agent.v1]
+runtime:
+  kind: agent_runtime
+  command: [python, -m, runtime]
+  healthTimeoutSeconds: 30
+  restartPolicy: on-failure
+skills:
+  directory: skills
+agents:
+  - id: jev
+    skillNames: [jev-run, jev-resume]
+    listensBroadcast: false
+permissions:
+  knowledge: []
+  messaging:
+    outboundAgents: [aggregator, jim-eq-hermes]
+  network:
+    outbound: ["https://api.typesafe.ai"]
+  devices: []
+security:
+  sandbox: restricted
+  secrets: [TYPESAFE_API_KEY]
+extensions: {}

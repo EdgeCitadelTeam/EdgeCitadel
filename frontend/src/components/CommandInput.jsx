@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Send } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { api } from '../api/client'
 import toast from 'react-hot-toast'
 import { visibleAgents } from '../stores/agentVisibility'
+import { createJevRequestId } from '../utils/jev'
 
 export default function CommandInput() {
   const allAgents = useAppStore((s) => s.agents)
@@ -13,6 +14,8 @@ export default function CommandInput() {
   const [target, setTarget] = useState('')
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const request = useRef(null)
+  const jevOnline = allAgents.some(a => a.agent_id === 'jev' && a.agent_state === 'online')
   const lastTaskId = useAppStore((s) => s.trackedTaskId)
 
   const effectiveTarget = (agents.some((agent) => agent.agent_id === target) ? target : '') || selectedAgent || ''
@@ -23,12 +26,17 @@ export default function CommandInput() {
   const addRealtimeMessage = useAppStore((s) => s.addRealtimeMessage)
   const setTrackedTaskId = useAppStore((s) => s.setTrackedTaskId)
 
-  const handleSend = async () => {
-    if (!effectiveTarget || !text.trim()) return
+  const handleSend = async (targetId = effectiveTarget) => {
+    if (sending || !targetId || !text.trim() || (targetId === 'jev' && !jevOnline)) return
     setSending(true)
     const message = text.trim()
     try {
-      const res = await api.sendCommand(effectiveTarget, message)
+      if (targetId === 'jev' && request.current?.body !== message) {
+        request.current = { body: message, id: createJevRequestId() }
+      }
+      const res = targetId === 'jev'
+        ? await api.sendCommand('jev', message, { request_id: request.current.id }, 'jev.run')
+        : await api.sendCommand(targetId, message)
       const taskId = res?.task_id
       const acceptedAt = res?.accepted_at || new Date().toISOString()
       setTrackedTaskId(taskId || null)
@@ -40,13 +48,14 @@ export default function CommandInput() {
           v: 1,
           type: 'command',
           sender_id: 'aggregator',
-          recipient_id: effectiveTarget,
+          recipient_id: targetId,
           task_id: taskId,
           timestamp: acceptedAt,
           payload: { body: message },
         })
-        addPendingCommand(taskId, effectiveTarget)
+        addPendingCommand(taskId, targetId)
       }
+      request.current = null
       setText('')
     } catch {
       toast.error('Failed to send command')
@@ -73,7 +82,7 @@ export default function CommandInput() {
           <option value="">Target...</option>
           {agents.map((a) => (
             <option key={a.agent_id} value={a.agent_id}>
-              {a.card?.name || a.agent_id}
+              {a.agent_id === 'jev' ? 'JEV' : (a.card?.name || a.agent_id)}
             </option>
           ))}
         </select>
@@ -86,13 +95,20 @@ export default function CommandInput() {
           className="flex-1 min-w-0 bg-surface-100 border border-surface-200 rounded px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-600 focus:outline-none focus:ring-1 focus:ring-accent/50"
         />
         <button
-          onClick={handleSend}
-          disabled={sending || !effectiveTarget || !text.trim()}
+          onClick={() => handleSend()}
+          disabled={sending || !effectiveTarget || !text.trim() || (effectiveTarget === 'jev' && !jevOnline)}
           aria-label="Send command"
           className="bg-accent hover:bg-accent-dark disabled:opacity-40 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1 transition-colors shrink-0"
         >
           <Send size={14} />
         </button>
+      </div>
+      <div className="flex items-center gap-2 text-xs">
+        <button onClick={() => handleSend('jev')} disabled={sending || !jevOnline || !text.trim()}
+          className="rounded border border-accent/50 px-2 py-1 text-accent-light disabled:opacity-40">
+          交给 JEV
+        </button>
+        <span role="status">JEV {jevOnline ? 'online' : 'offline'}</span>
       </div>
       {effectiveTarget && (
         <span

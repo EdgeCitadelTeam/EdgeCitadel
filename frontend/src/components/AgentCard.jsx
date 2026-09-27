@@ -41,7 +41,7 @@ export default function AgentCard({ agent, selected, onClick }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-100 truncate">
-              {agent.card?.name || id}
+              {id === 'jev' ? 'JEV' : (agent.card?.name || id)}
             </span>
             <StatusBadge status={state} />
           </div>

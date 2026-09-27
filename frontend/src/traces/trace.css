@@ -355,3 +355,9 @@
 
 .flow-network-address { display: block; font-size: 11px; line-height: 1.5; color: var(--trace-ink); overflow-wrap: anywhere; }
 .flow-agent .flow-network-address { grid-column: 1 / -1; margin-top: 5px; padding-top: 6px; border-top: 1px solid var(--trace-line); text-align: left; }
+
+.flow-mobile-tools { display: none; }
+.flow-theme-toggle { margin-bottom: 16px; }
+@media (max-width: 700px) {
+  .flow-mobile-tools { display: flex; padding: 10px 16px; border-bottom: 1px solid var(--trace-line); }
+}

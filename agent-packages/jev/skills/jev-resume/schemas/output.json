@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "body": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "completed",
+        "interrupted",
+        "rejected",
+        "failed"
+      ]
+    },
+    "resumable": {
+      "type": "boolean"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "body",
+    "outcome"
+  ],
+  "additionalProperties": false
+}

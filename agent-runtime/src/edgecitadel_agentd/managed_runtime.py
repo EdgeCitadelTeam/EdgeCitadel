@@ -85,7 +85,12 @@ class ManagedContext:
             return
 
 
-async def run(config_path: str | Path, handler: Handler) -> None:
+async def run(
+    config_path: str | Path,
+    handler: Handler,
+    *,
+    on_start: Callable[[AgentdClient], Awaitable[None]] | None = None,
+) -> None:
     state_dir = Path(os.environ["EDGECITADEL_STATE_DIR"])
     card = build_card(config_path)
     raw_skills = card.get("skills", [])
@@ -144,6 +149,8 @@ async def run(config_path: str | Path, handler: Handler) -> None:
 
     renewer = asyncio.create_task(renew())
     try:
+        if on_start is not None:
+            await on_start(client)
         while not stop.is_set():
             task = await asyncio.to_thread(
                 client.call, "task.claim", session_id=session_id

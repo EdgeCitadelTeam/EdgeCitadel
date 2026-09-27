@@ -66,3 +66,11 @@ describe('applyRealtimeEvent', () => {
     expect(next.addRealtimeMessage).toHaveBeenCalledWith(data)
   })
 })
+
+it('retains structured JEV progress and child references', () => {
+  const next = actions()
+  const data = { type: 'task.progress', sender_id: 'jev', payload: { run_id: 'run', steps: [{ task_id: 'child' }] } }
+  applyRealtimeEvent({ event: 'message', data }, next)
+  expect(next.addRealtimeMessage).toHaveBeenCalledWith(data)
+  expect(next.appendStreamDelta).not.toHaveBeenCalled()
+})

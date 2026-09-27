@@ -504,3 +504,17 @@ def test_dispatch_receipt_does_not_bypass_current_caller_authority(
         assert list(store._connection.iterdump()) == before
     assert store.get_task(task_id) == task_before
     assert store._connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 1
+
+
+def test_caller_reserved_child_id_is_atomic_and_cannot_be_reused(configured):
+    store, token, binding = configured
+    params = {**request(binding), "child_task_id": str(uuid4())}
+    reply = dispatch(store, token, params)
+    assert reply["result"]["task_id"] == params["child_task_id"]
+    assert dispatch(store, token, params) == reply
+    before = snapshot(store)
+    from edgecitadel_agentd.store import StoreError
+
+    with pytest.raises(StoreError, match="already exists"):
+        dispatch(store, token, {**params, "request_id": str(uuid4())})
+    assert snapshot(store) == before

@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "body": {
+      "type": "string",
+      "maxLength": 16000
+    },
+    "args": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "request_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "body",
+    "args"
+  ],
+  "additionalProperties": true
+}

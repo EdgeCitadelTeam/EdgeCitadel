@@ -140,7 +140,7 @@ def dispatch_trace(
             selected=True,
         )
         if allowed:
-            child_id = str(uuid4())
+            child_id = params.get("child_task_id") or str(uuid4())
             if task is None:
                 context = TaskTraceContext(
                     child_id,
