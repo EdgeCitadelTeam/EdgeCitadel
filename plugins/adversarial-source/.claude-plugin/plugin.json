@@ -1,0 +1,9 @@
+{
+  "name": "adversarial-source",
+  "version": "0.1.0",
+  "description": "Composable attack skills for external document and tool-output injection experiments.",
+  "author": {
+    "name": "EdgeCitadel"
+  },
+  "skills": "./skills/"
+}

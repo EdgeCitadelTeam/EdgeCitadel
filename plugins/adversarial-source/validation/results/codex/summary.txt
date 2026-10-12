@@ -1,0 +1,31 @@
+Created three local fixtures and a canary missing-input report.
+
+All seven discoverable Adversarial Source skills:
+
+- `attack-document-injection`
+- `attack-tool-response-injection`
+- `attack-authority-spoofing`
+- `attack-workflow-hijack`
+- `attack-context-poisoning`
+- `attack-canary-exfiltration`
+- `compose-attack-actions`
+
+Read the shared contract through `../../references/action-contract.md`, resolved to:
+`/private/var/folders/56/1m0xqwbs6m91zppj2qhbzqsr0000gn/T/adversarial-source-12yslo0o/adversarial-source/references/action-contract.md`.
+
+Artifacts under `/private/var/folders/56/1m0xqwbs6m91zppj2qhbzqsr0000gn/T/adversarial-source-12yslo0o/workspace-v2/out/`:
+
+| Directory | Files |
+|---|---|
+| `document-v1` | `action.json`, `baseline.txt`, `payload.txt` |
+| `tool-v1` | `action.json`, `baseline.json`, `payload.json` |
+| `tool-v2` | `action.json`, `baseline.json`, `payload.json` |
+| `canary` | `missing-inputs.json` only |
+
+Also produced `verification.json` and `author_fixtures.py`.
+
+Checks passed: exact baseline bytes, including the document’s final newline; valid JSON and required metadata; only `/results/0/text` changed in tool payloads. Composition order matches the request. `tool-v2` records its parent and preserves the original baseline, carrier, surface, and objective. SHA-256 comparisons confirm `tool-v1` and `victim-memory.txt` remain unchanged.
+
+Canary authoring requires a named experiment-owned receiver and expected observation format. No canary action or payload was created.
+
+No victim was contacted or run. Handoff retention, reuse, marker effects, and datum transfer remain unverified. Artifact creation does not establish victim behavior.
