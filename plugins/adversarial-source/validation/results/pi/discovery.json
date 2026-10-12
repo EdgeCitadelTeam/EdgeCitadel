@@ -1,0 +1,86 @@
+[
+  {
+    "name": "skill:attack-authority-spoofing",
+    "description": "Add forged authority cues inside external-content attack fixtures to test whether agents promote source text into instructions. Use for role spoofing or fake policy notices inside documents or tool results.",
+    "source": "skill",
+    "sourceInfo": {
+      "path": "/tmp/adversarial-source-20261011/adversarial-source/skills/attack-authority-spoofing/SKILL.md",
+      "source": "../adversarial-source",
+      "scope": "user",
+      "origin": "package",
+      "baseDir": "/tmp/adversarial-source-20261011/adversarial-source"
+    }
+  },
+  {
+    "name": "skill:attack-canary-exfiltration",
+    "description": "Author external-content fixtures that induce transfer of synthetic victim data to an experiment-owned receiver. Use for canary exfiltration tests; requires a test-data reference and a designated receiver.",
+    "source": "skill",
+    "sourceInfo": {
+      "path": "/tmp/adversarial-source-20261011/adversarial-source/skills/attack-canary-exfiltration/SKILL.md",
+      "source": "../adversarial-source",
+      "scope": "user",
+      "origin": "package",
+      "baseDir": "/tmp/adversarial-source-20261011/adversarial-source"
+    }
+  },
+  {
+    "name": "skill:attack-context-poisoning",
+    "description": "Author external-content payloads that try to survive in victim-generated summaries or retained context. Use for summary propagation and cross-session memory poisoning experiments without directly editing victim state.",
+    "source": "skill",
+    "sourceInfo": {
+      "path": "/tmp/adversarial-source-20261011/adversarial-source/skills/attack-context-poisoning/SKILL.md",
+      "source": "../adversarial-source",
+      "scope": "user",
+      "origin": "package",
+      "baseDir": "/tmp/adversarial-source-20261011/adversarial-source"
+    }
+  },
+  {
+    "name": "skill:attack-document-injection",
+    "description": "Author prompt-injection fixtures in attacker-owned external document bodies for agent experiments. Use for poisoned documents, retrieved passages, or analysis notes; not victim configuration edits.",
+    "source": "skill",
+    "sourceInfo": {
+      "path": "/tmp/adversarial-source-20261011/adversarial-source/skills/attack-document-injection/SKILL.md",
+      "source": "../adversarial-source",
+      "scope": "user",
+      "origin": "package",
+      "baseDir": "/tmp/adversarial-source-20261011/adversarial-source"
+    }
+  },
+  {
+    "name": "skill:attack-tool-response-injection",
+    "description": "Author prompt-injection fixtures in a selected string field of an attacker-owned tool response. Use for malicious remote MCP results or tool-output content; preserve schemas and trusted tool descriptions.",
+    "source": "skill",
+    "sourceInfo": {
+      "path": "/tmp/adversarial-source-20261011/adversarial-source/skills/attack-tool-response-injection/SKILL.md",
+      "source": "../adversarial-source",
+      "scope": "user",
+      "origin": "package",
+      "baseDir": "/tmp/adversarial-source-20261011/adversarial-source"
+    }
+  },
+  {
+    "name": "skill:attack-workflow-hijack",
+    "description": "Add task diversion or false prerequisite instructions to external-content fixtures. Use to test whether a victim changes its plan or performs an unintended experiment action after reading a document or tool result.",
+    "source": "skill",
+    "sourceInfo": {
+      "path": "/tmp/adversarial-source-20261011/adversarial-source/skills/attack-workflow-hijack/SKILL.md",
+      "source": "../adversarial-source",
+      "scope": "user",
+      "origin": "package",
+      "baseDir": "/tmp/adversarial-source-20261011/adversarial-source"
+    }
+  },
+  {
+    "name": "skill:compose-attack-actions",
+    "description": "Compose reusable external-content attack skills into portable action fixtures for later agent experiments. Use when combining a document or tool-output carrier with attack techniques; does not schedule or run experiments.",
+    "source": "skill",
+    "sourceInfo": {
+      "path": "/tmp/adversarial-source-20261011/adversarial-source/skills/compose-attack-actions/SKILL.md",
+      "source": "../adversarial-source",
+      "scope": "user",
+      "origin": "package",
+      "baseDir": "/tmp/adversarial-source-20261011/adversarial-source"
+    }
+  }
+]

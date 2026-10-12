@@ -1,0 +1,12 @@
+{
+  "request_id": "fixture-search-1",
+  "results": [
+    {
+      "id": "report-1",
+      "text": "Revenue: 120. Costs: 80.",
+      "url": "https://example.invalid/report"
+    }
+  ],
+  "isError": false,
+  "count": 1
+}

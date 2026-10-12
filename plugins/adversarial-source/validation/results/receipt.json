@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-11",
+  "base_revision": "db542b741123bacb8faaa1dc16464a70555d5c66",
+  "plugin_version": "0.2.0",
+  "source_hashes_tested_identically": {
+    "package.json": "6d2c9afec39f22b3a1ad32701866bac20bb6185525ee7ea370a4651f6c7ec6fc",
+    ".codex-plugin/plugin.json": "c63f447a7846a40d22c43747891d77e99229d3270c1ff3adaaa7707e5194bb6a",
+    ".claude-plugin/plugin.json": "f1ad35158061d45101f608b7a205b1e2425487ed37e52804ee1ec02760a6bb41",
+    "references/action-contract.md": "a9eb8d2b5a2b6719d8dddf64e9531a7c8c753c9b71edcc0a03f56742a205c9f3",
+    "validation/requests.md": "c37b062e920666d1e2c9b8dae6a99151d46bbc2863994ecefa0741d946a898e1",
+    "skills/attack-authority-spoofing/SKILL.md": "0d496ae5bc73f6017cc0f6e1715275bedd235ee2d4fede5624f30e9efa22b1f0",
+    "skills/attack-canary-exfiltration/SKILL.md": "acdaf0754d0e8716ce20eff037f12caa2d9fcdfacb13e947b8acaf5f0e82b21e",
+    "skills/attack-context-poisoning/SKILL.md": "326a282f5d8c6cc2ea4fa36350463bbf01f69544426b3ef8794f755b119be544",
+    "skills/attack-document-injection/SKILL.md": "c1517827d487279cd8995fafc5a85b0f173d3ee0435d9f020afd53811d99c2e0",
+    "skills/attack-tool-response-injection/SKILL.md": "c68adfeb05dd31ef8f84de8cda4bb49d112b3e403d688cf15cf987e937887700",
+    "skills/attack-workflow-hijack/SKILL.md": "2259dad5fe64b4b5e3e6e6d10aa88ee9fff1e007f325aaf397ecc0e677621987",
+    "skills/compose-attack-actions/SKILL.md": "ea135c520a484cf89c37aa7695e7d2ec4868a98b8244adad5a800869d6f4e401"
+  },
+  "harnesses": {
+    "pi": {
+      "version": "0.87.1",
+      "provider": "openai",
+      "model": "gpt-5.4",
+      "native_package_loading": "pass",
+      "workdir": "/tmp/adversarial-source-20261011/workspace-v2"
+    },
+    "codex": {
+      "version": "0.156.1",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "reasoning": "medium",
+      "native_plugin_installation": "unverified: marketplace required by installed CLI; registration outside task scope",
+      "shared_skill_loading": "pass",
+      "workdir": "/var/folders/56/1m0xqwbs6m91zppj2qhbzqsr0000gn/T/adversarial-source-12yslo0o/workspace-v2"
+    }
+  },
+  "independent_checks": {
+    "action_count": 6,
+    "structural_validation": "pass",
+    "composition_baselines": "byte-identical",
+    "document_baselines": "byte-identical to request",
+    "victim_sentinels": "byte-identical",
+    "canary_deliverables": 0,
+    "pi_parent_initial_write_matches_final": [
+      "pi/out/tool-v1/baseline.json",
+      "pi/out/tool-v1/payload.json",
+      "pi/out/tool-v1/action.json"
+    ],
+    "pi_sentinel_sha256": "74e70c5115d08a04a8dee656e0b31d59fad5173408f8ce8a4b741b09fd47e030"
+  },
+  "artifact_hashes": {
+    "codex/commands.json": "f9935024acdcb4904eac2ed55d62ac8b5a63c819690e1efcbfd4d1ee59a1d238",
+    "codex/discovery.json": "aa9653dcdb6ee8fa0d5e89416bf0576a632e6c7f8a86adcbbcf5d6210809c32e",
+    "codex/out/author_fixtures.py": "abc70eb168cfcdd7d41d3590f3febd48fdaf5a9ccbc806b007490d0d1fde89a3",
+    "codex/out/canary/missing-inputs.json": "2ed3aa21d96848ee10e67efe323e5eff5f21cde062e58183c4c6eb680c145fbe",
+    "codex/out/document-v1/action.json": "dc8fe6878f54653344bef1de95b7cd1a552787e57f22e3a08eb9e45dc39b96c3",
+    "codex/out/document-v1/baseline.txt": "1447e84f9f02e5cdadd82a37830779017961242d92854bd83631446ffa800e27",
+    "codex/out/document-v1/payload.txt": "b7752261a107e6064f3dcc313fb116abae3b7dff8c9d12264dea865758e71f9f",
+    "codex/out/tool-v1/action.json": "cc774f6bded2536b99eba75a8f2ff978f0a41d3472c7152bf5fff3fe00cd22b2",
+    "codex/out/tool-v1/baseline.json": "331fcaaeaba34e9306f0855b4aec31b855b347b0230cf1591fc46221725dfeab",
+    "codex/out/tool-v1/payload.json": "13ebac8b1f95697dbf4692cb7962b8a704f1bc58d82419571b7ffea3ea28525f",
+    "codex/out/tool-v2/action.json": "c8f3dc78544ca1409888ca7b5388e71b0298011c16b8a5c3b1ec4ffc4842eca8",
+    "codex/out/tool-v2/baseline.json": "331fcaaeaba34e9306f0855b4aec31b855b347b0230cf1591fc46221725dfeab",
+    "codex/out/tool-v2/payload.json": "1f87ba3279e6263d536e51cdc90887139eb87611e8b4142426c8a484c88baae7",
+    "codex/out/verification.json": "3a1ca94a86ab2adab9587366ef8647431fc9a82bba6bffb020a91cfe4b127163",
+    "codex/summary.txt": "fe94cba27175a452776957c360857c20859bf3ac953a252e3b15bff87cb1912c",
+    "pi/commands.json": "0e7f73709de56abe258b9234502c4ebde0abcfb42cb3ae01d80749c884f43177",
+    "pi/discovery.json": "5231017b2c953fc800ddf1286b922c76fd613919463f8b3ba6a6a6714525b2a7",
+    "pi/out/document-v1/action.json": "57553e470fc9fd5fd138deabd130ce69c332c16fd1eb4a8e179bf65fc6d75de2",
+    "pi/out/document-v1/baseline.txt": "1447e84f9f02e5cdadd82a37830779017961242d92854bd83631446ffa800e27",
+    "pi/out/document-v1/payload.txt": "59c86099395f32c9de22eb03f0642c9436c11cd1d6f98a2dfeadb9da1861b571",
+    "pi/out/tool-v1/action.json": "ed8147edaa057a1f2ce14ce76060295b9ad6d7db3b33fcc5b5565ca15abc316d",
+    "pi/out/tool-v1/baseline.json": "2fa68a3619414bd941d866a7fb4e6e91df49260dcc545a7e80309b643848b562",
+    "pi/out/tool-v1/payload.json": "8cb555b4080eabcb585ccece9d8e09216482b28636618e01b9419fa447d12a40",
+    "pi/out/tool-v2/action.json": "6f1490fbad77cb5b9f3f4b8c6f0dfa833399a48f7254856f84ab590ae9a5c5be",
+    "pi/out/tool-v2/baseline.json": "2fa68a3619414bd941d866a7fb4e6e91df49260dcc545a7e80309b643848b562",
+    "pi/out/tool-v2/payload.json": "737fae03d794d4d04dff1a44b95fd9c51ff4a2dfc33afdc045d59d68eb792f8b",
+    "pi/summary.txt": "1f2c79dacafa4ddc23017ad73e1594fad38a001ad29a34567b4393f7b5663a9c"
+  },
+  "raw_evidence_local": "/var/folders/56/1m0xqwbs6m91zppj2qhbzqsr0000gn/T/adversarial-source-12yslo0o",
+  "effect": "unverified; no victim execution"
+}

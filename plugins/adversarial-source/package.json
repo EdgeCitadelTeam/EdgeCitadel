@@ -1,0 +1,15 @@
+{
+  "name": "@edgecitadel/adversarial-source",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Composable attack skills for external document and tool-output injection experiments.",
+  "keywords": [
+    "pi-package",
+    "edgecitadel"
+  ],
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  }
+}

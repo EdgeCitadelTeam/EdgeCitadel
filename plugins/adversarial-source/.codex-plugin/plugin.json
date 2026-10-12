@@ -1,0 +1,23 @@
+{
+  "name": "adversarial-source",
+  "version": "0.2.0",
+  "description": "Composable attack skills for external document and tool-output injection experiments.",
+  "author": {
+    "name": "EdgeCitadel"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Adversarial Source",
+    "shortDescription": "Compose external-content attack actions for agent experiments.",
+    "longDescription": "Build document and tool-output injection fixtures using reusable attack skills and an explicit external-source threat boundary.",
+    "developerName": "EdgeCitadel",
+    "category": "Productivity",
+    "capabilities": [
+      "Attack fixture authoring",
+      "Attack action composition"
+    ],
+    "defaultPrompt": [
+      "Compose an external-content attack fixture for my agent experiment."
+    ]
+  }
+}
