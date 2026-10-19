@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.io/schemas/plugin-lock.v1.schema.json",
+  "title": "EdgeCitadel Plugin Lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lockVersion", "package", "files", "skills"],
+  "properties": {
+    "lockVersion": {
+      "const": 1
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "protocol"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedName"
+        },
+        "version": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "protocol": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    },
+    "skills": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "skillId", "version", "contentSha256"],
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/normalizedName"
+          },
+          "skillId": {
+            "$ref": "#/$defs/qualifiedName"
+          },
+          "version": {
+            "$ref": "#/$defs/semanticVersion"
+          },
+          "contentSha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "normalizedName": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "qualifiedName": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?!.*[\\u0000-\\u001F\\u007F-\\u009F])(?!/)(?![A-Za-z]:[\\\\/])(?!.*\\\\)(?!\\.\\.?$)(?!\\.\\.?/)(?!.*?/\\.\\.?(?:/|$))(?:[^/]+/)*[^/]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

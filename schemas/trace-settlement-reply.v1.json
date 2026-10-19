@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/trace-settlement-reply.v1.json",
+  "title": "Settlement checkpoint reply v1",
+  "$defs": {
+    "checkpoint": {
+      "$ref": "https://edgecitadel.dev/schemas/trace-settlement.v1.json"
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "status": {
+          "const": "ok"
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/checkpoint"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "status",
+        "checkpoint"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "status": {
+          "const": "error"
+        },
+        "code": {
+          "enum": [
+            "unknown_source",
+            "unsupported_version",
+            "invalid_request",
+            "temporarily_unavailable",
+            "rate_limited"
+          ]
+        },
+        "retry_after_ms": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 30000
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "status",
+        "code",
+        "retry_after_ms"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

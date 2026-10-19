@@ -1,0 +1,19 @@
+agent_id: echo-agent
+name: echo-agent
+description: Minimal deterministic EdgeCitadel echo Managed Agent.
+version: 0.2.0
+runtime:
+  kind: native
+  roles: [worker]
+  conformance: L1
+  heartbeat_interval_sec: 10
+  tags: [example, deterministic]
+capabilities:
+  streaming: false
+skills:
+  - id: edgecitadel.echo
+    name: echo
+    description: Return the received body unchanged.
+    tags: [example, echo]
+defaultInputModes: [text/plain]
+defaultOutputModes: [text/plain]

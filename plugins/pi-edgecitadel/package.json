@@ -1,0 +1,22 @@
+{
+  "name": "@edgecitadel/pi-plugin",
+  "version": "0.1.0",
+  "description": "Connect an active Pi session to the local EdgeCitadel Agent network.",
+  "keywords": ["pi-package", "edgecitadel"],
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": ["./extensions/edgecitadel.ts"],
+    "skills": ["./skills"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@sinclair/typebox": "^0.34.52"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2"
+  }
+}

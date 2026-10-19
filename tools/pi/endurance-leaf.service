@@ -1,0 +1,12 @@
+[Unit]
+Description=EdgeCitadel production Endurance NATS leaf
+After=network-online.target
+[Service]
+Type=simple
+ExecStart=/home/zhonghao/.edgecitadel/runtime/nats-server/v2.14.6/nats-server -c /home/zhonghao/.edgecitadel/nats_leaf/nats.conf
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+UMask=0077
+[Install]
+WantedBy=default.target

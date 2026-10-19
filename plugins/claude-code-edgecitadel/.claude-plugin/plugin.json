@@ -1,0 +1,9 @@
+{
+  "name": "edgecitadel",
+  "version": "0.1.0",
+  "description": "Connect an active Claude Code session to the local EdgeCitadel Agent network.",
+  "author": {"name": "EdgeCitadel"},
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

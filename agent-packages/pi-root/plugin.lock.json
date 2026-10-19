@@ -1,0 +1,50 @@
+{
+  "files": [
+    {
+      "path": "pi_runtime/__main__.py",
+      "sha256": "e2eddea309e324c6460e9f8091c9bc092b2ed770878ea02c6d44455db9807f14"
+    },
+    {
+      "path": "pi_runtime/config.yaml",
+      "sha256": "0b60fa5b53595efd6caf7f59c87468498cf75bb5141c78cce51076c7b53246f6"
+    },
+    {
+      "path": "pi_runtime/session.mjs",
+      "sha256": "754183b3ba965db9340cc6b80d86165e74a9e3a47d55b22b91d72a739c003502"
+    },
+    {
+      "path": "plugin.yaml",
+      "sha256": "f3249e5750d8523783c98444e52788a62e92119292e2470ab6c0c89abbcdae75"
+    },
+    {
+      "path": "skills/pi-task/SKILL.md",
+      "sha256": "486617b4368192dffac72ee00db74eba19c1ef106359baf754b731321c0de17a"
+    },
+    {
+      "path": "skills/pi-task/binding.yaml",
+      "sha256": "8a87c0628659e5c643a622c5aef4ea14cbc1c0e255ae6f90ef312dcb0a7eff97"
+    },
+    {
+      "path": "skills/pi-task/schemas/input.json",
+      "sha256": "7373fa03e1086bdf8447e74df64b29623c79f86485790ff00dd75466167a9cff"
+    },
+    {
+      "path": "skills/pi-task/schemas/output.json",
+      "sha256": "7373fa03e1086bdf8447e74df64b29623c79f86485790ff00dd75466167a9cff"
+    }
+  ],
+  "lockVersion": 1,
+  "package": {
+    "id": "edgecitadel.pi-root",
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.1.1"
+  },
+  "skills": [
+    {
+      "contentSha256": "486617b4368192dffac72ee00db74eba19c1ef106359baf754b731321c0de17a",
+      "name": "pi-task",
+      "skillId": "pi.coordinate",
+      "version": "0.1.1"
+    }
+  ]
+}

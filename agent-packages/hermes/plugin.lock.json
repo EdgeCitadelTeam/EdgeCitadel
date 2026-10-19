@@ -1,0 +1,82 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "1502056dd213efae7805aa558ff56e6d59a13ef7e5f71e34d5b4429cf1bec147"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/__main__.py",
+      "sha256": "894fcd7fa8f4c6bad56b2d75b8996a186de833f1ac06355517c7d4e59f656795"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/adapter.py",
+      "sha256": "f376533645ffb6c02976effe2b60ab35a4417ff41d0f4c32a1144980105cc10d"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/config.yaml",
+      "sha256": "39db6267173b4d94c42e3e47570389681591aea66d7649b3de1d3e3e7141f0d1"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/delegation.py",
+      "sha256": "74fcafda54c8e77948d62248ed96e598f15b38529155dbf1f3aa4abcc67520d7"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/hermes_client.py",
+      "sha256": "288ad41b49dd44143fd4487b4d4701888129a26e7fb74fcaedb176ade1f54ba1"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/http_bridge.py",
+      "sha256": "448ddb79dff37688e1a12acf58058ab438b99e758ca1efe9ac6929187f619c71"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/requirements.txt",
+      "sha256": "5e001466b9dac8aea97b90a9fe6a13d696c875ceca9aae7a5722c2f9665e2404"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/server.py",
+      "sha256": "ab23b4ad6e0593d13b21479b7de16494c170679f84e9cf1adabc6ac7fd0f14e9"
+    },
+    {
+      "path": "edgecitadel_hermes_plugin/trace_hooks.py",
+      "sha256": "44b3ac05b8c38ab08eb0f55d4d94dd122529f82c4a38961c25e9d6b3dbc63ed3"
+    },
+    {
+      "path": "plugin.yaml",
+      "sha256": "f7bd292c3f7bf2262276a746925590dea89a310f8615ad210395645eb074ad0d"
+    },
+    {
+      "path": "skills/hermes-reasoner/SKILL.md",
+      "sha256": "debe75f060ba525d4f172bb245c89708da4b891252a2b95cf9fda3999cc97f80"
+    },
+    {
+      "path": "skills/hermes-reasoner/binding.yaml",
+      "sha256": "a8bec3e901483b99ee7bffe4d9127c49a3670ffb56ce7c6c9a367d61baa3afbd"
+    },
+    {
+      "path": "skills/hermes-reasoner/schemas/input.json",
+      "sha256": "c45b5d3fb1f33f6810d0de9a93175e6085121af601d48fe453acea4bdb034785"
+    },
+    {
+      "path": "skills/hermes-reasoner/schemas/output.json",
+      "sha256": "c45b5d3fb1f33f6810d0de9a93175e6085121af601d48fe453acea4bdb034785"
+    }
+  ],
+  "lockVersion": 1,
+  "package": {
+    "id": "edgecitadel.hermes",
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.2.0"
+  },
+  "skills": [
+    {
+      "contentSha256": "debe75f060ba525d4f172bb245c89708da4b891252a2b95cf9fda3999cc97f80",
+      "name": "hermes-reasoner",
+      "skillId": "reasoning.chat",
+      "version": "0.1.0"
+    }
+  ]
+}

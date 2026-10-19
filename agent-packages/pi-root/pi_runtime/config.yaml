@@ -1,0 +1,19 @@
+agent_id: jim-eq-pi
+name: jim-eq-pi
+description: Persistent Pi coordinator using Jev routing, with real EdgeCitadel delegation.
+version: 0.1.1
+runtime:
+  kind: native
+  roles: [orchestrator]
+  conformance: L1
+  heartbeat_interval_sec: 10
+  tags: [pi, persistent, root]
+capabilities:
+  streaming: true
+skills:
+  - id: pi.coordinate
+    name: pi-task
+    description: Route a natural-language task to an authorized executor.
+    tags: [pi, root]
+defaultInputModes: [text/plain]
+defaultOutputModes: [text/plain]

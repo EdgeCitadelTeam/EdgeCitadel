@@ -1,0 +1,1 @@
+../../../.agents/skills/commit-check/SKILL.md
