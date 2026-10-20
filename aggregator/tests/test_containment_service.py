@@ -301,3 +301,20 @@ def test_status_of_unconfigured_control_records_unconfirmed_actions(core_db, tmp
     assert engine.status()["in_force"] == []
     engine.close()
     assert Path(tmp_path / "m.db").is_file()
+
+
+def test_monitor_waits_for_the_collector_epoch(core_db, tmp_path):
+    """The collector creates its tables before it inserts the row naming its
+    epoch; a monitor starting in between waits instead of failing."""
+    path, _, _ = core_db
+    with sqlite3.connect(path) as core:
+        core.execute("DELETE FROM trace_collector")
+    service = ContainmentMonitorService(path, poll_seconds=0.02)
+    service.start()
+    try:
+        wait_for(lambda: service.status().get("fault") == "collector_unavailable")
+        with sqlite3.connect(path) as core:
+            trace_store.initialize(core)
+        wait_for(lambda: service.status().get("state") == "running")
+    finally:
+        service.close()

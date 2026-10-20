@@ -553,10 +553,19 @@ class ContainmentMonitorService:
     def _ready(self) -> bool:
         if not self.core_db.is_file():
             return False
+        # The collector creates its tables before it inserts the singleton row
+        # that names the collector epoch; follow and status read that row.
         with open_core(self.core_db) as core:
-            return (
+            if (
                 core.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='trace_collector'"
+                ).fetchone()
+                is None
+            ):
+                return False
+            return (
+                core.execute(
+                    "SELECT 1 FROM trace_collector WHERE singleton=1"
                 ).fetchone()
                 is not None
             )
