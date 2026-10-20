@@ -1,0 +1,281 @@
+"""Two-phase enforcement: frontier holds now, optimal cut next, confirm then release.
+
+Protocol (theory note section 7.3):
+P1. Hold the frontier of the tainted region at once (Lemma 7.1: every feasible
+    hold on an edge leaving the uncuttable closure U of the sources), wait for every
+    node to confirm, reconcile taint from the events that arrived meanwhile, and
+    repeat while the block is no longer a cut.
+P2. Solve on G_C with the phase-1 holds counted as in force (feasible without
+    latency), apply the new actions and wait for EVERY target node to confirm.
+P3. Reconcile again; if the phase-2 set still separates G_C, release the phase-1
+    holds that are not in it. Otherwise solve again with the phase-1 holds kept.
+
+Releases are only ever issued after all phase-2 confirmations, so at every
+instant after P1 converges the actions in force contain a valid cut (Theorem
+7.3). A failed phase-2 confirmation keeps every phase-1 hold. Each decision is
+stamped with a fresh, monotone policy version for the owner (agentd's fence).
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+
+from . import solver
+from .control import ControlClient, ControlError, execute, release
+from .graph import ControlGraph
+from .model import Action
+from .projection import frontier_block
+
+
+def now_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
+@dataclass
+class ActionRecord:
+    action: Action
+    incident_id: str
+    phase: int
+    policy_version: int
+    t_alert: int
+    t_decision: int
+    t_sent: int | None = None
+    t_applied: int | None = None  # node clock, as reported
+    t_confirmed: int | None = None
+    t_release_sent: int | None = None
+    t_released: int | None = None
+    state: str = "planned"  # planned | in_force | failed | released | release_failed
+    error: str | None = None
+
+    def to_json(self) -> dict:
+        return {
+            "action": self.action.to_json(),
+            "incident_id": self.incident_id,
+            "phase": self.phase,
+            "policy_version": self.policy_version,
+            "t_alert": self.t_alert,
+            "t_decision": self.t_decision,
+            "t_sent": self.t_sent,
+            "t_applied": self.t_applied,
+            "t_confirmed": self.t_confirmed,
+            "t_release_sent": self.t_release_sent,
+            "t_released": self.t_released,
+            "state": self.state,
+            "error": self.error,
+        }
+
+    @classmethod
+    def from_json(cls, value: dict) -> ActionRecord:
+        return cls(**{**value, "action": Action.from_json(value["action"])})
+
+
+class EnforcementDriver:
+    """Executes decisions concurrently and returns once every node answered."""
+
+    def __init__(
+        self,
+        client: ControlClient,
+        owner: str,
+        next_version: Callable[[], int],
+        *,
+        clock: Callable[[], int] = now_ms,
+        max_workers: int = 8,
+    ):
+        self.client = client
+        self.owner = owner
+        self.next_version = next_version
+        self.clock = clock
+        self._pool = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="containment-control"
+        )
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=True)
+
+    def apply(
+        self,
+        actions: Iterable[Action],
+        *,
+        incident_id: str,
+        phase: int,
+        t_alert: int,
+        t_decision: int,
+    ) -> list[ActionRecord]:
+        actions = sorted(set(actions))
+        if not actions:
+            return []
+        version = self.next_version()
+        records = [
+            ActionRecord(action, incident_id, phase, version, t_alert, t_decision)
+            for action in actions
+        ]
+
+        def run(record: ActionRecord) -> ActionRecord:
+            record.t_sent = self.clock()
+            try:
+                confirmation = execute(
+                    self.client, record.action, owner=self.owner, policy_version=version
+                )
+            except ControlError as error:
+                record.state, record.error = "failed", error.code
+            else:
+                record.t_applied = confirmation.applied_at_ms
+                record.state = "in_force"
+            record.t_confirmed = self.clock()
+            return record
+
+        return list(self._pool.map(run, records))
+
+    def release(self, records: Iterable[ActionRecord]) -> list[ActionRecord]:
+        records = [r for r in records if r.state == "in_force"]
+        if not records:
+            return []
+        version = self.next_version()
+
+        def run(record: ActionRecord) -> ActionRecord:
+            record.t_release_sent = self.clock()
+            try:
+                release(
+                    self.client, record.action, owner=self.owner, policy_version=version
+                )
+            except ControlError as error:
+                record.state, record.error = "release_failed", error.code
+            else:
+                record.state = "released"
+            record.t_released = self.clock()
+            return record
+
+        return list(self._pool.map(run, records))
+
+
+@dataclass
+class Decision:
+    incident_id: str
+    strategy: str
+    status: str = "pending"
+    rounds: int = 0
+    phase1: list[ActionRecord] = field(default_factory=list)
+    phase2: list[ActionRecord] = field(default_factory=list)
+    released: list[ActionRecord] = field(default_factory=list)
+    unavoidable: list[str] = field(default_factory=list)
+    cut_valid: bool | None = None
+    solve: dict = field(default_factory=dict)
+    graph: dict = field(default_factory=dict)
+
+    def to_json(self) -> dict:
+        return {
+            "incident_id": self.incident_id,
+            "strategy": self.strategy,
+            "status": self.status,
+            "rounds": self.rounds,
+            "phase1": [r.to_json() for r in self.phase1],
+            "phase2": [r.to_json() for r in self.phase2],
+            "released": [r.to_json() for r in self.released],
+            "unavoidable": self.unavoidable,
+            "cut_valid": self.cut_valid,
+            "solve": self.solve,
+            "graph": self.graph,
+        }
+
+
+def cut_holds(cg: ControlGraph, actions: Iterable[Action]) -> tuple[bool, list[str]]:
+    """Whether the actions separate every avoidable sink of cg; also the unavoidable."""
+    instance = cg.instance()
+    unavoidable = solver.unavoidable_sinks(instance)
+    return solver.separated(instance, actions, instance.sinks - unavoidable), sorted(
+        unavoidable
+    )
+
+
+class TwoPhaseProtocol:
+    """Orchestrates P1-P3 over callbacks owned by the monitor service.
+
+    ``project(phase, in_force)`` builds G_C (phase 1: holds only, no solve budget);
+    ``reconcile()`` ingests events that arrived while waiting; ``choose(cg)``
+    returns the phase-2 strategy result. ``in_force`` maps actions to their records
+    and is updated in place.
+    """
+
+    def __init__(self, driver: EnforcementDriver, *, max_rounds: int = 3):
+        self.driver = driver
+        self.max_rounds = max_rounds
+
+    def run(
+        self,
+        decision: Decision,
+        *,
+        t_alert: int,
+        project: Callable[[int, frozenset[Action]], ControlGraph],
+        reconcile: Callable[[], None],
+        choose: Callable[[ControlGraph], object],
+        in_force: dict[Action, ActionRecord],
+        two_phase: bool = True,
+    ) -> Decision:
+        clock = self.driver.clock
+        if two_phase:
+            for _ in range(self.max_rounds):
+                decision.rounds += 1
+                cg = project(1, frozenset(in_force))
+                block, _ = frontier_block(cg)
+                records = self.driver.apply(
+                    block - in_force.keys(),
+                    incident_id=decision.incident_id,
+                    phase=1,
+                    t_alert=t_alert,
+                    t_decision=clock(),
+                )
+                decision.phase1.extend(records)
+                in_force.update({r.action: r for r in records if r.state == "in_force"})
+                reconcile()
+                held, _ = cut_holds(project(1, frozenset(in_force)), in_force)
+                if held:
+                    break
+        phase1 = {r.action: r for r in decision.phase1 if r.state == "in_force"}
+        for _ in range(self.max_rounds):
+            decision.rounds += 1
+            cg = project(2, frozenset(in_force))
+            started = time.perf_counter()
+            result = choose(cg)
+            decision.solve = {
+                "strategy": decision.strategy,
+                "ms": round((time.perf_counter() - started) * 1000, 3),
+                "solver_ms": round(getattr(result, "solve_ms", 0.0), 3),
+                "status": getattr(result, "status", None),
+                "method": getattr(result, "method", None),
+                "predicted_cost": getattr(result, "predicted_cost", None),
+                "actions": [a.to_json() for a in result.actions],
+            }
+            decision.graph = dict(cg.stats)
+            decision.unavoidable = sorted(getattr(result, "unavoidable", ()))
+            chosen = set(result.actions)
+            records = self.driver.apply(
+                chosen - in_force.keys(),
+                incident_id=decision.incident_id,
+                phase=2,
+                t_alert=t_alert,
+                t_decision=clock(),
+            )
+            decision.phase2.extend(records)
+            in_force.update({r.action: r for r in records if r.state == "in_force"})
+            if any(r.state == "failed" for r in records):
+                decision.status = "phase2_unconfirmed"  # keep every phase-1 hold
+                return decision
+            reconcile()
+            held, _ = cut_holds(project(2, frozenset(in_force)), chosen)
+            decision.cut_valid = held
+            if not two_phase:
+                decision.status = "applied"
+                return decision
+            if held:
+                releasable = [r for a, r in phase1.items() if a not in chosen]
+                decision.released = self.driver.release(releasable)
+                for record in decision.released:
+                    if record.state == "released":
+                        in_force.pop(record.action, None)
+                decision.status = "contained"
+                return decision
+        decision.status = "phase2_check_failed"  # phase-1 holds stay in force
+        return decision
