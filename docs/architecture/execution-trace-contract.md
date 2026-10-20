@@ -1318,6 +1318,38 @@ tasks, and ingest rejects a delegated envelope without it (`missing_authority_sc
 Native and Managed `task.create` check the same connector grant. Unbound
 `task.create` has no invocation, so it is not attenuated.
 
+### Pause, resume and cancel of running managed work
+
+A hold on an `accepted` or `running` task **pauses** it; it is reversible. A
+task is paused exactly when it is non-terminal, claimed and held; agentd does
+not store a separate state. Every gate applies at once: the task cannot
+transition, its invocation cannot dispatch or authorize effects, and its
+outbound messages stay in the outbox. **Cancel** is terminal: the task becomes
+`cancelled` by its sender, its recipient or a controller.
+
+`managed_runtime.run` reacts to both. While a handler runs, the runtime reads its
+task every 0.5 s (`WATCH_INTERVAL_SECONDS`):
+
+| Observed | Runtime action | Task afterwards |
+|---|---|---|
+| hold | cancel the handler with `context.interruption = "pause"`; wait | unchanged state and claim, held |
+| hold released | call the handler again for the same task and binding, `context.resumed = True` | runs on; one run binding spans the pause |
+| terminal state | cancel the handler with `context.interruption = "cancel"`; finish the run with that state | terminal |
+| handler returned while held | keep the result in memory; commit it on release | committed on release, unless the task ended first (a cancel wins) |
+| hold before the `running` transition | wait for release, then start the handler | paused before execution |
+
+The handler alone decides what resuming means. The Pi harness aborts the current
+Pi turn when cancelled (`abort` on its private IPC, rejecting any adapter call the
+turn waits on). A paused turn is journaled as `paused`; on resume the worker
+continues the same Pi session with a resume instruction, and the root waits for
+a child it already dispatched instead of dispatching again. A cancelled or
+otherwise interrupted Pi turn is never repeated.
+
+If the runtime exits while its task is held, session recovery skips the task.
+Releasing the hold then applies the ordinary session-loss rule in the release
+transaction: an `accepted` task is requeued, and a `running` task fails with
+`executor_session_lost` because its handler may already have had effects.
+
 ### Reviewed activation with unresolved work held
 
 Schema 14 adds activation receipts keyed by node/source epoch. The internal

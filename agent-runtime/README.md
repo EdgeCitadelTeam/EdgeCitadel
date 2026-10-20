@@ -351,6 +351,10 @@ task cannot be claimed, transitioned or used to dispatch. Its unpublished outbou
 messages stay in the outbox. Inbound deliveries for it are acknowledged, then
 parked and applied in order on release. See the
 [trace contract](../docs/architecture/execution-trace-contract.md#containment-holds-and-dispatch-admission).
+A hold on running Managed Agent work pauses it: the runtime cancels the handler
+(`context.interruption == "pause"`) and resumes it on release with
+`context.resumed` set. A cancel ends it (`context.interruption == "cancel"`).
+See [pause, resume and cancel](../docs/architecture/execution-trace-contract.md#pause-resume-and-cancel-of-running-managed-work).
 
 If reconciliation encounters a SQLite storage error, agentd stays available and
 reports `status: degraded` with `reconciliation: storage_unavailable` in health.

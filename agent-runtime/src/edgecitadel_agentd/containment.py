@@ -169,10 +169,30 @@ def release_hold(
             "DELETE FROM holds WHERE kind=? AND object_id=? AND reason='containment'",
             (kind, object_id),
         )
+        if kind == "task":
+            _recover_if_orphaned_locked(store, object_id)
     applied = (
         apply_released_deliveries(store, task_id=object_id) if kind == "task" else 0
     )
     return {"released": True, "applied_deliveries": applied}
+
+
+def _recover_if_orphaned_locked(store: AgentdStore, task_id: str) -> None:
+    """Recover a released task whose executing session closed while it was held.
+
+    Session recovery skips held tasks, so a paused task whose runtime exited
+    would otherwise stay claimed forever. Once nothing holds it, the ordinary
+    session-loss rule applies: accepted work is requeued, and running work
+    fails as not retry-safe because its handler may have had effects.
+    """
+    row = store._connection.execute(
+        "SELECT t.claimed_session_id FROM tasks t JOIN sessions s "
+        "ON s.session_id=t.claimed_session_id WHERE t.task_id=? "
+        "AND t.state IN ('accepted','running') AND s.closed_at_ms IS NOT NULL",
+        (task_id,),
+    ).fetchone()
+    if row is not None and store._task_hold_locked(task_id) is None:
+        store._recover_session_tasks_locked(str(row[0]), time.time_ns() // 1_000_000)
 
 
 def list_holds(store: AgentdStore) -> list[dict[str, object]]:
