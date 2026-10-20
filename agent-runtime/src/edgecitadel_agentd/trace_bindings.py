@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from . import trace_capacity
 from . import trace_lineage as lineage
+from .delegation_authority import delegation_grant, exported_authority
 from .trace_authority import (
     BindingAuthority,
     ExecutionAuthority,
@@ -24,6 +25,7 @@ from .trace_contract import (
     validate_binding_request,
     validate_rpc_reply,
 )
+from .trace_correlation import TaskTraceContext
 from .trace_journal import TraceJournal
 from .trace_reservations import Obligation, reserve
 
@@ -217,6 +219,10 @@ def bind_trace(
                 else None
             )
             causes = [lineage.reference(arrival)] if arrival else []
+            authority = exported_authority(
+                delegation_grant(store, connector),
+                TaskTraceContext(**correlation) if correlation else None,
+            )
             started = TraceJournal(db).record(
                 node_id,
                 {
@@ -239,7 +245,7 @@ def bind_trace(
                     "duration_ms": None,
                     "evidence_kind": "source_observed",
                     "causes": causes,
-                    "attributes": {},
+                    "attributes": {"authority": authority},
                     "supersedes_event_id": None,
                 },
                 selected=True,

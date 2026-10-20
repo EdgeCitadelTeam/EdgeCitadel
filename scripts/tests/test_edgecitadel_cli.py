@@ -603,6 +603,8 @@ def test_connector_grant_replaces_native_delegation_recipients(
             "jim-eq-hermes",
             "--outbound-agent",
             "endurance-pi",
+            "--effect",
+            "fs.write=workspace/*",
             "--state-dir",
             str(tmp_path),
         ]
@@ -614,6 +616,7 @@ def test_connector_grant_replaces_native_delegation_recipients(
             {
                 "connector_id": "pi-local",
                 "outbound_agents": ["endurance-pi", "jim-eq-hermes"],
+                "effects": [{"effect_class": "fs.write", "target": "workspace/*"}],
             },
         )
     ]

@@ -343,14 +343,31 @@ keeps all uncertain work held. Operator commands, enrollment switching and
 individual restore-hold reconciliation are not yet implemented.
 
 Schema 30 stores these as `reason: restore` rows of a general `holds` table, beside
-`reason: containment` holds that a monitor places and releases through the admin
-RPCs `containment.hold`, `containment.release` and `containment.list`. Each hold
+`reason: containment` holds that a monitor places and releases through the
+[containment control protocol](../docs/architecture/execution-trace-contract.md#containment-control-protocol)
+(NATS `edgecitadel.control.v1.<node_id>` with an owner key in
+`<agentd state>/control-keys/<owner>.key`, or the admin RPC `containment.control`);
+`containment.list` shows them. Each hold
 names its owner and carries the owner's policy version. agentd rejects any
 decision older than the newest version it has accepted from that owner. A held
 task cannot be claimed, transitioned or used to dispatch. Its unpublished outbound
 messages stay in the outbox. Inbound deliveries for it are acknowledged, then
 parked and applied in order on release. See the
 [trace contract](../docs/architecture/execution-trace-contract.md#containment-holds-and-dispatch-admission).
+A hold on running Managed Agent work pauses it: the runtime cancels the handler
+(`context.interruption == "pause"`) and resumes it on release with
+`context.resumed` set. A cancel ends it (`context.interruption == "cancel"`).
+See [pause, resume and cancel](../docs/architecture/execution-trace-contract.md#pause-resume-and-cancel-of-running-managed-work).
+Before an external effect (a writing tool, an HTTP request, a device command), a
+harness asks `effect.authorize` with its execution binding. agentd decides from
+holds, revocations, ingress filters, the effect scope (package
+`permissions.effects` narrowed by what the task inherited) and the task's lease,
+and records `effect/requested` and `effect/committed|denied` in the run. A
+scheduled effect is requested now and committed later with `effect.commit`, and
+can be held in between. See the
+[effect gateway](../docs/architecture/execution-trace-contract.md#effect-gateway).
+Each `run/started` event exports the invocation's effective authority
+(recipients, effect rules, lease and authority chain) as `attributes.authority`.
 
 If reconciliation encounters a SQLite storage error, agentd stays available and
 reports `status: degraded` with `reconciliation: storage_unavailable` in health.
@@ -428,13 +445,17 @@ For execution-bound Hermes HTTP requests, use the packaged server launcher and
 `edgecitadel-scoped` toolset described in
 [`agent-packages/hermes/README.md`](../agent-packages/hermes/README.md).
 It supplies per-execution MCP metadata outside model arguments. The generic
-stdio configuration below alone does not attach that execution metadata.
+stdio configuration below alone does not attach that execution metadata, so
+its `edgecitadel_delegate` is refused: a Managed Agent delegates only through
+the execution binding of the task it runs, which keeps the authority that task
+inherited.
 
 A Managed Agent can expose the existing `edgecitadel_delegate` and
 `edgecitadel_task_status` tools to its upstream model using a local stdio MCP
 server. Use the installed supervisor Python and the existing Managed Agent
 connector; this mode opens no execution session and exposes no inbox or task
-transition tools. The adapter remains the sole executor.
+transition tools. The adapter remains the sole executor, and delegation needs
+`_meta.edgecitadel_execution` from it.
 
 ```bash
 /absolute/state/supervisor/bin/python -m edgecitadel_agentd.mcp \

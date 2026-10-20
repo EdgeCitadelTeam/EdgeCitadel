@@ -31,7 +31,7 @@ def service(tmp_path: Path) -> tuple[Path, Path, threading.Event]:
     assert not thread.is_alive()
 
 
-def test_managed_mcp_delegation_obeys_package_grant_without_execution_session(
+def test_managed_mcp_delegates_only_through_an_execution_binding(
     service: tuple[Path, Path, threading.Event],
 ) -> None:
     socket_path, service_dir, _ = service
@@ -48,6 +48,19 @@ def test_managed_mcp_delegation_obeys_package_grant_without_execution_session(
     token_path = service_dir.parent / "connectors/managed-hermes.token"
     token_path.parent.mkdir()
     token_path.write_text(registration["token"])
+    # Even a recipient the package grants is unreachable without a binding:
+    # unbound task creation would escape the scope the task inherited.
+    admin.call(
+        "managed.reconcile",
+        records=[
+            {
+                "package_id": "edgecitadel.hermes",
+                "desired_state": "running",
+                "agent_ids": ["hermes"],
+                "outbound_agents": ["codex"],
+            }
+        ],
+    )
     # This fixture puts the service directly under state; the MCP expects agentd/.
     with patch("edgecitadel_agentd.mcp.socket_path_for", return_value=socket_path):
         server = NativeMcpServer(
@@ -64,34 +77,21 @@ def test_managed_mcp_delegation_obeys_package_grant_without_execution_session(
         assert admin.call("health")["active_sessions"] == 0
         with pytest.raises(ValueError, match="unknown"):
             server._call_tool("edgecitadel_inbox", {})
-        request = {"recipient_id": "codex", "request": "ping"}
-        with pytest.raises(AgentdClientError, match="not authorized by its package"):
-            server._call_tool("edgecitadel_delegate", request)
-        record = {
-            "package_id": "edgecitadel.hermes",
-            "desired_state": "running",
-            "agent_ids": ["hermes"],
-            "outbound_agents": ["codex"],
-        }
-        admin.call("managed.reconcile", records=[record])
-        task = server._call_tool("edgecitadel_delegate", request)
-        assert task["sender_id"] == "hermes"
-        assert (
-            server._call_tool("edgecitadel_task_status", {"task_id": task["task_id"]})
-            == task
+        reply = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "edgecitadel_delegate",
+                    "arguments": {"recipient_id": "codex", "request": "ping"},
+                },
+            }
         )
-        with pytest.raises(AgentdClientError, match="not authorized by its package"):
-            server._call_tool(
-                "edgecitadel_delegate", {**request, "recipient_id": "other"}
-            )
-        admin.call("managed.reconcile", records=[{**record, "outbound_agents": []}])
-        with pytest.raises(AgentdClientError, match="not authorized by its package"):
-            server._call_tool("edgecitadel_delegate", request)
-        admin.call(
-            "managed.reconcile", records=[{**record, "desired_state": "stopped"}]
-        )
-        with pytest.raises(AgentdClientError, match="not authorized by its package"):
-            server._call_tool("edgecitadel_delegate", request)
+        assert reply["result"]["isError"] is True
+        assert "execution binding" in reply["result"]["content"][0]["text"]
+        with pytest.raises(AgentdClientError, match="not authorized for this"):
+            server.client.call("task.create", recipient_id="codex", payload={})
     finally:
         server.close()
     assert admin.call("health")["active_sessions"] == 0
@@ -131,7 +131,7 @@ def test_health_and_authenticated_connector_session(
     assert health == {
         "status": "ready",
         "database": "ok",
-        "schema_version": 31,
+        "schema_version": 32,
         "active_sessions": 0,
         "database_bytes": health["database_bytes"],
         "storage_backend": {"backend": "unverified", "mount_verified": False},

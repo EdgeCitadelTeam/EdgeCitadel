@@ -1,4 +1,27 @@
-"""Runtime bridge for an EdgeCitadel-owned Managed Agent process."""
+"""Runtime bridge for an EdgeCitadel-owned Managed Agent process.
+
+Containment of claimed work
+---------------------------
+agentd owns task state; this runtime only reacts to it. While a handler runs,
+a watcher reads the task every ``WATCH_INTERVAL_SECONDS``:
+
+- A hold (containment or restore) **pauses** the invocation. The handler is
+  cancelled (``context.interruption == "pause"``; a harness aborts its current
+  turn) and the runtime waits. The task keeps its state and claim, so agentd
+  still refuses its transitions, dispatches and effects. When the hold is
+  released, the runtime **resumes** the same invocation: it calls the handler
+  again for the same task and binding with ``context.resumed`` set. Whether a
+  resumed handler continues or refuses to repeat work is the package's rule.
+- A terminal state set by someone else (a sender or controller cancel, or a
+  daemon outcome) **cancels** the invocation: the handler is cancelled
+  (``context.interruption == "cancel"``) and the run finishes with that state.
+
+A handler that returns while its task is held keeps its result in memory until
+the hold is released (then the result is committed) or the task ends
+otherwise. If this process exits meanwhile, agentd's session recovery decides
+the task once the hold is released. An egress hold does not pause the handler,
+but its result likewise waits for release.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +34,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from edgecitadel_plugin_runtime.agent_card import build_card
 
@@ -21,6 +44,11 @@ from .trace_correlation import TaskTraceContext
 from .trace_producer import RuntimeTrace
 
 Handler = Callable[[dict[str, Any], Any], Awaitable[tuple[dict[str, Any], str]]]
+Signal = Literal["run", "held", "egress", "terminal", "stopped"]
+WATCH_INTERVAL_SECONDS = 0.5
+TERMINAL_STATES = frozenset(
+    {"completed", "failed", "rejected", "cancelled", "expired", "undeliverable"}
+)
 
 
 def _timestamp() -> str:
@@ -57,6 +85,10 @@ class ManagedContext:
         self.js = None
         self.msg = SimpleNamespace()
         self.trace = RuntimeTrace(client)
+        # Set by the runtime: why the handler is being cancelled, and whether
+        # this call resumes an invocation that a containment hold paused.
+        self.interruption: Literal["pause", "cancel"] | None = None
+        self.resumed = False
 
     async def in_progress(self) -> None:
         return None
@@ -83,6 +115,132 @@ class ManagedContext:
             )
         except AgentdClientError:
             return
+
+
+class _TaskSupervisor:
+    """Drive one claimed task through pause, resume, cancel and completion."""
+
+    def __init__(
+        self,
+        client: AgentdClient,
+        session_id: str,
+        task_id: str,
+        stop: asyncio.Event,
+    ) -> None:
+        self.client = client
+        self.session_id = session_id
+        self.task_id = task_id
+        self.stop = stop
+
+    async def signal(self) -> tuple[Signal, str]:
+        """The task's containment signal; an unreadable task keeps running."""
+        if self.stop.is_set():
+            return "stopped", ""
+        try:
+            task = cast(
+                Mapping[str, object],
+                await asyncio.to_thread(
+                    self.client.call, "task.get", task_id=self.task_id
+                ),
+            )
+        except AgentdClientError:
+            return "run", ""
+        state = str(task["state"])
+        if state in TERMINAL_STATES:
+            return "terminal", state
+        if "containment_hold" in task or "restore_status" in task:
+            return "held", state
+        if "containment_egress_hold" in task:
+            return "egress", state
+        return "run", state
+
+    async def wait_while_held(self, *, egress: bool = False) -> tuple[Signal, str]:
+        """Wait out a hold, and also an egress hold when ``egress`` is set."""
+        waiting = {"held", "egress"} if egress else {"held"}
+        while True:
+            try:
+                await asyncio.wait_for(self.stop.wait(), WATCH_INTERVAL_SECONDS)
+            except TimeoutError:
+                pass
+            signal, state = await self.signal()
+            if signal not in waiting:
+                return signal, state
+
+    async def transition(
+        self, state: str, result: dict[str, Any] | None = None
+    ) -> str | None:
+        """Commit a transition, waiting out a hold; return the task's final say.
+
+        Returns ``state`` once committed, another terminal state if the task
+        ended meanwhile (a cancel wins over a held result), or None if the
+        runtime is stopping.
+        """
+        while True:
+            try:
+                await asyncio.to_thread(
+                    self.client.call,
+                    "task.transition",
+                    task_id=self.task_id,
+                    state=state,
+                    session_id=self.session_id,
+                    **({"result": result} if result is not None else {}),
+                )
+                return state
+            except AgentdClientError:
+                signal, current = await self.signal()
+                if signal == "terminal":
+                    return current
+                if signal not in {"held", "egress"}:
+                    raise
+            signal, current = await self.wait_while_held(egress=True)
+            if signal == "terminal":
+                return current
+            if signal == "stopped":
+                return None
+
+    async def execute(
+        self, handler: Handler, envelope: dict[str, Any], context: ManagedContext
+    ) -> str | None:
+        """Run the handler until it completes, is cancelled, or the runtime stops."""
+        while True:
+            context.interruption = None
+            work = asyncio.create_task(handler(envelope, context))
+            signal: Signal = "run"
+            state = ""
+            try:
+                while not work.done():
+                    await asyncio.wait({work}, timeout=WATCH_INTERVAL_SECONDS)
+                    if work.done():
+                        break
+                    signal, state = await self.signal()
+                    # A handler that finished meanwhile keeps its result.
+                    if signal in {"held", "terminal"} and not work.done():
+                        break
+            finally:
+                if not work.done() and signal not in {"held", "terminal"}:
+                    # The runtime itself is being cancelled; do not orphan work.
+                    work.cancel()
+            if work.done():
+                try:
+                    result, returned = work.result()
+                except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
+                    result, returned = {"error": type(error).__name__}, "failed"
+                terminal = "cancelled" if returned == "canceled" else returned
+                if terminal not in {"completed", "failed", "rejected", "cancelled"}:
+                    result, terminal = {"error": "invalid_handler_state"}, "failed"
+                return await self.transition(terminal, result)
+            context.interruption = "pause" if signal == "held" else "cancel"
+            work.cancel()
+            await asyncio.gather(work, return_exceptions=True)
+            if signal == "terminal":
+                return state
+            signal, state = await self.wait_while_held()
+            if signal == "terminal":
+                return state
+            if signal == "stopped":
+                return None
+            # Released (an egress hold alone does not stop execution).
+            context.resumed = True
 
 
 async def run(
@@ -164,14 +322,15 @@ async def run(
             record = cast(Mapping[str, object], task)
             task_id = str(record["task_id"])
             context = ManagedContext(client, agent_id)
+            supervisor = _TaskSupervisor(client, session_id, task_id, stop)
             await context.trace.bind(session_id=session_id, task_id=task_id)
-            await asyncio.to_thread(
-                client.call,
-                "task.transition",
-                task_id=task_id,
-                state="running",
-                session_id=session_id,
-            )
+            # A hold placed between the claim and this transition pauses the
+            # task before its handler starts.
+            started = await supervisor.transition("running")
+            if started != "running":
+                if started is not None:
+                    await context.trace.finish(started)
+                continue
             envelope = {
                 "v": 1,
                 "id": str(uuid.uuid4()),
@@ -195,22 +354,9 @@ async def run(
                 envelope = TaskTraceContext(
                     **cast(dict[str, Any], record["trace_context"])
                 ).apply(envelope)
-            try:
-                result, state = await handler(envelope, context)
-            except Exception as error:  # noqa: BLE001
-                result, state = {"error": type(error).__name__}, "failed"
-            terminal = "cancelled" if state == "canceled" else state
-            if terminal not in {"completed", "failed", "rejected", "cancelled"}:
-                result, terminal = {"error": "invalid_handler_state"}, "failed"
-            await asyncio.to_thread(
-                client.call,
-                "task.transition",
-                task_id=task_id,
-                state=terminal,
-                session_id=session_id,
-                result=result,
-            )
-            await context.trace.finish(terminal)
+            final = await supervisor.execute(handler, envelope, context)
+            if final is not None:
+                await context.trace.finish(final)
     finally:
         stop.set()
         renewer.cancel()

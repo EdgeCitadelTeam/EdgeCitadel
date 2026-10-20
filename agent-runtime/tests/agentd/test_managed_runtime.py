@@ -88,13 +88,16 @@ skills:
     token_path.write_text(str(registration["token"]) + "\n")
     token_path.chmod(0o600)
 
+    parent_task_id = str(uuid4())
     correlation = TaskTraceContext(
         task_id=str(uuid4()),
         context_id="30000000-0000-4000-8000-000000000001",
         trace_id=uuid4().hex,
-        parent_task_id=str(uuid4()),
+        parent_task_id=parent_task_id,
         hop_count=2,
         authority_scope=("gemma-1",),
+        effect_scope=(),
+        authority_chain=(str(uuid4()), parent_task_id),
     )
 
     async def handler(

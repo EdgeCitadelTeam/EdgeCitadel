@@ -21,6 +21,7 @@ from edgecitadel_plugin_runtime.agent_card import topology_metadata
 from edgecitadel_plugin_runtime.jetstream import ensure_consumer, ensure_stream
 from edgecitadel_plugin_runtime.validator import ValidationError, default_validator
 
+from .containment_control import handle_wire, subject_for
 from .node_state import read_node
 from .store import AgentdStore, StoreError
 from .trace_contract import TraceContractError
@@ -53,6 +54,10 @@ class AgentdNatsTransport:
         self._validator = default_validator()
         self._trace: TransportTrace | None = None
         self._broker_tracing = False
+        # Containment commands and the outbox's last recheck of a message before
+        # publication serialize on this lock; see containment_control.
+        self.publication_lock = threading.Lock()
+        self._in_flight: set[str] = set()
 
     def start(self) -> None:
         if self._thread is not None:
@@ -66,6 +71,10 @@ class AgentdNatsTransport:
             self._thread.join(timeout=10)
             if self._thread.is_alive():
                 raise StoreError("NATS transport did not stop within 10 seconds")
+
+    def in_flight(self) -> frozenset[str]:
+        """Outbox messages handed to the broker but not yet recorded as published."""
+        return frozenset(self._in_flight)
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -230,6 +239,12 @@ class AgentdNatsTransport:
                     "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.>",
                     cb=self._observe_advisory,
                 )
+                node_id = str(node["agent_id"])
+
+                async def control(message: Msg) -> None:
+                    await self._handle_control(message, node_id)
+
+                await nc.subscribe(subject_for(node_id), cb=control)
                 await self._connected_loop(nc, js)
             except Exception as error:  # noqa: BLE001
                 self._set_status(
@@ -295,61 +310,18 @@ class AgentdNatsTransport:
                         pending["envelope"], separators=(",", ":")
                     ).encode()
                     message_id = str(pending["message_id"])
-                    observation = {
-                        "envelope": pending["envelope"],
-                        "attributes": {
-                            "subject": str(pending["subject"]),
-                            "publication_attempt_id": str(uuid.uuid4()),
-                        },
-                    }
-                    self._observe(
-                        "publish_started",
-                        content={
-                            "body": pending["envelope"]["payload"].get(
-                                "body", pending["envelope"]["payload"]
-                            )
-                        },
-                        **observation,
-                    )
+                    with self.publication_lock:
+                        # A containment decision may have landed since the
+                        # batch was selected; after this point it cannot
+                        # recall the message, and confirmations say so.
+                        if not self.store.publication_allowed(message_id):
+                            continue
+                        self._in_flight.add(message_id)
                     try:
-                        ack = await js.publish(
-                            str(pending["subject"]),
-                            envelope,
-                            headers={
-                                "Nats-Msg-Id": message_id,
-                                **(
-                                    {
-                                        "Nats-Trace-Dest": f"_EC.TRACE.{self._trace.node_id}.{message_id}.{observation['attributes']['publication_attempt_id']}",
-                                        "Nats-Trace-Only": "false",
-                                    }
-                                    if self._trace and self._broker_tracing
-                                    else {}
-                                ),
-                            },
-                        )
-                    except Exception as error:
-                        self._observe(
-                            "publish_failed",
-                            envelope=pending["envelope"],
-                            attributes={
-                                **observation["attributes"],
-                                "error_type": type(error).__name__,
-                            },
-                        )
-                        raise
-                    self._observe(
-                        "publish_accepted",
-                        envelope=pending["envelope"],
-                        attributes={
-                            **observation["attributes"],
-                            **publication_metadata(ack),
-                        },
-                    )
-                    await nc.publish(
-                        f"agents.{pending['envelope']['sender_id']}.outbox",
-                        envelope,
-                    )
-                    self.store.mark_transport_published(message_id)
+                        await self._publish_one(nc, js, pending, envelope, message_id)
+                    finally:
+                        with self.publication_lock:
+                            self._in_flight.discard(message_id)
                 await asyncio.sleep(1)
         finally:
             if monitor is not None:
@@ -361,6 +333,70 @@ class AgentdNatsTransport:
             with self._lock:
                 self._ready_agents.clear()
                 self._status["ready_inbox_count"] = 0
+
+    async def _publish_one(
+        self,
+        nc: NATS,
+        js: JetStreamContext,
+        pending: Mapping[str, Any],
+        envelope: bytes,
+        message_id: str,
+    ) -> None:
+        observation = {
+            "envelope": pending["envelope"],
+            "attributes": {
+                "subject": str(pending["subject"]),
+                "publication_attempt_id": str(uuid.uuid4()),
+            },
+        }
+        self._observe(
+            "publish_started",
+            content={
+                "body": pending["envelope"]["payload"].get(
+                    "body", pending["envelope"]["payload"]
+                )
+            },
+            **observation,
+        )
+        try:
+            ack = await js.publish(
+                str(pending["subject"]),
+                envelope,
+                headers={
+                    "Nats-Msg-Id": message_id,
+                    **(
+                        {
+                            "Nats-Trace-Dest": f"_EC.TRACE.{self._trace.node_id}.{message_id}.{observation['attributes']['publication_attempt_id']}",
+                            "Nats-Trace-Only": "false",
+                        }
+                        if self._trace and self._broker_tracing
+                        else {}
+                    ),
+                },
+            )
+        except Exception as error:
+            self._observe(
+                "publish_failed",
+                envelope=pending["envelope"],
+                attributes={
+                    **observation["attributes"],
+                    "error_type": type(error).__name__,
+                },
+            )
+            raise
+        self._observe(
+            "publish_accepted",
+            envelope=pending["envelope"],
+            attributes={
+                **observation["attributes"],
+                **publication_metadata(ack),
+            },
+        )
+        await nc.publish(
+            f"agents.{pending['envelope']['sender_id']}.outbox",
+            envelope,
+        )
+        self.store.mark_transport_published(message_id)
 
     async def _consume_agent(self, js: JetStreamContext, agent_id: str) -> None:
         await ensure_stream(js, agent_id)
@@ -589,6 +625,16 @@ class AgentdNatsTransport:
             )
         except (UnicodeDecodeError, json.JSONDecodeError, StoreError):
             return
+
+    async def _handle_control(self, message: Msg, node_id: str) -> None:
+        """Apply one containment command off the event loop and confirm it."""
+        confirmation = await asyncio.to_thread(
+            handle_wire, self.store, message.data, node_id=node_id, gate=self
+        )
+        if message.reply:
+            await message.respond(
+                json.dumps(confirmation, separators=(",", ":")).encode()
+            )
 
     async def _publish_register(
         self, nc: NATS, connector: Mapping[str, object]

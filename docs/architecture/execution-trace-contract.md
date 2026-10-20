@@ -37,7 +37,7 @@ export-position ledgers belong to the later journal/collector implementation.
 
 | Kind | Evidence and allowed attributes |
 |---|---|
-| run | Explicit run outcome; bounded reason code |
+| run | Explicit run outcome; bounded reason code; `started` carries the invocation's effective `authority` |
 | task | Original lifecycle state, sender/recipient/daemon role, reason code |
 | dispatch | Dispatch identity, recipient, optional skill/grant version, reason; `allowed` names the `child_task_id` it created |
 | permission | Dispatch identity, policy/version, grant version, reason |
@@ -47,6 +47,8 @@ export-position ledgers belong to the later journal/collector implementation.
 | source | Source/export-generation start, restore or selection-policy change |
 | link | Explicit join between tasks, separate from ancestry |
 | lineage | `used`/`generated` of a versioned request or result by one invocation (`lineage_version`, `entity`, `entity_task_id`, `version_id`, `external`) |
+| effect | `requested` and then `committed` or `denied` external effect of one invocation (`effect_version`, `effect_id`, `effect_class`, `target`, `tool_call_id`, `scheduled_at_ms`; decision `policy`, `policy_version`, `reason`, `effects_remaining`); see the effect gateway |
+| containment | `alert` from an enforcement gate (`containment_version`, `alert`, `request_id`, `lease_dimension`) |
 
 The schemas define the exact phase and attribute sets. All unknown fields are
 rejected. Raw prompts, arguments, outputs, arbitrary exception messages and
@@ -1278,10 +1280,11 @@ to the transport as accepted, so the broker delivery is acknowledged rather than
 redelivered or terminated. A held transport message is not published. Task reads
 expose `restore_status` and/or `containment_hold: {owner, policy_version}`.
 
-Containment holds are managed through admin RPCs that require the management
-credential. `containment.hold` and `containment.release` both take
-`{kind, object_id, owner, policy_version}`, and `containment.list` returns every
-hold with its parked delivery count. The policy version is a fencing token:
+Containment holds are placed and released through the
+[containment control protocol](#containment-control-protocol), locally with the
+admin RPC `containment.control` (management credential) or remotely on NATS.
+The admin RPC `containment.list` returns every hold with its parked delivery
+count, every revocation and every ingress filter. The policy version is a fencing token:
 `containment_fences` keeps, per owner, the highest version agentd has accepted,
 and any hold or release with a lower version fails with `stale_policy_version`.
 Other stable errors are `hold_not_found`, `hold_owned_by_another` and the
@@ -1290,9 +1293,18 @@ arrival order through the normal ingest path. Maintenance repeats this for any
 delivery whose task is no longer held, which finishes a release interrupted by a
 crash. Ingest is idempotent for already-applied envelopes.
 
-A containment hold does not recall a message that the live outbox loop has
-already selected; that publication is recorded as it happened. Restore-held
-messages are placed offline and can never be marked published.
+A hold on a child task at its parent's node also withholds a result that was
+applied before the hold: reads by the child's sender (`task.get`, `task.list`)
+report the last non-terminal state, `result: null` and `result_withheld: true`
+until release, and the parent records no `used` lineage meanwhile. The
+recipient still reads its own task unchanged.
+
+A containment hold does not recall a message that the outbox loop has already
+handed to the broker; that publication is recorded as it happened, and the
+command's confirmation lists it as `in_flight`. The loop rechecks each selected
+message just before publishing it, so only that one message can escape a
+decision. Restore-held messages are placed offline and can never be marked
+published.
 
 `trace.dispatch` admission runs inside the dispatch transaction, after binding
 authority and the receipt lookup. It checks these conditions in order, and the
@@ -1315,8 +1327,321 @@ dispatching invocation's effective scope (its grant intersected with the scope i
 inherited), so a child's scope is always a subset of its parent's. The scope
 travels in `payload.execution_context.authority_scope`. It is `null` only for root
 tasks, and ingest rejects a delegated envelope without it (`missing_authority_scope`).
-Native and Managed `task.create` check the same connector grant. Unbound
-`task.create` has no invocation, so it is not attenuated.
+Only native connectors can call `task.create`, and it checks the same
+connector grant. It creates a root task: the native session has no invocation
+to attenuate. A Managed Agent always runs inside a claimed task, so it can
+delegate only through its execution binding (`trace.dispatch`). No shipped
+package used its former unbound `task.create`, which escaped the inherited scope.
+The managed MCP server likewise rejects `edgecitadel_delegate` without
+`_meta.edgecitadel_execution`.
+
+### Delegated authority: effects, leases, revocation and filters
+
+Schema 32 extends the authority a delegated task inherits. The
+`payload.execution_context` capsule now carries, beside `authority_scope`:
+
+| Field | Meaning |
+|---|---|
+| `effect_scope` | effect rules `{effect_class, target}` the delegator could authorize; `null` only for root tasks |
+| `lease` | `{expires_at_ms, max_effects, max_tokens}` hard limits, or `null` for unlimited |
+| `authority_chain` | the delegated task IDs from the root to the parent |
+
+Effect classes are `fs.write`, `process.exec`, `network.http` and
+`device.command`. A target is exact, or a prefix when it ends in `*`. The grant
+comes from administrator state: a Managed Agent package's optional
+`permissions.effects` (carried into the installed summary as `effect_grant`) and
+a native connector's `effects` set by `connector.grant` (CLI
+`edgecitadel connector grant --effect CLASS=TARGET`), empty by default. As for
+recipients, a child's `effect_scope` is the dispatching invocation's grant
+intersected with what it inherited, so a child never authorizes more than its
+parent could.
+
+`trace.dispatch` accepts an optional `lease: {wall_time_ms, max_effects,
+max_tokens}`. The child's expiry is the earlier of the parent's expiry and
+`now + wall_time_ms`. A requested effect or token budget larger than the parent's
+remainder is denied `lease_exceeded`; an omitted one inherits the remainder. A
+dispatch after the parent's lease expired is also denied. The child's effect
+budget is reserved from the parent's in the dispatch transaction
+(`authority_ledger`), so the effects of a delegation tree never exceed the
+root's budget; unused reservations are not returned. `max_tokens` is carried and
+attenuated but nothing meters tokens yet. A lease denial records a
+`containment/alert` event (`alert: lease_exceeded`, `lease_dimension`) in the
+dispatching run, beside the `permission` and `dispatch` denials.
+
+Admission now checks, in order: execution hold (`execution_held`), egress hold
+(`egress_held`), revocation of the invocation's task or any task in its chain
+(`authority_revoked`), the grant (`not_authorized`), the inherited recipients
+(`outside_authority_scope`), ingress filters (`ingress_filtered`) and the lease
+(`lease_exceeded`). Containment denials name the deciding policy
+(`containment_hold`, `containment_egress_hold`, `revocation`,
+`ingress_filter`) and its owner's fencing token as `policy_version`.
+
+Containment state managed by the same fenced owners as holds:
+
+- **Egress hold** (`holds.kind = egress`): the invocation keeps running and
+  receiving, but nothing leaves it. Its dispatches and effects are denied, its
+  recipient terminal transitions (`completed`, `failed`, `rejected`) are refused
+  until release, and none of its outbound messages is published. This includes
+  requests and cancels it had already queued for its children. Task reads show
+  `containment_egress_hold`. The managed runtime does not pause on it; a result
+  waits for release. A task-less native root is egress-held by its binding ID,
+  which withholds the requests of the children it dispatched.
+- **Revocation** (`revocations`, kind `authority`, `egress` or `credential`):
+  irreversible. `authority` denies every later dispatch and effect of the named
+  task and of any task whose `authority_chain` contains it; the task may be
+  unknown here, since descendants that arrive later carry it in their chain.
+  `egress` denies those of one invocation only (a task, or a task-less native
+  root by binding ID), which may still complete. `credential` denies every
+  dispatch, effect and `task.create` of an agent and withholds the publication of
+  every message it emits. Denials name the policy `<kind>_revocation`.
+- **Ingress filter** (`ingress_filters`, key `(authority, target)`): denies only
+  traffic under that authority into that target. The authority is a delegation
+  (`task:<id>`, reaching descendants), a credential (`agent:<id>`), or any
+  (`any:*`, admission control). An agent target refuses the
+  dispatch at the sender, withholds an already queued request in the outbox,
+  and parks the delivery at the receiver (acknowledged to the broker, applied
+  when the filter is removed). An effect-rule target denies matching effects.
+  Other traffic into the same target continues.
+
+The outbox gate (`PUBLICATION_BLOCKED_SQL`) is one predicate used both to select
+messages and to recheck each message just before publication: transport and
+task holds, the requester's execution or egress hold (or a native root's
+binding egress hold) for a child's request or cancel, a credential revocation
+of the emitting agent, and agent filters on the child's chain, its sender's
+credential, or any authority.
+
+**Exported authority.** Each `run/started` carries the invocation's effective
+authority when it started, so a controller need not mirror grants from
+configuration:
+
+```json
+"attributes":{"authority":{"authority_version":1,"policy":"managed_package_grant",
+  "policy_version":"3","grant_version":"<sha256>","recipients":["child"],
+  "effects":[{"effect_class":"fs.write","target":"workspace/*"}],
+  "lease":{"expires_at_ms":1760000060000,"max_effects":2,"max_tokens":null},
+  "authority_chain":["<parent task>"]}}
+```
+
+`recipients` and `effects` are the grant intersected with what the task
+inherited, as admission computes them (a task-less native root: its connector
+grant; `lease: null` and an empty chain). When the two lists would exceed 8 KiB
+they are exported as `null`; read the grant instead. The snapshot does not fold
+in holds, revocations or filters, which are separate controller decisions, and
+a grant changed during the run is not exported again. Only `run/started` may
+carry `authority` (`invalid_run_authority` otherwise).
+
+Contexts saved before schema 32 gain `effect_scope: null`, `lease: null` and a
+chain holding only their parent, so revocation reaches them through their
+parent. A redelivered delegation is now compared by its saved JSON, which fixes
+a schema 31 false `execution_context` conflict on duplicate delivery.
+
+### Effect gateway
+
+A harness calls `effect.authorize` (`schemas/trace-effect-request.v1.json`) before
+each external effect and performs it only on an `ok` reply:
+
+```json
+{"schema_version":1,"request_id":"<uuid4>","binding_id":"<uuid4>",
+ "effect_class":"fs.write","target":"workspace/notes.md","tool_call_id":"<harness id>|null",
+ "scheduled_at_ms":null}
+```
+
+The request is bound to the invocation by its execution binding (Managed Agents,
+and native connectors with `edgecitadel_trace`), and only an `accepted` or
+`running` task may authorize. The target is exact; the harness classifies it.
+In one transaction agentd checks, and the first failure decides the error code:
+execution hold (`execution_held`), egress hold of the task or binding
+(`egress_held`), an `authority`, `egress` or `credential` revocation applying to
+the invocation (`authority_revoked`), the controller lease when configured
+(`controller_lease_expired`), the effect scope, which is the connector's effect
+grant narrowed by the inherited `effect_scope` (`outside_effect_scope`),
+effect-rule ingress filters on the invocation's authorities (`ingress_filtered`),
+and the lease's expiry and remaining effects (`lease_exceeded`). A committed
+effect is charged to the task's lease, and the reply returns
+`{event_id, state: "committed", effects_remaining, lease_expires_at_ms}`. A retry
+with the same `request_id` returns the stored decision and is charged once.
+
+Each effect records `effect/requested` and then `effect/committed` or
+`effect/denied` in the invocation's run, the decision citing the request in
+`causes`. Their attributes (`effect_version: 1`) are `effect_id` (the
+authorizing request ID), `effect_class`, `target`, `tool_call_id`,
+`scheduled_at_ms` (`null` for an immediate effect), and for the decision
+`policy`, `policy_version`, `reason` and `effects_remaining`. Lease and
+controller-lease denials also record `containment/alert`. `committed` means
+agentd released the effect to the harness, not that the harness performed it.
+
+**Scheduled effects and effect holds.** With `scheduled_at_ms` in the future,
+`effect.authorize` runs the same checks and, if they pass, records only
+`effect/requested` and replies `state: "scheduled"`; nothing is charged. When
+the effect is due, the harness sends `effect.commit`
+(`schemas/trace-effect-commit-request.v1.json`,
+`{schema_version, request_id, binding_id, effect_id}`). The checks run again then,
+and the effect is committed (charged) or denied. Between request and commit a
+controller can hold the effect by its ID (`hold {kind: effect, object_id:
+effect_id}`): a commit while held is refused with `effect_held`, records no event
+and stores no receipt, so the same commit request succeeds after release. An
+immediate effect is decided in one step and cannot be held individually; hold
+its task or egress instead. A committed or denied effect cannot be committed
+again (`invalid_metadata`). No harness schedules effects yet; Pi authorizes
+immediate effects only.
+
+**Fail-closed controller lease (off by default).** With
+`EDGECITADEL_CONTROLLER_LEASE_MS` set in the agentd environment, effects are
+denied unless a controller `renew` command was applied within that period. The
+renewal is held in memory, so a restarted daemon denies effects until renewed.
+A renewal never extends past the renewing command's own `expires_at_ms`, so a
+replayed renewal cannot keep the lease alive. Only effects are gated; dispatch
+and task execution continue. Whether losing the controller should fail closed is
+an open design decision, which is why the mechanism is opt-in.
+
+The gateway is cooperative: it constrains harnesses that call it. It is not an
+OS sandbox, and a harness with unrestricted tools can still act without asking.
+
+### Containment control protocol
+
+A controller drives a node's containment with versioned commands
+(`schemas/containment-control.v1.json`, `$defs.command`). The node answers each
+with an enforcement confirmation (`$defs.confirmation`).
+
+**Transports.** NATS request/reply on `edgecitadel.control.v1.<node_id>`, where
+`node_id` is the node's enrolled identity (`node.json` `agent_id`, the same name
+as in `edgecitadel.telemetry.v1.<node_id>`). agentd subscribes on every
+connection and applies a command off its event loop. Locally, the admin RPC
+`containment.control` takes `{action, target, owner, policy_version,
+command_id?}` and issues the same command with a five-minute expiry.
+
+**Command.**
+
+```json
+{"schema_version":1,"command_id":"<uuid4>","node_id":"endurance","owner":"core-monitor",
+ "policy_version":7,"issued_at_ms":1760000000000,"expires_at_ms":1760000030000,
+ "action":"hold","target":{"kind":"egress","object_id":"<task uuid>"},"mac":"<64 hex>"}
+```
+
+| `action` | `target` | Effect |
+|---|---|---|
+| `hold` / `release` | `{kind: task, object_id}` | pause a task (reversible) |
+| | `{kind: egress, object_id}` | egress block of a task, or of a task-less native root by its binding ID |
+| | `{kind: transport, object_id}` | withhold one outbox message |
+| | `{kind: effect, object_id: effect_id}` | keep a scheduled effect uncommitted |
+| `revoke` | `{kind: authority, object_id: task}` | a delegation and all its descendants |
+| | `{kind: egress, object_id: task or binding}` | one invocation's new dispatches and effects; it may still complete |
+| | `{kind: credential, object_id: agent}` | the agent's dispatches, effects, `task.create`, and publication of everything it emits |
+| | `{kind: grant, object_id: "<agent>><agent>"\|"<agent>>fx:<class>"}` | one sender into one recipient or effect class (a filter) |
+| | `{kind: admission, object_id: agent}` | no new task for the agent at this node, under any authority (a filter) |
+| `filter` / `unfilter` | `{authority: {task_id}\|{agent_id}\|{any: true}, into: {agent_id}\|{effect_class, target}}` | reversible ingress filter for one authority into one target |
+| `cancel` | `{task_id}` | remove this owner's holds on the task and cancel it (terminal) |
+| `renew` | `{}` | renew the fail-closed controller lease, when configured |
+| `describe` | `{}` | report `capabilities`, the supported `op:kind` pairs |
+
+`hold`, `release` and `revoke` with `{kind, object_id}` are the monitor's
+ControlClient operations; `describe` lists what a node enforces (`hold:task`,
+`hold:egress`, `hold:transport`, `hold:effect`, `revoke:authority`, `revoke:egress`,
+`revoke:credential`, `revoke:grant`, `revoke:admission`, `filter:agent`,
+`filter:effect`, `cancel:task`, `renew:controller`). Revocations are
+irreversible; `grant` and `admission` revocations are stored as ingress filters
+and listed with them.
+
+**Authentication.** The broker has no per-subject permissions, so a NATS command
+carries `mac = HMAC-SHA256(key, "edgecitadel.containment.control.v1\0" ||
+canonical JSON of the command without mac)`. Canonical JSON is the trace v1
+form: UTF-8, sorted keys, no whitespace. The key is read from
+`<agentd state>/control-keys/<owner>.key` (a regular file, not a symbolic link;
+at least 32 bytes after surrounding whitespace is stripped; provision the same
+key bytes to the controller). The command's owner is thereby
+authenticated, so its fencing token cannot be spent by another owner. Unknown
+owners and wrong MACs are rejected as `not_authenticated` and counted as
+authentication rejections.
+
+**Once and only before expiry.** A command must name this node (`wrong_node`),
+have `0 < expires_at_ms - issued_at_ms <= 300000` (`invalid_command`) and arrive
+before `expires_at_ms` by this node's clock (`command_expired`); keep controller
+and node clocks synchronized. Its confirmation is stored under `command_id` until
+expiry, so a retried or replayed command returns the original confirmation, and
+the same ID with a different body is `idempotency_conflict`. Every decision is
+fenced per owner as for holds (`stale_policy_version`); a renewal checks the
+fence without advancing state.
+
+**Confirmation.**
+
+```json
+{"schema_version":1,"command_id":"…","node_id":"endurance","action":"hold",
+ "status":"applied","code":null,"received_at_ms":…,"applied_at_ms":…,
+ "enforcement":{"gates":["result","dispatch","effect","publication"],
+   "task":{"state":"running","claimed":true},
+   "outbound":{"held":1,"pending":0,"in_flight":["<message uuid>"],"published":0}}}
+```
+
+`status` is `applied` or `rejected` with a stable `code` (the containment error
+codes above, `task_not_found`, `restore_hold`, `task_terminal`, `invalid_authority`,
+`invalid_filter_target`). `applied_at_ms` is when the gates took effect at this
+node. `enforcement` reports what was enforced at that instant:
+
+- `gates`: what the decision closed: `claim`, `transition`, `result`,
+  `dispatch`, `effect`, `task_create`, `publication`, `inbound`.
+- `task`: the local task's state and whether a session holds its claim, or
+  `null` when the task is not (yet) on this node; a hold placed first applies
+  when it arrives.
+- `outbound`: the object's outbound messages: for a task or egress hold, the
+  task's own messages and the requests and cancels it sent its children; for an
+  agent filter, the requests under that authority into that agent. `held` will
+  not be published while the decision stands; `pending` will be (after a
+  release); `in_flight` lists messages the outbox had already handed to the
+  broker, which cannot be recalled and are recorded as published; `published`
+  were sent before.
+- `parked_deliveries` / `applied_deliveries`: inbound deliveries withheld, or
+  applied by a release or unfilter.
+- `local_tasks` (revoke): local non-terminal tasks under the revoked authority.
+- `effect_state` (effect hold/release): `scheduled`, `committed`, `denied`, or
+  `null` when the effect is not (yet) known here.
+- `released_holds` (cancel); `controller_lease_until_ms` and
+  `controller_lease_enforced` (renew).
+
+The outbox and the command executor serialize on one publication lock: the
+outbox rechecks a message and registers it as in flight under the lock, and a
+command applies its decision and snapshots the in-flight set under it, so a
+message is either in `in_flight` or withheld. A paused handler is interrupted by
+its runtime within the runtime's watch interval (0.5 s) after `applied_at_ms`;
+its gates hold from `applied_at_ms`.
+
+Revocations and filters affect only the node that applies them. A controller
+revoking a delegation sends `revoke` to every node that may hold its
+descendants; descendants arriving later carry the revoked ID in their chain.
+A credential revocation is enforced through agentd's gates; it does not revoke
+the connector's local token (`connector.revoke` does that and fails running
+work).
+
+### Pause, resume and cancel of running managed work
+
+A hold on an `accepted` or `running` task **pauses** it; it is reversible. A
+task is paused exactly when it is non-terminal, claimed and held; agentd does
+not store a separate state. Every gate applies at once: the task cannot
+transition, its invocation cannot dispatch or authorize effects, and its
+outbound messages stay in the outbox. **Cancel** is terminal: the task becomes
+`cancelled` by its sender, its recipient or a controller.
+
+`managed_runtime.run` reacts to both. While a handler runs, the runtime reads its
+task every 0.5 s (`WATCH_INTERVAL_SECONDS`):
+
+| Observed | Runtime action | Task afterwards |
+|---|---|---|
+| hold | cancel the handler with `context.interruption = "pause"`; wait | unchanged state and claim, held |
+| hold released | call the handler again for the same task and binding, `context.resumed = True` | runs on; one run binding spans the pause |
+| terminal state | cancel the handler with `context.interruption = "cancel"`; finish the run with that state | terminal |
+| handler returned while held | keep the result in memory; commit it on release | committed on release, unless the task ended first (a cancel wins) |
+| hold before the `running` transition | wait for release, then start the handler | paused before execution |
+
+The handler alone decides what resuming means. The Pi harness aborts the current
+Pi turn when cancelled (`abort` on its private IPC, rejecting any adapter call the
+turn waits on). A paused turn is journaled as `paused`; on resume the worker
+continues the same Pi session with a resume instruction, and the root waits for
+a child it already dispatched instead of dispatching again. A cancelled or
+otherwise interrupted Pi turn is never repeated.
+
+If the runtime exits while its task is held, session recovery skips the task.
+Releasing the hold then applies the ordinary session-loss rule in the release
+transaction: an `accepted` task is requeued, and a `running` task fails with
+`executor_session_lost` because its handler may already have had effects.
 
 ### Reviewed activation with unresolved work held
 

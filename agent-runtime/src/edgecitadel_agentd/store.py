@@ -61,7 +61,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -209,6 +209,11 @@ class AgentdStore:
             self._last_retention_ms = 0
             self._reconciliation_storage_unavailable = False
             self._maintenance_checkpoint_blocked = False
+            # Fail-closed controller lease for effects; None disables it. The
+            # renewal is deliberately volatile: a restarted daemon denies
+            # effects until the controller renews again.
+            self.controller_lease_ms: int | None = None
+            self._controller_lease_until_ms = 0
             schema_version = int(
                 self._connection.execute("PRAGMA user_version").fetchone()[0]
             )
@@ -655,6 +660,65 @@ class AgentdStore:
             self._connection.execute("PRAGMA main.user_version=31")
             self._connection.execute("PRAGMA task_state.user_version=31")
 
+        if version < 32:
+            from .containment import AUTHORITY_SCHEMA_SQL
+
+            self._migrate_holds_v32_locked()
+            self._execute_migration_sql(AUTHORITY_SCHEMA_SQL)
+            for table, column in (
+                ("held_deliveries", "recipient_id TEXT NOT NULL DEFAULT ''"),
+                ("held_deliveries", "authorities_json TEXT NOT NULL DEFAULT '[]'"),
+                # Native connectors start with no effect grant.
+                ("connectors", "effect_grant_json TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                existing = {
+                    row[1]
+                    for row in self._connection.execute(
+                        f"PRAGMA task_state.table_info({table})"
+                    )
+                }
+                if column.split()[0] not in existing:
+                    self._connection.execute(
+                        f"ALTER TABLE task_state.{table} ADD COLUMN {column}"
+                    )
+            # Saved contexts gain effect scope, lease and authority chain. An
+            # earlier delegated context knows only its parent: no inherited
+            # effect restriction or lease, and revocations reach it through
+            # its parent's authority.
+            for row in self._connection.execute(
+                "SELECT task_id,context_json FROM trace_task_contexts"
+            ).fetchall():
+                context = json.loads(row[1])
+                context.setdefault("effect_scope", None)
+                context.setdefault("lease", None)
+                parent = context.get("parent_task_id")
+                context.setdefault("authority_chain", [parent] if parent else [])
+                self._connection.execute(
+                    "UPDATE trace_task_contexts SET context_json=? WHERE task_id=?",
+                    (
+                        json.dumps(context, sort_keys=True, separators=(",", ":")),
+                        row[0],
+                    ),
+                )
+            self._connection.execute("PRAGMA main.user_version=32")
+            self._connection.execute("PRAGMA task_state.user_version=32")
+
+    def _migrate_holds_v32_locked(self) -> None:
+        """Allow egress and effect holds; holds before schema 32 cannot."""
+        definition = self._connection.execute(
+            "SELECT sql FROM task_state.sqlite_schema WHERE name='holds'"
+        ).fetchone()[0]
+        if "'effect'" in definition:
+            return
+        self._connection.execute("ALTER TABLE task_state.holds RENAME TO holds_v31")
+        from .containment import HOLDS_SCHEMA_SQL
+
+        self._connection.execute(HOLDS_SCHEMA_SQL.split(";")[0])
+        self._connection.execute(
+            "INSERT INTO task_state.holds SELECT * FROM task_state.holds_v31"
+        )
+        self._connection.execute("DROP TABLE task_state.holds_v31")
+
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.
 
@@ -717,6 +781,42 @@ class AgentdStore:
             self, node_id=node_id, connector_id=connector_id, token=token, params=params
         )
 
+    def authorize_effect(
+        self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        from .effect_gateway import authorize_effect
+
+        return authorize_effect(
+            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
+
+    def commit_effect(
+        self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        from .effect_gateway import commit_effect
+
+        return commit_effect(
+            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
+
+    def controller_lease_valid(self, now_ms: int) -> bool:
+        with self._lock:
+            return (
+                self.controller_lease_ms is None
+                or now_ms < self._controller_lease_until_ms
+            )
+
+    def renew_controller_lease(self, now_ms: int, bound_ms: int) -> int | None:
+        """Extend the controller lease, never past the renewing command's expiry."""
+        with self._lock:
+            if self.controller_lease_ms is None:
+                return None
+            self._controller_lease_until_ms = max(
+                self._controller_lease_until_ms,
+                min(now_ms + self.controller_lease_ms, bound_ms),
+            )
+            return self._controller_lease_until_ms
+
     def place_hold(
         self, *, kind: str, object_id: str, owner: str, policy_version: int
     ) -> dict[str, object]:
@@ -743,10 +843,10 @@ class AgentdStore:
             policy_version=policy_version,
         )
 
-    def list_holds(self) -> list[dict[str, object]]:
-        from .containment import list_holds
+    def list_containment(self) -> dict[str, list[dict[str, object]]]:
+        from .containment import list_containment
 
-        return list_holds(self)
+        return list_containment(self)
 
     def _execute_migration_sql(self, source: str) -> None:
         """Execute simple migration statements without executescript's implicit commit."""
@@ -1010,7 +1110,7 @@ class AgentdStore:
             rows = self._connection.execute(
                 """
                 SELECT connector_id, host_type, agent_id, capabilities_json,
-                       outbound_agents_json,
+                       outbound_agents_json, effect_grant_json,
                        card_json, revoked_at_ms, created_at_ms, updated_at_ms,
                        EXISTS (
                            SELECT 1 FROM sessions s
@@ -1029,6 +1129,7 @@ class AgentdStore:
                 "agent_id": row["agent_id"],
                 "capabilities": json.loads(row["capabilities_json"])["items"],
                 "outbound_agents": json.loads(row["outbound_agents_json"]),
+                "effect_grant": json.loads(row["effect_grant_json"]),
                 "card": json.loads(row["card_json"]) if row["card_json"] else None,
                 "revoked": row["revoked_at_ms"] is not None,
                 "session_active": bool(row["session_active"]),
@@ -1211,6 +1312,8 @@ class AgentdStore:
     def reconcile_managed_agents(
         self, records: list[Mapping[str, object]]
     ) -> list[dict[str, object]]:
+        from .delegation_authority import effect_rules
+
         normalized: list[tuple[str, str, str, int]] = []
         now = _now_ms()
         for record in records:
@@ -1222,6 +1325,10 @@ class AgentdStore:
                 raise StoreError(
                     "Managed Agent desired_state must be running or stopped"
                 )
+            try:
+                effect_rules(record.get("effect_grant", []))
+            except TraceContractError as error:
+                raise StoreError("Managed Agent effect_grant is invalid") from error
             encoded = json.dumps(dict(record), separators=(",", ":"), sort_keys=True)
             if len(encoded.encode()) > 64 * 1024:
                 raise StoreError("Managed Agent record exceeds the 64 KiB limit")
@@ -1294,7 +1401,16 @@ class AgentdStore:
         return [cast(dict[str, object], json.loads(row["record_json"])) for row in rows]
 
     def authorize_recipient(self, connector: sqlite3.Row, recipient_id: str) -> None:
-        """Use the administrator-held delegation grant, never the Agent card."""
+        """Use the administrator-held delegation grant, never the Agent card.
+
+        Containment also applies: a revoked credential creates no task, and an
+        ingress filter on its credential or on admission refuses the recipient.
+        """
+        from .containment import (
+            authority_keys,
+            ingress_filter_locked,
+            revocation_locked,
+        )
         from .delegation_authority import delegation_grant
 
         grant = delegation_grant(self, connector)
@@ -1304,9 +1420,26 @@ class AgentdStore:
                 if connector["host_type"] == "managed-agent"
                 else "native connector recipient is not authorized by its grant"
             )
+        agent_id = str(connector["agent_id"])
+        with self._lock:
+            if revocation_locked(
+                self._connection, authorities=(), invocation=(), agent_id=agent_id
+            ):
+                raise StoreError("authority_revoked")
+            if ingress_filter_locked(
+                self._connection, authority_keys((), agent_id), agent_id=recipient_id
+            ):
+                raise StoreError("ingress_filtered")
 
-    def grant_connector(self, *, connector_id: str, outbound_agents: object) -> None:
-        """Set a native connector's delegation recipients (management authority only)."""
+    def grant_connector(
+        self, *, connector_id: str, outbound_agents: object, effects: object = ()
+    ) -> None:
+        """Set a native connector's delegation recipients and effect rules.
+
+        Management authority only. Both start empty for a new connector.
+        """
+        from .delegation_authority import effect_rules
+
         if (
             not isinstance(outbound_agents, list)
             or len(outbound_agents) > 256
@@ -1317,24 +1450,34 @@ class AgentdStore:
             or len(set(outbound_agents)) != len(outbound_agents)
         ):
             raise StoreError("outbound_agents must be unique Agent identities")
+        try:
+            rules = sorted(effect_rules(effects))
+        except TraceContractError as error:
+            raise StoreError("effects must be effect rules") from error
         with self._lock, self._connection:
             existing = self._connection.execute(
-                "SELECT agent_id,host_type,outbound_agents_json FROM connectors "
-                "WHERE connector_id=? AND revoked_at_ms IS NULL",
+                "SELECT agent_id,host_type,outbound_agents_json,effect_grant_json "
+                "FROM connectors WHERE connector_id=? AND revoked_at_ms IS NULL",
                 (connector_id,),
             ).fetchone()
             if existing is None:
                 raise StoreError("connector does not exist or is revoked")
             if existing["host_type"] == "managed-agent":
-                raise StoreError("Managed Agent recipients come from its package grant")
+                raise StoreError("Managed Agent grants come from its package")
             encoded = json.dumps(sorted(outbound_agents), separators=(",", ":"))
-            if existing["outbound_agents_json"] == encoded:
+            encoded_effects = json.dumps(
+                [asdict(rule) for rule in rules], separators=(",", ":")
+            )
+            if (
+                existing["outbound_agents_json"] == encoded
+                and existing["effect_grant_json"] == encoded_effects
+            ):
                 return
             now = _now_ms()
             self._connection.execute(
-                "UPDATE connectors SET outbound_agents_json=?, updated_at_ms=? "
-                "WHERE connector_id=?",
-                (encoded, now, connector_id),
+                "UPDATE connectors SET outbound_agents_json=?, effect_grant_json=?, "
+                "updated_at_ms=? WHERE connector_id=?",
+                (encoded, encoded_effects, now, connector_id),
             )
             self._record_event_locked(
                 event_type="connector.grant_reconciled",
@@ -1344,6 +1487,7 @@ class AgentdStore:
                 attributes={
                     "connector_id": connector_id,
                     "recipient_count": len(outbound_agents),
+                    "effect_rule_count": len(rules),
                 },
                 now=now,
             )
@@ -1519,7 +1663,7 @@ class AgentdStore:
             if correlation is not None:
                 self._connection.execute(
                     "INSERT INTO trace_task_contexts(task_id,context_json) VALUES (?,?)",
-                    (task_id, json.dumps(asdict(correlation), sort_keys=True)),
+                    (task_id, correlation.saved()),
                 )
             self._record_event_locked(
                 event_type="task.queued",
@@ -1576,7 +1720,37 @@ class AgentdStore:
         task = self.get_task(task_id)
         if actor_id not in {task["sender_id"], task["recipient_id"]}:
             raise StoreError("task is outside the connector scope")
-        return task
+        return self.visible_task(task, actor_id)
+
+    def visible_task(self, task: dict[str, object], actor_id: str) -> dict[str, object]:
+        """What an agent may see of a task, given holds on it.
+
+        A held child's outcome is withheld from its sender (the delegating
+        parent), even if the result had already been applied at this node:
+        the sender sees the last non-terminal state and no result until the
+        hold is released, so it cannot consume the result meanwhile.
+        """
+        held = "containment_hold" in task or "restore_status" in task
+        if (
+            not held
+            or task["sender_id"] != actor_id
+            or task["state"] not in TERMINAL_STATES
+        ):
+            return task
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT state FROM task_attempts WHERE task_id=? AND state IN "
+                "('queued','offered','accepted','running') "
+                "ORDER BY created_at_ms DESC, rowid DESC LIMIT 1",
+                (task["task_id"],),
+            ).fetchone()
+        return {
+            **task,
+            "state": row["state"] if row else "queued",
+            "terminal_reason": None,
+            "result": None,
+            "result_withheld": True,
+        }
 
     @contextmanager
     def _bounded_read(self) -> Iterator[None]:
@@ -1640,7 +1814,10 @@ class AgentdStore:
             rows = self._connection.execute(
                 "SELECT * FROM tasks" + where + " ORDER BY created_at_ms", arguments
             ).fetchall()
-        return [self._task_mapping(row) for row in rows]
+        tasks = [self._task_mapping(row) for row in rows]
+        return (
+            [self.visible_task(task, actor_id) for task in tasks] if actor_id else tasks
+        )
 
     def transition_task(
         self,
@@ -1709,9 +1886,16 @@ class AgentdStore:
             if state in {"accepted", "running", "completed", "failed", "rejected"}:
                 if actor_id != row["recipient_id"]:
                     raise StoreError("only the recipient may execute this transition")
+            if state in {"completed", "failed", "rejected"} and current != state:
+                from .containment import egress_hold_locked
+
+                # A result is the executing invocation's egress.
+                if egress_hold_locked(self._connection, task_id) is not None:
+                    raise StoreError("task egress is held by containment")
             if state == "cancelled" and actor_id not in {
                 row["sender_id"],
                 row["recipient_id"],
+                "edgecitadel-system",
             }:
                 raise StoreError("only the sender or recipient may cancel a task")
             if state in {"offered", "expired", "undeliverable"} and actor_id != (
@@ -1814,7 +1998,15 @@ class AgentdStore:
                     "expired": "failed",
                     "undeliverable": "failed",
                 }.get(state, state)
-                if state == "cancelled" and actor_id == row["sender_id"]:
+                # The sender, or a controller at the sender's node, cancels
+                # toward the executing recipient.
+                if state == "cancelled" and (
+                    actor_id == row["sender_id"]
+                    or (
+                        actor_id == "edgecitadel-system"
+                        and not self._agent_is_local_locked(str(row["recipient_id"]))
+                    )
+                ):
                     recipient_id = str(row["recipient_id"])
                     message_type = "cancel"
                 if not self._agent_is_local_locked(recipient_id):
@@ -1915,10 +2107,14 @@ class AgentdStore:
         task_id = envelope.get("task_id")
         if not isinstance(task_id, str) or not task_id:
             raise StoreError("transport envelope task_id is required")
-        from .containment import park_delivery_locked
+        from .containment import (
+            authority_keys,
+            ingress_filter_locked,
+            park_delivery_locked,
+        )
 
-        # Holding the store lock across the check and the application keeps a
-        # concurrent containment.hold from slipping between them.
+        # Holding the store lock across the checks and the application keeps a
+        # concurrent containment decision from slipping between them.
         with self._lock:
             if self._task_hold_locked(task_id) is not None:
                 # Acknowledge, then hold: the broker delivery completes and the
@@ -1926,6 +2122,29 @@ class AgentdStore:
                 with self._task_transaction():
                     park_delivery_locked(self, dict(envelope), task_id)
                 return {"task_id": task_id, "held": True}
+            if message_type in {
+                "command",
+                "delegation",
+            } and not self._task_exists_locked(task_id):
+                try:
+                    arriving = TaskTraceContext.from_envelope(envelope)
+                except TraceContractError as error:
+                    raise StoreError(error.code) from error
+                # The delivery acts under the delegations that led to it and
+                # under its sender's credential.
+                keys = authority_keys(
+                    arriving.authority_chain, str(envelope.get("sender_id", ""))
+                )
+                if ingress_filter_locked(
+                    self._connection,
+                    keys,
+                    agent_id=str(envelope.get("recipient_id", "")),
+                ):
+                    with self._task_transaction():
+                        park_delivery_locked(
+                            self, dict(envelope), task_id, authorities=keys
+                        )
+                    return {"task_id": task_id, "held": True}
             return self._apply_transport_envelope(envelope, message_type, task_id)
 
     def _apply_transport_envelope(
@@ -2090,8 +2309,8 @@ class AgentdStore:
                     "SELECT context_json FROM trace_task_contexts WHERE task_id=?",
                     (task_id,),
                 ).fetchone()
-            if saved_context is not None and json.loads(saved_context[0]) != asdict(
-                correlation
+            if saved_context is not None and json.loads(saved_context[0]) != json.loads(
+                correlation.saved()
             ):
                 conflicts.append("execution_context")
             if conflicts:
@@ -2129,17 +2348,16 @@ class AgentdStore:
         )
 
     def pending_transport(self, limit: int = 100) -> list[dict[str, object]]:
+        from .containment import PUBLICATION_BLOCKED_SQL
+
         if not 1 <= limit <= 1000:
             raise StoreError("transport limit must be between 1 and 1000")
         with self._lock:
             rows = self._connection.execute(
-                """
-                SELECT message_id, task_id, subject, envelope_json, created_at_ms
-                FROM transport_outbox WHERE published_at_ms IS NULL
-                  AND message_id NOT IN (SELECT object_id FROM holds WHERE kind='transport')
-                  AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task')
-                ORDER BY created_at_ms LIMIT ?
-                """,
+                "SELECT message_id, task_id, subject, envelope_json, created_at_ms "
+                "FROM transport_outbox o WHERE published_at_ms IS NULL "
+                f"AND NOT {PUBLICATION_BLOCKED_SQL} "
+                "ORDER BY created_at_ms LIMIT ?",
                 (limit,),
             ).fetchall()
         return [
@@ -2152,6 +2370,20 @@ class AgentdStore:
             }
             for row in rows
         ]
+
+    def publication_allowed(self, message_id: str) -> bool:
+        """Recheck one selected message just before it is handed to the broker."""
+        from .containment import PUBLICATION_BLOCKED_SQL
+
+        with self._lock:
+            return (
+                self._connection.execute(
+                    "SELECT 1 FROM transport_outbox o WHERE message_id=? "
+                    f"AND published_at_ms IS NULL AND NOT {PUBLICATION_BLOCKED_SQL}",
+                    (message_id,),
+                ).fetchone()
+                is not None
+            )
 
     def mark_transport_published(self, message_id: str) -> None:
         # Restore holds are placed offline, so a held restored message can never
@@ -2348,6 +2580,17 @@ class AgentdStore:
         # Finishes a release interrupted between its commit and applying the
         # deliveries it had parked.
         apply_released_deliveries(self)
+        # A control command past its expiry is rejected without being applied,
+        # so its receipt is no longer needed for replay protection.
+        with self._lock:
+            expired = self._connection.execute(
+                "SELECT 1 FROM control_commands WHERE expires_at_ms<=? LIMIT 1", (now,)
+            ).fetchone()
+        if expired is not None:
+            with self._task_transaction():
+                self._connection.execute(
+                    "DELETE FROM control_commands WHERE expires_at_ms<=?", (now,)
+                )
         with self._lock:
             with self._connection:
                 rows = self._connection.execute(
@@ -2813,6 +3056,14 @@ class AgentdStore:
             )
         return event_id
 
+    def _task_exists_locked(self, task_id: str) -> bool:
+        return (
+            self._connection.execute(
+                "SELECT 1 FROM tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+            is not None
+        )
+
     def _task_hold_locked(self, task_id: str) -> sqlite3.Row | None:
         """The task's hold, if any; a restore hold outranks a containment hold."""
         return cast(
@@ -2847,17 +3098,19 @@ class AgentdStore:
         # The hold lookup still shares the connection with background writers.
         with self._lock:
             holds = self._connection.execute(
-                "SELECT reason,owner,policy_version FROM holds WHERE kind='task' AND object_id=?",
+                "SELECT kind,reason,owner,policy_version FROM holds "
+                "WHERE kind IN ('task','egress') AND object_id=?",
                 (str(row["task_id"]),),
             ).fetchall()
         for hold in holds:
             if hold["reason"] == "restore":
                 value["restore_status"] = "reconciliation_required"
             else:
-                value["containment_hold"] = {
-                    "owner": hold["owner"],
-                    "policy_version": hold["policy_version"],
-                }
+                value[
+                    "containment_hold"
+                    if hold["kind"] == "task"
+                    else "containment_egress_hold"
+                ] = {"owner": hold["owner"], "policy_version": hold["policy_version"]}
         return value
 
     @staticmethod

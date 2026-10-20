@@ -7,13 +7,18 @@ from pathlib import Path
 
 import pytest
 
+from edgecitadel_agentd.delegation_authority import EffectRule, Lease
 from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.trace_contract import TraceContractError
 from edgecitadel_agentd.trace_correlation import TaskTraceContext
 from edgecitadel_plugin_runtime.validator import default_validator
 
-# Every delegated context carries the scope its delegator could reach.
-SCOPE = frozenset({"agent-1", "agent-2", "agent-3"})
+# Every delegated context carries the authority its delegator could pass on.
+AUTHORITY = {
+    "recipients": frozenset({"agent-1", "agent-2", "agent-3"}),
+    "effects": frozenset({EffectRule("fs.write", "workspace/*")}),
+    "lease": Lease(expires_at_ms=1_900_000_000_000, max_effects=5, max_tokens=None),
+}
 
 FIXTURES = json.loads(
     (Path(__file__).parents[1] / "fixtures/traces/delegation.v1.json").read_text()
@@ -43,7 +48,7 @@ def test_three_levels_preserve_context_across_wire_and_results(fixture: dict) ->
     edges = []
     for index, task_id in enumerate([root, child, grandchild]):
         if index:
-            contexts.append(contexts[-1].child(task_id, SCOPE))
+            contexts.append(contexts[-1].child(task_id, **AUTHORITY))
         context = contexts[-1]
         envelope = context.apply(
             message(task_id, f"agent-{index}", f"agent-{index + 1}")
@@ -73,7 +78,7 @@ def test_two_roots_in_same_conversation_never_share_ancestry() -> None:
     contexts = [
         TaskTraceContext(
             item["task_ids"][0], item["context_id"], item["trace_id"]
-        ).child(item["task_ids"][1], SCOPE)
+        ).child(item["task_ids"][1], **AUTHORITY)
         for item in FIXTURES
     ]
     assert contexts[0].context_id == contexts[1].context_id
@@ -88,7 +93,7 @@ def test_legacy_root_does_not_gain_invented_trace_evidence() -> None:
     assert context.context_id == task_id
     assert context.context_origin == "legacy_default"
     assert context.trace_id is None
-    upgraded = context.child(str(uuid.uuid4()), SCOPE)
+    upgraded = context.child(str(uuid.uuid4()), **AUTHORITY)
     wire = upgraded.apply(message(upgraded.task_id, "worker", "next"))
     assert "trace_id" not in wire["payload"]
     assert TaskTraceContext.from_envelope(wire).context_origin == "legacy_default"
@@ -99,8 +104,8 @@ def test_existing_receiver_executes_new_delegated_envelope(tmp_path: Path) -> No
     context = TaskTraceContext(
         fixture["task_ids"][0], fixture["context_id"], fixture["trace_id"]
     )
-    context = context.child(fixture["task_ids"][1], SCOPE).child(
-        fixture["task_ids"][2], SCOPE
+    context = context.child(fixture["task_ids"][1], **AUTHORITY).child(
+        fixture["task_ids"][2], **AUTHORITY
     )
     wire = context.apply(message(context.task_id, "sender", "worker"))
     store = AgentdStore(tmp_path / "agentd.sqlite3")
@@ -124,7 +129,12 @@ def test_existing_receiver_executes_new_delegated_envelope(tmp_path: Path) -> No
 
 def test_native_observational_root_is_typed_without_parent_task() -> None:
     context = TaskTraceContext(
-        str(uuid.uuid4()), str(uuid.uuid4()), "a" * 32, parent_run_id="a" * 32
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
+        "a" * 32,
+        parent_run_id="a" * 32,
+        authority_scope=("worker",),
+        effect_scope=(),
     )
     wire = context.apply(message(context.task_id, "codex", "worker"))
     assert wire["type"] == "command" and wire["hop_count"] == 0
@@ -136,7 +146,7 @@ def test_reserved_handler_output_cannot_change_task_correlation() -> None:
     item = FIXTURES[0]
     context = TaskTraceContext(
         item["task_ids"][0], item["context_id"], item["trace_id"]
-    ).child(item["task_ids"][1], SCOPE)
+    ).child(item["task_ids"][1], **AUTHORITY)
     wire = message(context.task_id, "worker", "sender", "result")
     wire["payload"].update(
         trace_id="b" * 32,

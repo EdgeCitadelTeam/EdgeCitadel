@@ -1,0 +1,740 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/containment-control.v1.json",
+  "title": "Containment control command and enforcement confirmation v1",
+  "description": "Request/reply on edgecitadel.control.v1.<node_id>. A command is authenticated by mac = HMAC-SHA256(owner key, 'edgecitadel.containment.control.v1\\u0000' + canonical JSON of the command without mac).",
+  "$defs": {
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "command_id",
+        "node_id",
+        "owner",
+        "policy_version",
+        "issued_at_ms",
+        "expires_at_ms",
+        "action",
+        "target"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "command_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "node_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_.:-]{0,127}$"
+        },
+        "policy_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "issued_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "action": {
+          "enum": [
+            "hold",
+            "release",
+            "revoke",
+            "filter",
+            "unfilter",
+            "cancel",
+            "renew",
+            "describe"
+          ]
+        },
+        "target": {
+          "type": "object"
+        },
+        "mac": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "hold"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "object_id"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "task",
+                      "egress",
+                      "transport",
+                      "effect"
+                    ]
+                  },
+                  "object_id": {
+                    "type": "string",
+                    "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "release"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "object_id"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "task",
+                      "egress",
+                      "transport",
+                      "effect"
+                    ]
+                  },
+                  "object_id": {
+                    "type": "string",
+                    "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "revoke"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "object_id"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "authority",
+                          "egress"
+                        ]
+                      },
+                      "object_id": {
+                        "type": "string",
+                        "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "object_id"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "credential",
+                          "admission"
+                        ]
+                      },
+                      "object_id": {
+                        "type": "string",
+                        "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "object_id"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "grant"
+                      },
+                      "object_id": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}>([a-z0-9][a-z0-9_-]{0,63}|fx:(fs\\.write|process\\.exec|network\\.http|device\\.command))$"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "filter"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "authority",
+                  "into"
+                ],
+                "properties": {
+                  "authority": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "task_id"
+                        ],
+                        "properties": {
+                          "task_id": {
+                            "type": "string",
+                            "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "agent_id"
+                        ],
+                        "properties": {
+                          "agent_id": {
+                            "type": "string",
+                            "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "any"
+                        ],
+                        "properties": {
+                          "any": {
+                            "const": true
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "into": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "agent_id"
+                        ],
+                        "properties": {
+                          "agent_id": {
+                            "type": "string",
+                            "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "effect_class",
+                          "target"
+                        ],
+                        "properties": {
+                          "effect_class": {
+                            "enum": [
+                              "fs.write",
+                              "process.exec",
+                              "network.http",
+                              "device.command"
+                            ]
+                          },
+                          "target": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512,
+                            "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]+$"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "unfilter"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "authority",
+                  "into"
+                ],
+                "properties": {
+                  "authority": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "task_id"
+                        ],
+                        "properties": {
+                          "task_id": {
+                            "type": "string",
+                            "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "agent_id"
+                        ],
+                        "properties": {
+                          "agent_id": {
+                            "type": "string",
+                            "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "any"
+                        ],
+                        "properties": {
+                          "any": {
+                            "const": true
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "into": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "agent_id"
+                        ],
+                        "properties": {
+                          "agent_id": {
+                            "type": "string",
+                            "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "effect_class",
+                          "target"
+                        ],
+                        "properties": {
+                          "effect_class": {
+                            "enum": [
+                              "fs.write",
+                              "process.exec",
+                              "network.http",
+                              "device.command"
+                            ]
+                          },
+                          "target": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512,
+                            "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]+$"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "cancel"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "task_id"
+                ],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "renew"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "describe"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "command_id",
+        "node_id",
+        "action",
+        "status",
+        "code",
+        "received_at_ms",
+        "applied_at_ms",
+        "enforcement"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "command_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "node_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        "action": {
+          "anyOf": [
+            {
+              "enum": [
+                "hold",
+                "release",
+                "revoke",
+                "filter",
+                "unfilter",
+                "cancel",
+                "renew",
+                "describe"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "rejected"
+          ]
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "received_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "applied_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enforcement": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "gates": {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "claim",
+                      "transition",
+                      "result",
+                      "dispatch",
+                      "effect",
+                      "task_create",
+                      "publication",
+                      "inbound"
+                    ]
+                  }
+                },
+                "task": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "state",
+                        "claimed"
+                      ],
+                      "properties": {
+                        "state": {
+                          "type": "string"
+                        },
+                        "claimed": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "outbound": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "held",
+                    "pending",
+                    "in_flight",
+                    "published"
+                  ],
+                  "properties": {
+                    "held": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "pending": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "in_flight": {
+                      "type": "array",
+                      "maxItems": 1000,
+                      "items": {
+                        "type": "string",
+                        "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      }
+                    },
+                    "published": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                },
+                "parked_deliveries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "applied_deliveries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "local_tasks": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "released_holds": {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "task",
+                      "egress"
+                    ]
+                  }
+                },
+                "controller_lease_until_ms": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "controller_lease_enforced": {
+                  "type": "boolean"
+                },
+                "capabilities": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z]+:[a-z]+$"
+                  }
+                },
+                "effect_state": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "scheduled",
+                        "committed",
+                        "denied"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/command"
+    },
+    {
+      "$ref": "#/$defs/confirmation"
+    }
+  ]
+}

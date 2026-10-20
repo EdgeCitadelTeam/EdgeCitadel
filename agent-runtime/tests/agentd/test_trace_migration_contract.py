@@ -97,10 +97,21 @@ def populated_v5(tmp_path):
 
 
 def upgraded(before):
-    """Schema 30 replaces restore_holds by owned holds and adds containment state."""
+    """Schema 30 replaces restore_holds by owned holds and adds containment state;
+    schema 32 adds delegated authority state and control-command receipts."""
     rows = {name: value for name, value in before.items() if name != "restore_holds"}
     assert before["restore_holds"] == []  # This fixture predates restore.
-    return {**rows, "holds": [], "containment_fences": [], "held_deliveries": []}
+    empty = (
+        "holds",
+        "containment_fences",
+        "held_deliveries",
+        "revocations",
+        "ingress_filters",
+        "authority_ledger",
+        "scheduled_effects",
+        "control_commands",
+    )
+    return {**rows, **{name: [] for name in empty}}
 
 
 def test_populated_upgrade_preserves_journal_outbox_and_encrypted_content(populated_v5):

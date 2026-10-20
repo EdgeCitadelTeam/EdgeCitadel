@@ -2,16 +2,23 @@
 
 These values are correlation data, never credentials. The recorder must persist
 the entire context rather than reconstruct depth from whichever parents remain.
-``authority_scope`` only ever narrows delegation: a child inherits the set of
-recipients its parent invocation could reach, and the executing node intersects
-it with its own grant. It cannot grant anything a local grant does not.
+The inherited authority only ever narrows what the executing node's own grant
+allows; it cannot grant anything a local grant does not:
+
+- ``authority_scope``: recipients the delegating invocation could reach;
+- ``effect_scope``: effect rules it could authorize;
+- ``lease``: the child's hard limits, within the parent's remainder;
+- ``authority_chain``: the delegated task IDs from the root to the parent. A
+  revocation or ingress filter naming any of them applies to this task too.
+  Contexts saved before schema 32 know only their parent.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal, cast
 
 from edgecitadel_plugin_runtime.validator import (
@@ -20,6 +27,7 @@ from edgecitadel_plugin_runtime.validator import (
     normalize_task_correlation,
 )
 
+from .delegation_authority import EffectRule, Lease, effect_rules
 from .trace_contract import TraceContractError
 
 _UUID = re.compile(
@@ -28,6 +36,7 @@ _UUID = re.compile(
 _TRACE = re.compile(r"[0-9a-f]{32}")
 _AGENT = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 MAX_SCOPE = 256
+MAX_CHAIN = 64
 
 
 @dataclass(frozen=True)
@@ -39,10 +48,19 @@ class TaskTraceContext:
     parent_run_id: str | None = None
     hop_count: int = 0
     context_origin: Literal["source_explicit", "legacy_default"] = "source_explicit"
-    # None: no inherited restriction (a root task, or a context saved before scopes).
+    # None: no inherited restriction (a root task).
     authority_scope: tuple[str, ...] | None = None
+    effect_scope: tuple[EffectRule, ...] | None = None
+    lease: Lease | None = None
+    authority_chain: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        # Saved and transported contexts are JSON; keep one canonical form.
+        if self.effect_scope is not None:
+            object.__setattr__(
+                self, "effect_scope", tuple(sorted(effect_rules(self.effect_scope)))
+            )
+        object.__setattr__(self, "lease", Lease.parse(self.lease))
         if self.authority_scope is not None:
             scope = self.authority_scope
             if (
@@ -90,11 +108,35 @@ class TaskTraceContext:
             self.trace_id is None or self.parent_run_id != self.trace_id
         ):
             raise TraceContractError("invalid_task_correlation")
+        chain = self.authority_chain
+        if (
+            not isinstance(chain, (list, tuple))
+            or len(chain) > min(MAX_CHAIN, self.hop_count)
+            or not all(
+                isinstance(task, str) and _UUID.fullmatch(task) for task in chain
+            )
+            or len(set(chain)) != len(chain)
+            or self.task_id in chain
+            or (
+                (not chain or chain[-1] != self.parent_task_id)
+                if self.parent_task_id is not None
+                else bool(chain)
+            )
+        ):
+            raise TraceContractError("invalid_task_correlation")
+        object.__setattr__(self, "authority_chain", tuple(chain))
 
-    def child(self, task_id: str, authority_scope: frozenset[str]) -> TaskTraceContext:
+    def child(
+        self,
+        task_id: str,
+        *,
+        recipients: frozenset[str],
+        effects: frozenset[EffectRule],
+        lease: Lease | None,
+    ) -> TaskTraceContext:
         """Derive identity for an already-authorized child dispatch.
 
-        ``authority_scope`` is the dispatching invocation's effective scope,
+        The authority is the dispatching invocation's effective authority,
         which the child can only narrow further.
         """
         return replace(
@@ -103,8 +145,16 @@ class TaskTraceContext:
             parent_task_id=self.task_id,
             parent_run_id=None,
             hop_count=self.hop_count + 1,
-            authority_scope=tuple(sorted(authority_scope)),
+            authority_scope=tuple(sorted(recipients)),
+            effect_scope=tuple(sorted(effects)),
+            lease=lease,
+            authority_chain=(*self.authority_chain, self.task_id),
         )
+
+    @property
+    def authorities(self) -> tuple[str, ...]:
+        """The delegations this task acts under: its ancestors and itself."""
+        return (*self.authority_chain, self.task_id)
 
     def execution_context(self) -> dict[str, Any]:
         """The payload capsule that carries this context across a transport hop."""
@@ -115,7 +165,16 @@ class TaskTraceContext:
             "authority_scope": list(self.authority_scope)
             if self.authority_scope is not None
             else None,
+            "effect_scope": [asdict(rule) for rule in self.effect_scope]
+            if self.effect_scope is not None
+            else None,
+            "lease": asdict(self.lease) if self.lease is not None else None,
+            "authority_chain": list(self.authority_chain),
         }
+
+    def saved(self) -> str:
+        """The canonical JSON this context is persisted and compared as."""
+        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
 
     def apply(self, envelope: Mapping[str, Any]) -> dict[str, Any]:
         """Stamp reserved correlation fields, preserving non-correlation data.
@@ -165,37 +224,36 @@ class TaskTraceContext:
             raise TraceContractError("invalid_task_correlation") from error
         payload = cast(dict[str, Any], normalized["payload"])
         origin = "source_explicit" if "context_id" in envelope else "legacy_default"
-        parent_run = None
-        scope = None
+        metadata: dict[str, Any] = {
+            "parent_run_id": None,
+            "authority_scope": None,
+            "effect_scope": None,
+            "lease": None,
+            "authority_chain": [],
+        }
         if "execution_context" in payload:
-            metadata = payload["execution_context"]
+            capsule = payload["execution_context"]
             if (
-                not isinstance(metadata, dict)
-                or set(metadata)
-                != {
-                    "schema_version",
-                    "context_origin",
-                    "parent_run_id",
-                    "authority_scope",
-                }
-                or type(metadata["schema_version"]) is not int
-                or metadata["schema_version"] != 1
+                not isinstance(capsule, dict)
+                or set(capsule) != {"schema_version", "context_origin", *metadata}
+                or type(capsule["schema_version"]) is not int
+                or capsule["schema_version"] != 1
             ):
                 raise TraceContractError("unsupported_execution_context")
-            origin = metadata["context_origin"]
-            parent_run = metadata["parent_run_id"]
-            scope = metadata["authority_scope"]
-        if normalized["hop_count"] and scope is None:
-            # A delegated task always carries the delegator's scope; its absence
-            # would silently widen authority at this hop.
+            origin = capsule["context_origin"]
+            metadata = {key: capsule[key] for key in metadata}
+        if (normalized["hop_count"] or metadata["parent_run_id"]) and (
+            metadata["authority_scope"] is None or metadata["effect_scope"] is None
+        ):
+            # A delegated task always carries the delegator's authority; its
+            # absence would silently widen authority at this hop.
             raise TraceContractError("missing_authority_scope")
         return cls(
             task_id=cast(str, normalized["task_id"]),
             context_id=cast(str, normalized["context_id"]),
             trace_id=payload.get("trace_id"),
             parent_task_id=payload.get("parent_task_id"),
-            parent_run_id=parent_run,
             hop_count=cast(int, normalized["hop_count"]),
             context_origin=cast(Literal["source_explicit", "legacy_default"], origin),
-            authority_scope=scope,
+            **metadata,
         )

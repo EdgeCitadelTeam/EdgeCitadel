@@ -76,7 +76,7 @@ def authorize_binding_operation(
     delegation_allowed: bool = False,
 ) -> None:
     _session(session, now_ms)
-    if operation not in {"append", "dispatch", "finish"}:
+    if operation not in {"append", "dispatch", "finish", "effect"}:
         raise TraceContractError("invalid_binding_operation")
     if (
         binding.connector_id != session.connector_id
@@ -94,9 +94,10 @@ def authorize_binding_operation(
             raise TraceContractError("binding_task_mismatch")
         _execution(session, task)
         # Completion callbacks can arrive just after the store commits a terminal
-        # task state. They cannot reopen the task or authorize another dispatch.
+        # task state. They cannot reopen the task or authorize another dispatch
+        # or effect.
         allowed = {"accepted", "running"}
-        if operation != "dispatch":
+        if operation not in {"dispatch", "effect"}:
             allowed |= {"completed", "failed", "rejected", "cancelled", "expired"}
         if task.state not in allowed:
             raise TraceContractError("execution_not_active")

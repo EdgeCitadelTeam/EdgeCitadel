@@ -53,6 +53,8 @@ def _validators() -> dict[str, Draft202012Validator]:
             "finish-request",
             "loss-request",
             "dispatch-request",
+            "effect-request",
+            "effect-commit-request",
             "import-request",
             "rpc-reply",
             "event",
@@ -231,10 +233,25 @@ def validate_event(event: dict[str, Any]) -> bytes:
         # Only an allowed dispatch creates a child; it must name exactly that child.
         if (event["phase"] == "allowed") != ("child_task_id" in event["attributes"]):
             raise TraceContractError("invalid_dispatch_child")
+    if (
+        event["kind"] == "run"
+        and event["phase"] != "started"
+        and "authority" in event["attributes"]
+    ):
+        # Authority is what an invocation started with, never a later claim.
+        raise TraceContractError("invalid_run_authority")
     if event["kind"] == "lineage":
         # A producer is never "external"; only a consumed root input can be.
         if event["phase"] == "generated" and event["attributes"]["external"]:
             raise TraceContractError("invalid_lineage_origin")
+    if event["kind"] == "effect":
+        # A request carries no decision; a denial always names its reason.
+        attributes = event["attributes"]
+        decided = event["phase"] != "requested"
+        if (attributes["policy"] is not None) != decided or (
+            attributes["reason"] is not None
+        ) != (event["phase"] == "denied"):
+            raise TraceContractError("invalid_effect_decision")
     return encoded
 
 
@@ -311,6 +328,14 @@ def validate_dispatch_request(request: dict[str, Any]) -> bytes:
     # Commands can contain raw user content locally; this request must never be
     # copied into exported event attributes. Unicode can occupy four UTF-8 bytes.
     return _validate("dispatch-request", request, 68 * 1024)
+
+
+def validate_effect_request(request: dict[str, Any]) -> bytes:
+    return _validate("effect-request", request, 2048)
+
+
+def validate_effect_commit_request(request: dict[str, Any]) -> bytes:
+    return _validate("effect-commit-request", request, 1024)
 
 
 def validate_finish_request(request: dict[str, Any]) -> bytes:

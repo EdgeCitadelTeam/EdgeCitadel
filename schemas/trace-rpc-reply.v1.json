@@ -242,7 +242,8 @@
             "finish",
             "import",
             "dispatch",
-            "loss"
+            "loss",
+            "effect"
           ]
         },
         "status": {
@@ -260,7 +261,14 @@
             "storage_unavailable",
             "quota_exceeded",
             "execution_held",
-            "outside_authority_scope"
+            "outside_authority_scope",
+            "egress_held",
+            "authority_revoked",
+            "ingress_filtered",
+            "lease_exceeded",
+            "outside_effect_scope",
+            "controller_lease_expired",
+            "effect_held"
           ]
         },
         "retryable": {
@@ -400,6 +408,78 @@
             "source_seq"
           ],
           "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "operation",
+        "status",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "operation": {
+          "const": "effect"
+        },
+        "status": {
+          "const": "ok"
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "event_id",
+            "state",
+            "effects_remaining",
+            "lease_expires_at_ms"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string",
+              "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "state": {
+              "enum": [
+                "scheduled",
+                "committed"
+              ]
+            },
+            "effects_remaining": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lease_expires_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
         }
       },
       "required": [

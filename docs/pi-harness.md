@@ -113,6 +113,37 @@ Jev receives the current request and recent conversation context, which can incl
 text returned by a worker. This routing path does not promise that all result text
 stays local to Endurance.
 
+## Containment hooks
+
+The Pi adapter cooperates with agentd's containment of running work
+([pause, resume and cancel](architecture/execution-trace-contract.md#pause-resume-and-cancel-of-running-managed-work),
+[effect gateway](architecture/execution-trace-contract.md#effect-gateway)):
+
+- **Pause and cancel.** When the managed runtime cancels the handler, the adapter
+  sends `abort` to `session.mjs`, rejects any adapter call the Pi turn is waiting
+  on, and waits up to 5 s for the turn to end before stopping the process. The
+  request journal records `paused` or `cancelled`. On resume after a pause, the
+  worker re-prompts the same Pi session with a resume instruction; the root
+  re-routes the original request and waits for a child it already dispatched
+  instead of dispatching again. Cancelled or interrupted turns are not repeated.
+- **Effect gate (worker).** `session.mjs` installs an inline extension whose
+  `tool_call` handler asks the adapter (`effect` IPC call, which calls
+  `effect.authorize` with the task's binding) before every tool except `read`,
+  `grep`, `find` and `ls`. `write` and `edit` are `fs.write` with target
+  `workspace/<path>` inside the workspace or the absolute path outside it
+  (lexical resolution, not an OS sandbox); every other tool, including `bash`, is
+  `process.exec` with the tool name as target. A denial or an unreachable agentd
+  blocks the tool, and the model sees the reason. If the extension cannot be
+  installed, the worker refuses to run tools at all.
+- **Grants.** Both manifests declare `permissions.effects`
+  `fs.write workspace/*` and `process.exec bash`. The root holds them only to
+  delegate them, because a child's effects never exceed its delegator's.
+
+The gate relies on SDK 0.87.1 accepting `DefaultResourceLoader({extensionFactories})`
+with `noExtensions: true` and honouring `{block: true}` from a `tool_call`
+handler. This was tested only against a scripted stand-in for the SDK
+(`tests/pi/test_pi_effect_gate.py`); verify it on Endurance before relying on it.
+
 ## Installation artifacts
 
 Source: `agent-packages/pi-root/`; shared runtime supports both roles.

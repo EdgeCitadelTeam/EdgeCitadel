@@ -266,7 +266,12 @@ def test_rollback_keeps_the_obligation_pending_and_positions_unspent(completed_s
         db.execute("BEGIN IMMEDIATE")
         TraceJournal(db).record(
             "edge-a",
-            {**original, "event_id": str(uuid4()), "phase": "completed"},
+            {
+                **original,
+                "event_id": str(uuid4()),
+                "phase": "completed",
+                "attributes": {},
+            },
             selected=True,
             completion=obligation,
         )

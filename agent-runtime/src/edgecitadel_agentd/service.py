@@ -56,8 +56,7 @@ ADMIN_OPERATIONS = frozenset(
         "managed.reconcile",
         "managed.list",
         "managed.connector.reissue",
-        "containment.hold",
-        "containment.release",
+        "containment.control",
         "containment.list",
     }
 )
@@ -106,6 +105,23 @@ def _write_process_record(state_dir: Path, pid: int | None) -> None:
     temporary.chmod(0o600)
     temporary.replace(path)
     path.chmod(0o600)
+
+
+def _controller_lease_ms() -> int | None:
+    """EDGECITADEL_CONTROLLER_LEASE_MS: deny effects unless renewed this recently.
+
+    Unset or 0 leaves the fail-closed controller lease off (the default).
+    """
+    value = os.environ.get("EDGECITADEL_CONTROLLER_LEASE_MS", "0")
+    try:
+        lease_ms = int(value)
+    except ValueError as error:
+        raise StoreError(
+            "EDGECITADEL_CONTROLLER_LEASE_MS must be an integer"
+        ) from error
+    if not 0 <= lease_ms <= 3_600_000:
+        raise StoreError("EDGECITADEL_CONTROLLER_LEASE_MS must be at most one hour")
+    return lease_ms or None
 
 
 def _load_or_create_admin_token(state_dir: Path) -> str:
@@ -230,9 +246,10 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
     host_type = str(connector["host_type"])
     capabilities = set(json.loads(connector["capabilities_json"])["items"])
     common = {"connector.update", "session.open", "session.renew", "session.close"}
+    # A Managed Agent delegates only through its execution binding
+    # (trace.dispatch), so its inherited authority scope always applies.
     managed = {
         "agent.list",
-        "task.create",
         "task.get",
         "task.claim",
         "task.progress",
@@ -247,6 +264,8 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.dispatch",
         "trace.history",
         "trace.loss",
+        "effect.authorize",
+        "effect.commit",
     }
     native_capabilities = {
         "agent.list": "edgecitadel_agents",
@@ -265,6 +284,8 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.append": "edgecitadel_trace",
         "trace.finish": "edgecitadel_trace",
         "trace.dispatch": "edgecitadel_trace",
+        "effect.authorize": "edgecitadel_trace",
+        "effect.commit": "edgecitadel_trace",
     }
     if operation in common:
         return
@@ -278,6 +299,21 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
     ):
         return
     raise StoreError("connector is not authorized for this operation")
+
+
+def _node_id(store: AgentdStore) -> str | None:
+    """The enrolled node identity from daemon-owned node.json, if any.
+
+    Never accept a node claim in connector params or copy its credentials into
+    a diagnostic.
+    """
+    try:
+        with (store.state_directory.parent / "node.json").open("rb") as source:
+            node = json.loads(source.read(65537))
+        node_id = node["agent_id"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return node_id if isinstance(node_id, str) else None
 
 
 def _trace_operation(
@@ -301,16 +337,9 @@ def _trace_operation(
             raise ValueError
     except (TypeError, ValueError, AttributeError) as error:
         raise StoreError("invalid trace request identity") from error
-    # node.json is daemon-owned enrollment state. Never accept a node claim in
-    # connector params or copy its credentials into a diagnostic.
-    try:
-        with (store.state_directory.parent / "node.json").open("rb") as source:
-            node = json.loads(source.read(65537))
-        node_id = node["agent_id"]
-        if not isinstance(node_id, str):
-            raise ValueError
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise StoreError("trace node identity is unavailable") from error
+    node_id = _node_id(store)
+    if node_id is None:
+        raise StoreError("trace node identity is unavailable")
     methods: dict[str, Callable[..., dict[str, Any]]] = {
         "trace.import": partial(import_trace, store, administrator_authenticated=True),
         "trace.bind": store.bind_trace,
@@ -318,6 +347,8 @@ def _trace_operation(
         "trace.finish": store.finish_trace,
         "trace.dispatch": store.dispatch_trace,
         "trace.loss": partial(report_loss, store),
+        "effect.authorize": store.authorize_effect,
+        "effect.commit": store.commit_effect,
     }
     method = methods[operation]
     code = "storage_unavailable"
@@ -357,17 +388,20 @@ def _trace_operation(
             code = "invalid_metadata"
     except sqlite3.Error:
         pass
+    reply_operation = (
+        "effect"
+        if operation.startswith("effect.")
+        else operation.removeprefix("trace.")
+    )
     reply = {
         "schema_version": 1,
-        "operation": operation.removeprefix("trace."),
+        "operation": reply_operation,
         "request_id": request_id,
         "status": "error",
         "code": code,
         "retryable": code == "storage_unavailable",
     }
-    validate_rpc_reply(
-        reply, operation=operation.removeprefix("trace."), request_id=request_id
-    )
+    validate_rpc_reply(reply, operation=reply_operation, request_id=request_id)
     return reply
 
 
@@ -446,6 +480,7 @@ def dispatch(
         store.grant_connector(
             connector_id=str(params.get("connector_id", "")),
             outbound_agents=params.get("outbound_agents"),
+            effects=params.get("effects", []),
         )
         return {"granted": True}
     if operation == "connector.list":
@@ -477,18 +512,18 @@ def dispatch(
         )
         return {"token": token}
 
-    if operation in {"containment.hold", "containment.release"}:
-        hold = {
-            key: params.get(key)
-            for key in ("kind", "object_id", "owner", "policy_version")
-        }
-        return (
-            store.place_hold(**hold)
-            if operation == "containment.hold"
-            else store.release_hold(**hold)
+    if operation == "containment.control":
+        from .containment_control import execute, local_command
+
+        node_id = _node_id(store) or "local"
+        return execute(
+            store,
+            local_command(params, node_id=node_id),
+            node_id=node_id,
+            gate=transport,
         )
     if operation == "containment.list":
-        return store.list_holds()
+        return store.list_containment()
 
     if operation == "trace.import.configure":
         from .trace_import import configure_import
@@ -507,6 +542,8 @@ def dispatch(
         "trace.finish",
         "trace.dispatch",
         "trace.loss",
+        "effect.authorize",
+        "effect.commit",
     }:
         return _trace_operation(store, connector_id, token, operation, dict(params))
     if operation == "connector.update":
@@ -741,6 +778,7 @@ def _serve_locked(
             store.close()
             raise
     admin_token = _load_or_create_admin_token(state_dir)
+    store.controller_lease_ms = _controller_lease_ms()
     transport = AgentdNatsTransport(state_dir.parent, store)
     supervisor = ManagedAgentSupervisor(state_dir.parent, store)
     telemetry = TraceSyncService(

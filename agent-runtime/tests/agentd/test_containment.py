@@ -6,7 +6,6 @@ import pytest
 
 from containment_test_support import Node, deliver
 from edgecitadel_agentd.containment import ContainmentError
-from edgecitadel_agentd.service import dispatch as rpc_dispatch
 from edgecitadel_agentd.store import StoreError
 
 MONITOR = "core-monitor"
@@ -90,6 +89,40 @@ def test_inbound_result_is_parked_until_the_parent_may_consume_it(nodes):
     assert applied["result"]["body"] == "suspect output"
 
 
+def test_an_applied_result_is_withheld_from_the_parent_while_held(nodes):
+    root, worker = nodes
+    child_id = delegate(root)
+    deliver(root, worker)
+    worker.start("child")
+    worker.complete("child", child_id, {"body": "suspect output"})
+    deliver(worker, root)  # The result is applied before the decision.
+    hold(root, child_id)
+    seen = root.rpc("parent", "task.get", task_id=child_id)
+    assert seen["state"] == "running" and seen["result"] is None
+    assert seen["result_withheld"] is True
+    [listed] = [
+        task
+        for task in root.store.list_tasks(actor_id="parent")
+        if task["task_id"] == child_id
+    ]
+    assert listed["result"] is None and listed["result_withheld"] is True
+    # Nothing was consumed: the parent recorded no use of the result.
+    assert [
+        e
+        for e in root.events("lineage", "used")
+        if e["attributes"]["entity"] == "result"
+    ] == []
+    release(root, child_id)
+    applied = root.rpc("parent", "task.get", task_id=child_id)
+    assert applied["state"] == "completed"
+    assert applied["result"]["body"] == "suspect output"
+    assert [
+        e["attributes"]["entity_task_id"]
+        for e in root.events("lineage", "used")
+        if e["attributes"]["entity"] == "result"
+    ] == [child_id]
+
+
 def test_outbound_messages_of_a_held_task_stay_in_the_outbox(nodes):
     root, worker = nodes
     child_id = delegate(root)
@@ -134,7 +167,7 @@ def test_fencing_rejects_stale_and_foreign_decisions(nodes):
     release(root, first, version=3)
     with pytest.raises(ContainmentError, match="hold_not_found"):
         release(root, first, version=4)
-    assert [h["object_id"] for h in root.store.list_holds()] == [second]
+    assert [h["object_id"] for h in root.store.list_containment()["holds"]] == [second]
     for bad in (
         {"kind": "agent"},
         {"object_id": "not-a-uuid"},
@@ -151,39 +184,6 @@ def test_fencing_rejects_stale_and_foreign_decisions(nodes):
         }
         with pytest.raises(ContainmentError):
             root.store.place_hold(**params)
-
-
-def test_containment_rpc_requires_the_management_credential(nodes):
-    root, _ = nodes
-    task_id = str(uuid4())
-    request = {
-        "version": 1,
-        "operation": "containment.hold",
-        "params": {
-            "kind": "task",
-            "object_id": task_id,
-            "owner": MONITOR,
-            "policy_version": 1,
-        },
-    }
-    with pytest.raises(StoreError, match="management authentication"):
-        rpc_dispatch(root.store, request, admin_token="a" * 48)
-    held = rpc_dispatch(
-        root.store, {**request, "admin_token": "a" * 48}, admin_token="a" * 48
-    )
-    assert held["object_id"] == task_id and held["reason"] == "containment"
-    listed = rpc_dispatch(
-        root.store,
-        {"version": 1, "operation": "containment.list", "admin_token": "a" * 48},
-        admin_token="a" * 48,
-    )
-    assert [item["object_id"] for item in listed] == [task_id]
-    released = rpc_dispatch(
-        root.store,
-        {**request, "operation": "containment.release", "admin_token": "a" * 48},
-        admin_token="a" * 48,
-    )
-    assert released == {"released": True, "applied_deliveries": 0}
 
 
 def test_holds_and_parked_deliveries_survive_restart(tmp_path):

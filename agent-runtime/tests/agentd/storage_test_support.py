@@ -34,8 +34,17 @@ def legacy_holds(db):
         "INSERT INTO task_state.restore_holds "
         "SELECT kind,object_id,owner,held_at_ms FROM task_state.holds WHERE reason='restore'"
     )
-    for table in ("held_deliveries", "containment_fences", "holds"):
-        db.execute(f"DROP TABLE task_state.{table}")
+    for table in (
+        "control_commands",
+        "scheduled_effects",
+        "authority_ledger",
+        "ingress_filters",
+        "revocations",
+        "held_deliveries",
+        "containment_fences",
+        "holds",
+    ):
+        db.execute(f"DROP TABLE IF EXISTS task_state.{table}")
 
 
 def flatten_connection(db):
