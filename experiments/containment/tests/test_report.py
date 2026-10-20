@@ -49,7 +49,9 @@ def test_sign_flip_detects_a_consistent_paired_difference():
     assert report.sign_flip_p([1.0, -1.0] * 4) == 1.0
 
 
-def write_run(directory, *, strategy: str, rep: int, kept: bool) -> None:
+def write_run(
+    directory, *, strategy: str, rep: int, kept: bool, slot_restarts: int = 0
+) -> None:
     """A collected run of the mini workload: R.plan done before the alert, B.n
     kept (completed with its effect) or stopped."""
     spec = S.from_dict(mini_document())
@@ -75,6 +77,7 @@ def write_run(directory, *, strategy: str, rep: int, kept: bool) -> None:
         "t_alert_ms": 6000,
         "status": "quiescent",
         "errors": [],
+        "slot_restarts": slot_restarts,
     }
     (run / "run.json").write_text(json.dumps(meta))
     records = Records(spec)
@@ -95,10 +98,14 @@ def write_run(directory, *, strategy: str, rep: int, kept: bool) -> None:
 
 def test_score_writes_one_row_per_run_with_identity_and_metrics(tmp_path):
     write_run(tmp_path, strategy="firebreak", rep=0, kept=True)
-    write_run(tmp_path, strategy="stop_team", rep=0, kept=False)
+    write_run(tmp_path, strategy="stop_team", rep=0, kept=False, slot_restarts=1)
     rows = report.score(tmp_path)
     by = {r["strategy_code"]: r for r in rows}
     assert by["firebreak"]["strategy"] == "Firebreak (ours)"
+    # a run the testbed failed is flagged, and still scored and counted
+    assert by["firebreak"]["testbed_failure"] == ""
+    assert "lost agentd" in by["stop_team"]["testbed_failure"]
+    assert by["stop_team"]["contained"] in (0, 1)
     assert by["firebreak"]["family"] == names.FAMILY_FUT
     assert by["firebreak"]["kept_cfrac"] == 1.0 and by["stop_team"]["kept_cfrac"] == 0.0
     with (tmp_path / "runs.csv").open() as handle:

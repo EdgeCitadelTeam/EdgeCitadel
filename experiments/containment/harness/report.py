@@ -32,6 +32,7 @@ from typing import Any
 
 from .metrics import evaluate
 from .names import CODE_NAME, COLOR, FAMILY, MAIN_NAMES, MARKER
+from .runner import infrastructure_failure
 from .spec import from_dict
 
 IDENTITY = (
@@ -92,6 +93,9 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "time_scale": meta.get("time_scale"),
         "n_errors": len(meta.get("errors", [])),
         "attempts": meta.get("attempts", 1),
+        # A run whose last attempt still failed on the testbed stays in every
+        # denominator; this column lets a reader see (or exclude) it.
+        "testbed_failure": infrastructure_failure(meta) or "",
     }
     actions: list[dict[str, Any]] = []
     if meta.get("t0_ms") is None or (
@@ -265,6 +269,11 @@ def summarize(runs: Any) -> Any:
                 "timeouts": int(_column(g, "timeout").fillna(0).sum()),
                 "control_failures": int(_column(g, "n_failed_actions").fillna(0).sum()),
                 "slot_restarts": int(_column(g, "slot_restarts").fillna(0).sum()),
+                "testbed_failures": int(
+                    (g["testbed_failure"].fillna("") != "").sum()
+                    if "testbed_failure" in g
+                    else 0
+                ),
             }
         )
     return pd.DataFrame(rows)
