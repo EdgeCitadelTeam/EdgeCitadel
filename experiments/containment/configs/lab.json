@@ -1,0 +1,46 @@
+{
+  "mode": "lab",
+  "controller": "jim-eq",
+  "control_transport": "ssh_forward",
+  "hosts": {
+    "jim-eq": {
+      "address": "jim-eq",
+      "python": "${HARNESS_PYTHON}",
+      "repo": "${HARNESS_REPO}",
+      "runtime_root": "${HARNESS_RUNTIME_ROOT}",
+      "work_root": "/var/tmp/edgecitadel-containment",
+      "nats_server": "${HARNESS_NATS_SERVER}"
+    },
+    "netsys-endurance": {
+      "ssh": "${HARNESS_SSH_ENDURANCE}",
+      "address": "NetSys-Endurance",
+      "python": "${HARNESS_REMOTE_PYTHON}",
+      "repo": "${HARNESS_REMOTE_REPO}",
+      "runtime_root": "${HARNESS_REMOTE_RUNTIME_ROOT}",
+      "work_root": "/var/tmp/edgecitadel-containment"
+    },
+    "netsys-cluster": {
+      "ssh": "${HARNESS_SSH_CLUSTER}",
+      "address": "NetSys-Cluster",
+      "python": "${HARNESS_REMOTE_PYTHON}",
+      "repo": "${HARNESS_REMOTE_REPO}",
+      "runtime_root": "${HARNESS_REMOTE_RUNTIME_ROOT}",
+      "work_root": "/var/tmp/edgecitadel-containment"
+    }
+  },
+  "node_hosts": {"core": "jim-eq", "edge-1": "netsys-endurance", "edge-2": "netsys-cluster"},
+  "ports": {"nats": 14222, "nats_monitor": 18222, "services": 18900, "aggregator": 18800},
+  "tau_ms": 50,
+  "netem": {
+    "apply": false,
+    "interface": {"jim-eq": "tailscale0", "netsys-endurance": "tailscale0", "netsys-cluster": "tailscale0"},
+    "ports": [14222, 18900],
+    "profiles": {
+      "lan": {"delay_ms": 0},
+      "wan-50": {"delay_ms": 50, "jitter_ms": 10, "distribution": "normal"},
+      "wan-200": {"delay_ms": 200, "jitter_ms": 40, "distribution": "normal"},
+      "measured-endurance": {"delay_ms": null, "jitter_ms": null, "distribution": "paretonormal", "note": "placeholder: fill from the measured jim-eq <-> NetSys-Endurance RTT distribution"},
+      "measured-cluster": {"delay_ms": null, "jitter_ms": null, "distribution": "paretonormal", "note": "placeholder: fill from the measured jim-eq <-> NetSys-Cluster RTT distribution"}
+    }
+  }
+}

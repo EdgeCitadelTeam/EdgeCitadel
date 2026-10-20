@@ -1,0 +1,16 @@
+{
+  "mode": "dryrun",
+  "controller": "local",
+  "hosts": {
+    "local": {
+      "address": "127.0.0.1",
+      "python": "${HARNESS_PYTHON}",
+      "repo": "",
+      "runtime_root": "${HARNESS_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_WORK_ROOT}",
+      "nats_server": "${HARNESS_NATS_SERVER}"
+    }
+  },
+  "node_hosts": {"core": "local", "edge-1": "local", "edge-2": "local"},
+  "tau_ms": 50
+}

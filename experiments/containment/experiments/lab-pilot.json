@@ -1,0 +1,19 @@
+{
+  "name": "lab-pilot",
+  "instances": ["../workloads/c2.json", "../workloads/n2.json", "../workloads/n3.json", "../workloads/c3.json",
+                "../workloads/rand-n7-s0.json", "../workloads/rand-n7-s1.json", "../workloads/rand-n7-s2.json"],
+  "strategies": ["reject_source", "stop_team", "stop_downstream", "trace_and_stop", "greedy_cut", "cut_without_deadlines", "firebreak", "none"],
+  "alerts": ["early", "late"],
+  "latencies": [
+    {"name": "native", "control_latency_ms": {"*": 50}},
+    {"name": "L0.5", "control_latency_ms": {"*": 1000}, "control_delay_ms": {"*": 1000}},
+    {"name": "L2", "control_latency_ms": {"*": 4000}, "control_delay_ms": {"*": 4000}}
+  ],
+  "repetitions": 3,
+  "time_scale": 2.0,
+  "rogue_rates": [0.0, 0.3],
+  "reference": true,
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90
+}

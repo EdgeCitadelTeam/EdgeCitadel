@@ -1,0 +1,336 @@
+{
+ "spec_version": 1,
+ "name": "n2",
+ "agents": [
+  {
+   "id": "kipp",
+   "parent": null,
+   "site": "core",
+   "label": "KIPP"
+  },
+  {
+   "id": "tars",
+   "parent": "kipp",
+   "site": "siteA",
+   "label": "TARS"
+  },
+  {
+   "id": "case",
+   "parent": "kipp",
+   "site": "siteB",
+   "label": "CASE"
+  },
+  {
+   "id": "tars-l1",
+   "parent": "tars",
+   "site": "siteA1",
+   "label": "TARS-L1"
+  },
+  {
+   "id": "tars-l2",
+   "parent": "tars",
+   "site": "siteA2",
+   "label": "TARS-L2"
+  },
+  {
+   "id": "case-l1",
+   "parent": "case",
+   "site": "siteB1",
+   "label": "CASE-L1"
+  },
+  {
+   "id": "case-l2",
+   "parent": "case",
+   "site": "siteB2",
+   "label": "CASE-L2"
+  }
+ ],
+ "placement": {
+  "core": "core",
+  "siteB": "edge-1",
+  "siteB2": "edge-1",
+  "siteB1": "edge-1",
+  "siteA": "edge-2",
+  "siteA2": "edge-2",
+  "siteA1": "edge-2"
+ },
+ "effect_classes": [
+  {
+   "id": "final",
+   "site": "core",
+   "min_delay": 0.2,
+   "protected": true
+  },
+  {
+   "id": "act_A2",
+   "site": "siteA2",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_B1",
+   "site": "siteB1",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_B2",
+   "site": "siteB2",
+   "min_delay": 0.5,
+   "protected": true
+  }
+ ],
+ "tasks": [
+  {
+   "id": "K.plan",
+   "agent": "kipp",
+   "session": "sK",
+   "compute": 1.0,
+   "reads": [
+    "task"
+   ]
+  },
+  {
+   "id": "T.plan",
+   "agent": "tars",
+   "session": "sT",
+   "compute": 1.0
+  },
+  {
+   "id": "C.plan",
+   "agent": "case",
+   "session": "sC",
+   "compute": 1.0
+  },
+  {
+   "id": "P",
+   "agent": "tars-l1",
+   "session": "sP",
+   "compute": 4.0
+  },
+  {
+   "id": "Q0",
+   "agent": "tars-l2",
+   "session": "sQ",
+   "compute": 8.0
+  },
+  {
+   "id": "Q",
+   "agent": "tars-l2",
+   "session": "sQ",
+   "compute": 3.0,
+   "reads": [
+    "Z@v1"
+   ]
+  },
+  {
+   "id": "U",
+   "agent": "tars-l2",
+   "session": "sU",
+   "compute": 10.0
+  },
+  {
+   "id": "N1",
+   "agent": "case-l1",
+   "session": "sN1",
+   "compute": 12.0
+  },
+  {
+   "id": "N2",
+   "agent": "case-l2",
+   "session": "sN2",
+   "compute": 9.0
+  }
+ ],
+ "external_inputs": [
+  "task"
+ ],
+ "artifacts": [
+  {
+   "id": "Z@v1",
+   "producer": "P"
+  }
+ ],
+ "messages": [
+  {
+   "id": "dT",
+   "sender": "K.plan",
+   "receiver": "T.plan",
+   "latency": 0.3
+  },
+  {
+   "id": "dC",
+   "sender": "K.plan",
+   "receiver": "C.plan",
+   "latency": 0.3
+  },
+  {
+   "id": "dP",
+   "sender": "T.plan",
+   "receiver": "P",
+   "latency": 0.3
+  },
+  {
+   "id": "dQ",
+   "sender": "T.plan",
+   "receiver": "Q0",
+   "latency": 0.3
+  },
+  {
+   "id": "dU",
+   "sender": "T.plan",
+   "receiver": "U",
+   "latency": 0.3
+  },
+  {
+   "id": "dN1",
+   "sender": "C.plan",
+   "receiver": "N1",
+   "latency": 0.3
+  },
+  {
+   "id": "dN2",
+   "sender": "C.plan",
+   "receiver": "N2",
+   "latency": 0.3
+  }
+ ],
+ "effects": [
+  {
+   "id": "E_Q",
+   "issuer": "Q",
+   "class": "act_A2",
+   "delay": 2.0
+  },
+  {
+   "id": "E_U",
+   "issuer": "U",
+   "class": "act_A2",
+   "delay": 2.0
+  },
+  {
+   "id": "E_N1",
+   "issuer": "N1",
+   "class": "act_B1",
+   "delay": 2.0
+  },
+  {
+   "id": "E_N2",
+   "issuer": "N2",
+   "class": "act_B2",
+   "delay": 2.0
+  }
+ ],
+ "fault": {
+  "class": "wrong_value",
+  "item": "Z@v1"
+ },
+ "alerts": {
+  "early": {
+   "event": "produce",
+   "item": "Z@v1",
+   "delay_s": 0.4,
+   "designate_root": true
+  },
+  "late": {
+   "event": "consume",
+   "item": "Z@v1",
+   "delay_s": 0.4,
+   "designate_root": true
+  },
+  "sim": {
+   "event": "produce",
+   "item": "Z@v1",
+   "delay_s": 0.40000000000000036,
+   "designate_root": true,
+   "sim_t": 7.0
+  }
+ },
+ "rogue": {
+  "rate": 0.0,
+  "p_eff": 0.5,
+  "extra_delay": 1.5,
+  "p_spawn": 1.0,
+  "seed": 0,
+  "dyn_steps": 3,
+  "dyn_step_len": 2.0,
+  "new_inv_step": 0.5,
+  "max_dyn": 200
+ },
+ "sim": {
+  "site_L": {
+   "core": 0.5,
+   "siteA": 0.5,
+   "siteA1": 0.5,
+   "siteA2": 0.5,
+   "siteB": 0.5,
+   "siteB1": 0.5,
+   "siteB2": 0.5
+  },
+  "net_lat": [
+   [
+    "kipp",
+    "case",
+    0.3
+   ],
+   [
+    "kipp",
+    "case-l1",
+    0.6
+   ],
+   [
+    "kipp",
+    "case-l2",
+    0.6
+   ],
+   [
+    "kipp",
+    "tars",
+    0.3
+   ],
+   [
+    "kipp",
+    "tars-l1",
+    0.6
+   ],
+   [
+    "kipp",
+    "tars-l2",
+    0.6
+   ],
+   [
+    "tars",
+    "tars-l1",
+    0.3
+   ],
+   [
+    "tars",
+    "tars-l2",
+    0.3
+   ],
+   [
+    "case",
+    "case-l1",
+    0.3
+   ],
+   [
+    "case",
+    "case-l2",
+    0.3
+   ],
+   [
+    "tars-l1",
+    "tars-l2",
+    0.6
+   ]
+  ],
+  "new_inv_step": 0.5,
+  "t_alert": 7.0,
+  "workflow": "N2"
+ },
+ "source": {
+  "kind": "sim",
+  "scenario": "n2",
+  "params": {}
+ }
+}

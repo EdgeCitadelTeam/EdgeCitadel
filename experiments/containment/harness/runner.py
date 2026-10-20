@@ -1,0 +1,559 @@
+"""Controller: run a paired grid of experiment runs and collect their records.
+
+An experiment file names instances (spec files), strategies, alert timings,
+latency settings and repetitions. The grid is paired: every strategy runs the
+same instance under the same alert trigger, latency setting and repetition,
+consecutively, so slow drift of the testbed affects all strategies alike. Each
+instance also gets a no-fault reference run per latency setting and repetition
+(strategy ``reference``); strategy ``none`` runs the fault with no alert.
+
+One run: fresh stack, root task(s) submitted at ``t0``, the alert posted when
+its trigger fires on the workers' events (same trigger for every strategy),
+then wait until every task ended, the run is quiescent, or it times out.
+Collected into ``<out>/runs/<run_id>/``: ``run.json`` (identity, times,
+status, alert), ``spec.json``, ``plan.json``, ``events.jsonl``,
+``ledger.jsonl``, ``marks.jsonl``, ``decisions.jsonl`` (the monitor's
+decision log), ``status.json`` and ``status_at_decision.json`` (monitor
+snapshots), and ``logs/``. A run whose ``run.json`` exists is not repeated.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import time
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
+
+from . import deploy
+from .spec import (
+    AlertTrigger,
+    Fault,
+    Spec,
+    compile_plan,
+    derive,
+    fault_origin,
+    load,
+    makespan,
+    to_dict,
+)
+from .stack import RunStack, StackConfig, StackError
+
+POLL_S = 0.2
+START_MARGIN_MS = 1500
+# Core ingests the faulty task's run/started about a second after it happened.
+ATTEMPT_LOOKUP_S = 1.0
+
+
+@dataclass(frozen=True)
+class Latency:
+    """A latency setting: what the monitor assumes and what is injected.
+
+    ``control_latency_ms``: per node (``*`` for all) for the monitor's deadline
+    model; ``control_delay_ms``: added to every control call to that node;
+    ``netem``: a lab network profile name (installed around the run when the
+    stack file sets ``netem.apply``; see ``harness.netem``).
+    """
+
+    name: str  # unique within an experiment; identifies the setting
+    control_latency_ms: Mapping[str, float] = field(default_factory=dict, compare=False)
+    control_delay_ms: Mapping[str, float] = field(default_factory=dict, compare=False)
+    netem: str | None = None
+
+    def per_node(self, nodes: Iterable[str]) -> dict[str, float]:
+        default = float(self.control_latency_ms.get("*", 50.0))
+        return {n: float(self.control_latency_ms.get(n, default)) for n in nodes}
+
+
+@dataclass(frozen=True)
+class Experiment:
+    name: str
+    instances: tuple[Path, ...]
+    strategies: tuple[str, ...]
+    alerts: tuple[str, ...]
+    latencies: tuple[Latency, ...]
+    repetitions: int = 1
+    time_scale: float = 1.0
+    rogue_rates: tuple[float, ...] | None = None
+    reference: bool = True
+    quiet_s: float = 6.0
+    timeout_factor: float = 3.0
+    timeout_extra_s: float = 60.0
+    keep_state: bool = False
+    # Repeat a run whose testbed failed (a worker slot lost agentd, a process
+    # died, a service never came up): such a run measures the machine, not the
+    # strategy. The failed attempt is kept next to it as <run_id>.infra<n>.
+    infra_retries: int = 1
+
+    @classmethod
+    def load(cls, path: str | Path) -> Experiment:
+        path = Path(path)
+        document = json.loads(path.read_text())
+        base = path.parent
+        strategies = tuple(document["strategies"])
+        for s in strategies:
+            if s not in deploy.STRATEGIES and s != "none":
+                raise ValueError(f"unknown strategy '{s}'")
+        return cls(
+            name=document["name"],
+            instances=tuple((base / p).resolve() for p in document["instances"]),
+            strategies=strategies,
+            alerts=tuple(document["alerts"]),
+            latencies=tuple(Latency(**latency) for latency in document["latencies"]),
+            repetitions=int(document.get("repetitions", 1)),
+            time_scale=float(document.get("time_scale", 1.0)),
+            rogue_rates=tuple(document["rogue_rates"])
+            if "rogue_rates" in document
+            else None,
+            reference=bool(document.get("reference", True)),
+            quiet_s=float(document.get("quiet_s", 6.0)),
+            timeout_factor=float(document.get("timeout_factor", 3.0)),
+            timeout_extra_s=float(document.get("timeout_extra_s", 60.0)),
+            keep_state=bool(document.get("keep_state", False)),
+            infra_retries=int(document.get("infra_retries", 1)),
+        )
+
+
+@dataclass(frozen=True)
+class RunCell:
+    instance: Path
+    rogue_rate: float | None
+    strategy: str  # monitor strategy code, "none" (no alert) or "reference" (no fault)
+    alert: str | None
+    latency: Latency
+    rep: int
+
+    @property
+    def run_id(self) -> str:
+        rogue = "" if self.rogue_rate is None else f"__p{self.rogue_rate:g}"
+        parts = [
+            self.instance.stem + rogue,
+            self.alert or "nofault",
+            self.latency.name,
+            f"r{self.rep}",
+            self.strategy,
+        ]
+        return re.sub(r"[^A-Za-z0-9_.=-]+", "-", "__".join(parts))
+
+
+def grid(experiment: Experiment) -> list[RunCell]:
+    """Paired cells: strategies adjacent within each (instance, alert, latency, rep)."""
+    cells = []
+    rates: tuple[float | None, ...] = experiment.rogue_rates or (None,)
+    for instance in experiment.instances:
+        for rate in rates:
+            for latency in experiment.latencies:
+                for rep in range(experiment.repetitions):
+                    if experiment.reference:
+                        cells.append(
+                            RunCell(instance, rate, "reference", None, latency, rep)
+                        )
+                    for alert in experiment.alerts:
+                        for strategy in experiment.strategies:
+                            cells.append(
+                                RunCell(instance, rate, strategy, alert, latency, rep)
+                            )
+    return cells
+
+
+def cell_spec(cell: RunCell) -> Spec:
+    spec = load(cell.instance)
+    if cell.rogue_rate is not None:
+        spec = replace(spec, rogue=replace(spec.rogue, rate=cell.rogue_rate))
+    if cell.strategy == "reference":
+        spec = replace(spec, fault=Fault("none"), alerts={})
+    return spec
+
+
+# ---------------------------------------------------------------------------
+# Alert triggers on the workers' events
+# ---------------------------------------------------------------------------
+class TriggerWatch:
+    """Find when an alert trigger fires, from the services' event feed."""
+
+    def __init__(
+        self, spec: Spec, trigger: AlertTrigger, t0_ms: int, time_scale: float
+    ) -> None:
+        self.spec = spec
+        self.trigger = trigger
+        self.t0 = t0_ms
+        self.scale = time_scale
+        self.readers = set(derive(spec).readers.get(trigger.item or "", ()))
+        self.consumers: dict[str, int] = {}
+        self.matched: int | None = None
+
+    def observe(self, event: Mapping[str, Any]) -> None:
+        trigger, kind = self.trigger, event["kind"]
+        if self.matched is not None or event.get("inv_kind") != "task":
+            return
+        if (
+            trigger.event == "produce"
+            and kind == "produce"
+            and event.get("item") == trigger.item
+        ):
+            self.matched = int(event["t_ms"])
+        elif trigger.event == "consume":
+            if (
+                trigger.count == 0
+                and kind == "produce"
+                and event.get("item") == trigger.item
+            ):
+                self.matched = int(event["t_ms"])
+            elif (
+                kind == "consume"
+                and event.get("item") == trigger.item
+                and event["task"] in self.readers
+            ):
+                self.consumers.setdefault(event["task"], int(event["t_ms"]))
+                if trigger.count and len(self.consumers) >= trigger.count:
+                    self.matched = int(event["t_ms"])
+        elif (
+            trigger.event in {"start", "end"}
+            and kind == trigger.event
+            and event["task"] == trigger.task
+        ):
+            self.matched = int(event["t_ms"])
+        elif trigger.event == "fault" and kind == "fault":
+            self.matched = int(event["t_ms"])
+
+    def fire_at(self) -> int | None:
+        delay = int(self.trigger.delay_s * self.scale * 1000)
+        if self.trigger.event == "at":
+            return self.t0 + delay
+        return None if self.matched is None else self.matched + delay
+
+
+# ---------------------------------------------------------------------------
+# One run
+# ---------------------------------------------------------------------------
+def run_cell(
+    stack_config: StackConfig, experiment: Experiment, cell: RunCell, out: Path
+) -> Path:
+    run_dir = out / "runs" / cell.run_id
+    if (run_dir / "run.json").exists():
+        return run_dir
+    run_dir.mkdir(parents=True, exist_ok=True)
+    spec = cell_spec(cell)
+    scale = experiment.time_scale
+    plan = compile_plan(spec, run_id=cell.run_id, time_scale=scale)
+    (run_dir / "spec.json").write_text(json.dumps(to_dict(spec), indent=1))
+    (run_dir / "plan.json").write_text(json.dumps(plan))
+    nodes = deploy.nodes(spec)
+    meta: dict[str, Any] = {
+        "run_id": cell.run_id,
+        "experiment": experiment.name,
+        "mode": stack_config.mode,
+        "instance": cell.instance.stem,
+        "spec_name": spec.name,
+        "fault": spec.fault.cls,
+        "rogue_rate": spec.rogue.rate,
+        "strategy": cell.strategy,
+        "alert": cell.alert,
+        "latency": cell.latency.name,
+        "control_latency_ms": cell.latency.per_node(nodes),
+        "control_delay_ms": dict(cell.latency.control_delay_ms),
+        "rep": cell.rep,
+        "time_scale": scale,
+        "t0_ms": None,
+        "t_alert_ms": None,
+        "status": "failed_to_start",
+        "errors": [],
+    }
+    stack = RunStack(stack_config, cell.run_id, run_dir)
+    strategy = cell.strategy if cell.strategy in deploy.STRATEGIES else "firebreak"
+    netem = False
+    try:
+        netem = stack.apply_netem(cell.latency.netem)
+        meta["netem_applied"] = netem
+        stack.up(
+            spec,
+            plan,
+            strategy=strategy,
+            control_latency_ms=meta["control_latency_ms"],
+            control_delay_ms=cell.latency.control_delay_ms,
+            enforce=cell.strategy in deploy.STRATEGIES,
+        )
+        _drive(stack, spec, plan, cell, experiment, meta, run_dir)
+    except (StackError, OSError, ValueError, KeyError) as error:
+        meta["errors"].append(f"{type(error).__name__}: {error}"[:2000])
+    finally:
+        died = stack.down()
+        if died:
+            meta["errors"].append(f"processes exited early: {died}")
+        if netem:
+            stack.clear_netem()
+        _collect(stack, stack_config, run_dir, keep_state=experiment.keep_state)
+        meta["slot_restarts"] = sum(
+            1
+            for line in (run_dir / "events.jsonl").read_text().splitlines()
+            if '"kind":"slot_restart"' in line
+        )
+        (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
+    return run_dir
+
+
+def _drive(
+    stack: RunStack,
+    spec: Spec,
+    plan: Mapping[str, Any],
+    cell: RunCell,
+    experiment: Experiment,
+    meta: dict[str, Any],
+    run_dir: Path,
+) -> None:
+    scale = experiment.time_scale
+    t0 = int(stack.services("GET", "/clock")["t_ms"]) + START_MARGIN_MS
+    meta["t0_ms"] = t0
+    stack.services("POST", "/mark", {"name": "t0", "t0_ms": t0})
+    root_agent = plan["root_agent"]
+    root_node = plan["agents"][root_agent]["node"]
+    meta["roots"] = {
+        root: stack.submit(
+            root_node,
+            root_agent,
+            {
+                "protocol": "det-worker.v1",
+                "run": cell.run_id,
+                "t0_ms": t0,
+                "kind": "task",
+                "task": root,
+                "input": None,
+            },
+        )
+        for root in derive(spec).roots
+    }
+    trigger = (
+        spec.alerts.get(cell.alert)
+        if cell.alert and cell.strategy != "reference"
+        else None
+    )
+    if cell.alert and cell.strategy != "reference" and trigger is None:
+        raise ValueError(f"instance has no alert '{cell.alert}'")
+    watch = TriggerWatch(spec, trigger, t0, scale) if trigger else None
+    origin = fault_origin(spec)
+    deadline = (
+        time.monotonic()
+        + (START_MARGIN_MS / 1000)
+        + makespan(spec) * scale * experiment.timeout_factor
+        + experiment.timeout_extra_s
+    )
+    quiet = max(experiment.quiet_s, 2.0) * max(1.0, scale)
+    after, last_change = 0, time.monotonic()
+    ended: set[str] = set()
+    origin_rt = origin_attempt = None
+    next_lookup = next_status = 0.0
+    alert_due = cell.strategy not in {"reference", "none"}
+    decision_seen = False
+    while True:
+        feed = stack.services("GET", f"/events?after={after}")
+        events = feed["events"]
+        if events:
+            after, last_change = feed["next"], time.monotonic()
+        for event in events:
+            if event.get("inv_kind") == "task" and event["kind"] == "end":
+                ended.add(event["task"])
+            if (
+                event.get("inv_kind") == "task"
+                and event["task"] == origin
+                and origin_rt is None
+            ):
+                origin_rt = event["rt"]
+                next_lookup = time.monotonic() + ATTEMPT_LOOKUP_S
+            if watch:
+                watch.observe(event)
+        if (
+            alert_due
+            and origin_rt
+            and origin_attempt is None
+            and time.monotonic() >= next_lookup
+        ):
+            # Resolve the faulty invocation ahead of the trigger (Core lags the run).
+            origin_attempt = stack.attempt_of(origin_rt)
+            next_lookup = time.monotonic() + ATTEMPT_LOOKUP_S
+        now_ms = int(feed["t_ms"])
+        if (
+            watch
+            and meta["t_alert_ms"] is None
+            and watch.fire_at() is not None
+            and now_ms >= watch.fire_at()
+        ):
+            meta["alert_trigger_ms"] = watch.fire_at()
+            if alert_due and origin_rt is not None:
+                _post_alert(stack, spec, cell, trigger, origin_rt, origin_attempt, meta)
+            elif not alert_due:
+                # Uncontained baseline: the alert time is still the reference point.
+                meta["t_alert_ms"] = int(
+                    stack.services("POST", "/mark", {"name": "alert", "posted": False})[
+                        "t_ms"
+                    ]
+                )
+        if (
+            meta["t_alert_ms"] is not None
+            and alert_due
+            and not decision_seen
+            and time.monotonic() >= next_status
+        ):
+            next_status = time.monotonic() + 0.5
+            status = stack.monitor_status()
+            if status.get("last_decision"):
+                decision_seen = True
+                (run_dir / "status_at_decision.json").write_text(json.dumps(status))
+        if len(ended) == len(spec.tasks) and time.monotonic() - last_change > 1.0:
+            meta["status"] = "complete"
+            break
+        if (
+            time.monotonic() - last_change > quiet
+            and (now_ms - t0) / 1000 > makespan(spec) * scale
+        ):
+            meta["status"] = "quiescent"
+            break
+        if time.monotonic() > deadline:
+            meta["status"] = "timeout"
+            break
+        time.sleep(POLL_S)
+    meta["n_ended"] = len(ended)
+    if trigger is not None and meta["t_alert_ms"] is None:
+        meta["errors"].append("alert trigger never fired")
+    if alert_due and meta["t_alert_ms"] is not None and "alert_payload" not in meta:
+        meta["errors"].append("faulty task never started; no alert posted")
+    try:
+        (run_dir / "status.json").write_text(json.dumps(stack.monitor_status()))
+    except OSError as error:
+        meta["errors"].append(f"final monitor status unavailable: {error}")
+
+
+def _post_alert(
+    stack: RunStack,
+    spec: Spec,
+    cell: RunCell,
+    trigger: AlertTrigger,
+    origin_rt: str,
+    origin_attempt: str | None,
+    meta: dict[str, Any],
+) -> None:
+    """An operator alert naming the faulty invocation (its task if unresolved).
+
+    The monitor's taint index starts from invocations and versions; a task
+    subject alone does not reach the invocation's outputs, so the attempt is
+    preferred and a fallback is recorded as an error of the run.
+    """
+    subject = (
+        {"attempt_id": origin_attempt} if origin_attempt else {"task_id": origin_rt}
+    )
+    if origin_attempt is None:
+        meta["errors"].append("faulty invocation not yet in Core; alert names its task")
+    alert: dict[str, Any] = {
+        "kind": "operator",
+        **subject,
+        "strategy": cell.strategy,
+        "detail": {
+            "fault": spec.fault.cls,
+            "item": spec.fault.item or "",
+            "run": cell.run_id,
+        },
+    }
+    if trigger.designate_root:
+        alert["root"] = dict(subject)
+    t_posted = int(
+        stack.services("POST", "/mark", {"name": "alert", "posted": True})["t_ms"]
+    )
+    reply = stack.post_alert(alert)
+    meta["t_alert_ms"] = t_posted
+    meta["alert_payload"] = {**alert, "reply": reply}
+
+
+def _collect(
+    stack: RunStack, config: StackConfig, run_dir: Path, *, keep_state: bool
+) -> None:
+    controller = config.controller
+    base = stack.host_dir(controller)
+    for name, target in (
+        ("services/events.jsonl", "events.jsonl"),
+        ("services/ledger.jsonl", "ledger.jsonl"),
+        ("services/marks.jsonl", "marks.jsonl"),
+        ("core/containment-decisions.jsonl", "decisions.jsonl"),
+    ):
+        data = stack.fetch(controller, f"{base}/{name}")
+        (run_dir / target).write_bytes(data or b"")
+    logs = run_dir / "logs"
+    logs.mkdir(exist_ok=True)
+    for host in {controller, *config.node_hosts.values()}:
+        directory = stack.host_dir(host)
+        for proc_log in _remote_logs(stack, host, directory):
+            data = stack.fetch(host, proc_log)
+            if data is not None:
+                (logs / f"{host}__{Path(proc_log).name}").write_bytes(data[-2_000_000:])
+    if not keep_state:
+        for host in {controller, *config.node_hosts.values()}:
+            if config.hosts[host].ssh is None:
+                shutil.rmtree(stack.host_dir(host), ignore_errors=True)
+            else:
+                stack.hosts[host].run(["rm", "-rf", stack.host_dir(host)])
+
+
+def _remote_logs(stack: RunStack, host: str, directory: str) -> list[str]:
+    names = []
+    for proc_dir in ("logs",):
+        listing = stack.hosts[host].run(
+            [
+                "sh",
+                "-c",
+                f"ls {directory}/{proc_dir}/*.log {directory}/workers/*/*.events.jsonl 2>/dev/null || true",
+            ]
+        )
+        names += [line for line in listing.split() if line]
+    return names
+
+
+def infrastructure_failure(meta: Mapping[str, Any]) -> str | None:
+    """Why a run measured the testbed rather than the strategy, if it did."""
+    if meta.get("slot_restarts"):
+        return f"{meta['slot_restarts']} worker slot(s) lost agentd"
+    for error in meta.get("errors", []):
+        if (
+            "exited early" in error
+            or "did not become ready" in error
+            or "cannot reach" in error
+        ):
+            return error
+    if meta.get("t0_ms") is None:
+        return "the run did not start"
+    return None
+
+
+def run_experiment(
+    stack_config: StackConfig,
+    experiment: Experiment,
+    out: Path,
+    *,
+    limit: int | None = None,
+) -> list[Path]:
+    out.mkdir(parents=True, exist_ok=True)
+    done = []
+    for i, cell in enumerate(grid(experiment)):
+        if limit is not None and i >= limit:
+            break
+        started = time.monotonic()
+        for attempt in range(experiment.infra_retries + 1):
+            run_dir = run_cell(stack_config, experiment, cell, out)
+            meta = json.loads((run_dir / "run.json").read_text())
+            failure = infrastructure_failure(meta)
+            if failure is None or attempt == experiment.infra_retries:
+                break
+            print(
+                f"[{i + 1}] {cell.run_id}: testbed failure ({failure}); repeating",
+                flush=True,
+            )
+            run_dir.rename(run_dir.with_name(f"{run_dir.name}.infra{attempt}"))
+        meta["attempts"] = attempt + 1
+        (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
+        print(
+            f"[{i + 1}] {cell.run_id}: {meta['status']} in {time.monotonic() - started:.0f}s"
+            + (f" errors={meta['errors']}" if meta["errors"] else ""),
+            flush=True,
+        )
+        done.append(run_dir)
+    return done
