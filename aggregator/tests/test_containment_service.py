@@ -128,6 +128,12 @@ def test_service_follows_core_and_answers_alerts_over_http(
     assert decision["alert"]["alert_id"] == alert_id
     assert status["root_cause"][0]["node"] == f"inv:{child}"
     assert status["g_c"]["nodes"] > 0 and status["last_solve"]["status"] == "optimal"
+    # Every solve reports the checked fast-path conditions and the solver used.
+    solve = status["last_solve"]
+    assert solve["solver"] in {"gadget", "enumeration", "ilp", "trivial"}
+    assert solve["fast_path"] == (solve["exceptions"] == 0)
+    assert (solve["fast_path_reason"] is None) == solve["fast_path"]
+    assert decision["solves"] and decision["solves"][-1] == solve
     assert status["in_force"], "the decision left holds in force"
     for record in status["in_force"]:
         assert {"t_alert", "t_decision", "t_sent", "t_applied", "t_confirmed"} <= set(
@@ -137,6 +143,9 @@ def test_service_follows_core_and_answers_alerts_over_http(
     logged = json.loads(line)
     assert logged["type"] == "decision" and logged["alert"]["alert_id"] == alert_id
     assert logged["phase1"] and logged["status"] == decision["status"]
+    assert {"solver", "fast_path", "fast_path_reason", "exceptions"} <= set(
+        logged["solve"]
+    )
 
 
 def test_monitor_database_is_separate_and_single_writer(core_db, tmp_path):

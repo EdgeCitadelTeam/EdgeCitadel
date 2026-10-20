@@ -83,10 +83,9 @@ Mapping of the monitor's actions onto agentd commands:
 | `revoke:admission` | `revoke {kind: admission, object_id: <agent>}` (filter `any` into the agent) | the agent's node and the nodes of agents that may dispatch to it |
 | `cancel:task` | `cancel {task_id}` | the task's node |
 
-`hold:egress`, `revoke:authority` and `cancel:task` are mapped and executable
-but not offered by the projection: an egress hold lands at the same node and time
-as the task hold and covers a subset of its edges, so the solver never prefers
-it, and no strategy uses authority revocation or cancel yet.
+`revoke:authority` and `cancel:task` are mapped and executable but never
+offered by the projection (M4 item 1: the vocabulary is vertex-local by
+design). `hold:egress` is offered only in phase 1 (M4 item 4).
 
 Immediate effects are decided at request time and cannot be held individually:
 the projection covers them only through the issuing unit's task hold, egress
@@ -184,3 +183,48 @@ Re-running the affected work once a corrected artifact exists needs:
 - unconfirmed actions must be reconciled with each node's `containment.list`
   before releasing anything, and the owner's fence must continue (a fresh
   monitor database needs a new owner).
+
+## M4 design changes (`m4/design`, from `m3/integration` at `1b24f02`)
+
+Four changes the team approved after an external review of the theory, plus two
+baselines. Each item is its own commit; this section records what changed and
+why.
+
+### 1. Fast-path conditions are checked, not assumed
+
+The single max-flow is exact only if every grouped action is gated (its removal
+set is equivalent, for source-sink connectivity, to edges at one port) and the
+gate sets at every port are laminar.
+
+- Vocabulary: the projection never offers `revoke:authority` (a delegation
+  subtree across invocations; with per-site deadlines it has no gate) or
+  `cancel:task`; `_Builder.allowed` refuses them. Descendants are cut through
+  their own per-invocation actions and taint-aware admission.
+- Solver (`solver.solve`): classifies every action on the actual instance as
+  private (one edge), gated at a port (members share a tail or a head, G1; or a
+  dominating member, G3, whose head must not be a source, which the previous
+  check missed), or an exception; then keeps, per port, gate sets largest first
+  while they nest with or avoid every kept set. With no exception it runs one
+  max-flow on the laminar chain gadget of theory 4.3 (an edge leaves through its
+  tail's out-chain, crosses its private actions in series and enters through its
+  head's in-chain). The previous series split of multiply covered edges is gone:
+  it was exact but turned nested vertex-local families (theory example 6.1) into
+  ungated groups. With exceptions it enumerates them (`enum_limit`, 12) or runs
+  the ILP over the timely masks (HiGHS, now in `aggregator/requirements.txt`);
+  the greedy fallback without HiGHS is reported `approximate`.
+- Deadlines: `ControlGraph.masks()` gives, per action, R(a) and its timely mask
+  R_tau(a) = {e in R(a) : now + tau + L(site(a)) < d(e)}; the cut instance is
+  built from the masks. An action in force keeps its whole R(a). No action
+  removes another's edges (no tree semantics). G_C stats count
+  `partial_actions` and `untimely_actions`.
+- Reporting: every solve records `solver`, `fast_path`, `fast_path_reason`
+  (`ungated`, `non_laminar`, both, or `no_cut_solver`/`heuristic` for rules and
+  the greedy), `exceptions` and `exception_actions` in the decision's `solve`
+  (last round) and `solves` (every round), hence in the ledger and in status
+  `last_solve`.
+
+Tests: exhaustive comparisons on random gated, ungated and multiply covered
+instances and on 200 random nested-scope instances (all on the fast path); a
+Set-Cover-at-one-vertex instance that must leave the fast path
+(`non_laminar`); the source-headed dominating member; the ILP route above the
+limit; per-action masks and in-force masks on random workloads.

@@ -4,6 +4,16 @@ Every edge is a possible future flow. ``action`` is the control decision that
 removes it (None: uncuttable); ``deadline`` is the earliest time tainted influence
 can traverse it; ``feasible`` says whether the action lands before that deadline
 (or is already in force). Infeasible edges are uncuttable for the solver.
+
+Deadlines enter the cut problem only through per-action timely removal masks:
+R(a) is the set of edges whose action is a, and
+
+    R_tau(a) = {e in R(a) : now + tau + L(site(a)) < d(e)}
+
+for an action not in force; an action in force (confirmed at every site it
+must reach) keeps its whole R(a), since nothing has to land any more. No action
+ever removes another action's edges: a revocation never implies its
+descendants' (no tree semantics), and each mask is judged from its own site.
 """
 
 from __future__ import annotations
@@ -101,17 +111,34 @@ class ControlGraph:
     def actions(self) -> set[Action]:
         return {edge.action for edge in self.edges if edge.action is not None}
 
+    def masks(self) -> dict[Action, tuple[list[int], list[int]]]:
+        """Per action, its removal set R(a) and timely mask R_tau(a) (edge indices)."""
+        found: dict[Action, tuple[list[int], list[int]]] = {}
+        for index, edge in enumerate(self.edges):
+            if edge.action is None:
+                continue
+            removal, timely = found.setdefault(edge.action, ([], []))
+            removal.append(index)
+            if edge.feasible:
+                timely.append(index)
+        return found
+
     def instance(self) -> CutInstance:
-        """The cut problem: feasible actions only, each costed once."""
-        edges = []
+        """The cut problem: each action removes its timely mask, at its full cost."""
+        covering: dict[int, tuple[Action, ...]] = {}
         costs: dict[Action, float] = {}
-        for edge in self.edges:
-            covering: tuple[Action, ...] = ()
-            if edge.action is not None and edge.feasible:
-                covering = (edge.action,)
-                if edge.action not in costs:
-                    costs[edge.action] = self.cost(edge.action) if self.cost else 1.0
-            edges.append((edge.tail, edge.head, covering))
+        for action, (_, timely) in self.masks().items():
+            if not timely:
+                continue  # cannot land before any of its edges: useless now
+            costs[action] = self.cost(action) if self.cost else 1.0
+            for index in timely:
+                covering[index] = (*covering.get(index, ()), action)
         return CutInstance(
-            tuple(edges), costs, frozenset(self.sources), frozenset(self.sinks)
+            tuple(
+                (edge.tail, edge.head, covering.get(index, ()))
+                for index, edge in enumerate(self.edges)
+            ),
+            costs,
+            frozenset(self.sources),
+            frozenset(self.sinks),
         )

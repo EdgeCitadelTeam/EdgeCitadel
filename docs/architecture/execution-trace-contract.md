@@ -3527,7 +3527,25 @@ type prior; the top candidate's prune level (version, invocation, session, agent
 subtree) defines the roots. The chosen strategy (default Firebreak: exact grouped
 min-cut; experiment baselines are selectable per alert) runs through the
 two-phase protocol: frontier holds first, then the optimal set, and phase-1 holds
-are released only after every phase-2 action is confirmed. Each action records
+are released only after every phase-2 action is confirmed.
+
+**Solver.** The offered vocabulary is vertex-local: every action removes edges
+of one invocation, one effect, one credential, one grant pair or one agent's
+admission. `revoke:authority` (a whole delegation subtree) is mapped but never
+offered. Deadlines enter only through per-action timely masks
+`R_tau(a) = {e in R(a) : now + tau + L(site(a)) < d(e)}`; an action in force
+keeps all of `R(a)`, and no action implies another's removal. Before each solve
+the solver checks, on the instance, that every grouped action is gated (its
+members share a tail or a head, or one member lies on every path meeting it)
+and that the gate sets at each port are laminar. Only then does it use the
+single max-flow on the laminar chain gadget. Otherwise the failing actions form
+the exception set: up to `enum_limit` (12) it enumerates them (2^k max-flows),
+beyond that it solves the compact ILP over the timely masks with HiGHS
+(`highspy`, a Core dependency), and without HiGHS it falls back to the greedy cut
+with status `approximate`. Each solve records `solver`, `fast_path`,
+`fast_path_reason` (`ungated`, `non_laminar` or both), `exceptions` and
+`exception_actions` in the decision's `solve` and `solves`, in the ledger and in
+status `last_solve`. Each action records
 `t_alert`, `t_decision`, `t_sent`, `t_applied` (node clock), `t_confirmed` and
 release times; `GET /api/containment/status` returns them with G_P/G_C sizes, the
 last solve and the root-cause ranking. Both endpoints require

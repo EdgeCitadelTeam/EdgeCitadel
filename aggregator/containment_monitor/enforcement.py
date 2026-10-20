@@ -29,6 +29,7 @@ import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from . import solver
 from .control import (
@@ -41,6 +42,9 @@ from .control import (
 from .graph import ControlGraph
 from .model import Action
 from .projection import frontier_block
+
+if TYPE_CHECKING:
+    from .strategies import StrategyResult
 
 
 def now_ms() -> int:
@@ -223,7 +227,8 @@ class Decision:
     released: list[ActionRecord] = field(default_factory=list)
     unavoidable: list[str] = field(default_factory=list)
     cut_valid: bool | None = None
-    solve: dict = field(default_factory=dict)
+    solve: dict = field(default_factory=dict)  # the last phase-2 solve
+    solves: list[dict] = field(default_factory=list)  # every phase-2 solve
     graph: dict = field(default_factory=dict)
 
     def to_json(self) -> dict:
@@ -238,6 +243,7 @@ class Decision:
             "unavoidable": self.unavoidable,
             "cut_valid": self.cut_valid,
             "solve": self.solve,
+            "solves": self.solves,
             "graph": self.graph,
         }
 
@@ -271,7 +277,7 @@ class TwoPhaseProtocol:
         t_alert: int,
         project: Callable[[int, frozenset[Action]], ControlGraph],
         reconcile: Callable[[], None],
-        choose: Callable[[ControlGraph], object],
+        choose: Callable[[ControlGraph], StrategyResult],
         in_force: dict[Action, ActionRecord],
         two_phase: bool = True,
     ) -> Decision:
@@ -301,14 +307,17 @@ class TwoPhaseProtocol:
             started = time.perf_counter()
             result = choose(cg)
             decision.solve = {
+                # solver, fast_path, fast_path_reason, exceptions, ...
+                **result.report,
                 "strategy": decision.strategy,
                 "ms": round((time.perf_counter() - started) * 1000, 3),
-                "solver_ms": round(getattr(result, "solve_ms", 0.0), 3),
-                "status": getattr(result, "status", None),
-                "method": getattr(result, "method", None),
-                "predicted_cost": getattr(result, "predicted_cost", None),
+                "solver_ms": round(result.solve_ms, 3),
+                "status": result.status,
+                "method": result.method,
+                "predicted_cost": result.predicted_cost,
                 "actions": [a.to_json() for a in result.actions],
             }
+            decision.solves.append(decision.solve)
             decision.graph = dict(cg.stats)
             decision.unavoidable = sorted(getattr(result, "unavoidable", ()))
             chosen = set(result.actions)

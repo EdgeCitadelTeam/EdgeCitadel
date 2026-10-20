@@ -47,6 +47,18 @@ DISPLAY = {
 CUT_STRATEGIES = frozenset({"greedy_cut", "cut_without_deadlines", "firebreak"})
 
 
+# The per-solve report of a rule: no cut solver ran, so no fast path either.
+RULE_REPORT = {
+    "solver": "rule",
+    "status": "applied",
+    "fast_path": False,
+    "fast_path_reason": "no_cut_solver",
+    "exceptions": None,
+    "exception_actions": [],
+    "relevant_edges": None,
+}
+
+
 @dataclass
 class StrategyResult:
     name: str
@@ -56,6 +68,8 @@ class StrategyResult:
     status: str
     method: str
     unavoidable: list[str] = field(default_factory=list)
+    # solver.CutSolution.report() for a cut strategy, else RULE_REPORT.
+    report: dict = field(default_factory=lambda: dict(RULE_REPORT))
 
 
 @dataclass
@@ -215,6 +229,9 @@ def _cut(ctx: Context, name: str, cg: ControlGraph, method: Callable) -> Strateg
         ctx, name, actions, started, result.status, result.method, result.unavoidable
     )
     finished.solve_ms = result.solve_ms
+    finished.report = result.report()
+    if finished.report["fast_path"] is None:  # the greedy checks nothing
+        finished.report.update(fast_path=False, fast_path_reason="heuristic")
     return finished
 
 

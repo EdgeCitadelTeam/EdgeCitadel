@@ -97,7 +97,12 @@ def test_gated_groups_take_one_max_flow_and_ungated_ones_enumerate():
         ],
         {"w": 1.0},
     )
-    assert solver.solve(gated).method == "gadget"
+    single = solver.solve(gated)
+    assert (single.method, single.fast_path, single.fast_path_reason) == (
+        "gadget",
+        True,
+        None,
+    )
     # Two branches no single vertex separates: the group has no gate.
     scattered = instance(
         [
@@ -111,7 +116,12 @@ def test_gated_groups_take_one_max_flow_and_ungated_ones_enumerate():
         {"w": 1.0},
     )
     result = solver.solve(scattered)
-    assert (result.method, result.ungated, result.actions) == ("enumeration", 1, ["w"])
+    assert (result.method, result.exceptions, result.actions) == (
+        "enumeration",
+        ["w"],
+        ["w"],
+    )
+    assert (result.fast_path, result.fast_path_reason) == (False, "ungated")
 
 
 def test_theory_example_grouped_optimum_beats_edge_only_and_stop_all():
@@ -133,6 +143,9 @@ def test_theory_example_grouped_optimum_beats_edge_only_and_stop_all():
     result = solver.solve(instance(edges, costs))
     assert result.cost == 5.0
     assert result.actions == ["e_y5", "u1", "u2"]
+    # Every witness is vertex-local at a's out-port and the family is nested:
+    # the chain gadget solves it with one max-flow (theory 4.3).
+    assert (result.method, result.fast_path, result.exceptions) == ("gadget", True, [])
 
 
 def test_theory_example_stop_all_descendants_overpays():
@@ -228,7 +241,11 @@ def test_a_group_with_a_dominating_member_is_gated_by_that_edge():
         {"hold": 1.0},
     )
     result = solver.solve(problem)
-    assert (result.method, result.ungated, result.actions) == ("gadget", 0, ["hold"])
+    assert (result.method, result.exceptions, result.actions) == (
+        "gadget",
+        [],
+        ["hold"],
+    )
     # Not dominating: the second member can be reached around the first.
     bypass = instance(
         [
@@ -241,3 +258,121 @@ def test_a_group_with_a_dominating_member_is_gated_by_that_edge():
         {"hold": 1.0},
     )
     assert solver.solve(bypass).method == "enumeration"
+
+
+def test_crossing_gate_sets_at_one_port_are_never_solved_by_the_fast_path():
+    """Theory Theorem 3.4: vertex-local but non-laminar bundles at one vertex are
+    Set Cover. The check rejects the crossing set and enumerates it exactly."""
+    elements = {"S1": ["y1", "y2"], "S2": ["y2", "y3"], "S3": ["y3", "y4"]}
+    edges = [("s", "v", [])]
+    for y in ("y1", "y2", "y3", "y4"):
+        edges.append(("v", y, [name for name, ys in elements.items() if y in ys]))
+        edges.append((y, "t", []))
+    problem = instance(edges, {"S1": 1.0, "S2": 1.0, "S3": 1.0})
+    result = solver.solve(problem)
+    assert (result.fast_path, result.fast_path_reason) == (False, "non_laminar")
+    assert result.method == "enumeration" and result.exceptions == ["S2"]
+    assert result.cost == solver.brute_force(problem).cost == 2.0
+    assert solver.separated(problem, result.actions)
+    report = result.report()
+    assert (report["solver"], report["fast_path"], report["exceptions"]) == (
+        "enumeration",
+        False,
+        1,
+    )
+
+
+def test_a_dominating_member_whose_head_is_a_source_is_no_gate():
+    """A path may start at the head of g, so removing g alone is not equivalent."""
+    problem = instance(
+        [
+            ("s", "in", []),
+            ("in", "out", ["hold"]),
+            ("out", "t", ["hold"]),
+        ],
+        {"hold": 1.0},
+        sources=("s", "out"),
+    )
+    result = solver.solve(problem)
+    assert (result.fast_path, result.exceptions) == (False, ["hold"])
+    assert result.actions == ["hold"]
+    assert solver.separated(problem, result.actions)
+
+
+def test_exceptions_above_the_limit_use_the_ilp_never_the_fast_path(monkeypatch):
+    edges = [("s", f"m{i}", []) for i in range(5)]
+    edges += [(f"m{i}", "t", [f"g{i % 3}", f"h{i}"]) for i in range(5)]
+    edges += [("s", "t", [f"g{i}" for i in range(3)])]
+    costs = {**{f"g{i}": 1.0 for i in range(3)}, **{f"h{i}": 0.6 for i in range(5)}}
+    problem = instance(edges, costs)
+    calls = []
+    monkeypatch.setattr(solver, "ilp_available", lambda: True)
+    monkeypatch.setattr(
+        solver,
+        "ilp",
+        lambda given: calls.append(given)
+        or solver.CutSolution(
+            ["g0", "g1", "g2"], 3.0, "optimal", "ilp", frozenset(), 0
+        ),
+    )
+    result = solver.solve(problem, enum_limit=1)
+    assert calls == [problem]
+    # Each g is gated at the sink's in-port, but the three gate sets cross at s->t.
+    assert (result.method, result.fast_path, result.fast_path_reason) == (
+        "ilp",
+        False,
+        "non_laminar",
+    )
+    assert result.exceptions == ["g1", "g2"]
+
+
+def laminar_instance(rng: random.Random):
+    """Layered digraph whose grouped actions are nested families at out-ports
+    (delegated sub-scopes of one principal), plus single-edge actions."""
+    layers = [
+        ["s"],
+        *[[f"n{i}_{j}" for j in range(rng.randint(1, 3))] for i in range(3)],
+    ]
+    layers.append(["t1", "t2"])
+    covering: dict[tuple[str, str], list[str]] = {}
+    costs: dict[str, float] = {}
+    for i in range(len(layers) - 1):
+        for u in layers[i]:
+            heads = rng.sample(layers[i + 1], rng.randint(1, len(layers[i + 1])))
+            for v in heads:
+                covering[(u, v)] = []
+                if rng.random() < 0.5:
+                    name = f"e:{u}>{v}"
+                    covering[(u, v)].append(name)
+                    costs[name] = rng.choice([0.5, 1.0, 3.0, 9.0])
+            # A random chain of nested scopes over u's out-edges.
+            members = list(heads)
+            rng.shuffle(members)
+            size = len(members)
+            for depth in range(rng.randint(0, 2)):
+                size = rng.randint(1, size)
+                name = f"w:{u}:{depth}"
+                costs[name] = rng.choice([0.5, 1.0, 2.0, 4.0])
+                for v in members[:size]:
+                    covering[(u, v)].append(name)
+    return instance(
+        [(u, v, cover) for (u, v), cover in covering.items()],
+        costs,
+        sinks=("t1", "t2"),
+    )
+
+
+def test_nested_scopes_at_a_port_stay_on_the_fast_path_and_are_exact():
+    rng = random.Random("laminar")
+    checked = 0
+    for _ in range(200):
+        problem = laminar_instance(rng)
+        expected = solver.brute_force(problem, max_actions=18)
+        if expected is None:
+            continue
+        got = solver.solve(problem)
+        assert got.fast_path, got.exceptions
+        assert got.cost == pytest.approx(expected.cost, abs=1e-9)
+        assert solver.separated(problem, got.actions, problem.sinks - got.unavoidable)
+        checked += 1
+    assert checked > 100

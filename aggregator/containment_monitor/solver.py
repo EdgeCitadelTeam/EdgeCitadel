@@ -2,25 +2,38 @@
 
 An instance is a directed graph whose edges are removable by zero or more actions
 (ANY semantics: one covering action suffices), action costs, sources and sinks.
-Deadlines are applied before this module: an action that cannot land in time is
-simply not listed on that edge, so a partially feasible group removes only its
-feasible members while its full cost is paid (theory note section 5).
+An action's edges are its timely removal mask R_tau(a): deadlines are applied
+before this module, so an action that cannot land in time for an edge is simply
+not listed on it. A partially timely action removes only its timely edges while
+its full cost is paid (theory note section 5). The solver never infers removal
+from any other action (no tree semantics).
+
+The single max-flow (theory Theorem 4.2) is exact only under two conditions,
+which ``solve`` checks on every instance instead of assuming them:
+
+- every grouped action is *gated*: its removal set is equivalent, for source-sink
+  connectivity, to a set of edges at one port (the out- or in-edges of one
+  vertex). Checked sufficient conditions: all members share a tail or a head
+  (G1), or one member lies on every path that meets the group (G3);
+- at every port the gate sets are laminar (pairwise nested or disjoint).
 
 Algorithm (theory note sections 4.2-4.8):
 1. Sinks reachable through uncuttable edges only are unavoidable; they are
    reported and dropped (no cut exists for them).
 2. Only edges on some source-to-sink path matter, and the remaining sinks are
    contracted into the super-sink (reaching any sink is reaching it).
-3. An edge covered by several actions is replaced by a private series path with
-   one action per segment, so every edge has at most one action.
-4. A group whose edges share a tail (or a head) is gated at that vertex; a group
-   with a member every other member's path must cross is gated by that edge.
-   Gated groups become one gadget edge each: the whole instance is ONE max-flow.
-5. Ungated groups (k of them) are enumerated: 2^k max-flows on the gated residual.
-   Above ``enum_limit``, the compact ILP runs when HiGHS is importable; otherwise
-   the greedy cut is returned with status ``approximate``.
+3. Classify every action: private (one edge), gated at a port, or an exception
+   (ungated, or gated but crossing another gate set at its port).
+4. No exception: ONE max-flow on the laminar chain gadget (theory 4.3), where an
+   edge passes through its tail's out-chain, its private actions in series and
+   its head's in-chain.
+5. k exceptions, k <= ``enum_limit``: 2^k max-flows on the gated residual
+   (Proposition 4.7). Above it, the compact ILP over the timely masks
+   (Proposition 4.8); without HiGHS the greedy cut is returned with status
+   ``approximate``. The fast path is never used when a condition fails.
 
-Max-flow is Dinic's algorithm in pure Python; the aggregator has no graph library.
+Every solution reports whether the fast path was valid, why not, the exception
+set and the solver used. Max-flow is Dinic's algorithm in pure Python.
 """
 
 from __future__ import annotations
@@ -50,19 +63,39 @@ class CutInstance:
 class CutSolution:
     actions: list
     cost: float
-    status: str  # optimal | trivial | infeasible | approximate
+    status: str  # optimal | trivial | infeasible | approximate | heuristic
     method: str  # trivial | gadget | enumeration | ilp | greedy | brute_force
     unavoidable: frozenset[str]
     solve_ms: float
     relevant_nodes: int = 0
     relevant_edges: int = 0
-    ungated: int = 0
+    # The checked fast-path conditions: None when they were not checked (the
+    # greedy, the ILP called directly, brute force).
+    fast_path: bool | None = None
+    fast_path_reason: str | None = None  # ungated | non_laminar | both, joined by +
+    exceptions: list = field(default_factory=list)
     lower_bound: float | None = None
-    info: dict = field(default_factory=dict)
+
+    def report(self) -> dict:
+        """The per-solve record kept in status and the decision ledger."""
+        return {
+            "solver": self.method,
+            "status": self.status,
+            "fast_path": self.fast_path,
+            "fast_path_reason": self.fast_path_reason,
+            "exceptions": len(self.exceptions),
+            "exception_actions": [_label(a) for a in self.exceptions],
+            "relevant_edges": self.relevant_edges,
+        }
 
 
 def _order(action: Hashable) -> str:
     return str(action)
+
+
+def _label(action: Hashable) -> str:
+    label = getattr(action, "label", None)
+    return label() if callable(label) else str(action)
 
 
 # ---------------------------------------------------------------------------
@@ -279,21 +312,55 @@ class FlowNetwork:
 # ---------------------------------------------------------------------------
 # Exact grouped solver
 # ---------------------------------------------------------------------------
+Port = tuple[str, str]  # ("out" | "in", vertex)
+
+
 @dataclass
 class _Prepared:
-    edges: list[tuple[str, str, Hashable | None]]  # at most one action per edge
+    """The relevant instance, classified for the chain gadget.
+
+    ``edges`` keep every covering action; ``bundles`` are the timely masks
+    R_tau(a) by edge position. ``private`` actions remove a single edge.
+    ``ports`` hold, per port, the laminar family of gate sets with the actions
+    that have each set. ``exceptions`` are the actions the gadget cannot carry:
+    ``ungated`` ones and ``non_laminar`` ones (gated, but crossing a gate set
+    kept at their port).
+    """
+
+    edges: list[tuple[str, str, tuple[Hashable, ...]]]
     bundles: dict[Hashable, list[int]]
-    gates: dict[Hashable, tuple[str, str]]  # action -> ("out"|"in", vertex)
+    private: set[Hashable]
+    ports: dict[Port, dict[frozenset[int], list[Hashable]]]
     ungated: list[Hashable]
+    non_laminar: list[Hashable]
     sources: frozenset[str]
-    sinks: frozenset[str]
     costs: dict[Hashable, float]
+
+    @property
+    def exceptions(self) -> list[Hashable]:
+        return sorted([*self.ungated, *self.non_laminar], key=_order)
+
+    @property
+    def fast_path_reason(self) -> str | None:
+        reasons = [
+            name
+            for name, found in (
+                ("ungated", self.ungated),
+                ("non_laminar", self.non_laminar),
+            )
+            if found
+        ]
+        return "+".join(reasons) or None
+
+
+def _laminar(left: frozenset[int], right: frozenset[int]) -> bool:
+    return left <= right or right <= left or not (left & right)
 
 
 def _prepare(
     instance: CutInstance, sinks: frozenset[str], indices: list[int]
 ) -> _Prepared:
-    edges: list[tuple[str, str, Hashable | None]] = []
+    edges: list[tuple[str, str, tuple[Hashable, ...]]] = []
     for index in indices:
         tail, head, actions = instance.edges[index]
         # Reaching any sink is reaching the super-sink: contract the sinks. Paths
@@ -301,87 +368,129 @@ def _prepare(
         # (e.g. an admission block over several per-flow boundaries).
         if tail in sinks:
             continue
-        if head in sinks:
-            head = SNK
-        if len(actions) <= 1:
-            edges.append((tail, head, actions[0] if actions else None))
-            continue
-        # Series split (theory 2.1(c)): one private segment per covering action.
-        ordered = sorted(actions, key=_order)
-        hops = [
-            tail,
-            *[f"\x00split:{index}:{i}" for i in range(len(ordered) - 1)],
-            head,
-        ]
-        for i, action in enumerate(ordered):
-            edges.append((hops[i], hops[i + 1], action))
+        edges.append(
+            (
+                tail,
+                SNK if head in sinks else head,
+                tuple(sorted(set(actions), key=_order)),
+            )
+        )
     bundles: dict[Hashable, list[int]] = {}
-    for position, (_, _, action) in enumerate(edges):
-        if action is not None:
+    for position, (_, _, actions) in enumerate(edges):
+        for action in actions:
             bundles.setdefault(action, []).append(position)
     in_degree: dict[str, int] = {}
     for _, head, _ in edges:
         in_degree[head] = in_degree.get(head, 0) + 1
-    gates: dict[Hashable, tuple[str, str]] = {}
+    private: set[Hashable] = set()
+    gated: dict[Port, dict[frozenset[int], list[Hashable]]] = {}
     ungated: list[Hashable] = []
-    for action, members in list(bundles.items()):
+    for action in sorted(bundles, key=_order):
+        members = bundles[action]
         if len(members) == 1:
+            private.add(action)
             continue
         tails = {edges[i][0] for i in members}
         heads = {edges[i][1] for i in members}
+        port: Port | None = None
         if len(tails) == 1:
-            gates[action] = ("out", next(iter(tails)))
+            port = ("out", next(iter(tails)))
+        elif len(heads) == 1:
+            port = ("in", next(iter(heads)))
+        if port is not None:  # G1: the gate set is the whole bundle
+            gated.setdefault(port, {}).setdefault(frozenset(members), []).append(action)
             continue
-        if len(heads) == 1:
-            gates[action] = ("in", next(iter(heads)))
-            continue
-        # Single-edge gate (theory G3): a member g whose head is entered only by g
-        # and is the tail of every other member lies on every path meeting the
-        # group. By substitutability (Lemma 4.1) the group may remove just g.
+        # G3: a member g whose head is no source, is entered only by g and is the
+        # tail of every other member lies on every path that meets the group.
+        # By substitutability (Lemma 4.1) the action may remove just g.
         dominant = [
             g
             for g in members
-            if in_degree.get(edges[g][1], 0) == 1
+            if edges[g][1] not in instance.sources
+            and in_degree.get(edges[g][1], 0) == 1
             and all(edges[e][0] == edges[g][1] for e in members if e != g)
         ]
         if dominant:
             for e in members:
                 if e != dominant[0]:
-                    edges[e] = (edges[e][0], edges[e][1], None)
+                    tail, head, actions = edges[e]
+                    edges[e] = (tail, head, tuple(a for a in actions if a != action))
             bundles[action] = [dominant[0]]
+            private.add(action)
         else:
             ungated.append(action)
-    ungated.sort(key=_order)
+    # Laminarity per port: keep gate sets largest first while they nest with or
+    # avoid every kept set; the actions of a crossing set become exceptions.
+    ports: dict[Port, dict[frozenset[int], list[Hashable]]] = {}
+    non_laminar: list[Hashable] = []
+    for port, family in gated.items():
+        kept: dict[frozenset[int], list[Hashable]] = {}
+        for gate_set in sorted(family, key=lambda s: (-len(s), sorted(s))):
+            if all(_laminar(gate_set, other) for other in kept):
+                kept[gate_set] = family[gate_set]
+            else:
+                non_laminar.extend(family[gate_set])
+        ports[port] = kept
     return _Prepared(
-        edges, bundles, gates, ungated, instance.sources, sinks, dict(instance.costs)
+        edges,
+        bundles,
+        private,
+        ports,
+        sorted(ungated, key=_order),
+        sorted(non_laminar, key=_order),
+        instance.sources,
+        dict(instance.costs),
     )
 
 
-def _gated_flow(prepared: _Prepared, removed: set[int]) -> tuple[float, list[Hashable]]:
-    """One max-flow on the chain gadget; ungated actions not chosen are uncuttable."""
+def _gated_flow(
+    prepared: _Prepared, chosen: Iterable[Hashable]
+) -> tuple[float, list[Hashable]]:
+    """One max-flow on the laminar chain gadget (theory 4.3).
+
+    The chosen exceptions are applied (their edges deleted); the others are
+    unavailable. Each port's gate sets form a forest by inclusion with one node
+    per set, entered from its parent set (or the port's vertex) through an edge
+    costing the cheapest action with that set. An edge leaves its tail through
+    the smallest out-set containing it, crosses its private actions in series and
+    enters its head through the smallest in-set containing it; an edge with no
+    action left is uncuttable.
+    """
+    removed = {position for action in chosen for position in prepared.bundles[action]}
     net = FlowNetwork()
-    ungated = set(prepared.ungated)
-    placed: set[Hashable] = set()
-    for position, (tail, head, action) in enumerate(prepared.edges):
+    smallest: dict[tuple[str, int], str] = {}  # (side, edge position) -> chain node
+    for (side, vertex), family in prepared.ports.items():
+        ordered = sorted(family, key=lambda s: (-len(s), sorted(s)))
+        names = {
+            gate_set: f"\x00{side}:{vertex}:{i}" for i, gate_set in enumerate(ordered)
+        }
+        for i, gate_set in enumerate(ordered):
+            parents = [s for s in ordered[:i] if gate_set < s]
+            upper = names[min(parents, key=len)] if parents else vertex
+            action = min(family[gate_set], key=lambda a: (prepared.costs[a], _order(a)))
+            if side == "out":
+                net.add(upper, names[gate_set], prepared.costs[action], action)
+            else:
+                net.add(names[gate_set], upper, prepared.costs[action], action)
+            # Larger sets come first, so the last assignment is the smallest set.
+            for position in gate_set:
+                smallest[(side, position)] = names[gate_set]
+    for position, (tail, head, actions) in enumerate(prepared.edges):
         if position in removed:
             continue
-        if action is None or action in ungated:
-            net.add(tail, head, INF)
-        elif action in prepared.gates:
-            side, vertex = prepared.gates[action]
-            gadget = f"\x00gate:{_order(action)}"
-            if action not in placed:
-                placed.add(action)
-                if side == "out":
-                    net.add(vertex, gadget, prepared.costs[action], action)
-                else:
-                    net.add(gadget, vertex, prepared.costs[action], action)
-            if side == "out":
-                net.add(gadget, head, INF)
-            else:
-                net.add(tail, gadget, INF)
-        else:
-            net.add(tail, head, prepared.costs[action], action)
+        start = smallest.get(("out", position), tail)
+        end = smallest.get(("in", position), head)
+        segments = [a for a in actions if a in prepared.private]
+        if not segments:
+            net.add(start, end, INF)
+            continue
+        hops = [
+            start,
+            *(f"\x00m:{position}:{i}" for i in range(len(segments) - 1)),
+            end,
+        ]
+        for i, action in enumerate(segments):
+            net.add(hops[i], hops[i + 1], prepared.costs[action], action)
     for source in prepared.sources:
         net.add(SRC, source, INF)
     if net.has_infinite_path(SRC, SNK):
@@ -415,39 +524,46 @@ def solve(
         )
 
     if not indices:
-        return result([], 0.0, "trivial", "trivial")
+        return result([], 0.0, "trivial", "trivial", fast_path=True)
     prepared = _prepare(instance, sinks, indices)
-    k = len(prepared.ungated)
+    exceptions = prepared.exceptions
+    checked = {
+        "fast_path": not exceptions,
+        "fast_path_reason": prepared.fast_path_reason,
+        "exceptions": exceptions,
+    }
+    k = len(exceptions)
     if k == 0:
-        value, actions = _gated_flow(prepared, set())
-        return result(actions, value, "optimal", "gadget")
+        value, actions = _gated_flow(prepared, ())
+        if value == INF:
+            return result([], INF, "infeasible", "gadget", **checked)
+        return result(actions, value, "optimal", "gadget", **checked)
     if k > enum_limit:
         if use_ilp and ilp_available():
             solution = ilp(instance)
             if solution is not None:
                 solution.solve_ms = (time.perf_counter() - started) * 1000
-                solution.ungated = k
+                for name, value in checked.items():
+                    setattr(solution, name, value)
                 return solution
         approximate = greedy(instance)
         approximate.status = "approximate"
-        approximate.ungated = k
+        for name, value in checked.items():
+            setattr(approximate, name, value)
         return approximate
     best, best_actions = INF, []
-    costs = [prepared.costs[action] for action in prepared.ungated]
+    costs = [prepared.costs[action] for action in exceptions]
     for mask in range(1 << k):
-        chosen = [prepared.ungated[i] for i in range(k) if mask >> i & 1]
+        chosen = [exceptions[i] for i in range(k) if mask >> i & 1]
         group_cost = sum(costs[i] for i in range(k) if mask >> i & 1)
         if group_cost >= best - EPS:
             continue
-        removed = {
-            position for action in chosen for position in prepared.bundles[action]
-        }
-        value, actions = _gated_flow(prepared, removed)
+        value, actions = _gated_flow(prepared, chosen)
         if group_cost + value < best - EPS:
             best, best_actions = group_cost + value, [*chosen, *actions]
     if best == INF:
-        return result([], INF, "infeasible", "enumeration", ungated=k)
-    return result(best_actions, best, "optimal", "enumeration", ungated=k)
+        return result([], INF, "infeasible", "enumeration", **checked)
+    return result(best_actions, best, "optimal", "enumeration", **checked)
 
 
 # ---------------------------------------------------------------------------

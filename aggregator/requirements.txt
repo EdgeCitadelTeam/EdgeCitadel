@@ -3,3 +3,5 @@ uvicorn[standard]
 nats-py>=2.9.0
 pydantic
 sqlite-vec>=0.1.6
+# Exact grouped-cut ILP when the solver's fast-path conditions fail.
+highspy>=1.15,<2

@@ -36,10 +36,21 @@ Sinks are per flow, never shared by flows of different origin: one boundary per
 stopped in time makes only its own sink unavoidable. An admission block at b is
 then a grouped action over b's boundaries (solved exactly by the grouped solver).
 
+The offered vocabulary is vertex-local by design: every action removes edges
+of one invocation (task hold, egress revocation, result park), one effect, one
+agent's credential, one grant pair or one agent's admission. No action removes
+a whole delegation subtree across invocations: ``revoke:authority`` stays
+mapped in control (an operator may send it) but is never offered here, because
+its removal set spans every descendant's sites with different latencies and
+has no gate at one port once deadlines split it (theory 3.3, 5.1(d)).
+Descendants are cut through their own per-invocation actions and taint-aware
+admission. Whether a grouped action is actually gated on the instance is
+checked by the solver, not assumed.
+
 Deadlines are earliest arrival times (time-dependent Dijkstra over lower-bound
 delays); an action is feasible iff ``t_now + tau + L(site)`` is strictly earlier
-or it is already in force. Two splits keep that exact where flows of different
-timing share an element:
+or it is already in force (``graph.ControlGraph.masks``). Two splits keep that
+exact where flows of different timing share an element:
 - early windows: a unit's emissions before its own hold/egress lands are routed
   through private copies, one per window between the deadline thresholds of the
   downstream actions (result park at the parent, admission at each target), each
@@ -83,6 +94,9 @@ Capabilities = Callable[[str], frozenset[str]]
 INF = math.inf
 MAX_SPLIT_ROUNDS = 4
 MAX_DOOMED_ROUNDS = 8
+# Mapped in control, never offered by the projection (see the module docstring;
+# cancel is terminal and has no edge of its own).
+NOT_OFFERED = frozenset({"revoke:authority", "cancel:task"})
 
 
 @dataclass(frozen=True)
@@ -291,6 +305,8 @@ class _Builder:
 
     def allowed(self, action: Action | None) -> Action | None:
         """The action if every node it must reach enforces it, else None."""
+        if action is not None and action.capability in NOT_OFFERED:
+            raise ValueError("action_not_offered")
         if action is None or not all(
             action.capability in self.capabilities(site)
             for site in self.scopes.sites(action)
@@ -778,6 +794,7 @@ def project(
         effect_issuer={e.effect_id: e.attempt_id for e in graph.effects.values()},
     )
     cg.units = units
+    masks = cg.masks()
     cg.stats = {
         "nodes": len(cg.nodes),
         "edges": len(cg.edges),
@@ -791,6 +808,12 @@ def project(
         "boundary": sum(1 for attrs in cg.nodes.values() if attrs.get("boundary")),
         "cuttable": n_cuttable,
         "infeasible": n_infeasible,
+        # Actions whose timely mask is a strict, non-empty part of R(a): paid in
+        # full, removing only what lands in time.
+        "partial_actions": sum(
+            1 for removal, timely in masks.values() if 0 < len(timely) < len(removal)
+        ),
+        "untimely_actions": sum(1 for _, timely in masks.values() if not timely),
         "horizon": config.horizon,
         "projection_ms": (time.perf_counter() - started) * 1000,
     }

@@ -631,3 +631,73 @@ def test_stop_team_holds_the_team_the_configured_levels_up(tmp_path, level, team
     }
     assert held == team
     harness.close()
+
+
+# ---------------------------------------------------------------------------
+# Vertex-local vocabulary and per-action timely masks
+# ---------------------------------------------------------------------------
+def test_vocabulary_is_vertex_local_and_deadlines_are_per_action_masks(tmp_path):
+    """No offered action spans a delegation subtree; every action's timely mask
+    is judged from its own site, an action in force keeps all of R(a), and the
+    cut instance lists exactly the timely masks."""
+    from aggregator.containment_monitor.projection import NOT_OFFERED
+
+    partial = 0
+    for seed in range(12):
+        rng = random.Random(seed)
+        trace, config = workload(rng)
+        t_alert = rng.randint(30, 160)
+        started = [
+            e["execution_attempt_id"]
+            for e in trace.events
+            if e["kind"] == "run" and e["phase"] == "started" and event_ms(e) <= t_alert
+        ]
+        harness = Harness(tmp_path / f"seed-{seed}", config)
+        harness.feed([e for e in trace.events if event_ms(e) <= t_alert])
+        harness.monitor.graph.mark_roots([inv(rng.choice(started))])
+        cg = gc(harness, t_alert)
+        assert not {a.capability for a in cg.actions()} & NOT_OFFERED
+        masks = cg.masks()
+        instance = cg.instance()
+        for action, (removal, timely) in masks.items():
+            landing = (
+                harness.now + config.tau_ms + config.control_latency(action.node_id)
+            )
+            assert timely == [i for i in removal if landing < cg.edges[i].deadline]
+            covered = [i for i, edge in enumerate(instance.edges) if action in edge[2]]
+            assert covered == timely
+            assert (action in instance.costs) == bool(timely)
+        chosen = [a for a, (r, t) in masks.items() if 0 < len(t) < len(r)]
+        assert cg.stats["partial_actions"] == len(chosen)
+        partial += len(chosen)
+        for action in chosen[:1]:
+            # Confirmed in force: nothing has to land, the whole R(a) is removed.
+            held = gc(harness, t_alert, in_force=[action])
+            removal, timely = held.masks()[action]
+            assert timely == removal and removal
+        harness.close()
+    assert partial > 0  # partially timely actions were exercised
+
+
+def test_an_authority_revocation_is_never_offered(tmp_path):
+    from aggregator.containment_monitor.projection import _Builder
+
+    harness = Harness(tmp_path, MonitorConfig())
+    graph = harness.monitor.graph
+    builder = _Builder(
+        graph,
+        harness.config,
+        {},
+        ScopeMirror(graph, harness.config),
+        None,
+        ALL,
+        harness.now,
+        0.0,
+        False,
+        frozenset(),
+    )
+    task_id = "00000000-0000-4000-8000-000000000001"
+    with pytest.raises(ValueError, match="action_not_offered"):
+        builder.allowed(Action("revoke", "n0", "authority", task_id))
+    assert builder.allowed(revoke_egress("n0", task_id)) is not None
+    harness.close()
