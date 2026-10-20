@@ -1692,7 +1692,37 @@ class AgentdStore:
         task = self.get_task(task_id)
         if actor_id not in {task["sender_id"], task["recipient_id"]}:
             raise StoreError("task is outside the connector scope")
-        return task
+        return self.visible_task(task, actor_id)
+
+    def visible_task(self, task: dict[str, object], actor_id: str) -> dict[str, object]:
+        """What an agent may see of a task, given holds on it.
+
+        A held child's outcome is withheld from its sender (the delegating
+        parent), even if the result had already been applied at this node:
+        the sender sees the last non-terminal state and no result until the
+        hold is released, so it cannot consume the result meanwhile.
+        """
+        held = "containment_hold" in task or "restore_status" in task
+        if (
+            not held
+            or task["sender_id"] != actor_id
+            or task["state"] not in TERMINAL_STATES
+        ):
+            return task
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT state FROM task_attempts WHERE task_id=? AND state IN "
+                "('queued','offered','accepted','running') "
+                "ORDER BY created_at_ms DESC, rowid DESC LIMIT 1",
+                (task["task_id"],),
+            ).fetchone()
+        return {
+            **task,
+            "state": row["state"] if row else "queued",
+            "terminal_reason": None,
+            "result": None,
+            "result_withheld": True,
+        }
 
     @contextmanager
     def _bounded_read(self) -> Iterator[None]:
@@ -1756,7 +1786,10 @@ class AgentdStore:
             rows = self._connection.execute(
                 "SELECT * FROM tasks" + where + " ORDER BY created_at_ms", arguments
             ).fetchall()
-        return [self._task_mapping(row) for row in rows]
+        tasks = [self._task_mapping(row) for row in rows]
+        return (
+            [self.visible_task(task, actor_id) for task in tasks] if actor_id else tasks
+        )
 
     def transition_task(
         self,

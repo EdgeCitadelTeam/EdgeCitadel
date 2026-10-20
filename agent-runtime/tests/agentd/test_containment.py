@@ -89,6 +89,40 @@ def test_inbound_result_is_parked_until_the_parent_may_consume_it(nodes):
     assert applied["result"]["body"] == "suspect output"
 
 
+def test_an_applied_result_is_withheld_from_the_parent_while_held(nodes):
+    root, worker = nodes
+    child_id = delegate(root)
+    deliver(root, worker)
+    worker.start("child")
+    worker.complete("child", child_id, {"body": "suspect output"})
+    deliver(worker, root)  # The result is applied before the decision.
+    hold(root, child_id)
+    seen = root.rpc("parent", "task.get", task_id=child_id)
+    assert seen["state"] == "running" and seen["result"] is None
+    assert seen["result_withheld"] is True
+    [listed] = [
+        task
+        for task in root.store.list_tasks(actor_id="parent")
+        if task["task_id"] == child_id
+    ]
+    assert listed["result"] is None and listed["result_withheld"] is True
+    # Nothing was consumed: the parent recorded no use of the result.
+    assert [
+        e
+        for e in root.events("lineage", "used")
+        if e["attributes"]["entity"] == "result"
+    ] == []
+    release(root, child_id)
+    applied = root.rpc("parent", "task.get", task_id=child_id)
+    assert applied["state"] == "completed"
+    assert applied["result"]["body"] == "suspect output"
+    assert [
+        e["attributes"]["entity_task_id"]
+        for e in root.events("lineage", "used")
+        if e["attributes"]["entity"] == "result"
+    ] == [child_id]
+
+
 def test_outbound_messages_of_a_held_task_stay_in_the_outbox(nodes):
     root, worker = nodes
     child_id = delegate(root)

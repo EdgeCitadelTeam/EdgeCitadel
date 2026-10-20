@@ -1291,6 +1291,12 @@ arrival order through the normal ingest path. Maintenance repeats this for any
 delivery whose task is no longer held, which finishes a release interrupted by a
 crash. Ingest is idempotent for already-applied envelopes.
 
+A hold on a child task at its parent's node also withholds a result that was
+applied before the hold: reads by the child's sender (`task.get`, `task.list`)
+report the last non-terminal state, `result: null` and `result_withheld: true`
+until release, and the parent records no `used` lineage meanwhile. The
+recipient still reads its own task unchanged.
+
 A containment hold does not recall a message that the outbox loop has already
 handed to the broker; that publication is recorded as it happened, and the
 command's confirmation lists it as `in_flight`. The loop rechecks each selected
