@@ -276,10 +276,7 @@ def test_execution_hold_requires_a_staged_restore(tmp_path):
         with pytest.raises(StoreError, match="staging barrier"):
             hold_restored_execution(store, source_epoch=epoch)
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM restore_holds").fetchone()[
-                0
-            ]
-            == 0
+            store._connection.execute("SELECT COUNT(*) FROM holds").fetchone()[0] == 0
         )
     finally:
         store.close()
@@ -304,7 +301,7 @@ def test_hold_failure_rolls_back_sessions_and_keeps_old_directory_unretired(tmp_
     assert not (previous / RESTORE_BARRIER).exists()
     assert rows(previous) == rows(destination) == before
     with paired_connect(destination / "agentd.sqlite3") as db:
-        assert db.execute("SELECT COUNT(*) FROM restore_holds").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM holds").fetchone()[0] == 0
     rejected_start(destination)
 
 
@@ -312,19 +309,16 @@ def test_v12_upgrade_preserves_work_and_creates_empty_holds(tmp_path):
     seed(tmp_path)
     before = rows(tmp_path)
     with paired_connect(tmp_path / "agentd.sqlite3") as db:
-        db.execute("DROP TABLE restore_holds")
         db.execute("DROP TABLE IF EXISTS trace_import_records")
         db.execute("DROP TABLE IF EXISTS trace_import_grants")
         flatten_connection(db)
+        db.execute("DROP TABLE restore_holds")
         db.execute("PRAGMA user_version=12")
     store = AgentdStore(tmp_path / "agentd.sqlite3")
     try:
-        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 29
+        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 30
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM restore_holds").fetchone()[
-                0
-            ]
-            == 0
+            store._connection.execute("SELECT COUNT(*) FROM holds").fetchone()[0] == 0
         )
         assert rows(tmp_path) == before
         assert len(store.pending_transport()) == 1

@@ -220,15 +220,16 @@ def hold_restored_execution(store: AgentdStore, *, source_epoch: str) -> dict[st
         ):
             raise StoreError("active restored source was not found")
         now = time.time_ns() // 1_000_000
+        # The restored epoch owns these holds; they carry no policy fence.
         db.execute(
-            "INSERT OR IGNORE INTO restore_holds(kind,object_id,source_epoch,held_at_ms) "
-            "SELECT 'task',task_id,?,? FROM tasks WHERE state NOT IN "
+            "INSERT OR IGNORE INTO holds(kind,object_id,reason,owner,policy_version,held_at_ms) "
+            "SELECT 'task',task_id,'restore',?,0,? FROM tasks WHERE state NOT IN "
             "('completed','failed','rejected','cancelled','expired','undeliverable')",
             (source_epoch, now),
         )
         db.execute(
-            "INSERT OR IGNORE INTO restore_holds(kind,object_id,source_epoch,held_at_ms) "
-            "SELECT 'transport',message_id,?,? FROM transport_outbox WHERE published_at_ms IS NULL",
+            "INSERT OR IGNORE INTO holds(kind,object_id,reason,owner,policy_version,held_at_ms) "
+            "SELECT 'transport',message_id,'restore',?,0,? FROM transport_outbox WHERE published_at_ms IS NULL",
             (source_epoch, now),
         )
         sessions = db.execute(
@@ -242,7 +243,8 @@ def hold_restored_execution(store: AgentdStore, *, source_epoch: str) -> dict[st
         return {
             kind: int(
                 db.execute(
-                    "SELECT COUNT(*) FROM restore_holds WHERE kind=?", (kind,)
+                    "SELECT COUNT(*) FROM holds WHERE reason='restore' AND kind=?",
+                    (kind,),
                 ).fetchone()[0]
             )
             for kind in ("task", "transport")

@@ -108,7 +108,7 @@ def test_native_shared_upgrade_and_daemon_restart(volume):
                 assert thread.is_alive() and time.monotonic() < deadline
                 time.sleep(0.02)
             health = AgentdClient(socket_path_for(state)).call("health")
-            assert health["schema_version"] == 29
+            assert health["schema_version"] == 30
             assert health["storage_backend"]["mount_verified"] is True
             assert health["storage_backend"]["physical_limit_bytes"] == IMAGE_BYTES
         finally:

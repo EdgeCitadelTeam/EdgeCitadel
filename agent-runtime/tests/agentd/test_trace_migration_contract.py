@@ -96,12 +96,19 @@ def populated_v5(tmp_path):
     return path, expected, snapshot(path)
 
 
+def upgraded(before):
+    """Schema 30 replaces restore_holds by owned holds and adds containment state."""
+    rows = {name: value for name, value in before.items() if name != "restore_holds"}
+    assert before["restore_holds"] == []  # This fixture predates restore.
+    return {**rows, "holds": [], "containment_fences": [], "held_deliveries": []}
+
+
 def test_populated_upgrade_preserves_journal_outbox_and_encrypted_content(populated_v5):
     path, expected, before = populated_v5
     store = AgentdStore(path)
     try:
-        assert (
-            snapshot(path) == before
+        assert snapshot(path) == upgraded(
+            before
         )  # Includes ciphertext, attempts, events and outbox.
         for original in expected:
             actual = store.get_task(original["task_id"])
@@ -139,7 +146,7 @@ def test_failure_after_migration_statements_rolls_back_every_change(populated_v5
     assert snapshot(path) == before
     recovered = AgentdStore(path)
     recovered.close()
-    assert snapshot(path) == before
+    assert snapshot(path) == upgraded(before)
 
 
 def test_fenced_matched_backup_restores_pending_work_and_exact_results(

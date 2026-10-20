@@ -55,6 +55,9 @@ ADMIN_OPERATIONS = frozenset(
         "managed.reconcile",
         "managed.list",
         "managed.connector.reissue",
+        "containment.hold",
+        "containment.release",
+        "containment.list",
     }
 )
 
@@ -466,6 +469,19 @@ def dispatch(
             str(params.get("connector_id", "")), str(params.get("agent_id", ""))
         )
         return {"token": token}
+
+    if operation in {"containment.hold", "containment.release"}:
+        hold = {
+            key: params.get(key)
+            for key in ("kind", "object_id", "owner", "policy_version")
+        }
+        return (
+            store.place_hold(**hold)
+            if operation == "containment.hold"
+            else store.release_hold(**hold)
+        )
+    if operation == "containment.list":
+        return store.list_holds()
 
     if operation == "trace.import.configure":
         from .trace_import import configure_import

@@ -24,7 +24,8 @@ def review_inventory(store: AgentdStore) -> dict[str, Any]:
     counts = {"task": 0, "transport": 0}
     with store._lock:
         for row in store._connection.execute(
-            "SELECT kind,object_id,source_epoch,held_at_ms FROM restore_holds ORDER BY kind,object_id"
+            "SELECT kind,object_id,owner,held_at_ms FROM holds WHERE reason='restore' "
+            "ORDER BY kind,object_id"
         ):
             kind, object_id = str(row[0]), str(row[1])
             table, key = (
@@ -137,10 +138,10 @@ def activate_restored_state(
                         raise StoreError("restore inventory changed since review")
                     unheld = db.execute(
                         "SELECT 1 FROM tasks WHERE state NOT IN ('completed','failed','rejected','cancelled','expired','undeliverable') "
-                        "AND task_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='task') LIMIT 1"
+                        "AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task') LIMIT 1"
                     ).fetchone()
                     unpublished = db.execute(
-                        "SELECT 1 FROM transport_outbox WHERE published_at_ms IS NULL AND message_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='transport') LIMIT 1"
+                        "SELECT 1 FROM transport_outbox WHERE published_at_ms IS NULL AND message_id NOT IN (SELECT object_id FROM holds WHERE kind='transport') LIMIT 1"
                     ).fetchone()
                     active = db.execute(
                         "SELECT 1 FROM sessions WHERE closed_at_ms IS NULL LIMIT 1"

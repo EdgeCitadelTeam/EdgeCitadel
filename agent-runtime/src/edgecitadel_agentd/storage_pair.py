@@ -7,7 +7,8 @@ import sqlite3
 from pathlib import Path
 from uuid import UUID, uuid4
 
-TASK_TABLES = (
+# The task tables moved by the schema-24 pair conversion.
+PAIR_TABLES = (
     "connectors",
     "sessions",
     "tasks",
@@ -15,6 +16,13 @@ TASK_TABLES = (
     "transport_outbox",
     "managed_agents",
     "restore_holds",
+)
+# Schema 30 generalizes restore_holds into owned holds with parked deliveries.
+TASK_TABLES = (
+    *PAIR_TABLES[:-1],
+    "holds",
+    "containment_fences",
+    "held_deliveries",
 )
 CROSS_REFERENCES = (
     ("trace_bindings", "connector_id", "connectors", "connector_id"),
@@ -24,6 +32,7 @@ CROSS_REFERENCES = (
     ("trace_task_contexts", "task_id", "tasks", "task_id"),
 )
 PAIR_VERSION = 24
+CURRENT_VERSION = 30
 
 
 def task_database_path(trace_path: Path) -> Path:
@@ -42,8 +51,8 @@ def attach_tasks(db: sqlite3.Connection, path: Path, *, existing: bool) -> None:
     db.execute("PRAGMA task_state.synchronous=EXTRA")
 
 
-def verify_pair(db: sqlite3.Connection, *, version: int = 29) -> None:
-    if version not in (24, 25, 26, 27, 28, 29):
+def verify_pair(db: sqlite3.Connection, *, version: int = CURRENT_VERSION) -> None:
+    if not PAIR_VERSION <= version <= CURRENT_VERSION:
         raise sqlite3.DatabaseError("unsupported storage pair schema")
     ids = []
     for schema in ("main", "task_state"):
@@ -66,12 +75,13 @@ def verify_pair(db: sqlite3.Connection, *, version: int = 29) -> None:
             "SELECT name FROM task_state.sqlite_schema WHERE type='table'"
         )
     }
-    if tables != set(TASK_TABLES) | {"storage_pair"}:
+    expected = TASK_TABLES if version >= 30 else PAIR_TABLES
+    if tables != set(expected) | {"storage_pair"}:
         raise sqlite3.DatabaseError("task storage has an unexpected table inventory")
     if ids[0] != ids[1]:
         raise sqlite3.DatabaseError("storage pair identities differ")
     for schema, unexpected in (
-        ("main", TASK_TABLES),
+        ("main", expected),
         ("task_state", ("trace_journal",)),
     ):
         for name in unexpected:
@@ -163,7 +173,7 @@ def migrate_pair(db: sqlite3.Connection) -> None:
         raise sqlite3.ProgrammingError("pair migration requires its owned transaction")
     if db.execute("SELECT 1 FROM task_state.sqlite_schema LIMIT 1").fetchone():
         raise sqlite3.DatabaseError("migration task destination is not empty")
-    for table in TASK_TABLES:
+    for table in PAIR_TABLES:
         for kind, sql in _objects(db, table):
             if kind not in ("table", "index"):
                 raise sqlite3.DatabaseError("unexpected task schema object")
@@ -191,7 +201,7 @@ def migrate_pair(db: sqlite3.Connection) -> None:
             if kind != "index":
                 raise sqlite3.DatabaseError("unexpected trace schema object")
             db.execute(sql)
-    for table in reversed(TASK_TABLES):
+    for table in reversed(PAIR_TABLES):
         db.execute(f'DROP TABLE main."{table}"')
     identity = str(uuid4())
     for schema in ("main", "task_state"):

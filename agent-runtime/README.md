@@ -253,7 +253,7 @@ paired super-journal at full inode quota. Passes that change rows still use norm
 commit and may refuse for lack of capacity; bounded reclamation under full quota
 is not yet qualified.
 
-For a stopped, clean schema-29 DELETE pair already owned by the dedicated UID,
+For a stopped, clean schema-30 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with
 `no_new_privs` enabled and no capabilities:
 
@@ -340,7 +340,17 @@ holds nonterminal tasks/unpublished commands; task reads flag these as
 holds. The internal activation API accepts an exact reviewed hold inventory,
 records unknown coverage durably and removes only the destination barrier; it
 keeps all uncertain work held. Operator commands, enrollment switching and
-individual hold reconciliation are not yet implemented.
+individual restore-hold reconciliation are not yet implemented.
+
+Schema 30 stores these as `reason: restore` rows of a general `holds` table, beside
+`reason: containment` holds that a monitor places and releases through the admin
+RPCs `containment.hold`, `containment.release` and `containment.list`. Each hold
+names its owner and carries the owner's policy version. agentd rejects any
+decision older than the newest version it has accepted from that owner. A held
+task cannot be claimed, transitioned or used to dispatch. Its unpublished outbound
+messages stay in the outbox. Inbound deliveries for it are acknowledged, then
+parked and applied in order on release. See the
+[trace contract](../docs/architecture/execution-trace-contract.md#containment-holds-and-dispatch-admission).
 
 If reconciliation encounters a SQLite storage error, agentd stays available and
 reports `status: degraded` with `reconciliation: storage_unavailable` in health.
@@ -1054,7 +1064,7 @@ Native macOS uses a private, fully allocated 512 MiB journaled HFS+ disk image
 with the existing 256 MiB application admission thresholds. Task state and its
 key stay outside the trace volume. Run `edgecitadel service storage-setup` after
 installing matching runtime code; this stops the service and resumes any recorded
-schema-6/shared or schema-29/paired migration without creating another backup.
+schema-6/shared or schema-30/paired migration without creating another backup.
 Use `EDGECITADEL_TRACE_SYNC=1 edgecitadel service start` to persist the launchd
 export opt-in. See [native storage and migration](../docs/architecture/native-macos-trace-storage.md)
 for the trust boundary, crash recovery, diagnostics and qualification commands.

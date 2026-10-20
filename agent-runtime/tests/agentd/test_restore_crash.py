@@ -86,9 +86,7 @@ def exercise_stage(directory, point):
         store = AgentdStore(new / "agentd.sqlite3")
         try:
             assert (
-                store._connection.execute(
-                    "SELECT COUNT(*) FROM restore_holds"
-                ).fetchone()[0]
+                store._connection.execute("SELECT COUNT(*) FROM holds").fetchone()[0]
                 == 0
             )
             assert rows(new) == before

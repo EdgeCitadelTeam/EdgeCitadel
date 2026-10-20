@@ -17,7 +17,7 @@ def test_task_response_queries_own_connection_lock(tmp_path, monkeypatch, method
         if held:
             with store._lock, store._connection:
                 store._connection.execute(
-                    "INSERT INTO restore_holds VALUES ('task',?,'old-epoch',1)",
+                    "INSERT INTO holds VALUES ('task',?,'restore','old-epoch',0,1)",
                     (task_id,),
                 )
         connection = store._connection
@@ -46,6 +46,6 @@ def test_task_response_queries_own_connection_lock(tmp_path, monkeypatch, method
         assert result.get("restore_status") == (
             "reconciliation_required" if held else None
         )
-        assert any("restore_holds" in query for query in queries)
+        assert any("FROM holds" in query for query in queries)
     finally:
         store.close()

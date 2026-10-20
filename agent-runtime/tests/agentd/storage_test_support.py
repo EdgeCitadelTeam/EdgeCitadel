@@ -3,7 +3,7 @@
 import sqlite3
 from pathlib import Path
 
-from edgecitadel_agentd.storage_pair import TASK_TABLES, task_database_path
+from edgecitadel_agentd.storage_pair import PAIR_TABLES, task_database_path
 from edgecitadel_agentd.storage_layout import StorageLayout
 
 
@@ -16,6 +16,26 @@ def paired_connect(path, **kwargs):
             (str(task_database_path(Path(filename))),),
         )
     return db
+
+
+def legacy_holds(db):
+    """Return an attached current pair to the schema-29 restore_holds layout.
+
+    Downgrade fixtures call this before lowering user_version below 30. Only
+    restore holds existed then; containment state has no older representation.
+    """
+    db.execute(
+        "CREATE TABLE task_state.restore_holds ("
+        "kind TEXT NOT NULL CHECK(kind IN ('task', 'transport')),"
+        "object_id TEXT NOT NULL, source_epoch TEXT NOT NULL,"
+        "held_at_ms INTEGER NOT NULL, PRIMARY KEY(kind, object_id))"
+    )
+    db.execute(
+        "INSERT INTO task_state.restore_holds "
+        "SELECT kind,object_id,owner,held_at_ms FROM task_state.holds WHERE reason='restore'"
+    )
+    for table in ("held_deliveries", "containment_fences", "holds"):
+        db.execute(f"DROP TABLE task_state.{table}")
 
 
 def flatten_connection(db):
@@ -50,7 +70,11 @@ def flatten_connection(db):
         "SELECT name FROM temp.sqlite_schema WHERE type='trigger' AND (name LIKE 'pair_%' OR name LIKE 'completed_%')"
     ).fetchall():
         db.execute(f'DROP TRIGGER temp."{name}"')
-    for table in TASK_TABLES:
+    if db.execute(
+        "SELECT 1 FROM task_state.sqlite_schema WHERE name='holds'"
+    ).fetchone():
+        legacy_holds(db)
+    for table in PAIR_TABLES:
         objects = db.execute(
             "SELECT type,sql FROM task_state.sqlite_schema WHERE tbl_name=? AND sql IS NOT NULL ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END",
             (table,),
@@ -66,7 +90,7 @@ def flatten_connection(db):
         db.execute(
             f'INSERT INTO main."{table}"(rowid,{columns}) SELECT rowid,{columns} FROM task_state."{table}"'
         )
-    for table in reversed(TASK_TABLES):
+    for table in reversed(PAIR_TABLES):
         db.execute(f'DROP TABLE IF EXISTS task_state."{table}"')
     db.execute("DROP TABLE main.storage_pair")
     db.execute("DROP TABLE task_state.storage_pair")

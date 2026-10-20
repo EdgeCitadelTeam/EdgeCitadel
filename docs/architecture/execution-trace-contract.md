@@ -1259,6 +1259,41 @@ and coverage reporting are implemented and verified. No hold-release API exists
 yet, and deleting hold rows manually is not a supported recovery procedure.
 
 
+### Containment holds and dispatch admission
+
+Schema 30 replaces `restore_holds` with one `holds` table keyed by
+`(kind, object_id, reason)`. Each row also records `owner`, `policy_version` and
+`held_at_ms`. `kind` is `task` (a task ID, which may precede the task's arrival)
+or `transport` (an outbox message ID). `reason` is `restore`, owned by the
+restored source epoch with version 0, or `containment`. Every existing restore
+row migrates unchanged in meaning.
+
+Any hold stops its object. A held task is not claimable. Its transitions are
+refused ("task requires restore reconciliation" or "task is held by
+containment"), and deadline and session-loss sweeps skip it. Its unpublished
+outbound messages are not selected for publication, whether they were queued
+before or after the hold. Inbound envelopes for it (command, delegation, result
+or cancel) are validated, then parked durably in `held_deliveries` and returned
+to the transport as accepted, so the broker delivery is acknowledged rather than
+redelivered or terminated. A held transport message is not published. Task reads
+expose `restore_status` and/or `containment_hold: {owner, policy_version}`.
+
+Containment holds are managed through admin RPCs that require the management
+credential. `containment.hold` and `containment.release` both take
+`{kind, object_id, owner, policy_version}`, and `containment.list` returns every
+hold with its parked delivery count. The policy version is a fencing token:
+`containment_fences` keeps, per owner, the highest version agentd has accepted,
+and any hold or release with a lower version fails with `stale_policy_version`.
+Other stable errors are `hold_not_found`, `hold_owned_by_another` and the
+`invalid_*` input errors. Releasing a task hold applies its parked deliveries in
+arrival order through the normal ingest path. Maintenance repeats this for any
+delivery whose task is no longer held, which finishes a release interrupted by a
+crash. Ingest is idempotent for already-applied envelopes.
+
+A containment hold does not recall a message that the live outbox loop has
+already selected; that publication is recorded as it happened. Restore-held
+messages are placed offline and can never be marked published.
+
 ### Reviewed activation with unresolved work held
 
 Schema 14 adds activation receipts keyed by node/source epoch. The internal

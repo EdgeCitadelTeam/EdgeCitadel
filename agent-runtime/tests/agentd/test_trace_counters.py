@@ -7,7 +7,7 @@ from edgecitadel_agentd.store import AgentdStore
 from edgecitadel_agentd.trace_contract import TraceContractError
 from edgecitadel_agentd.trace_journal import TRACE_SCHEMA_SQL
 from test_trace_journal import event, write
-from storage_test_support import stage_restore
+from storage_test_support import legacy_holds, stage_restore
 from edgecitadel_agentd.storage_pair import task_database_path
 
 
@@ -44,6 +44,7 @@ def legacy_counters(path, task_path):
             db.execute(f"ALTER TABLE {scratch} RENAME TO {table}")
             for (sql,) in indexes:
                 db.execute(sql)
+        legacy_holds(db)
         db.execute("PRAGMA main.user_version=24")
         db.execute("PRAGMA task_state.user_version=24")
 
@@ -147,7 +148,7 @@ def test_v24_paired_snapshot_restores_then_migrates_before_rotation(tmp_path):
     )
     assert marker["source_epoch"] != original["source_epoch"]
     with sqlite3.connect(destination / "agentd.sqlite3") as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 29
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 30
         assert (
             db.execute(
                 "SELECT source_seq FROM trace_journal WHERE event_id=?",

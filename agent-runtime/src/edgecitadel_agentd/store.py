@@ -61,7 +61,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -626,6 +626,19 @@ class AgentdStore:
             self._connection.execute("PRAGMA main.user_version=29")
             self._connection.execute("PRAGMA task_state.user_version=29")
 
+        if version < 30:
+            from .containment import HOLDS_SCHEMA_SQL
+
+            # Restore holds become reason='restore' rows owned by their epoch.
+            self._execute_migration_sql(HOLDS_SCHEMA_SQL)
+            self._connection.execute(
+                "INSERT INTO task_state.holds(kind,object_id,reason,owner,policy_version,held_at_ms) "
+                "SELECT kind,object_id,'restore',source_epoch,0,held_at_ms FROM task_state.restore_holds"
+            )
+            self._connection.execute("DROP TABLE task_state.restore_holds")
+            self._connection.execute("PRAGMA main.user_version=30")
+            self._connection.execute("PRAGMA task_state.user_version=30")
+
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.
 
@@ -687,6 +700,37 @@ class AgentdStore:
         return bind_trace(
             self, node_id=node_id, connector_id=connector_id, token=token, params=params
         )
+
+    def place_hold(
+        self, *, kind: str, object_id: str, owner: str, policy_version: int
+    ) -> dict[str, object]:
+        from .containment import place_hold
+
+        return place_hold(
+            self,
+            kind=kind,
+            object_id=object_id,
+            owner=owner,
+            policy_version=policy_version,
+        )
+
+    def release_hold(
+        self, *, kind: str, object_id: str, owner: str, policy_version: int
+    ) -> dict[str, object]:
+        from .containment import release_hold
+
+        return release_hold(
+            self,
+            kind=kind,
+            object_id=object_id,
+            owner=owner,
+            policy_version=policy_version,
+        )
+
+    def list_holds(self) -> list[dict[str, object]]:
+        from .containment import list_holds
+
+        return list_holds(self)
 
     def _execute_migration_sql(self, source: str) -> None:
         """Execute simple migration statements without executescript's implicit commit."""
@@ -1593,8 +1637,13 @@ class AgentdStore:
             if conflict is not None:
                 raise StoreError("conflicting terminal task result was rejected")
         with self._task_transaction():
-            if self._restore_held_locked("task", task_id):
-                raise StoreError("task requires restore reconciliation")
+            hold = self._task_hold_locked(task_id)
+            if hold is not None:
+                raise StoreError(
+                    "task requires restore reconciliation"
+                    if hold["reason"] == "restore"
+                    else "task is held by containment"
+                )
             row = self._connection.execute(
                 "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
             ).fetchone()
@@ -1768,7 +1817,7 @@ class AgentdStore:
                 SELECT task_id, state FROM tasks
                 WHERE recipient_id = ? AND state IN ('queued', 'offered')
                   AND claimed_session_id IS NULL
-                  AND task_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='task')
+                  AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task')
                 ORDER BY created_at_ms LIMIT 1
                 """,
                 (connector["agent_id"],),
@@ -1810,6 +1859,22 @@ class AgentdStore:
         task_id = envelope.get("task_id")
         if not isinstance(task_id, str) or not task_id:
             raise StoreError("transport envelope task_id is required")
+        from .containment import park_delivery_locked
+
+        # Holding the store lock across the check and the application keeps a
+        # concurrent containment.hold from slipping between them.
+        with self._lock:
+            if self._task_hold_locked(task_id) is not None:
+                # Acknowledge, then hold: the broker delivery completes and the
+                # parked envelope is applied when the task is released.
+                with self._task_transaction():
+                    park_delivery_locked(self, dict(envelope), task_id)
+                return {"task_id": task_id, "held": True}
+            return self._apply_transport_envelope(envelope, message_type, task_id)
+
+    def _apply_transport_envelope(
+        self, envelope: Mapping[str, object], message_type: object, task_id: str
+    ) -> dict[str, object]:
         if message_type == "result":
             requested_state = envelope.get("task_state")
             state = {
@@ -2010,7 +2075,8 @@ class AgentdStore:
                 """
                 SELECT message_id, task_id, subject, envelope_json, created_at_ms
                 FROM transport_outbox WHERE published_at_ms IS NULL
-                  AND message_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='transport')
+                  AND message_id NOT IN (SELECT object_id FROM holds WHERE kind='transport')
+                  AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task')
                 ORDER BY created_at_ms LIMIT ?
                 """,
                 (limit,),
@@ -2027,12 +2093,18 @@ class AgentdStore:
         ]
 
     def mark_transport_published(self, message_id: str) -> None:
+        # Restore holds are placed offline, so a held restored message can never
+        # have been selected for publication. A containment hold placed after
+        # the live outbox loop selected a message cannot recall it; record the
+        # publication that happened.
         with self._lock, self._connection:
             changed = self._connection.execute(
                 """
                 UPDATE transport_outbox SET published_at_ms = ?
                 WHERE message_id = ? AND published_at_ms IS NULL
-                  AND message_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='transport')
+                  AND message_id NOT IN (
+                      SELECT object_id FROM holds WHERE kind='transport' AND reason='restore'
+                  )
                 """,
                 (_now_ms(), message_id),
             ).rowcount
@@ -2207,9 +2279,14 @@ class AgentdStore:
         return {"spans": spans, "events": events, "presence": presence}
 
     def reconcile(self, now_ms: int | None = None) -> dict[str, int]:
+        from .containment import apply_released_deliveries
+
         now = now_ms if now_ms is not None else _now_ms()
         expired_sessions = 0
         expired_tasks = 0
+        # Finishes a release interrupted between its commit and applying the
+        # deliveries it had parked.
+        apply_released_deliveries(self)
         with self._lock:
             with self._connection:
                 rows = self._connection.execute(
@@ -2238,7 +2315,7 @@ class AgentdStore:
                     """
                     SELECT task_id, trace_id, sender_id FROM tasks
                     WHERE deadline_at_ms IS NOT NULL AND deadline_at_ms <= ?
-                      AND task_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='task')
+                      AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task')
                       AND state NOT IN (
                           'completed', 'failed', 'rejected', 'cancelled',
                           'expired', 'undeliverable'
@@ -2384,7 +2461,7 @@ class AgentdStore:
             SELECT task_id, sender_id, trace_id, state
             FROM tasks
             WHERE claimed_session_id = ? AND state IN ('accepted', 'running')
-              AND task_id NOT IN (SELECT object_id FROM restore_holds WHERE kind='task')
+              AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task')
             """,
             (session_id,),
         ).fetchall()
@@ -2675,13 +2752,15 @@ class AgentdStore:
             )
         return event_id
 
-    def _restore_held_locked(self, kind: str, object_id: str) -> bool:
-        return (
+    def _task_hold_locked(self, task_id: str) -> sqlite3.Row | None:
+        """The task's hold, if any; a restore hold outranks a containment hold."""
+        return cast(
+            sqlite3.Row | None,
             self._connection.execute(
-                "SELECT 1 FROM restore_holds WHERE kind=? AND object_id=?",
-                (kind, object_id),
-            ).fetchone()
-            is not None
+                "SELECT reason,owner,policy_version FROM holds WHERE kind='task' AND object_id=? "
+                "ORDER BY reason='restore' DESC LIMIT 1",
+                (task_id,),
+            ).fetchone(),
         )
 
     def _task_mapping(self, row: sqlite3.Row) -> dict[str, object]:
@@ -2704,10 +2783,20 @@ class AgentdStore:
         }
 
         # Read/list callers map immutable rows after releasing the query lock.
-        # The restore lookup still shares the connection with background writers.
+        # The hold lookup still shares the connection with background writers.
         with self._lock:
-            if self._restore_held_locked("task", str(row["task_id"])):
+            holds = self._connection.execute(
+                "SELECT reason,owner,policy_version FROM holds WHERE kind='task' AND object_id=?",
+                (str(row["task_id"]),),
+            ).fetchall()
+        for hold in holds:
+            if hold["reason"] == "restore":
                 value["restore_status"] = "reconciliation_required"
+            else:
+                value["containment_hold"] = {
+                    "owner": hold["owner"],
+                    "policy_version": hold["policy_version"],
+                }
         return value
 
     @staticmethod

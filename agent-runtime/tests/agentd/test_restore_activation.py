@@ -79,11 +79,11 @@ def test_activated_daemon_accepts_fresh_work_and_keeps_old_work_held(tmp_path):
         assert fresh["state"] == "queued" and "restore_status" not in fresh
         with paired_connect(new / "agentd.sqlite3") as db:
             old_task = db.execute(
-                "SELECT object_id FROM restore_holds WHERE kind='task'"
+                "SELECT object_id FROM holds WHERE kind='task'"
             ).fetchone()[0]
             assert (
                 db.execute(
-                    "SELECT published_at_ms FROM transport_outbox WHERE message_id IN (SELECT object_id FROM restore_holds WHERE kind='transport')"
+                    "SELECT published_at_ms FROM transport_outbox WHERE message_id IN (SELECT object_id FROM holds WHERE kind='transport')"
                 ).fetchone()[0]
                 is None
             )
@@ -182,7 +182,7 @@ def test_unheld_execution_state_prevents_activation(tmp_path, kind):
 def test_v13_migration_preserves_holds_and_adds_empty_activation_receipts(tmp_path):
     _old, new, _marker, review = staged(tmp_path)
     with paired_connect(new / "agentd.sqlite3") as db:
-        before = db.execute("SELECT * FROM restore_holds").fetchall()
+        before = db.execute("SELECT * FROM holds").fetchall()
         db.execute("DROP TABLE restore_activations")
         db.execute("DROP TABLE IF EXISTS trace_import_records")
         db.execute("DROP TABLE IF EXISTS trace_import_grants")
@@ -190,9 +190,9 @@ def test_v13_migration_preserves_holds_and_adds_empty_activation_receipts(tmp_pa
         db.execute("PRAGMA user_version=13")
     store = AgentdStore(new / "agentd.sqlite3")
     try:
-        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 29
+        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 30
         assert [
-            tuple(r) for r in store._connection.execute("SELECT * FROM restore_holds")
+            tuple(r) for r in store._connection.execute("SELECT * FROM holds")
         ] == before
         assert (
             store._connection.execute(
