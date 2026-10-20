@@ -3,6 +3,7 @@
 import random
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -37,6 +38,10 @@ def operator_alert(subject, at):
 def respond(tmp_path, seed, control):
     rng = random.Random(seed)
     trace, config = workload(rng)
+    # The cut property concerns avoidable sinks; the best-effort guard adds
+    # actions on sinks the decision judged unavoidable, which would make those
+    # sinks count once the guard actions are in force.
+    config = replace(config, best_effort_guard=False)
     t_alert = rng.randint(30, 160)
     started = [
         e["execution_attempt_id"]
@@ -501,4 +506,52 @@ def test_a_tainted_scheduled_effect_is_stopped_before_its_commit(tmp_path):
         harness.close()
     finally:
         root.close()
+        worker.close()
+
+
+def test_the_monitor_keeps_the_fail_closed_controller_lease_alive(tmp_path):
+    """With EDGECITADEL_CONTROLLER_LEASE_MS a node denies effects until a
+    controller renewal arrives; the monitor's renewals reopen them."""
+    from aggregator.containment_monitor.config import MonitorConfig
+
+    actuator = {"effect_class": "device.command", "target": "actuator/*"}
+    worker = Node(tmp_path / "worker", "worker-node")
+    worker.managed("child", effects=[actuator])
+    worker.store.controller_lease_ms = 30_000
+    try:
+        worker.submit("child")
+        _, binding = worker.start("child")
+
+        def authorize():
+            return worker.rpc(
+                "child",
+                "effect.authorize",
+                schema_version=1,
+                request_id=str(uuid4()),
+                binding_id=binding["binding_id"],
+                effect_class="device.command",
+                target="actuator/1",
+                tool_call_id=None,
+            )
+
+        assert authorize()["code"] == "controller_lease_expired"
+        control = LocalAgentdControlClient(
+            "core-monitor", {"worker-node": transport(worker)}
+        )
+        config = MonitorConfig(agent_nodes={"child": "worker-node"})
+        harness = Harness(tmp_path / "monitor", config, control)
+        harness.monitor.step()  # describes the node and sends the renewal
+        deadline = time.monotonic() + 5
+        while "worker-node" not in harness.monitor.leases:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+            harness.monitor.renew_leases()
+        lease = harness.monitor.leases["worker-node"]
+        assert lease["enforced"] and lease["error"] is None
+        assert lease["until_ms"] > time.time_ns() // 1_000_000 + 20_000
+        assert authorize()["status"] == "ok"
+        status = harness.monitor.status()["control"]["controller_leases"]
+        assert status["worker-node"]["until_ms"] == lease["until_ms"]
+        harness.close()
+    finally:
         worker.close()

@@ -107,8 +107,14 @@ class MonitorConfig:
     # After each cut, block new dispatches (egress) of every source-side invocation.
     taint_aware_admission: bool = False
     # Also issue c0-cost actions on the last hop into sinks judged unavoidable
-    # (deadlines are lower bounds, so some may still land in time).
-    best_effort_guard: bool = False
+    # (deadlines are lower bounds, so some may still land in time). On by team
+    # decision (2026-10-20).
+    best_effort_guard: bool = True
+    # Renew agentd's fail-closed controller lease (EDGECITADEL_CONTROLLER_LEASE_MS
+    # on the nodes) this often, on every known node that describes
+    # renew:controller; 0 disables. Keep it well under the lease and the command
+    # lifetime: a renewal never outlives the command that carried it.
+    controller_lease_renew_ms: int = 10_000
 
     # -- lookups ------------------------------------------------------------
     def control_latency(self, node_id: str) -> float:
@@ -184,7 +190,7 @@ class MonitorConfig:
                 if not isinstance(item, bool):
                     raise ConfigError(f"invalid_{key}")
                 kwargs[key] = item
-            elif key == "stop_team_level":
+            elif key in {"stop_team_level", "controller_lease_renew_ms"}:
                 if type(item) is not int or item < 0:
                     raise ConfigError(f"invalid_{key}")
                 kwargs[key] = item

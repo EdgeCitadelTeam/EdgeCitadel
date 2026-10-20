@@ -493,6 +493,18 @@ class FakeControlClient:
         if action == "describe":
             caps = sorted(self.capabilities(node_id))
             return Confirmation(node_id, command_id, _now_ms(), {"capabilities": caps})
+        if action == "renew":
+            with self._lock:
+                fences = self.nodes.setdefault(node_id, FakeNode()).fences
+                if policy_version < fences.get(self.owner, 0):
+                    raise ControlError("stale_policy_version")
+                fences[self.owner] = policy_version
+            return Confirmation(
+                node_id,
+                command_id,
+                _now_ms(),
+                {"controller_lease_until_ms": None, "controller_lease_enforced": False},
+            )
         kind = target.get("kind", "task")
         object_id = target.get("object_id") or target["task_id"]
         wait = self.delay(node_id, action)

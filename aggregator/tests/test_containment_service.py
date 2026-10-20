@@ -209,7 +209,7 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
                 "monitor": {
                     "grants": {"p": ["c"]},
                     "horizon": 2,
-                    "best_effort_guard": True,
+                    "best_effort_guard": False,
                     "control_latency_ms": {"n0": 120},
                 },
                 "control": {
@@ -229,7 +229,8 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
         service.config.grants == {"p": frozenset({"c"})} and service.config.horizon == 2
     )
     assert (
-        service.config.control_latency("n0") == 120 and service.config.best_effort_guard
+        service.config.control_latency("n0") == 120
+        and not service.config.best_effort_guard
     )
     assert isinstance(service.control, LocalAgentdControlClient)
     assert service.control.owner == service.config.owner == "core-monitor"

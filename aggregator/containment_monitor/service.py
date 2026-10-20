@@ -28,13 +28,16 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 from ..trace_payload_read import read_payload
 from . import rootcause
 from .config import ConfigError, MonitorConfig
 from .control import (
+    Confirmation,
     ControlClient,
+    ControlError,
     LocalAgentdControlClient,
     NatsControlClient,
     UnconfiguredControlClient,
@@ -116,8 +119,17 @@ class ContainmentMonitor:
         self.last_graph: dict = {}
         self.last_ranking: list[dict] = []
         self._last_resolve_ms = 0
+        # Controller lease renewals run beside decisions so that an unreachable
+        # node never delays a response; one renewal per node in flight.
+        self._lease_pool = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="containment-lease"
+        )
+        self._renewals: dict[str, Future[Confirmation]] = {}
+        self._last_renewal_ms: int | None = None
+        self.leases: dict[str, dict] = {}
 
     def close(self) -> None:
+        self._lease_pool.shutdown(wait=True)
         self.driver.close()
 
     # -- following --------------------------------------------------------------
@@ -393,12 +405,57 @@ class ContainmentMonitor:
         self._remember({"type": "resolve", "t_received": now, **decision.to_json()})
         return decision
 
+    def renew_leases(self) -> None:
+        """Keep agentd's fail-closed controller lease alive on the known nodes.
+
+        A node with ``EDGECITADEL_CONTROLLER_LEASE_MS`` denies effects unless a
+        renewal was applied within that period, so a monitor that stops (or is
+        cut off) stops the fleet's effects. Renewals carry the owner's current
+        policy version without advancing it; one that races a newer decision is
+        rejected as stale and the next round renews again.
+        """
+        for node, future in list(self._renewals.items()):
+            if not future.done():
+                continue
+            del self._renewals[node]
+            try:
+                confirmation = future.result()
+            except ControlError as error:
+                self.leases[node] = {**self.leases.get(node, {}), "error": error.code}
+            else:
+                enforcement = confirmation.enforcement
+                self.leases[node] = {
+                    "until_ms": enforcement.get("controller_lease_until_ms"),
+                    "enforced": enforcement.get("controller_lease_enforced"),
+                    "renewed_at_ms": confirmation.applied_at_ms,
+                    "error": None,
+                }
+        interval = self.config.controller_lease_renew_ms
+        now = self.clock()
+        if not interval or (
+            self._last_renewal_ms is not None and now - self._last_renewal_ms < interval
+        ):
+            return
+        self._last_renewal_ms = now
+        version = max(
+            1,
+            self.db.execute(
+                "SELECT policy_version FROM containment_state WHERE singleton=1"
+            ).fetchone()[0],
+        )
+        for node in sorted(self.graph.known_nodes() - self._renewals.keys()):
+            if "renew:controller" in self.control.capabilities(node):
+                self._renewals[node] = self._lease_pool.submit(
+                    self.control.send, node, "renew", {}, policy_version=version
+                )
+
     def step(self) -> None:
         if self.fault is not None:
             return
         self.catch_up()
         # Describe new nodes before an alert needs them (cached per node).
         self.control.refresh(self.graph.known_nodes())
+        self.renew_leases()
         self.handle_alerts()
         self.resolve_frontier()
 
@@ -466,6 +523,7 @@ class ContainmentMonitor:
                     node: sorted(self.control.capabilities(node))
                     for node in sorted(graph.known_nodes())
                 },
+                "controller_leases": self.leases,
             },
             "coverage_gaps": graph.coverage_gaps,
             "blocked_dispatches": graph.blocked_dispatches,

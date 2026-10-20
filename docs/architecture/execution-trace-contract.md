@@ -3578,3 +3578,19 @@ status lists it under `unconfirmed` for reconciliation with the node's
 
 Without control, decisions are computed with agentd's full action vocabulary and
 logged, and every action is recorded as failed (`node_unreachable`).
+
+**Controller lease.** Every `controller_lease_renew_ms` (default 10000; 0 stops)
+the monitor sends `renew` to each known node (seen in events or named in
+`agent_nodes`) that describes `renew:controller`, beside its decisions so an
+unreachable node never delays one. A renewal carries the owner's current policy
+version without advancing it; one that races a newer decision is rejected as
+stale and the next round renews again. Status reports each node's
+`controller_lease_until_ms`, whether the node enforces a lease, and the last
+error under `control.controller_leases`. With `EDGECITADEL_CONTROLLER_LEASE_MS`
+on a node, a stopped or partitioned monitor therefore stops that node's effects
+within the lease.
+
+The best-effort guard (`best_effort_guard`) is on by default; `horizon` 1 with
+`boundary: "sink"` is the default projection. `stop_team_level` (default 0)
+makes the "Stop team" baseline hold the org subtree that many levels above the
+root's agent (`org_parent`, else the observed dispatch tree).

@@ -475,16 +475,20 @@ def test_horizon_and_boundary_modes(tmp_path):
     assert sizes["defer"] == (0, [])
 
 
-def test_best_effort_guard_and_taint_aware_admission_are_opt_in(tmp_path):
+def test_best_effort_guard_and_taint_aware_admission(tmp_path):
     """Controls land 1000 ms after the alert: the cut pauses r after its early
     window, whose boundary is unavoidable. The guard additionally issues the
     c0-cost admission block on that boundary's last hop; with a deferred boundary
     there is nothing to cut, and taint-aware admission blocks r's egress instead."""
     results = {}
     for name, flags in {
-        "plain": {},
-        "guard": {"best_effort_guard": True},
-        "admission": {"taint_aware_admission": True, "boundary": "defer"},
+        "plain": {"best_effort_guard": False},
+        "guard": {},  # the guard is on by default
+        "admission": {
+            "best_effort_guard": False,
+            "taint_aware_admission": True,
+            "boundary": "defer",
+        },
     }.items():
         config = MonitorConfig(
             grants={"r": frozenset({"w"})},
