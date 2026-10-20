@@ -54,3 +54,133 @@ actions) follows in separate commits on this branch; see below.
 test had never run because no `nats-server` was installed. With nats-server
 2.14.6 it failed with `rejected`; it is fixed in its own commit and now passes
 (4 passed) against a real broker.
+
+## Adapting the monitor to the agentd control protocol (after the merge)
+
+| Change | Where |
+|---|---|
+| One `send(node, action, target, policy_version)` per transport; three outcomes: `Confirmation` (with `applied_at_ms` and the node's `enforcement` report), `ControlError(code)` (rejected, or not delivered), `ControlUnconfirmed` (sent, unanswered) | `aggregator/containment_monitor/control.py` |
+| `LocalAgentdControlClient` on `containment.control`; `NatsControlClient` signing with agentd's `command_mac` on `edgecitadel.control.v1.<node>`, retrying one `command_id` until the confirmation timeout and never past expiry | same |
+| Capabilities from each node's `describe`, cached per node (`refresh`), instead of a fixed set | same, `service.py` |
+| Vocabulary: `hold:egress`, `revoke:authority`, `cancel:task` added; revocations with node-local state fan out to every node that may enforce them | `model.py`, `projection.ScopeMirror.sites` |
+| The projection offers an action only where every site describes it | `projection.py` |
+| An action is in force only when every site confirmed; unconfirmed actions are neither counted nor released and keep phase-1 holds | `enforcement.py` |
+| Scopes from `run/started.attributes.authority`; configured grants only where no export exists | `projection.ScopeMirror`, `provenance.py` |
+| Effects from the gateway's `requested`/`committed`/`denied`; only scheduled effects stay pending, cut by an effect hold or by holding the issuer | `provenance.py`, `projection.py` |
+
+Mapping of the monitor's actions onto agentd commands:
+
+| Monitor action | agentd command | Sent to |
+|---|---|---|
+| `hold:task` | `hold {kind: task, object_id: <task>}`; released by `release` | the node of the task (pause) or of its parent (result park) |
+| `hold:egress` | `hold {kind: egress, object_id: <task or native binding>}` | the invocation's node |
+| `hold:transport` | `hold {kind: transport, object_id: <message>}` | the publishing node |
+| `hold:effect` | `hold {kind: effect, object_id: <effect_id>}` (scheduled effects only) | the issuing invocation's node |
+| `revoke:egress` | `revoke {kind: egress, object_id: <task>}` | the invocation's node |
+| `revoke:authority` | `revoke {kind: authority, object_id: <task>}` | every node that may hold the delegation's descendants |
+| `revoke:credential` | `revoke {kind: credential, object_id: <agent>}` | the agent's node |
+| `revoke:grant` | `revoke {kind: grant, object_id: "a>b" or "a>fx:<class>"}` (an ingress filter) | a's node, and b's node for an agent target |
+| `revoke:admission` | `revoke {kind: admission, object_id: <agent>}` (filter `any` into the agent) | the agent's node and the nodes of agents that may dispatch to it |
+| `cancel:task` | `cancel {task_id}` | the task's node |
+
+`hold:egress`, `revoke:authority` and `cancel:task` are mapped and executable
+but not offered by the projection: an egress hold lands at the same node and time
+as the task hold and covers a subset of its edges, so the solver never prefers
+it, and no strategy uses authority revocation or cancel yet.
+
+Immediate effects are decided at request time and cannot be held individually:
+the projection covers them only through the issuing unit's task hold, egress
+revocation, credential or grant revocation. `stop_team_level` (new monitor
+setting) selects how many org levels above the root's agent "Stop team" starts.
+
+## Team decisions applied (2026-10-20)
+
+| Decision | Implementation |
+|---|---|
+| Best-effort guard on by default | `MonitorConfig.best_effort_guard = True`. The cut-property test disables it explicitly, because guard actions target sinks the decision judged unavoidable. |
+| Fail-closed controller leases on for the lab, configurable, renewed by the monitor | agentd: `EDGECITADEL_CONTROLLER_LEASE_MS` (unchanged, off unless set); lab value 30000 ms in `DEPLOY_RUNBOOK.md` with its justification. Monitor: `controller_lease_renew_ms` (default 10000, 0 disables) sends `renew` to every known node that describes `renew:controller`, on its own thread pool so an unreachable node never delays a decision, with the owner's current policy version (not advanced). Per-node lease state is in status `control.controller_leases`. The local end-to-end runs with leases enforced on all three nodes. |
+| Horizon h = 1, boundary as sink | Already the defaults (`horizon: 1`, `boundary: "sink"`); recorded in the runbook. |
+
+## Local end-to-end test (`e2e/containment/`)
+
+Real processes on one host: nats-server 2.14.6 (JetStream), Core
+(`uvicorn aggregator.main:app`, collector and monitor, signed NATS control),
+three agentd nodes `jim-eq`, `cluster`, `endurance` (trace sync on, controller
+lease 30 s), one Managed Agent process per agent running agentd's production
+`managed_runtime.run` with a scripted handler, and a 25 ms one-way delay relay
+in front of the broker for cluster and endurance (`tc` is not installed here, so
+the delay is a TCP relay rather than netem; it delays the nodes' task,
+telemetry and control traffic alike). agentd uses the ordinary-store test
+entrypoint (`agent-runtime/tests/agentd/service_test_support.py`): the
+provisioned production storage layout is not exercised.
+
+nats-server provenance: GitHub releases and the Go module proxy are blocked by
+this sandbox's egress policy (403), and no Docker daemon is available, so the
+binary came from the PyPI wheel `nats-server-bin==2.14.6` (a third-party
+repackaging, Bing-su/pip-binary-factory; `nats-server --version` reports
+v2.14.6, the version Core's compose file pins). It was used only for local
+tests.
+
+Workflow (C2): `kipp` (jim-eq) → `tars` (cluster) and `case` (endurance). `tars`
+starts the healthy `a3`, has `a1` produce a shared artifact, passes it to the
+sibling `a2` and returns a2's analysis; `kipp` fans it out to `case`, whose `b1`
+schedules an actuator command (`effect.authorize` with `scheduled_at_ms` 20 s
+ahead, then `effect.commit`). `a3` and `b2` never see the artifact. A validator
+failure on a1's result version is injected while a2 holds the artifact
+(`early`) or after b1 scheduled its command (`late`), once Core and the monitor
+hold every workflow event the nodes recorded (11 to 136 ms after the trigger).
+
+| Strategy, variant | Actions (phase) | Released after confirmation | Effect | Healthy done | Status |
+|---|---|---|---|---|---|
+| Firebreak, early | hold a2, tars @cluster, kipp @jim-eq (1); cut = {hold tars} (2) | a2, kipp | none requested | 2/2 | contained, cut valid |
+| Firebreak, late | hold effect, b1, case @endurance, kipp @jim-eq (1); cut = {b1, case, kipp} (2) | effect hold | scheduled, never committed | 2/2 | contained, cut valid |
+| Trace & stop, early | hold tars, a2 @cluster, tars-result park and kipp @jim-eq | none | none requested | 2/2 | applied, cut valid |
+| Trace & stop, late | hold effect, b1, case @endurance, kipp, case-result park @jim-eq | none | scheduled, never committed | 2/2 | applied, cut valid |
+| Stop team, early | hold a2, tars, a3 @cluster | none | none requested | 1/2 (a3 paused) | applied |
+| Stop team, late | hold a3 @cluster (team A had nothing else live) | none | **committed and performed** | 1/2 | applied, cut not valid |
+
+Root cause named a1's invocation (the producer) in every run. Per-action times
+after the alert's intake, over all six runs: decision 24 to 104 ms, sent 34 to
+109 ms, applied (node clock, same host) 85 to 201 ms, confirmed 124 to 267 ms;
+Firebreak sent its releases 261 to 272 ms after the alert and only after every
+action of the chosen cut was confirmed. No action was unconfirmed. Controller
+leases were enforced and renewed on all nodes throughout. Each run's JSON holds
+the full decision (ranking, contamination, G_C statistics, per-site
+enforcement reports) and the nodes' own `containment.list`.
+
+Reproduce: `PATH=<nats-server dir>:$PATH python -m e2e.containment.c2
+--strategy firebreak --variant late --out result.json`; the opt-in pytest
+`aggregator/tests/test_containment_e2e.py` (`RUN_CONTAINMENT_E2E=1`) checks the
+Firebreak properties for both variants.
+
+## Defects found by the end-to-end run
+
+| Defect | Status |
+|---|---|
+| Monitor: the thread could start between the collector creating `trace_collector` and inserting its singleton row, then fail with `monitor_lifecycle_fault` (1 of 4 cold starts in a dedicated check, 2 of 6 scenario runs before the fix) | fixed: readiness requires the row |
+| agentd (pre-existing): `AGENT_INBOX` subjects are updated by read-modify-write; single-client nodes starting together on one broker drop each other's subjects, and deliveries to the lost agents fail with `NoStreamResponseError` | not fixed; the harness starts nodes one at a time and verifies the subjects; runbook step 4.4 |
+| agentd (pre-existing): admin writes such as `connector.register` use a deferred transaction that reads before writing, so a concurrent write by the telemetry connection makes them fail with "database is locked" | not fixed; the harness retries; runbook known gaps |
+| `m2/agentd`: real-NATS control test used the old target shape | fixed (see above) |
+
+## Hooks a recovery milestone will need
+
+Re-running the affected work once a corrected artifact exists needs:
+
+- an incident close/release operation in the monitor: today phase-2 actions are
+  never released and the monitor's `in_force` is only changed by its own
+  decisions (the runbook's manual release leaves it stale);
+- the affected set per incident: the decision's `contamination` summary (live
+  and silent invocations, versions, effects) and the held tasks, persisted in
+  `containment_incidents`/`containment_actions` and the decision ledger;
+- an alert or API that names the corrected version for a revoked one, so the
+  monitor can stop treating consumers of the new version as tainted;
+- a rerun path in agentd and the handlers: a held task can be cancelled
+  (`cancel` is mapped) and its parent resumed (`context.resumed`), but a resumed
+  handler that derives child IDs from its task (as Pi and the scripted agents
+  do) would reattach to the cancelled child, so a rerun needs a new child
+  identity or an explicit redo marker;
+- held scheduled effects need a decision per effect (release to commit, or
+  deny); committed effects are not reversible;
+- unconfirmed actions must be reconciled with each node's `containment.list`
+  before releasing anything, and the owner's fence must continue (a fresh
+  monitor database needs a new owner).
