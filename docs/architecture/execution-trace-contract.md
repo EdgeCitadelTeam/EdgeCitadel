@@ -3153,3 +3153,58 @@ v1 pipeline. Historical content-free events remain valid. The earlier
 metadata-only restrictions are superseded for these bounded content fields;
 see [detailed execution tracing](detailed-execution-tracing.md) for the limits,
 provenance and deployment contract.
+
+## Containment monitor (experimental)
+
+`EDGECITADEL_CONTAINMENT_MONITOR=1` (requires the collector flag) starts
+`aggregator/containment_monitor` in the Core process. It follows
+`trace_raw_events` by `ingest_seq` like the projector but keeps its own
+`containment.sqlite3` beside the Core database: G_P rows, the follower cursor,
+alerts, incidents and actions. Each batch of events and its cursor advance commit
+in one transaction (exactly-once); a lock directory admits one writer. Core's
+schema is not changed. Decisions are also appended to
+`containment-decisions.jsonl` for the experiment ledger.
+
+**G_P** is append-only: invocations (execution attempts), tasks, request/result
+versions and effects, joined across nodes by `child_task_id`, task ids and lineage
+`version_id`. Edges carry influence: `generated`/`used` data, conversation
+`session` continuation (per agent and `context_id`, unless the agent is configured
+session-isolated), dispatch and execution `authority`. Taint is time-respecting:
+an invocation taints an output only if it was tainted when it generated it (same
+node clock); a version taints its consumers. Only the live frontier (running
+invocations, dispatched tasks not yet started, unread results, pending effects)
+and the taint index stay in memory.
+
+**G_C** holds each live unit node-split, its declared flows, and one layer of
+possible next events through one star hub per credential scope. Trace events do
+not carry `authority_scope`, so the monitor mirrors agentd's rule (agent grant
+intersected with the dispatcher's scope) from the configured grants; an agent
+without a configured grant may reach every known agent. Deadlines are earliest
+arrivals over lower-bound delays; an action is feasible when
+`now + tau + control latency(site)` precedes them. Early emission windows and
+merged hub arrivals get private copies so an unstoppable flow never masks a
+stoppable one. `horizon` (default 1) and `boundary` (`sink`, `defer`) select the
+bounded-horizon variant.
+
+**Response.** An alert (intake: `POST /api/containment/alerts`; detectors:
+`outside_authority_scope` and grant denials, lease loss, consumption of a revoked
+version) is ranked by a time-respecting backward slice with an Ochiai spectrum
+score over failing and `validator_pass` subjects, an untrusted-origin prior and a
+type prior; the top candidate's prune level (version, invocation, session, agent,
+subtree) defines the roots. The chosen strategy (default Firebreak: exact grouped
+min-cut; experiment baselines are selectable per alert) runs through the
+two-phase protocol: frontier holds first, then the optimal set, and phase-1 holds
+are released only after every phase-2 action is confirmed. Each action records
+`t_alert`, `t_decision`, `t_sent`, `t_applied` (node clock), `t_confirmed` and
+release times; `GET /api/containment/status` returns them with G_P/G_C sizes, the
+last solve and the root-cause ranking. Both endpoints require
+`X-EdgeCitadel-Admin-Token`.
+
+**Control.** Holds go through agentd's admin RPCs `containment.hold` and
+`containment.release`, fenced by the monitor's monotone policy version.
+`EDGECITADEL_CONTAINMENT_CONFIG` names a JSON file:
+`{"monitor": {...}, "control": {"agentd": {"<node>": {"socket": ..., "admin_token_file": ...}}}}`.
+Without control endpoints, decisions are computed and logged but every action is
+recorded as unconfirmed. agentd does not yet implement egress, grant, credential
+or admission revocation, effect holds, or a remote control subject; until it
+does, those elements are uncuttable for the solver.

@@ -133,6 +133,19 @@ def make_app(for_testing: bool = False) -> FastAPI:
         # writers. The signing key survives ordinary process restart.
         app.include_router(trace_router)
 
+    containment = None
+    containment_mode = os.environ.get("EDGECITADEL_CONTAINMENT_MONITOR", "0")
+    if containment_mode not in {"0", "1"}:
+        raise ValueError("containment_monitor_configuration_unavailable")
+    if containment_mode == "1":
+        from .containment_monitor.routes import make_containment_router
+        from .containment_monitor.service import service_from_environment
+
+        if os.environ.get("EDGECITADEL_TRACE_COLLECTOR") != "1":
+            raise ValueError("containment_monitor_collector_required")
+        containment = service_from_environment(Path(db_path))
+        app.include_router(make_containment_router(containment))
+
     async def _start_services():
         if for_testing:
             state["app"] = None
@@ -176,6 +189,9 @@ def make_app(for_testing: bool = False) -> FastAPI:
                 projector = TraceProjectorService(Path(db_path))
                 state["trace_projector"] = projector
                 projector.start()
+            if containment is not None:
+                state["containment"] = containment
+                containment.start()
         except BaseException:
             # ASGI servers do not run shutdown after failed startup. Close even
             # partially started services here, including preconstructed readers.
@@ -197,6 +213,10 @@ def make_app(for_testing: bool = False) -> FastAPI:
             if state.get("trace_projector"):
                 cleanup.push_async_callback(
                     asyncio.to_thread, state["trace_projector"].close
+                )
+            if state.get("containment"):
+                cleanup.push_async_callback(
+                    asyncio.to_thread, state["containment"].close
                 )
 
     @app.get("/api/system/status")
