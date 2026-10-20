@@ -1,7 +1,7 @@
 {
   "mode": "lab",
   "controller": "jim-eq",
-  "control_transport": "ssh_forward",
+  "control_transport": "nats",
   "hosts": {
     "jim-eq": {
       "address": "jim-eq",

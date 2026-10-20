@@ -1,0 +1,36 @@
+{
+  "name": "dryrun-control",
+  "instances": [
+    "../workloads/c2.json"
+  ],
+  "strategies": [
+    "trace_and_stop",
+    "firebreak"
+  ],
+  "alerts": [
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 50
+      }
+    },
+    {
+      "name": "L1",
+      "control_latency_ms": {
+        "*": 1000
+      },
+      "control_delay_ms": {
+        "*": 1000
+      }
+    }
+  ],
+  "repetitions": 1,
+  "time_scale": 1.0,
+  "rogue_rates": [
+    0.0
+  ],
+  "reference": false
+}

@@ -270,10 +270,11 @@ class StackConfig:
     )  # 0 or absent: pick free (local)
     tau_ms: float = 50.0
     monitor_overrides: dict[str, Any] = field(default_factory=dict)
-    # How the monitor reaches agentd on other hosts. The integrated monitor's
-    # control client only speaks to local admin sockets, so a lab run forwards
-    # each remote node's socket over SSH ("ssh_forward") until the monitor
-    # has its NATS control client; "local" requires every node on the controller.
+    # How the monitor reaches agentd: "local" admin sockets (every node on the
+    # controller), "nats" (owner-signed commands on the run's NATS, agentd's
+    # edgecitadel.control.v1.<node> subject; needs a monitor with
+    # NatsControlClient, m3/integration ab174ed or later), or "ssh_forward"
+    # (remote admin sockets forwarded over SSH, for older monitors).
     control_transport: str = "local"
     netem: dict[str, Any] = field(default_factory=dict)
 
@@ -305,9 +306,21 @@ class StackConfig:
             ports=dict(document.get("ports", {})),
             tau_ms=float(document.get("tau_ms", 50.0)),
             monitor_overrides=dict(document.get("monitor_overrides", {})),
-            control_transport=document.get("control_transport", "local"),
+            control_transport=_transport(document.get("control_transport", "local")),
             netem=dict(document.get("netem", {})),
         )
+
+
+CONTROL_TRANSPORTS = ("local", "nats", "ssh_forward")
+# The NATS control client retries one command until this timeout, then records
+# it as unconfirmed (neither in force nor absent).
+NATS_CONFIRMATION_TIMEOUT_MS = 5000
+
+
+def _transport(name: str) -> str:
+    if name not in CONTROL_TRANSPORTS:
+        raise StackError(f"control_transport must be one of {CONTROL_TRANSPORTS}")
+    return name
 
 
 def free_port() -> int:
@@ -590,30 +603,40 @@ class RunStack:
             ],
             cwd=self.config.hosts[host].runtime_root,
         )
-        control = {}
-        for node in deploy.nodes(spec) if enforce else ():
-            if self.config.node_hosts[node] == host:
-                control[node] = {
-                    "socket": self._socket(node),
-                    "admin_token_file": f"{self.node_state(node)}/agentd/admin.token",
-                }
-            elif self.config.control_transport == "ssh_forward":
-                control[node] = self._forward_control(node, host)
-        unreachable = [n for n in deploy.nodes(spec) if enforce and n not in control]
-        if unreachable:
-            raise StackError(
-                f"the monitor cannot reach agentd on {unreachable}; set control_transport"
-            )
-        document = {
-            "monitor": deploy.monitor_config(
-                spec,
-                strategy=strategy,
-                control_latency_ms=latency,
-                tau_ms=self.config.tau_ms,
-                overrides=self.config.monitor_overrides,
-            ),
-            "control": {"agentd": control},
-        }
+        monitor = deploy.monitor_config(
+            spec,
+            strategy=strategy,
+            control_latency_ms=latency,
+            tau_ms=self.config.tau_ms,
+            overrides=self.config.monitor_overrides,
+        )
+        control: dict[str, Any] = {}
+        if enforce and self.config.control_transport == "nats":
+            owner = str(monitor.get("owner", deploy.MONITOR_OWNER))
+            control["nats"] = {
+                "key_file": self._control_key(spec, host, owner),
+                "confirmation_timeout_ms": NATS_CONFIRMATION_TIMEOUT_MS,
+            }
+        else:
+            sockets = {}
+            for node in deploy.nodes(spec) if enforce else ():
+                if self.config.node_hosts[node] == host:
+                    sockets[node] = {
+                        "socket": self._socket(node),
+                        "admin_token_file": f"{self.node_state(node)}/agentd/admin.token",
+                    }
+                elif self.config.control_transport == "ssh_forward":
+                    sockets[node] = self._forward_control(node, host)
+            unreachable = [
+                n for n in deploy.nodes(spec) if enforce and n not in sockets
+            ]
+            if unreachable:
+                raise StackError(
+                    f"the monitor cannot reach agentd on {unreachable}; "
+                    "set control_transport to nats or ssh_forward"
+                )
+            control["agentd"] = sockets
+        document = {"monitor": monitor, "control": control}
         self.hosts[host].write(
             f"{directory}/containment.json", json.dumps(document, indent=1).encode()
         )
@@ -650,6 +673,22 @@ class RunStack:
         wait_until(
             lambda: self.monitor_status().get("state") == "running", "Core monitor"
         )
+
+    def _control_key(self, spec: Spec, controller: str, owner: str) -> str:
+        """A fresh owner key for this run, given to the monitor and every node.
+
+        agentd authenticates a NATS control command by the HMAC of its owner's
+        key in ``<agentd state>/control-keys/<owner>.key``; the key never leaves
+        mode-600 files and lives only as long as the run's state.
+        """
+        key = secrets.token_hex(32).encode()
+        path = f"{self.host_dir(controller)}/control/{owner}.key"
+        self.hosts[controller].write(path, key)
+        for node in deploy.nodes(spec):
+            self.hosts[self.config.node_hosts[node]].write(
+                f"{self.node_state(node)}/agentd/control-keys/{owner}.key", key
+            )
+        return path
 
     def _forward_control(self, node: str, controller: str) -> dict[str, str]:
         """Forward a remote node's admin socket to the controller over SSH."""

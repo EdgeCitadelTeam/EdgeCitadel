@@ -212,6 +212,16 @@ def test_a_failed_control_action_leaves_containment_time_undefined(run):
     )
 
 
+def test_an_unconfirmed_action_is_a_control_failure(run):
+    finish_b_n(run)
+    unanswered = decision()
+    unanswered["phase1"][1].update(state="unconfirmed", t_confirmed=None)
+    row = evaluate(run, decisions=[unanswered])
+    assert row["n_failed_actions"] == 1 and row["n_unconfirmed_actions"] == 1
+    assert math.isnan(row["time_to_containment_s"])
+    assert row["first_action_s"] == pytest.approx(0.09)  # the confirmed one
+
+
 def test_a_detector_incident_is_not_the_strategys_response(run):
     finish_b_n(run)
     detector = {

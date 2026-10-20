@@ -93,8 +93,37 @@ def test_stack_file_expands_the_environment(tmp_path, monkeypatch):
 
 
 def test_shipped_stack_files_name_hosts_only():
-    for name in ("dryrun.json", "lab.json"):
+    for name in ("dryrun.json", "dryrun-nats.json", "lab.json"):
         text = (stack.HARNESS_ROOT / "configs" / name).read_text()
         document = json.loads(text)
         assert "token" not in text.lower() and "password" not in text.lower()
         assert set(document["node_hosts"].values()) <= set(document["hosts"])
+
+
+def test_nats_control_gives_the_monitor_and_every_node_one_private_key(
+    tmp_path, mini_spec
+):
+    hosts = {
+        name: host_config(name=name, ssh=None, work_root=str(tmp_path / name))
+        for name in ("ctl", "edge")
+    }
+    config = stack.StackConfig(
+        mode="dryrun",
+        hosts=hosts,
+        controller="ctl",
+        node_hosts={"core": "ctl", "edge-1": "edge", "edge-2": "edge"},
+        control_transport="nats",
+    )
+    run = stack.RunStack(config, "r1", tmp_path / "out")
+    path = run._control_key(mini_spec, "ctl", "core-monitor")
+    key = (tmp_path / "ctl" / "r1" / "control" / "core-monitor.key").read_bytes()
+    assert path.endswith("control/core-monitor.key") and len(key) == 64
+    for node in ("core", "edge-1", "edge-2"):
+        copy = f"{run.node_state(node)}/agentd/control-keys/core-monitor.key"
+        assert run.hosts[config.node_hosts[node]].read(copy) == key
+        assert stack.Path(copy).stat().st_mode & 0o777 == 0o600
+
+
+def test_unknown_control_transports_are_rejected(tmp_path):
+    with pytest.raises(stack.StackError, match="control_transport"):
+        stack._transport("carrier-pigeon")

@@ -21,7 +21,7 @@ rows are comparable (times in seconds from the run's start ``t0``):
   stay in every denominator.
 - **time to containment**: alert to the last confirmation of the monitor's
   initial response (its first decision that issued actions; NaN when one of
-  them failed or none was ever issued); ``first_action_s`` / ``last_action_s``
+  them failed or stayed unconfirmed, or none was ever issued); ``first_action_s`` / ``last_action_s``
   are the first and last confirmation over the whole incident.
 """
 
@@ -42,6 +42,10 @@ from .groundtruth import (
 from .spec import Spec, derive
 
 NAN = float("nan")
+# Action states (the monitor's ActionRecord) that leave an action not in force:
+# rejected or undeliverable, or sent without a confirmation (m3/integration
+# ab174ed on) so it may or may not have landed.
+CONTROL_FAILURES = frozenset({"failed", "unconfirmed"})
 
 
 def _seconds(t_ms: float | None, t0_ms: float) -> float:
@@ -132,14 +136,18 @@ def decision_metrics(
         ),
     }
     actions: dict[str, Mapping[str, Any]] = {}
-    failed = phase1 = released = 0
+    failed = unconfirmed = phase1 = released = 0
     confirmed_all = []
     for d in responses:
         for record in [*d.get("phase1", ()), *d.get("phase2", ())]:
             actions.setdefault(_action_label(record["action"]), record)
-            failed += record["state"] == "failed"
+            failed += record["state"] in CONTROL_FAILURES
+            unconfirmed += record["state"] == "unconfirmed"
             phase1 += record["phase"] == 1
-            if record.get("t_confirmed") is not None and record["state"] != "failed":
+            if (
+                record.get("t_confirmed") is not None
+                and record["state"] not in CONTROL_FAILURES
+            ):
                 confirmed_all.append(record["t_confirmed"])
         released += sum(1 for r in d.get("released", ()) if r["state"] == "released")
     row.update(
@@ -147,6 +155,7 @@ def decision_metrics(
         n_phase1=phase1,
         n_released=released,
         n_failed_actions=failed,
+        n_unconfirmed_actions=unconfirmed,
         first_action_s=(min(confirmed_all) - t_alert_ms) / 1000
         if confirmed_all
         else NAN,
@@ -174,7 +183,12 @@ def decision_metrics(
     records = [*first.get("phase1", ()), *first.get("phase2", ())]
     decided = [r["t_decision"] for r in records]
     confirmed = [r["t_confirmed"] for r in records if r.get("t_confirmed") is not None]
-    complete = records and all(r["state"] != "failed" for r in records)
+    # In force only when every action was confirmed (an unconfirmed one may or
+    # may not have landed, so it counts as a control failure).
+    complete = records and all(
+        r["state"] not in CONTROL_FAILURES and r.get("t_confirmed") is not None
+        for r in records
+    )
     t_confirmed = max(confirmed) if complete and confirmed else None
     solve = first.get("solve") or {}
     graph = first.get("graph") or {}

@@ -32,9 +32,18 @@ Dry run (everything on this machine; from ``experiments/containment``)::
   CONTAIN_SIM_ROOT=<simulator> python -m harness sim --experiment ... --out <results>
   python -m harness report --out <results>     # pandas, numpy, matplotlib
 
+``configs/dryrun-nats.json`` is the same stack with the lab's control path: the
+monitor signs each command with a per-run owner key and sends it on the run's
+NATS (agentd's ``edgecitadel.control.v1.<node>``), which needs a monitor with
+``NatsControlClient`` (m3/integration ab174ed or later). ``dryrun.json`` uses
+co-located admin sockets and works with earlier monitors too.
+
 Lab: run the same commands on jim-eq with ``configs/lab.json``; set
-``HARNESS_SSH_ENDURANCE``/``HARNESS_SSH_CLUSTER`` (``user@host``) and the
-``HARNESS_REMOTE_*`` paths of the same checkouts on the edge hosts. Every run
-uses its own ports and ``/var/tmp/edgecitadel-containment/<run>`` state on
-each host and never touches the resident EdgeCitadel services.
+``HARNESS_SSH_ENDURANCE``/``HARNESS_SSH_CLUSTER`` (``user@host``),
+``HARNESS_REPO`` and the ``HARNESS_REMOTE_*`` paths of the same checkouts on
+the edge hosts. Every run uses its own ports, NATS, owner key and
+``/var/tmp/edgecitadel-containment/<run>`` state on each host and never
+touches the resident EdgeCitadel services. ``control_transport:
+ssh_forward`` forwards remote admin sockets over SSH for monitors without
+NATS control.
 """

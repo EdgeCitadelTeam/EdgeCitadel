@@ -17,6 +17,9 @@ from .spec import RUNTIME_EFFECT_CLASS, Spec, derive, node_of_agent
 
 # The monitor's strategy codes (display names in names.CODE_NAME).
 STRATEGIES = tuple(code for code in SIM_CODE if code != "none")
+# The monitor's default control owner (MonitorConfig.owner); agentd fences
+# holds by owner and authenticates NATS commands with this owner's key.
+MONITOR_OWNER = "core-monitor"
 
 
 def effect_rule(cls: str) -> dict[str, str]:
