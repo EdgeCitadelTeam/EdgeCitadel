@@ -66,6 +66,10 @@ READY_POLL_SECONDS = 0.05
 HELD_RETRY_SECONDS = 0.1
 # A scheduled effect due sooner than this is authorized as an immediate one.
 IMMEDIATE_EFFECT_MS = 20
+# Transport failures of one RPC (agentd's client messages), retried in place.
+TRANSPORT_ERRORS = ("agentd is unavailable", "agentd closed the connection")
+RPC_ATTEMPTS = 4
+RPC_RETRY_SECONDS = 0.5
 CONTENT_FAULTS = frozenset(
     {"wrong_value", "stale_version", "out_of_scope_effect", "lease_runaway"}
 )
@@ -597,11 +601,27 @@ class DetWorker:
     async def _call(
         self, context: Any, operation: str, **params: Any
     ) -> dict[str, Any]:
-        """One runtime RPC; a refused call becomes an error reply with its code."""
-        try:
-            reply = await asyncio.to_thread(context.client.call, operation, **params)
-        except AgentdClientError as error:
-            return {"status": "error", "code": f"rpc:{error}"[:200]}
+        """One runtime RPC; a refused call becomes an error reply with its code.
+
+        A transport failure (agentd busy or unreachable) is retried with the
+        same request id: agentd stores a receipt per request id, so a request
+        it already applied returns that receipt instead of acting twice. Only
+        a refusal or a persistent outage reaches the caller as an error.
+        """
+        for attempt in range(RPC_ATTEMPTS):
+            try:
+                reply = await asyncio.to_thread(
+                    context.client.call, operation, **params
+                )
+                break
+            except AgentdClientError as error:
+                code = f"rpc:{error}"[:200]
+                if not str(error).startswith(TRANSPORT_ERRORS):
+                    return {"status": "error", "code": code}
+                if attempt + 1 == RPC_ATTEMPTS:
+                    return {"status": "error", "code": code}
+                await self.note("rpc_retry", operation=operation, code=code)
+                await asyncio.sleep(RPC_RETRY_SECONDS * (attempt + 1))
         return (
             reply
             if isinstance(reply, dict)

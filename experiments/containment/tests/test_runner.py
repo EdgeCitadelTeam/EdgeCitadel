@@ -112,6 +112,8 @@ def test_netem_profiles_only_delay_experiment_ports():
     [
         ({"t0_ms": 1, "errors": [], "slot_restarts": 0}, False),
         ({"t0_ms": 1, "errors": [], "slot_restarts": 2}, True),
+        ({"t0_ms": 1, "errors": [], "rpc_retries": 3, "rpc_failures": 0}, False),
+        ({"t0_ms": 1, "errors": [], "rpc_failures": 1}, True),
         ({"t0_ms": 1, "errors": ["processes exited early: ['worker-a']"]}, True),
         ({"t0_ms": None, "errors": ["StackError: NATS did not become ready"]}, True),
         ({"t0_ms": 1, "errors": ["alert trigger never fired"]}, False),
@@ -119,3 +121,21 @@ def test_netem_profiles_only_delay_experiment_ports():
 )
 def test_testbed_failures_are_told_apart_from_outcomes(meta, failed):
     assert (runner.infrastructure_failure(meta) is not None) == failed
+
+
+def test_testbed_counts_separate_lost_calls_from_refusals(tmp_path):
+    events = [
+        {"kind": "rpc_retry", "code": "rpc:agentd is unavailable: timed out"},
+        {"kind": "dispatch", "code": "lease_exhausted"},
+        {"kind": "slot_restart"},
+    ]
+    ledger = [
+        {"phase": "denied", "code": "rpc:agentd is unavailable: timed out"},
+        {"phase": "denied", "code": "rpc:effect_scope_denied"},
+        {"phase": "committed"},
+    ]
+    for name, records in (("events.jsonl", events), ("ledger.jsonl", ledger)):
+        (tmp_path / name).write_text("".join(json.dumps(r) + "\n" for r in records))
+    counts = runner.testbed_counts(tmp_path)
+    # the retried call's event names its transport code but is not a failure
+    assert counts == {"slot_restarts": 1, "rpc_retries": 1, "rpc_failures": 1}

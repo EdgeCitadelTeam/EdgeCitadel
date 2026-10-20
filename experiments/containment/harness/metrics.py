@@ -296,6 +296,7 @@ def evaluate(
         ),
         "effects_denied": sum(1 for e in effects.values() if e["state"] == "denied"),
         "slot_restarts": sum(1 for e in records.events if e["kind"] == "slot_restart"),
+        "rpc_retries": sum(1 for e in records.events if e["kind"] == "rpc_retry"),
     }
     row["contained_after_confirm"] = (
         NAN

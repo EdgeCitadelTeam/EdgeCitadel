@@ -286,13 +286,32 @@ def run_cell(
         if netem:
             stack.clear_netem()
         _collect(stack, stack_config, run_dir, keep_state=experiment.keep_state)
-        meta["slot_restarts"] = sum(
-            1
-            for line in (run_dir / "events.jsonl").read_text().splitlines()
-            if '"kind":"slot_restart"' in line
-        )
+        meta.update(testbed_counts(run_dir))
         (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
     return run_dir
+
+
+TRANSPORT_CODES = ("rpc:agentd is unavailable", "rpc:agentd closed the connection")
+
+
+def testbed_counts(run_dir: Path) -> dict[str, int]:
+    """Worker slots that lost agentd, RPCs retried, and RPCs that never got
+    through (a dispatch or effect lost to the testbed, not refused by it)."""
+    counts = {"slot_restarts": 0, "rpc_retries": 0, "rpc_failures": 0}
+    for name in ("events.jsonl", "ledger.jsonl"):
+        path = run_dir / name
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            record = json.loads(line)
+            kind = record.get("kind")
+            if kind == "slot_restart":
+                counts["slot_restarts"] += 1
+            elif kind == "rpc_retry":
+                counts["rpc_retries"] += 1
+            elif str(record.get("code") or "").startswith(TRANSPORT_CODES):
+                counts["rpc_failures"] += 1
+    return counts
 
 
 def _drive(
@@ -512,6 +531,8 @@ def infrastructure_failure(meta: Mapping[str, Any]) -> str | None:
     """Why a run measured the testbed rather than the strategy, if it did."""
     if meta.get("slot_restarts"):
         return f"{meta['slot_restarts']} worker slot(s) lost agentd"
+    if meta.get("rpc_failures"):
+        return f"{meta['rpc_failures']} runtime call(s) never reached agentd"
     for error in meta.get("errors", []):
         if (
             "exited early" in error

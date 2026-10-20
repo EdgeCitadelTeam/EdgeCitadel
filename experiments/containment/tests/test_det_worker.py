@@ -21,7 +21,9 @@ from det_worker.content import fault_label, rogue_draw
 pytest.importorskip(
     "edgecitadel_agentd.client", reason="the worker needs agentd's client"
 )
+from det_worker import worker as worker_module  # noqa: E402
 from det_worker.worker import PROTOCOL, DetWorker  # noqa: E402
+from edgecitadel_agentd.client import AgentdClientError  # noqa: E402
 
 from harness import groundtruth as G
 from harness import spec as S
@@ -262,6 +264,58 @@ async def test_cancel_ends_the_invocation_without_outputs(mini_spec, tmp_path):
     assert [e["kind"] for e in services.events()][-1] == "cancelled"
     assert not services.events("produce")
     assert not runtime.dispatches and not services.ledger_records()
+
+
+class FlakyRuntime(FakeRuntime):
+    """Drops the first calls of one operation at the transport, or refuses them."""
+
+    def __init__(self, operation: str, failures: int, message: str) -> None:
+        super().__init__()
+        self.operation, self.failures, self.message = operation, failures, message
+        self.attempts = 0
+
+    def call(self, operation: str, **params: Any) -> dict[str, Any]:
+        if operation == self.operation:
+            self.attempts += 1
+            if self.attempts <= self.failures:
+                # The first attempt may still have been applied before the
+                # reply was lost; agentd then answers the retry from its receipt.
+                super().call(operation, **params)
+                raise AgentdClientError(self.message)
+        return super().call(operation, **params)
+
+
+@pytest.mark.asyncio
+async def test_transport_failures_are_retried_with_the_same_request(
+    mini_spec, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(worker_module, "RPC_RETRY_SECONDS", 0.01)
+    services = LocalServices(tmp_path)
+    expected = G.expected_contents(mini_spec)
+    worker = worker_for(mini_spec, "b1", services)
+    await land_x(worker, expected["X@v1"])
+    runtime = FlakyRuntime("effect.authorize", 2, "agentd is unavailable: timed out")
+    _, state = await worker.handle(
+        envelope("t-b", b_request(expected)), context(runtime)
+    )
+    assert state == "completed"
+    assert runtime.attempts == 3 and len(runtime.authorized) == 1
+    assert [r["phase"] for r in services.ledger_records()] == ["attempted", "committed"]
+    assert len(services.events("rpc_retry")) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_is_not_retried(mini_spec, tmp_path):
+    services = LocalServices(tmp_path)
+    expected = G.expected_contents(mini_spec)
+    worker = worker_for(mini_spec, "b1", services)
+    await land_x(worker, expected["X@v1"])
+    runtime = FlakyRuntime("effect.authorize", 1, "effect_scope_denied")
+    await worker.handle(envelope("t-b", b_request(expected)), context(runtime))
+    assert runtime.attempts == 1
+    denied = [r for r in services.ledger_records() if r["phase"] == "denied"]
+    assert [r["code"] for r in denied] == ["rpc:effect_scope_denied"]
+    assert not services.events("rpc_retry")
 
 
 @pytest.mark.asyncio

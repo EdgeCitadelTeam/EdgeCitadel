@@ -18,7 +18,7 @@
     },
     {
       "path": "det_worker/worker.py",
-      "sha256": "1071d17f0a343d0d604b4256156baa377dd58d85e04e00dc99ed1e3eb1e9bd80"
+      "sha256": "e557850227633cfe0e98e009435f3fa775ee3786abfc2fe1dc9690bed752748e"
     },
     {
       "path": "plugin.yaml",
