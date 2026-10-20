@@ -31,12 +31,13 @@ from __future__ import annotations
 import csv
 import json
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from .metrics import evaluate
 from .names import CODE_NAME, COLOR, FAMILY, MARKER, PLOTTED_NAMES
+from .netem import MEASURED_RTT_MS
 from .runner import infrastructure_failure, testbed_counts
 from .spec import from_dict
 
@@ -76,6 +77,16 @@ def _optional_json(path: Path) -> Any:
     )
 
 
+def _regime(meta: Mapping[str, Any]) -> str:
+    """The latency regime of a run recorded before runs carried it."""
+    values = [
+        float(v)
+        for key in ("control_latency_ms", "control_delay_ms")
+        for v in (meta.get(key) or {}).values()
+    ]
+    return "stress" if max(values, default=0.0) > MEASURED_RTT_MS else "measured"
+
+
 def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     meta = json.loads((run_dir / "run.json").read_text())
     code = meta["strategy"]
@@ -94,7 +105,7 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "alert": meta.get("alert"),
         "root_mode": meta.get("root_mode") or ("given" if meta.get("alert") else None),
         "latency": meta.get("latency"),
-        "latency_regime": meta.get("latency_regime", ""),
+        "latency_regime": meta.get("latency_regime") or _regime(meta),
         "effect_path": meta.get("effect_path", "authorize_perform"),
         "control_latency_ms": sum(latency.values()) / len(latency)
         if latency
@@ -489,7 +500,7 @@ METRICS = {
     "established": ("established", "runs with containment\nestablished (%)"),
     "kept": ("kept_cfrac", "normal work kept (%)"),
 }
-STRESS_NOTE = "stress: above the measured LAN round trip"
+STRESS_NOTE = "stress settings, above the measured LAN round trip (1.5-4 ms)"
 
 
 def _main_runs(runs: Any, mode: str) -> Any:
@@ -600,16 +611,6 @@ def fig_latency(runs: Any, path: Path, mode: str, metric: str = "clean") -> None
             )
             hi = stress.control_latency_ms.max()
             ax.axvspan(lo / 1000, hi / 1000 * 1.05, color="#f2f2f2", zorder=0, lw=0)
-            ax.text(
-                0.98,
-                0.02,
-                STRESS_NOTE,
-                transform=ax.transAxes,
-                ha="right",
-                va="bottom",
-                fontsize=7,
-                color="#7a7a7a",
-            )
         for name in PLOTTED_NAMES:
             g = part[part.strategy == name]
             if g.empty:
@@ -647,6 +648,16 @@ def fig_latency(runs: Any, path: Path, mode: str, metric: str = "clean") -> None
         bbox_to_anchor=(0.5, -0.17),
     )
     fig.tight_layout()
+    if not stress.empty:
+        fig.text(
+            0.5,
+            -0.2,
+            f"Shaded: {STRESS_NOTE}.",
+            ha="center",
+            va="top",
+            fontsize=8,
+            color="#7a7a7a",
+        )
     _save(fig, path)
 
 
