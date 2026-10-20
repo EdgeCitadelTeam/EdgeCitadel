@@ -18,6 +18,9 @@ without relying on repository-global state:
   Home Assistant service.
 - `hermes/` currently runs an EdgeCitadel-owned adapter to an independently
   managed Hermes service.
+- `det-worker/` executes compiled deterministic workloads for the containment
+  experiments (`experiments/containment/`); the harness registers one identity
+  per workload agent and launches its slots.
 - `examples/echo/` is the sole developer and lifecycle smoke fixture.
 
 `agent-runtime/` does not own Gemma, Hermes, or Home Assistant. It owns the

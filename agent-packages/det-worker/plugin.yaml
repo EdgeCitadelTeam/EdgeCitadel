@@ -1,0 +1,47 @@
+apiVersion: edgecitadel.io/v1alpha2
+kind: ManagedAgent
+
+metadata:
+  name: det-worker
+  displayName: Deterministic workload worker
+  description: Executes a compiled containment-experiment workload faithfully (inputs, compute, outputs, dispatch and effects) with no model.
+  version: 0.1.0
+  publisher: edgecitadel
+
+compatibility:
+  supervisorApi: ">=0.1.0,<0.2.0"
+  protocols: [edgecitadel.managed-agent.v1]
+
+runtime:
+  kind: agent_runtime
+  command: [python, -m, det_worker]
+  environmentVariables: [DET_WORKER_PLAN, DET_WORKER_AGENT, DET_WORKER_SERVICES, DET_WORKER_SERVICES_TOKEN, DET_WORKER_SLOTS, DET_WORKER_DIR]
+  healthTimeoutSeconds: 30
+  restartPolicy: never
+
+skills:
+  directory: skills
+
+# The experiment harness registers one identity per logical workload agent with
+# grants derived from the workload; this entry is the package's template agent.
+agents:
+  - id: det-worker
+    skillNames: [det-task]
+    listensBroadcast: false
+
+permissions:
+  knowledge: []
+  messaging:
+    outboundAgents: []
+  network:
+    outbound: []
+  devices: []
+  # Workload actuations are device commands to the experiment ledger.
+  effects:
+    - {effect_class: device.command, target: "actuator://*"}
+
+security:
+  sandbox: restricted
+  secrets: []
+
+extensions: {}
