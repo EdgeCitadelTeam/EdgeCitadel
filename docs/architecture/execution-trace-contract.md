@@ -1315,8 +1315,13 @@ dispatching invocation's effective scope (its grant intersected with the scope i
 inherited), so a child's scope is always a subset of its parent's. The scope
 travels in `payload.execution_context.authority_scope`. It is `null` only for root
 tasks, and ingest rejects a delegated envelope without it (`missing_authority_scope`).
-Native and Managed `task.create` check the same connector grant. Unbound
-`task.create` has no invocation, so it is not attenuated.
+Only native connectors can call `task.create`, and it checks the same
+connector grant. It creates a root task: the native session has no invocation
+to attenuate. A Managed Agent always runs inside a claimed task, so it can
+delegate only through its execution binding (`trace.dispatch`). No shipped
+package used its former unbound `task.create`, which escaped the inherited scope.
+The managed MCP server likewise rejects `edgecitadel_delegate` without
+`_meta.edgecitadel_execution`.
 
 ### Pause, resume and cancel of running managed work
 

@@ -432,13 +432,17 @@ For execution-bound Hermes HTTP requests, use the packaged server launcher and
 `edgecitadel-scoped` toolset described in
 [`agent-packages/hermes/README.md`](../agent-packages/hermes/README.md).
 It supplies per-execution MCP metadata outside model arguments. The generic
-stdio configuration below alone does not attach that execution metadata.
+stdio configuration below alone does not attach that execution metadata, so
+its `edgecitadel_delegate` is refused: a Managed Agent delegates only through
+the execution binding of the task it runs, which keeps the authority that task
+inherited.
 
 A Managed Agent can expose the existing `edgecitadel_delegate` and
 `edgecitadel_task_status` tools to its upstream model using a local stdio MCP
 server. Use the installed supervisor Python and the existing Managed Agent
 connector; this mode opens no execution session and exposes no inbox or task
-transition tools. The adapter remains the sole executor.
+transition tools. The adapter remains the sole executor, and delegation needs
+`_meta.edgecitadel_execution` from it.
 
 ```bash
 /absolute/state/supervisor/bin/python -m edgecitadel_agentd.mcp \

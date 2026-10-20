@@ -230,9 +230,10 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
     host_type = str(connector["host_type"])
     capabilities = set(json.loads(connector["capabilities_json"])["items"])
     common = {"connector.update", "session.open", "session.renew", "session.close"}
+    # A Managed Agent delegates only through its execution binding
+    # (trace.dispatch), so its inherited authority scope always applies.
     managed = {
         "agent.list",
-        "task.create",
         "task.get",
         "task.claim",
         "task.progress",

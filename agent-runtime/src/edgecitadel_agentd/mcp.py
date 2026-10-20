@@ -247,7 +247,10 @@ class NativeMcpServer:
                     result = self._call_bound_delegate(
                         arguments, metadata["edgecitadel_execution"]
                     )
-                elif name == "edgecitadel_delegate" and not self.managed:
+                elif name == "edgecitadel_delegate":
+                    if self.managed:
+                        # Unbound delegation would escape the inherited scope.
+                        raise ValueError("delegation requires an execution binding")
                     result = self._native_delegate(arguments, request_id)
                 else:
                     result = self._call_tool(str(name), arguments)
@@ -359,18 +362,6 @@ class NativeMcpServer:
             raise ValueError("unknown EdgeCitadel tool")
         if name == "edgecitadel_agents":
             return self.client.call("agent.list")
-        if name == "edgecitadel_delegate":
-            recipient_id = arguments["recipient_id"]
-            request = arguments["request"]
-            if not isinstance(recipient_id, str) or not isinstance(request, str):
-                raise ValueError("recipient_id and request must be strings")
-            return self.client.call(
-                "task.create",
-                recipient_id=recipient_id,
-                skill_id=arguments.get("skill_id"),
-                payload={"body": request},
-                deadline_at_ms=arguments.get("deadline_at_ms"),
-            )
         if name == "edgecitadel_inbox":
             return self.client.call(
                 "task.list", recipient_id=self.agent_id, include_terminal=False
