@@ -139,7 +139,8 @@
         "transport",
         "broker",
         "infrastructure",
-        "lineage"
+        "lineage",
+        "containment"
       ]
     },
     "phase": {
@@ -484,7 +485,11 @@
                       "quota_exceeded",
                       "unknown",
                       "execution_held",
-                      "outside_authority_scope"
+                      "outside_authority_scope",
+                      "egress_held",
+                      "authority_revoked",
+                      "ingress_filtered",
+                      "lease_exceeded"
                     ]
                   },
                   {
@@ -578,7 +583,11 @@
                       "quota_exceeded",
                       "unknown",
                       "execution_held",
-                      "outside_authority_scope"
+                      "outside_authority_scope",
+                      "egress_held",
+                      "authority_revoked",
+                      "ingress_filtered",
+                      "lease_exceeded"
                     ]
                   },
                   {
@@ -1565,6 +1574,83 @@
               "external"
             ],
             "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "containment"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "phase": {
+            "type": "string",
+            "enum": [
+              "alert"
+            ]
+          },
+          "trace_id": {
+            "type": "string",
+            "pattern": "^(?!.*[\\r\\n])[0-9a-f]{32}$"
+          },
+          "execution_attempt_id": {
+            "type": "string",
+            "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "span_id": {
+            "type": "null"
+          },
+          "parent_span_id": {
+            "type": "null"
+          },
+          "duration_ms": {
+            "type": "null"
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "containment_version",
+              "alert",
+              "request_id",
+              "lease_dimension"
+            ],
+            "properties": {
+              "containment_version": {
+                "const": 1
+              },
+              "alert": {
+                "type": "string",
+                "enum": [
+                  "lease_exceeded",
+                  "controller_lease_expired"
+                ]
+              },
+              "request_id": {
+                "type": "string",
+                "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "lease_dimension": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "wall_time",
+                      "effects",
+                      "tokens"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
           }
         }
       }

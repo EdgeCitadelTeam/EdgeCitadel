@@ -2636,15 +2636,23 @@ def command_connector(args: argparse.Namespace) -> int:
         return 0
     if args.connector_action == "grant":
         recipients = sorted(set(args.outbound_agent or ()))
+        effects = []
+        for rule in sorted(set(args.effect or ())):
+            effect_class, separator, target = rule.partition("=")
+            if not separator or not target:
+                raise UserError(f"Effect rule must be CLASS=TARGET: {rule}")
+            effects.append({"effect_class": effect_class, "target": target})
         _agentd_rpc(
             state_dir,
             "connector.grant",
             connector_id=args.connector_id,
             outbound_agents=recipients,
+            effects=effects,
         )
         print(
             f"Native connector {args.connector_id} may delegate to: "
-            f"{', '.join(recipients) if recipients else 'no recipients'}."
+            f"{', '.join(recipients) if recipients else 'no recipients'}; "
+            f"effects: {', '.join(sorted(set(args.effect or ()))) or 'none'}."
         )
         return 0
     if args.connector_action == "list":
@@ -2988,6 +2996,7 @@ def _managed_agent_summary(plugin_id: str, record: dict[str, Any]) -> dict[str, 
         "outbound_agents": inventory.get("permissions", {})
         .get("messaging", {})
         .get("outboundAgents", []),
+        "effect_grant": inventory.get("permissions", {}).get("effects", []),
         "install_path": record["path"],
         "installed_at": record["installed_at"],
     }
@@ -4472,7 +4481,7 @@ def _build_parser() -> argparse.ArgumentParser:
     connector_register.set_defaults(func=command_connector)
     connector_grant = connector_commands.add_parser(
         "grant",
-        help="Set the recipients a Plugin Connector may delegate to (replaces the grant)",
+        help="Set the recipients and effects a Plugin Connector may use (replaces the grant)",
     )
     connector_grant.add_argument("connector_id")
     connector_grant.add_argument(
@@ -4480,6 +4489,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="AGENT_ID",
         help="Recipient Agent ID; repeat for several, omit to revoke delegation",
+    )
+    connector_grant.add_argument(
+        "--effect",
+        action="append",
+        metavar="CLASS=TARGET",
+        help="Effect rule such as fs.write=workspace/*; repeat for several",
     )
     connector_grant.add_argument("--state-dir", help=argparse.SUPPRESS)
     connector_grant.set_defaults(func=command_connector)

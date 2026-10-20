@@ -1323,6 +1323,77 @@ package used its former unbound `task.create`, which escaped the inherited scope
 The managed MCP server likewise rejects `edgecitadel_delegate` without
 `_meta.edgecitadel_execution`.
 
+### Delegated authority: effects, leases, revocation and filters
+
+Schema 32 extends the authority a delegated task inherits. The
+`payload.execution_context` capsule now carries, beside `authority_scope`:
+
+| Field | Meaning |
+|---|---|
+| `effect_scope` | effect rules `{effect_class, target}` the delegator could authorize; `null` only for root tasks |
+| `lease` | `{expires_at_ms, max_effects, max_tokens}` hard limits, or `null` for unlimited |
+| `authority_chain` | the delegated task IDs from the root to the parent |
+
+Effect classes are `fs.write`, `process.exec`, `network.http` and
+`device.command`. A target is exact, or a prefix when it ends in `*`. The grant
+comes from administrator state: a Managed Agent package's optional
+`permissions.effects` (carried into the installed summary as `effect_grant`) and
+a native connector's `effects` set by `connector.grant` (CLI
+`edgecitadel connector grant --effect CLASS=TARGET`), empty by default. As for
+recipients, a child's `effect_scope` is the dispatching invocation's grant
+intersected with what it inherited, so a child never authorizes more than its
+parent could.
+
+`trace.dispatch` accepts an optional `lease: {wall_time_ms, max_effects,
+max_tokens}`. The child's expiry is the earlier of the parent's expiry and
+`now + wall_time_ms`. A requested effect or token budget larger than the parent's
+remainder is denied `lease_exceeded`; an omitted one inherits the remainder. A
+dispatch after the parent's lease expired is also denied. The child's effect
+budget is reserved from the parent's in the dispatch transaction
+(`authority_ledger`), so the effects of a delegation tree never exceed the
+root's budget; unused reservations are not returned. `max_tokens` is carried and
+attenuated but nothing meters tokens yet. A lease denial records a
+`containment/alert` event (`alert: lease_exceeded`, `lease_dimension`) in the
+dispatching run, beside the `permission` and `dispatch` denials.
+
+Admission now checks, in order: execution hold (`execution_held`), egress hold
+(`egress_held`), revocation of the invocation's task or any task in its chain
+(`authority_revoked`), the grant (`not_authorized`), the inherited recipients
+(`outside_authority_scope`), ingress filters (`ingress_filtered`) and the lease
+(`lease_exceeded`). Containment denials name the deciding policy
+(`containment_hold`, `containment_egress_hold`, `revocation`,
+`ingress_filter`) and its owner's fencing token as `policy_version`.
+
+Containment state managed by the same fenced owners as holds:
+
+- **Egress hold** (`holds.kind = egress`): the invocation keeps running and
+  receiving, but nothing leaves it. Its dispatches and effects are denied, its
+  recipient terminal transitions (`completed`, `failed`, `rejected`) are refused
+  until release, and none of its outbound messages is published. This includes
+  requests and cancels it had already queued for its children. Task reads show
+  `containment_egress_hold`. The managed runtime does not pause on it; a result
+  waits for release.
+- **Revocation** (`revocations`): irreversible. Every later dispatch and effect
+  of the named task and of any task whose `authority_chain` contains it is
+  denied on this node. The task may be unknown here; descendants that arrive
+  later carry it in their chain.
+- **Ingress filter** (`ingress_filters`, key `(authority, target)`): denies only
+  traffic under that authority into that target. An agent target refuses the
+  dispatch at the sender, withholds an already queued request in the outbox,
+  and parks the delivery at the receiver (acknowledged to the broker, applied
+  when the filter is removed). An effect-rule target denies matching effects.
+  Other traffic into the same target continues.
+
+The outbox gate (`PUBLICATION_BLOCKED_SQL`) is one predicate used both to select
+messages and to recheck each message just before publication: transport and
+task holds, the requester's execution or egress hold for a child's request or
+cancel, and agent filters on the child's chain.
+
+Contexts saved before schema 32 gain `effect_scope: null`, `lease: null` and a
+chain holding only their parent, so revocation reaches them through their
+parent. A redelivered delegation is now compared by its saved JSON, which fixes
+a schema 31 false `execution_context` conflict on duplicate delivery.
+
 ### Pause, resume and cancel of running managed work
 
 A hold on an `accepted` or `running` task **pauses** it; it is reversible. A

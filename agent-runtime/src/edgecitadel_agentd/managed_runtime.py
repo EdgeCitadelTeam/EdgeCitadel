@@ -19,7 +19,8 @@ a watcher reads the task every ``WATCH_INTERVAL_SECONDS``:
 A handler that returns while its task is held keeps its result in memory until
 the hold is released (then the result is committed) or the task ends
 otherwise. If this process exits meanwhile, agentd's session recovery decides
-the task once the hold is released.
+the task once the hold is released. An egress hold does not pause the handler,
+but its result likewise waits for release.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ from .trace_correlation import TaskTraceContext
 from .trace_producer import RuntimeTrace
 
 Handler = Callable[[dict[str, Any], Any], Awaitable[tuple[dict[str, Any], str]]]
-Signal = Literal["run", "held", "terminal", "stopped"]
+Signal = Literal["run", "held", "egress", "terminal", "stopped"]
 WATCH_INTERVAL_SECONDS = 0.5
 TERMINAL_STATES = frozenset(
     {"completed", "failed", "rejected", "cancelled", "expired", "undeliverable"}
@@ -149,16 +150,20 @@ class _TaskSupervisor:
             return "terminal", state
         if "containment_hold" in task or "restore_status" in task:
             return "held", state
+        if "containment_egress_hold" in task:
+            return "egress", state
         return "run", state
 
-    async def wait_while_held(self) -> tuple[Signal, str]:
+    async def wait_while_held(self, *, egress: bool = False) -> tuple[Signal, str]:
+        """Wait out a hold, and also an egress hold when ``egress`` is set."""
+        waiting = {"held", "egress"} if egress else {"held"}
         while True:
             try:
                 await asyncio.wait_for(self.stop.wait(), WATCH_INTERVAL_SECONDS)
             except TimeoutError:
                 pass
             signal, state = await self.signal()
-            if signal != "held":
+            if signal not in waiting:
                 return signal, state
 
     async def transition(
@@ -185,9 +190,9 @@ class _TaskSupervisor:
                 signal, current = await self.signal()
                 if signal == "terminal":
                     return current
-                if signal != "held":
+                if signal not in {"held", "egress"}:
                     raise
-            signal, current = await self.wait_while_held()
+            signal, current = await self.wait_while_held(egress=True)
             if signal == "terminal":
                 return current
             if signal == "stopped":
@@ -230,8 +235,11 @@ class _TaskSupervisor:
             if signal == "terminal":
                 return state
             signal, state = await self.wait_while_held()
-            if signal != "run":
-                return state if signal == "terminal" else None
+            if signal == "terminal":
+                return state
+            if signal == "stopped":
+                return None
+            # Released (an egress hold alone does not stop execution).
             context.resumed = True
 
 

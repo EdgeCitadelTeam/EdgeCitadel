@@ -131,7 +131,7 @@ def test_health_and_authenticated_connector_session(
     assert health == {
         "status": "ready",
         "database": "ok",
-        "schema_version": 31,
+        "schema_version": 32,
         "active_sessions": 0,
         "database_bytes": health["database_bytes"],
         "storage_backend": {"backend": "unverified", "mount_verified": False},

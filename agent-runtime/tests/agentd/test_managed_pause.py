@@ -109,6 +109,38 @@ async def test_a_result_returned_while_held_waits_for_release(tmp_path, monkeypa
         assert [e["phase"] for e in agent.journal("run")] == ["started", "completed"]
 
 
+@pytest.mark.asyncio
+async def test_an_egress_hold_lets_the_handler_finish_but_holds_its_result(
+    tmp_path, monkeypatch
+):
+    agent_ref: list[Any] = []
+    calls: list[str] = []
+    proceed = asyncio.Event()
+
+    async def handler(envelope: dict[str, Any], context: Any):
+        agent_ref[0].hold(envelope["task_id"], kind="egress")
+        try:
+            await proceed.wait()  # The watcher sees the egress hold meanwhile.
+        except asyncio.CancelledError:
+            calls.append("interrupted")
+            raise
+        calls.append("finished")
+        return {"body": "kept until egress opens"}, "completed"
+
+    async with managed_agent(tmp_path, monkeypatch, handler) as agent:
+        agent_ref.append(agent)
+        task_id = agent.submit()
+        await eventually(lambda: "containment_egress_hold" in agent.task(task_id))
+        await asyncio.sleep(0.3)
+        proceed.set()
+        await eventually(lambda: calls == ["finished"])
+        await asyncio.sleep(0.2)
+        assert agent.task(task_id)["state"] == "running"
+        agent.release(task_id, kind="egress")
+        await eventually(lambda: agent.task(task_id)["state"] == "completed")
+        assert calls == ["finished"]
+
+
 def test_release_recovers_a_task_whose_runtime_exited_while_paused(tmp_path):
     node = Node(tmp_path / "node", "node-a")
     try:

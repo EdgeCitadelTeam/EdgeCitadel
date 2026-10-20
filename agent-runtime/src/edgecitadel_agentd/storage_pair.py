@@ -18,11 +18,19 @@ PAIR_TABLES = (
     "restore_holds",
 )
 # Schema 30 generalizes restore_holds into owned holds with parked deliveries.
-TASK_TABLES = (
+HOLD_TABLES = (
     *PAIR_TABLES[:-1],
     "holds",
     "containment_fences",
     "held_deliveries",
+)
+# Schema 32 adds delegated authority state and control-command receipts.
+TASK_TABLES = (
+    *HOLD_TABLES,
+    "revocations",
+    "ingress_filters",
+    "authority_ledger",
+    "control_commands",
 )
 CROSS_REFERENCES = (
     ("trace_bindings", "connector_id", "connectors", "connector_id"),
@@ -32,7 +40,7 @@ CROSS_REFERENCES = (
     ("trace_task_contexts", "task_id", "tasks", "task_id"),
 )
 PAIR_VERSION = 24
-CURRENT_VERSION = 31
+CURRENT_VERSION = 32
 
 
 def task_database_path(trace_path: Path) -> Path:
@@ -75,7 +83,9 @@ def verify_pair(db: sqlite3.Connection, *, version: int = CURRENT_VERSION) -> No
             "SELECT name FROM task_state.sqlite_schema WHERE type='table'"
         )
     }
-    expected = TASK_TABLES if version >= 30 else PAIR_TABLES
+    expected = (
+        TASK_TABLES if version >= 32 else HOLD_TABLES if version >= 30 else PAIR_TABLES
+    )
     if tables != set(expected) | {"storage_pair"}:
         raise sqlite3.DatabaseError("task storage has an unexpected table inventory")
     if ids[0] != ids[1]:

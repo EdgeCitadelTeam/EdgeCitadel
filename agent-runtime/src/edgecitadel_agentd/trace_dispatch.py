@@ -13,7 +13,17 @@ from uuid import uuid4
 
 from . import trace_capacity
 from . import trace_lineage as lineage
-from .delegation_authority import GRANT_POLICY_VERSION, delegation_grant
+from .delegation_authority import (
+    GRANT_POLICY_VERSION,
+    EffectRule,
+    Lease,
+    LeaseExceeded,
+    LeaseRequest,
+    charge,
+    child_lease,
+    delegation_grant,
+    remaining_effects,
+)
 from .trace_binding_access import authorized_binding_locked
 from .trace_contract import (
     TraceContractError,
@@ -37,30 +47,52 @@ class Admission:
     grant_version: str | None
     reason: str | None
     code: str | None
-    scope: frozenset[str] = frozenset()
+    recipients: frozenset[str] = frozenset()
+    effects: frozenset[EffectRule] = frozenset()
+    lease: Lease | None = None
+    lease_dimension: str | None = None
+
+
+def _denied(row: sqlite3.Row, policy: str, code: str) -> Admission:
+    return Admission(policy, str(row["policy_version"]), None, code, code)
 
 
 def _admit(
     store: AgentdStore,
     connector: sqlite3.Row,
     *,
-    hold: sqlite3.Row | None,
-    inherited: tuple[str, ...] | None,
+    task_id: str | None,
+    parent: TaskTraceContext | None,
     recipient_id: str,
+    lease: LeaseRequest,
+    now_ms: int,
 ) -> Admission:
-    """Admission after binding authority: containment, grant, then inherited scope.
+    """Admission after binding authority; the first failing check decides.
 
-    A held invocation cannot delegate whatever its grant says. The policy
-    version of a containment denial is the hold's fencing token.
+    Containment comes first (a paused or egress-blocked invocation, or a
+    revoked authority, cannot delegate whatever its grant says), then the
+    grant, the inherited scope, ingress filters and the lease. The policy
+    version of a containment denial is the deciding owner's fencing token.
     """
-    if hold is not None:
-        return Admission(
-            f"{hold['reason']}_hold",
-            str(hold["policy_version"]),
-            None,
-            "execution_held",
-            "execution_held",
-        )
+    # containment imports the store, which imports this module.
+    from .containment import (
+        egress_hold_locked,
+        ingress_filter_locked,
+        revocation_locked,
+    )
+
+    db = store._connection
+    authorities = parent.authorities if parent else ((task_id,) if task_id else ())
+    if task_id is not None:
+        hold = store._task_hold_locked(task_id)
+        if hold is not None:
+            return _denied(hold, f"{hold['reason']}_hold", "execution_held")
+        egress = egress_hold_locked(db, task_id)
+        if egress is not None:
+            return _denied(egress, "containment_egress_hold", "egress_held")
+    revoked = revocation_locked(db, authorities)
+    if revoked is not None:
+        return _denied(revoked, "revocation", "authority_revoked")
     grant = delegation_grant(store, connector)
     if not grant.usable or recipient_id not in grant.recipients:
         return Admission(
@@ -70,6 +102,7 @@ def _admit(
             "permission_denied",
             "not_authorized",
         )
+    inherited = parent.authority_scope if parent is not None else None
     if inherited is not None and recipient_id not in inherited:
         return Admission(
             grant.policy,
@@ -78,6 +111,26 @@ def _admit(
             "outside_authority_scope",
             "outside_authority_scope",
         )
+    filtered = ingress_filter_locked(db, authorities, agent_id=recipient_id)
+    if filtered is not None:
+        return _denied(filtered, "ingress_filter", "ingress_filtered")
+    parent_lease = parent.lease if parent is not None else None
+    try:
+        child = child_lease(
+            parent_lease,
+            remaining_effects(db, task_id, parent_lease),
+            lease,
+            now_ms,
+        )
+    except LeaseExceeded as exceeded:
+        return Admission(
+            "lease",
+            GRANT_POLICY_VERSION,
+            grant.version,
+            "lease_exceeded",
+            "lease_exceeded",
+            lease_dimension=exceeded.dimension,
+        )
     return Admission(
         grant.policy,
         GRANT_POLICY_VERSION,
@@ -85,6 +138,8 @@ def _admit(
         None,
         None,
         grant.scope(inherited),
+        grant.effect_scope(parent.effect_scope if parent is not None else None),
+        child,
     )
 
 
@@ -138,12 +193,15 @@ def dispatch_trace(
             else None
         )
         parent = TaskTraceContext(**json.loads(saved[0])) if saved is not None else None
+        requested = params.get("lease") or {}
         admission = _admit(
             store,
             connector,
-            hold=store._task_hold_locked(task.task_id) if task is not None else None,
-            inherited=parent.authority_scope if parent is not None else None,
+            task_id=task.task_id if task is not None else None,
+            parent=parent,
             recipient_id=params["recipient_id"],
+            lease=LeaseRequest(**requested),
+            now_ms=now,
         )
         allowed = admission.code is None
         root = db.execute(
@@ -196,6 +254,19 @@ def dispatch_trace(
             },
             selected=True,
         )
+        if admission.code == "lease_exceeded":
+            from .containment import record_alert_locked
+
+            record_alert_locked(
+                db,
+                node_id,
+                base,
+                alert="lease_exceeded",
+                request_id=params["request_id"],
+                lease_dimension=admission.lease_dimension,
+                causes=[lineage.reference(dispatched)],
+                occurred_at=base["occurred_at"],
+            )
         if child_id is not None:
             if task is None:
                 context = TaskTraceContext(
@@ -206,7 +277,9 @@ def dispatch_trace(
                     context_origin="source_explicit"
                     if binding["context_id"]
                     else "legacy_default",
-                    authority_scope=tuple(admission.scope),
+                    authority_scope=tuple(admission.recipients),
+                    effect_scope=tuple(admission.effects),
+                    lease=admission.lease,
                 )
             else:
                 if parent is not None:
@@ -223,7 +296,20 @@ def dispatch_trace(
                         if binding["context_id"]
                         else "legacy_default",
                     )
-                context = parent.child(child_id, admission.scope)
+                context = parent.child(
+                    child_id,
+                    recipients=admission.recipients,
+                    effects=admission.effects,
+                    lease=admission.lease,
+                )
+                # The child's effect budget is reserved from the parent's.
+                if (
+                    admission.lease is not None
+                    and admission.lease.max_effects is not None
+                    and parent.lease is not None
+                    and parent.lease.max_effects is not None
+                ):
+                    charge(db, task.task_id, reserved=admission.lease.max_effects)
             payload = {
                 "body": params["request"],
                 "execution_context": context.execution_context(),

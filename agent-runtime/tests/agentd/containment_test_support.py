@@ -32,12 +32,18 @@ class Node:
         self.node_id = node_id
         self.store = AgentdStore(root / "agentd" / "agentd.sqlite3")
         self.agents: dict[str, Agent] = {}
-        self._grants: dict[str, list[str]] = {}
+        self._grants: dict[str, dict[str, list[Any]]] = {}
 
     def close(self) -> None:
         self.store.close()
 
-    def managed(self, agent_id: str, *, outbound: list[str] = ()) -> Agent:
+    def managed(
+        self,
+        agent_id: str,
+        *,
+        outbound: list[str] = (),
+        effects: list[dict[str, str]] = (),
+    ) -> Agent:
         connector_id = f"managed-{agent_id}"
         token = self.store.register_connector(
             connector_id=connector_id,
@@ -46,14 +52,17 @@ class Node:
             capabilities=[],
         )
         session = self.store.open_session(connector_id=connector_id, token=token)
-        self._grants[agent_id] = list(outbound)
+        self._grants[agent_id] = {
+            "outbound_agents": list(outbound),
+            "effect_grant": list(effects),
+        }
         self.store.reconcile_managed_agents(
             [
                 {
                     "package_id": f"test.{name}",
                     "desired_state": "running",
                     "agent_ids": [name],
-                    "outbound_agents": grant,
+                    **grant,
                 }
                 for name, grant in self._grants.items()
             ]

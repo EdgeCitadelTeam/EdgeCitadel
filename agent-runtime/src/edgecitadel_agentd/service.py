@@ -447,6 +447,7 @@ def dispatch(
         store.grant_connector(
             connector_id=str(params.get("connector_id", "")),
             outbound_agents=params.get("outbound_agents"),
+            effects=params.get("effects", []),
         )
         return {"granted": True}
     if operation == "connector.list":
@@ -489,7 +490,7 @@ def dispatch(
             else store.release_hold(**hold)
         )
     if operation == "containment.list":
-        return store.list_holds()
+        return store.list_containment()
 
     if operation == "trace.import.configure":
         from .trace_import import configure_import

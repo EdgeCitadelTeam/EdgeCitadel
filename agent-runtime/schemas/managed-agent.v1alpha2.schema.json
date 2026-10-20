@@ -185,6 +185,28 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "effects": {
+          "description": "Effect rules agentd's effect gateway may authorize for this package and delegate onward. A target ending in * is a prefix. Absent means none.",
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["effect_class", "target"],
+            "properties": {
+              "effect_class": {
+                "enum": ["fs.write", "process.exec", "network.http", "device.command"]
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]+$"
+              }
+            }
+          }
         }
       }
     },

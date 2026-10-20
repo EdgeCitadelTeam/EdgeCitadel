@@ -134,7 +134,7 @@ def test_fencing_rejects_stale_and_foreign_decisions(nodes):
     release(root, first, version=3)
     with pytest.raises(ContainmentError, match="hold_not_found"):
         release(root, first, version=4)
-    assert [h["object_id"] for h in root.store.list_holds()] == [second]
+    assert [h["object_id"] for h in root.store.list_containment()["holds"]] == [second]
     for bad in (
         {"kind": "agent"},
         {"object_id": "not-a-uuid"},
@@ -177,7 +177,7 @@ def test_containment_rpc_requires_the_management_credential(nodes):
         {"version": 1, "operation": "containment.list", "admin_token": "a" * 48},
         admin_token="a" * 48,
     )
-    assert [item["object_id"] for item in listed] == [task_id]
+    assert [item["object_id"] for item in listed["holds"]] == [task_id]
     released = rpc_dispatch(
         root.store,
         {**request, "operation": "containment.release", "admin_token": "a" * 48},

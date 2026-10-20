@@ -260,7 +260,11 @@
             "storage_unavailable",
             "quota_exceeded",
             "execution_held",
-            "outside_authority_scope"
+            "outside_authority_scope",
+            "egress_held",
+            "authority_revoked",
+            "ingress_filtered",
+            "lease_exceeded"
           ]
         },
         "retryable": {

@@ -49,19 +49,19 @@ class ManagedHarness:
         with self.store() as store:
             return store.get_task(task_id)
 
-    def hold(self, task_id: str, version: int = 1) -> object:
+    def hold(self, task_id: str, version: int = 1, kind: str = "task") -> object:
         return self.admin.call(
             "containment.hold",
-            kind="task",
+            kind=kind,
             object_id=task_id,
             owner="core-monitor",
             policy_version=version,
         )
 
-    def release(self, task_id: str, version: int = 1) -> object:
+    def release(self, task_id: str, version: int = 1, kind: str = "task") -> object:
         return self.admin.call(
             "containment.release",
-            kind="task",
+            kind=kind,
             object_id=task_id,
             owner="core-monitor",
             policy_version=version,
