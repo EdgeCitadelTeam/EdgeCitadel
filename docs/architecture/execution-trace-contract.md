@@ -3498,13 +3498,21 @@ session-isolated), dispatch and execution `authority`. Taint is time-respecting:
 an invocation taints an output only if it was tainted when it generated it (same
 node clock); a version taints its consumers. Only the live frontier (running
 invocations, dispatched tasks not yet started, unread results, pending effects)
-and the taint index stay in memory.
+and the taint index stay in memory. Effects come from the effect gateway's
+`effect/requested`, `effect/committed` and `effect/denied`: an immediate effect is
+decided with its request and is history; a scheduled one (`scheduled_at_ms`)
+stays a pending effect until its commit or denial arrives.
 
 **G_C** holds each live unit node-split, its declared flows, and one layer of
-possible next events through one star hub per credential scope. Trace events do
-not carry `authority_scope`, so the monitor mirrors agentd's rule (agent grant
-intersected with the dispatcher's scope) from the configured grants; an agent
-without a configured grant may reach every known agent. Deadlines are earliest
+possible next events through one star hub per credential scope. A unit's scope
+(recipients and protected effect classes) is the authority agentd exported on
+its `run/started`. Only without an export (a task not started yet, a new
+invocation beyond the horizon, or `null` lists) does the monitor mirror agentd's
+rule from the configured `grants` and `effect_scopes`, bounded by the
+dispatcher's scope; an agent without a configured grant may reach every known
+agent and perform every protected effect class. A pending scheduled effect is a
+flow into its `fx:` sink at `scheduled_at_ms`, removable by an effect hold or by
+holding its issuing task (agentd then denies the commit). Deadlines are earliest
 arrivals over lower-bound delays; an action is feasible when
 `now + tau + control latency(site)` precedes them. Early emission windows and
 merged hub arrivals get private copies so an unstoppable flow never masks a
@@ -3525,12 +3533,48 @@ release times; `GET /api/containment/status` returns them with G_P/G_C sizes, th
 last solve and the root-cause ranking. Both endpoints require
 `X-EdgeCitadel-Admin-Token`.
 
-**Control.** Holds go through agentd's admin RPC `containment.control`
-(the [containment control protocol](#containment-control-protocol)), fenced by
-the monitor's monotone policy version.
-`EDGECITADEL_CONTAINMENT_CONFIG` names a JSON file:
-`{"monitor": {...}, "control": {"agentd": {"<node>": {"socket": ..., "admin_token_file": ...}}}}`.
-Without control endpoints, decisions are computed and logged but every action is
-recorded as unconfirmed. agentd does not yet implement egress, grant, credential
-or admission revocation, effect holds, or a remote control subject; until it
-does, those elements are uncuttable for the solver.
+**Control.** Decisions are commands of the
+[containment control protocol](#containment-control-protocol), stamped with the
+monitor owner's monotone policy version:
+
+| Monitor action | agentd command |
+|---|---|
+| `hold:task`, `hold:egress`, `hold:transport`, `hold:effect` | `hold` (released with `release`) `{kind, object_id}` |
+| `revoke:egress`, `revoke:authority` | `revoke {kind, object_id: <task>}` |
+| `revoke:credential`, `revoke:admission` | `revoke {kind, object_id: <agent>}` |
+| `revoke:grant` | `revoke {kind: grant, object_id: "<agent>><agent>" \| "<agent>>fx:<class>"}` |
+| `cancel:task` | `cancel {task_id}` |
+
+The projection offers an action only where every node it must reach advertised
+it in its `describe` reply (cached per node, refreshed every five minutes; a node
+that never answered supports nothing). Revocations whose agentd state is
+node-local go to more than one node: a grant revocation to the sender's and the
+recipient's node, an admission revocation to the target's node and every node of
+an agent that may dispatch to it, an authority revocation to every node that may
+hold the delegation's descendants. An action is in force only when every node
+confirmed it; `t_applied` is the latest node's `applied_at_ms`, and each node's
+`enforcement` report is kept with the action. A rejection (`status: rejected`
+with its code, or a command that could not be delivered) fails the action. A
+command sent without a confirmation is **unconfirmed**: it is neither counted in
+force nor released, a phase-2 action in that state keeps every phase-1 hold, and
+status lists it under `unconfirmed` for reconciliation with the node's
+`containment.list`.
+
+`EDGECITADEL_CONTAINMENT_CONFIG` names a JSON file `{"monitor": {...},
+"control": {...}}` with one control transport:
+
+- `{"nats": {"key_file": ..., "confirmation_timeout_ms": 5000,
+  "command_lifetime_ms": 30000}}`: signed commands on
+  `edgecitadel.control.v1.<node_id>` over Core's `NATS_URL`/`NATS_TOKEN`. The
+  key file holds the owner's key, the same bytes as each node's
+  `<agentd state>/control-keys/<owner>.key`. A command is retried with the same
+  `command_id` and body until the confirmation timeout (which must be shorter
+  than the command lifetime), so a node that received an earlier copy returns
+  its stored confirmation; if no attempt reached a subscriber the action failed
+  (`node_unreachable`), otherwise it is unconfirmed.
+- `{"agentd": {"<node>": {"socket": ..., "admin_token_file": ...}}}`: the admin
+  RPC on co-located sockets. agentd stamps an admin command on receipt, so an
+  unanswered one is not retried and stays unconfirmed.
+
+Without control, decisions are computed with agentd's full action vocabulary and
+logged, and every action is recorded as failed (`node_unreachable`).

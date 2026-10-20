@@ -10,7 +10,7 @@ import pytest
 
 from aggregator.containment_monitor import solver
 from aggregator.containment_monitor.config import MonitorConfig
-from aggregator.containment_monitor.control import FakeControlClient
+from aggregator.containment_monitor.control import FakeControlClient, execute
 from aggregator.containment_monitor.model import (
     Action,
     hold_task,
@@ -29,6 +29,10 @@ from containment_test_support import Node, deliver  # noqa: E402
 from test_containment_provenance import journal  # noqa: E402
 
 ALL = FakeControlClient().capabilities
+
+
+def supported_everywhere(action):
+    return True
 
 
 def gc(harness, now, **kwargs):
@@ -53,18 +57,20 @@ def reachable(cg, predicate):
 
 
 # ---------------------------------------------------------------------------
-def test_scope_mirror_matches_agentd_admission(tmp_path):
+def test_scope_mirror_reads_the_authority_agentd_exports(tmp_path):
+    """run/started carries grant ∩ inherited; it wins over a stale configured
+    mirror, and an unstarted task is bounded by its dispatcher's export."""
+    actuator = {"effect_class": "device.command", "target": "actuator/*"}
     root = Node(tmp_path / "root", "root-node")
     worker = Node(tmp_path / "worker", "worker-node")
-    root.managed("parent", outbound=["child", "other"])
-    worker.managed("child", outbound=["parent", "other"])
-    config = MonitorConfig(
-        grants={
-            "parent": frozenset({"child", "other"}),
-            "child": frozenset({"parent", "other"}),
-        }
+    root.managed("parent", outbound=["child", "other"], effects=[actuator])
+    worker.managed("child", outbound=["parent", "other"], effects=[actuator])
+    stale = MonitorConfig(
+        grants={"parent": frozenset({"child"}), "child": frozenset({"parent"})},
+        effect_scopes={"child": frozenset()},
+        protected_effect_classes=frozenset({"device.command"}),
     )
-    harness = Harness(tmp_path / "monitor", config)
+    harness = Harness(tmp_path / "monitor", stale)
     try:
         root.submit("parent")
         _, binding = root.start("parent")
@@ -78,12 +84,17 @@ def test_scope_mirror_matches_agentd_admission(tmp_path):
             ingest(harness.core, event)
         harness.monitor.catch_up()
         graph = harness.monitor.graph
-        units = live_units(graph, config, harness.now, ScopeMirror(graph, config))
+        units = live_units(graph, stale, harness.now, ScopeMirror(graph, stale))
         scopes = {
-            unit.agent: unit.recipients for unit in units.values() if not unit.pending
+            unit.agent: (unit.recipients, unit.effects) for unit in units.values()
         }
         # agentd: child = grant(child) ∩ scope(parent) = {parent, other} ∩ {child, other}
-        assert scopes == {"parent": {"child", "other"}, "child": {"other"}}
+        assert scopes == {
+            "parent": ({"child", "other"}, {"device.command"}),
+            "child": ({"other"}, {"device.command"}),
+            # Not started: no configured grant, bounded by the child's export.
+            "other": ({"other"}, {"device.command"}),
+        }
     finally:
         harness.close()
         root.close()
@@ -122,14 +133,16 @@ def workload(rng: random.Random):
         "d": frozenset(),
     }
     effects = {
-        "c": frozenset({"act"}),
-        "d": frozenset({"act"}),
-        "b": frozenset({"pay"}),
+        "r": frozenset({"device.command", "network.http"}),
+        "a": frozenset({"device.command", "network.http"}),
+        "c": frozenset({"device.command"}),
+        "d": frozenset({"device.command"}),
+        "b": frozenset({"network.http"}),
     }
     config = MonitorConfig(
         grants=grants,
         effect_scopes=effects,
-        protected_effect_classes=frozenset({"act", "pay"}),
+        protected_effect_classes=frozenset({"device.command", "network.http"}),
         agent_nodes=AGENT_NODES,
         default_delivery_ms=DELIVERY,
         min_start_ms=MIN_START,
@@ -139,15 +152,17 @@ def workload(rng: random.Random):
     trace = TraceBuilder()
     plan: list = []
     order = [0]
-    scope = {}
+    scope, fx_scope = {}, {}
     live = set()
 
     def at(time, action, *args):
         order[0] += 1
         heapq.heappush(plan, (time, order[0], action, args))
 
-    def started(attempt, agent, inherited, time):
+    def started(attempt, agent, inherited, inherited_fx, time):
+        # agentd attenuates both: a child never exceeds what its parent could do.
         scope[attempt] = grants[agent] & inherited
+        fx_scope[attempt] = effects.get(agent, frozenset()) & inherited_fx
         live.add(attempt)
         for _ in range(rng.randint(0, 2)):
             if scope[attempt]:
@@ -157,12 +172,12 @@ def workload(rng: random.Random):
                     attempt,
                     rng.choice(sorted(scope[attempt])),
                 )
-        if effects.get(agent) and rng.random() < 0.7:
+        if fx_scope[attempt] and rng.random() < 0.7:
             at(
                 time + MIN_EMIT + rng.randint(0, 50),
                 "effect",
                 attempt,
-                next(iter(effects[agent])),
+                min(fx_scope[attempt]),
             )
         # Delegating invocations tend to outlive their children and read results.
         at(
@@ -172,15 +187,22 @@ def workload(rng: random.Random):
         )
 
     root_task = trace.root("r", "n0", 0)
-    at(1, "start", root_task, frozenset({"a", "b", "c", "d", "r"}))
+    at(
+        1,
+        "start",
+        root_task,
+        frozenset({"a", "b", "c", "d", "r"}),
+        config.protected_effect_classes,
+    )
     while plan:
         time, _, action, args = heapq.heappop(plan)
         if action == "start":
-            task_id, inherited = args
+            task_id, inherited, inherited_fx = args
             started(
                 trace.start(task_id, time),
                 trace.tasks[task_id]["agent"],
                 inherited,
+                inherited_fx,
                 time,
             )
         elif action == "dispatch":
@@ -195,7 +217,13 @@ def workload(rng: random.Random):
                 + rng.randint(0, 20)
             )
             at(arrival, "arrive", child)
-            at(arrival + MIN_START + rng.randint(0, 15), "start", child, scope[attempt])
+            at(
+                arrival + MIN_START + rng.randint(0, 15),
+                "start",
+                child,
+                scope[attempt],
+                fx_scope[attempt],
+            )
         elif action == "arrive":
             trace.arrive(args[0], time)
         elif action == "effect":
@@ -473,7 +501,12 @@ def test_best_effort_guard_and_taint_aware_admission_are_opt_in(tmp_path):
         harness.monitor.graph.mark_roots([inv(attempt)])
         cg = gc(harness, 100)
         context = Context(
-            harness.monitor.graph, config, cg, lambda: cg, [inv(attempt)], ALL
+            harness.monitor.graph,
+            config,
+            cg,
+            lambda: cg,
+            [inv(attempt)],
+            supported_everywhere,
         )
         result = firebreak(context)
         results[name] = (set(result.actions), result.unavoidable, task_id, attempt)
@@ -507,31 +540,18 @@ def test_no_source_reaches_an_avoidable_sink_after_enforcement(tmp_path, seed):
     harness.feed([e for e in trace.events if event_ms(e) <= t_alert])
     harness.monitor.graph.mark_roots([root])
     cg = gc(harness, t_alert)
-    context = Context(harness.monitor.graph, config, cg, lambda: cg, [root], ALL)
+    context = Context(
+        harness.monitor.graph, config, cg, lambda: cg, [root], supported_everywhere
+    )
     chosen = firebreak(context)
     control = FakeControlClient()
     for version, action in enumerate(chosen.actions, start=1):
-        if action.op == "hold":
-            control.place_hold(
-                action.node_id,
-                action.kind,
-                action.object_id,
-                owner="m",
-                policy_version=version,
-            )
-        else:
-            control.revoke(
-                action.node_id,
-                action.kind,
-                action.object_id,
-                owner="m",
-                policy_version=version,
-            )
+        execute(control, action, node_id=action.node_id, policy_version=version)
     in_force = {
-        Action(op, node, kind, object_id)
-        for node, kind, object_id in control.in_force()
-        for op in ("hold", "revoke")
-        if (op == "hold") == (kind in {"task", "transport", "effect"})
+        Action(op, node_id, kind, object_id)
+        for node_id, node in control.nodes.items()
+        for op, applied in (("hold", node.holds), ("revoke", node.revoked))
+        for kind, object_id in applied
     }
     assert in_force == set(chosen.actions)
     after = gc(harness, t_alert, in_force=in_force)

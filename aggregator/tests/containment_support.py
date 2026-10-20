@@ -83,8 +83,7 @@ class TraceBuilder:
             "attributes": attributes or {},
             "supersedes_event_id": None,
         }
-        if kind != "effect":
-            validate_event(event)
+        validate_event(event)
         self.events.append(event)
         return event
 
@@ -382,16 +381,24 @@ class TraceBuilder:
         *,
         effect_id: str | None = None,
         scheduled: int | None = None,
+        reason: str | None = None,
     ) -> dict:
-        """A forthcoming effect-gateway event (applied directly; not schema v1)."""
+        """agentd's effect gateway: requested, then committed or denied."""
         run = self.attempts[attempt]
         task = self.tasks[run["task"]]
+        decided = phase != "requested"
         attributes = {
+            "effect_version": 1,
             "effect_id": effect_id or str(uuid4()),
             "effect_class": effect_class,
+            "target": "actuator/1",
+            "tool_call_id": None,
+            "scheduled_at_ms": None if scheduled is None else BASE_MS + scheduled,
+            "policy": "managed_package_grant" if decided else None,
+            "policy_version": "1" if decided else None,
+            "reason": reason if phase == "denied" else None,
+            "effects_remaining": None,
         }
-        if scheduled is not None:
-            attributes["scheduled_at_ms"] = BASE_MS + scheduled
         return self._event(
             run["node"],
             "effect",
@@ -453,14 +460,9 @@ class Harness:
         self.now = BASE_MS + ms
 
     def feed(self, events: list[dict]) -> None:
-        """Through Core (schema-valid kinds) and the follower; effects directly."""
+        """Through Core ingest and the follower."""
         for event in events:
-            if event["kind"] == "effect":
-                self.monitor.catch_up()
-                with self.monitor.graph.transaction():
-                    self.monitor.graph.apply(event, 0)
-            else:
-                ingest(self.core, event)
+            ingest(self.core, event)
         self.monitor.catch_up()
 
     def close(self) -> None:

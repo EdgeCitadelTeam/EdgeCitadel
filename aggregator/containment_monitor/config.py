@@ -1,12 +1,14 @@
-"""Monitor configuration: authority mirror, timing model and cost weights.
+"""Monitor configuration: authority fallback, timing model and cost weights.
 
-Trace events do not export an invocation's authority scope, so the monitor mirrors
-agentd's rule (``delegation_authority``): an invocation's recipients are its
-agent's grant intersected with the scope of the invocation that dispatched its
-task. ``grants`` supplies the administrator grants. An agent without a configured
-grant is treated as able to reach every known agent, which over-approximates G_C
-soundly. Effect scopes and protected classes describe the forthcoming effect
-gateway; with none configured, potential effects are absent from G_C.
+agentd exports each invocation's effective authority (recipients and effect
+rules) on ``run/started``, and the monitor uses it. ``grants`` and
+``effect_scopes`` are only the fallback where no export exists (a task that has
+not started, a new invocation beyond the horizon, or an export of null because
+it exceeded 8 KiB): the monitor then mirrors agentd's rule, the configured grant
+intersected with the dispatcher's scope. An agent without a configured grant is
+treated as able to reach every known agent and to perform every protected effect
+class, which over-approximates G_C soundly. ``protected_effect_classes`` names
+the effect classes whose commits are sinks.
 
 The timing model gives lower bounds only. Deadlines are earliest possible times,
 so over-estimating a latency or a minimum delay would make G_C unsound.
@@ -67,7 +69,6 @@ class MonitorConfig:
     grants: Mapping[str, frozenset[str]] = field(default_factory=dict)
     effect_scopes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     protected_effect_classes: frozenset[str] = frozenset()
-    effect_sites: Mapping[str, str] = field(default_factory=dict)
     agent_nodes: Mapping[str, str] = field(default_factory=dict)
     org_parent: Mapping[str, str] = field(default_factory=dict)
     untrusted_agents: frozenset[str] = frozenset()
@@ -148,7 +149,7 @@ class MonitorConfig:
                 }
                 if not all(AGENT_PATTERN.fullmatch(agent) for agent in item):
                     raise ConfigError(f"invalid_{key}")
-            elif key in {"agent_nodes", "org_parent", "effect_sites"}:
+            elif key in {"agent_nodes", "org_parent"}:
                 if not isinstance(item, dict) or not all(
                     isinstance(k, str)
                     and isinstance(v, str)

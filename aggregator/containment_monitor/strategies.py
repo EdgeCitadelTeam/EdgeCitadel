@@ -65,7 +65,8 @@ class Context:
     cg: ControlGraph
     static_cg: Callable[[], ControlGraph]
     roots: list[str]
-    capabilities: frozenset[str]
+    # Whether every node an action must reach enforces it (describe).
+    supported: Callable[[Action], bool]
 
 
 def _finish(
@@ -77,9 +78,7 @@ def _finish(
     method="rule",
     unavoidable=(),
 ) -> StrategyResult:
-    chosen = sorted(
-        {a for a in actions if a is not None and a.capability in ctx.capabilities}
-    )
+    chosen = sorted({a for a in actions if a is not None and ctx.supported(a)})
     cost = sum(ctx.cg.cost(a) for a in chosen) if ctx.cg.cost else float(len(chosen))
     return StrategyResult(
         name,

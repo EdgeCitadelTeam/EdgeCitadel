@@ -1,6 +1,7 @@
 """Monitor thread, HTTP intake and status, decision ledger and startup wiring."""
 
 import json
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ from aggregator.containment_monitor.config import ConfigError, MonitorConfig
 from aggregator.containment_monitor.control import (
     FakeControlClient,
     LocalAgentdControlClient,
+    NatsControlClient,
 )
 from aggregator.containment_monitor.routes import make_containment_router
 from aggregator.containment_monitor.service import (
@@ -230,11 +232,38 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
         service.config.control_latency("n0") == 120 and service.config.best_effort_guard
     )
     assert isinstance(service.control, LocalAgentdControlClient)
+    assert service.control.owner == service.config.owner == "core-monitor"
+    key = startup / "core-monitor.key"
+    key.write_text(secrets.token_hex(32) + "\n")
+    short = startup / "short.key"
+    short.write_text("x" * 16)
+    monkeypatch.setenv("NATS_URL", "nats://127.0.0.1:1")
+    config.write_text(
+        json.dumps(
+            {
+                "monitor": {"owner": "lab-monitor"},
+                "control": {
+                    "nats": {"key_file": str(key), "confirmation_timeout_ms": 2000}
+                },
+            }
+        )
+    )
+    service = service_from_environment(startup / "core.db")
+    try:
+        assert isinstance(service.control, NatsControlClient)
+        assert service.control.owner == "lab-monitor"
+        assert service.control.confirmation_timeout_s == 2
+        assert service.control.key == key.read_bytes().strip()
+    finally:
+        service.control.close()
     for bad in (
         {"monitor": {"grants": {"P": ["c"]}}},
         {"monitor": {"boundary": "maybe"}},
         {"monitor": {"unknown": 1}},
         {"control": {"agentd": {"n0": {"socket": "x"}}}},
+        {"control": {"nats": {"key_file": str(short)}}},
+        {"control": {"nats": {"key_file": str(key), "command_lifetime_ms": 1000}}},
+        {"control": {"nats": {"key_file": str(key)}, "agentd": {}}},
         {"extra": {}},
     ):
         config.write_text(json.dumps(bad))

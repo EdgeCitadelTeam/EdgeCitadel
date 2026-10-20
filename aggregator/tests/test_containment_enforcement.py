@@ -2,6 +2,7 @@
 
 import random
 import sys
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,9 +10,12 @@ import pytest
 
 from aggregator.containment_monitor import solver
 from aggregator.containment_monitor.control import (
+    AGENTD_CAPABILITIES,
     ControlError,
     FakeControlClient,
     LocalAgentdControlClient,
+    execute,
+    release,
 )
 from aggregator.containment_monitor.model import Action, Alert, inv
 from containment_support import Harness
@@ -153,7 +157,39 @@ def test_unconfirmed_phase_two_keeps_every_phase_one_hold(tmp_path):
     assert decision.status == "phase2_unconfirmed"
     assert decision.released == []
     assert failing.in_force() == {("n0", "task", t) for t in tasks}
-    assert [r.error for r in decision.phase2] == ["node_unreachable"]
+    assert [(r.state, r.error) for r in decision.phase2] == [
+        ("failed", "node_unreachable")
+    ]
+    harness.close()
+
+
+def test_a_lost_confirmation_is_neither_in_force_nor_released(tmp_path):
+    """The revocation is applied at the node but its confirmation never arrives:
+    the monitor must not count it, and must not release the frontier holds."""
+    lossy = FakeControlClient(lose=lambda node, op, object_id: op == "revoke")
+    harness, decision, tasks = three_invocations(tmp_path, lossy)
+    (record,) = decision.phase2
+    assert (record.state, record.error) == ("unconfirmed", "confirmation_timeout")
+    assert record.t_confirmed is None and record.sites["n0"]["state"] == "unconfirmed"
+    assert decision.status == "phase2_unconfirmed" and decision.released == []
+    assert lossy.in_force() == {("n0", "task", t) for t in tasks} | {
+        ("n0", "credential", "a")
+    }
+    status = harness.monitor.status()
+    assert [a["action"]["kind"] for a in status["in_force"]] == ["task"] * 3
+    assert [a["action"]["kind"] for a in status["unconfirmed"]] == ["credential"]
+    harness.close()
+
+
+def test_projection_offers_only_what_each_node_describes(tmp_path):
+    """n0 cannot revoke credentials: the solver keeps the per-invocation holds."""
+    limited = FakeControlClient(
+        {"n0": AGENTD_CAPABILITIES - {"revoke:credential"}, "n1": AGENTD_CAPABILITIES}
+    )
+    harness, decision, tasks = three_invocations(tmp_path, limited)
+    chosen = {r.action.capability for r in decision.phase1 + decision.phase2}
+    assert "revoke:credential" not in chosen
+    assert decision.status == "contained" and decision.cut_valid
     harness.close()
 
 
@@ -168,8 +204,8 @@ def test_policy_versions_are_monotone_and_survive_restart(tmp_path):
     assert harness.monitor._next_version() == latest + 1
     # A decision stamped with an older version is refused by the node.
     with pytest.raises(ControlError, match="stale_policy_version"):
-        control.place_hold(
-            "n0", "task", str(uuid4()), owner="core-monitor", policy_version=2
+        control.send(
+            "n0", "hold", {"kind": "task", "object_id": str(uuid4())}, policy_version=2
         )
     harness.close()
 
@@ -206,37 +242,44 @@ def transport(node):
     return call
 
 
-def test_local_agentd_client_places_fenced_holds(nodes):
+def test_local_agentd_client_speaks_the_control_protocol(nodes):
+    """Capabilities from describe, confirmations with enforcement detail, and
+    typed rejections, through agentd's real containment.control admin RPC."""
     root, _ = nodes
-    client = LocalAgentdControlClient({"root-node": transport(root)})
+    client = LocalAgentdControlClient("core-monitor", {"root-node": transport(root)})
+    assert client.capabilities("root-node") == frozenset()  # not described yet
+    client.refresh(["root-node", "elsewhere"])
+    assert client.capabilities("root-node") == AGENTD_CAPABILITIES
+    assert client.capabilities("elsewhere") == frozenset()
     task_id = str(uuid4())
-    confirmation = client.place_hold(
-        "root-node", "task", task_id, owner="core-monitor", policy_version=2
-    )
+    hold = Action("hold", "root-node", "task", task_id)
+    confirmation = execute(client, hold, node_id="root-node", policy_version=2)
     assert confirmation.applied_at_ms is not None
-    assert [h["object_id"] for h in root.store.list_containment()["holds"]] == [task_id]
+    assert "dispatch" in confirmation.enforcement["gates"]
+    assert confirmation.enforcement["task"] is None  # held before it arrives
+    holds = root.store.list_containment()["holds"]
+    assert [h["object_id"] for h in holds] == [task_id]
     with pytest.raises(ControlError) as stale:
-        client.release_hold(
-            "root-node", "task", task_id, owner="core-monitor", policy_version=1
-        )
+        release(client, hold, policy_version=1)
     assert stale.value.code == "stale_policy_version"
-    client.release_hold(
-        "root-node", "task", task_id, owner="core-monitor", policy_version=3
-    )
+    release(client, hold, policy_version=3)
     assert root.store.list_containment()["holds"] == []
-    for call in (
-        lambda: client.place_hold(
-            "elsewhere", "task", task_id, owner="core-monitor", policy_version=4
-        ),
-        lambda: client.revoke(
-            "root-node", "grant", "parent>child", owner="core-monitor", policy_version=4
-        ),
-        lambda: client.place_hold(
-            "root-node", "effect", task_id, owner="core-monitor", policy_version=4
-        ),
-    ):
-        with pytest.raises(ControlError):
-            call()
+    with pytest.raises(ControlError) as missing:
+        release(client, hold, policy_version=4)
+    assert missing.value.code == "hold_not_found"
+    grant = Action("revoke", "root-node", "grant", "parent>child")
+    execute(client, grant, node_id="root-node", policy_version=5)
+    (stored,) = root.store.list_containment()["ingress_filters"]
+    assert (stored["authority"], stored["target"]) == (
+        {"agent_id": "parent"},
+        {"agent_id": "child"},
+    )
+    effect = Action("hold", "root-node", "effect", str(uuid4()))
+    unknown = execute(client, effect, node_id="root-node", policy_version=6)
+    assert unknown.enforcement["effect_state"] is None
+    with pytest.raises(ControlError) as unsupported:
+        execute(client, hold, node_id="elsewhere", policy_version=7)
+    assert unsupported.value.code == "unsupported_action"
 
 
 def test_engine_hold_stops_the_parent_at_the_agentd_boundary(nodes, tmp_path):
@@ -257,7 +300,8 @@ def test_engine_hold_stops_the_parent_at_the_agentd_boundary(nodes, tmp_path):
     worker.complete("child", child_id, {"body": "suspect"})
     deliver(worker, root)
     control = LocalAgentdControlClient(
-        {"root-node": transport(root), "worker-node": transport(worker)}
+        "core-monitor",
+        {"root-node": transport(root), "worker-node": transport(worker)},
     )
     config = MonitorConfig(
         grants={"parent": frozenset({"child"}), "child": frozenset()}
@@ -365,3 +409,96 @@ def test_every_strategy_emits_the_same_vocabulary(tmp_path, seed):
         harness.close()
     # Same G_C and cost model: the exact cut is never costlier than the greedy one.
     assert costs["firebreak"] <= costs["greedy_cut"] + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Effects: real effect-gateway evidence, and a held scheduled effect
+# ---------------------------------------------------------------------------
+def test_a_tainted_scheduled_effect_is_stopped_before_its_commit(tmp_path):
+    """agentd's effect evidence reaches G_P/G_C through Core: an immediate effect
+    is committed history, a scheduled one is a pending flow into a protected
+    sink. Firebreak cuts it, and agentd then refuses the real commit."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from aggregator.containment_monitor.model import fx
+    from containment_support import ingest
+    from test_containment_provenance import journal
+
+    actuator = {"effect_class": "device.command", "target": "actuator/*"}
+    root = Node(tmp_path / "root", "root-node")
+    worker = Node(tmp_path / "worker", "worker-node")
+    root.managed("parent", outbound=["child"], effects=[actuator])
+    worker.managed("child", effects=[actuator])
+    try:
+        root.submit("parent")
+        _, binding = root.start("parent")
+        root.dispatch("parent", binding, "child")
+        deliver(root, worker)
+        _, child = worker.start("child")
+
+        def authorize(**extra):
+            reply = worker.rpc(
+                "child",
+                "effect.authorize",
+                schema_version=1,
+                request_id=str(uuid4()),
+                binding_id=child["binding_id"],
+                effect_class="device.command",
+                target="actuator/1",
+                tool_call_id=None,
+                **extra,
+            )
+            assert reply["status"] == "ok", reply
+            return reply
+
+        immediate = authorize()
+        due = time.time_ns() // 1_000_000 + 60_000
+        scheduled = authorize(scheduled_at_ms=due)
+        assert (immediate["result"]["state"], scheduled["result"]["state"]) == (
+            "committed",
+            "scheduled",
+        )
+        control = LocalAgentdControlClient(
+            "core-monitor",
+            {"root-node": transport(root), "worker-node": transport(worker)},
+        )
+        config = MonitorConfig(protected_effect_classes=frozenset({"device.command"}))
+        harness = Harness(tmp_path / "monitor", config, control)
+        for event in journal(root) + journal(worker):
+            ingest(harness.core, event)
+        harness.monitor.catch_up()
+        graph = harness.monitor.graph
+        effect_id = scheduled["request_id"]
+        assert set(graph.effects) == {effect_id}
+        assert graph.effects[effect_id].scheduled_ms == due
+        states = dict(
+            graph.db.execute("SELECT effect_id,state FROM containment_effects")
+        )
+        assert states == {immediate["request_id"]: "committed", effect_id: "pending"}
+        (attempt,) = [
+            a for a, live in graph.running.items() if live.agent_id == "child"
+        ]
+        assert {fx(effect_id), fx(immediate["request_id"])} <= set(
+            graph.successors(inv(attempt), ["data"])
+        )
+        decision = harness.monitor.respond(
+            operator_alert(inv(attempt), harness.now), roots=[inv(attempt)]
+        )
+        assert decision.status == "contained" and decision.cut_valid
+        in_force = {r.action.capability for r in harness.monitor.in_force.values()}
+        assert in_force & {"hold:effect", "hold:task"}
+        commit = worker.rpc(
+            "child",
+            "effect.commit",
+            schema_version=1,
+            request_id=str(uuid4()),
+            binding_id=child["binding_id"],
+            effect_id=effect_id,
+        )
+        assert (commit["status"], commit["code"]) in {
+            ("error", "effect_held"),
+            ("error", "execution_held"),
+        }
+        harness.close()
+    finally:
+        root.close()
+        worker.close()

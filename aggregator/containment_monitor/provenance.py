@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS containment_invocations (
     started_ms INTEGER NOT NULL,
     ended_ms INTEGER,
     outcome TEXT,
+    authority_json TEXT,
     seq INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS containment_invocations_task ON containment_invocations(task_id);
@@ -125,7 +126,7 @@ CREATE TABLE IF NOT EXISTS containment_actions (
     action_json TEXT PRIMARY KEY,
     incident_id TEXT NOT NULL,
     phase INTEGER NOT NULL,
-    state TEXT NOT NULL CHECK(state IN ('in_force', 'released', 'failed')),
+    state TEXT NOT NULL CHECK(state IN ('in_force', 'released', 'failed', 'unconfirmed')),
     policy_version INTEGER NOT NULL,
     record_json TEXT NOT NULL
 );
@@ -210,11 +211,17 @@ class PendingResult:
 
 @dataclass
 class PendingEffect:
+    """A scheduled effect agentd authorized but has not committed yet.
+
+    ``node_id`` is the issuing invocation's node, whose effect gateway decides
+    the commit and enforces an effect hold.
+    """
+
     effect_id: str
     attempt_id: str
     effect_class: str
     node_id: str
-    scheduled_ms: int | None
+    scheduled_ms: int
     protected: bool
 
 
@@ -229,6 +236,8 @@ class ProvenanceGraph:
         self.results: dict[str, PendingResult] = {}
         self.effects: dict[str, PendingEffect] = {}
         self.agent_nodes: dict[str, str] = {}
+        # Agents named as recipients by exported authority (they may be unseen).
+        self.granted_agents: set[str] = set()
         self.revoked: set[str] = set()
         # Taint index: node -> earliest time it may carry taint (ROOT_TIME for roots).
         self.taint: dict[str, int] = {}
@@ -262,6 +271,12 @@ class ProvenanceGraph:
             "WHERE recipient_id IS NOT NULL AND recipient_node IS NOT NULL"
         ):
             self.agent_nodes.setdefault(agent, node)
+        self.granted_agents = set()
+        for (encoded,) in db.execute(
+            "SELECT authority_json FROM containment_invocations "
+            "WHERE authority_json IS NOT NULL"
+        ):
+            self.granted_agents.update(json.loads(encoded)["recipients"] or ())
         self.running = {
             row[0]: Invocation(*row)
             for row in db.execute(
@@ -288,7 +303,7 @@ class ProvenanceGraph:
             row[0]: PendingEffect(*row[:5], bool(row[5]))
             for row in db.execute(
                 "SELECT effect_id,attempt_id,effect_class,node_id,scheduled_ms,protected "
-                "FROM containment_effects WHERE state='pending'"
+                "FROM containment_effects WHERE state='pending' AND scheduled_ms IS NOT NULL"
             )
         }
         self.revoked = {
@@ -352,10 +367,12 @@ class ProvenanceGraph:
             return
         if event["phase"] == "started":
             agent, node, task_id = event["agent_id"], event["node_id"], event["task_id"]
+            # The invocation's effective authority as agentd computed it.
+            authority = event["attributes"].get("authority")
             inserted = self.db.execute(
                 "INSERT OR IGNORE INTO containment_invocations"
-                "(attempt_id,agent_id,node_id,task_id,trace_id,context_id,started_ms,seq) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "(attempt_id,agent_id,node_id,task_id,trace_id,context_id,started_ms,"
+                "authority_json,seq) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     attempt,
                     agent,
@@ -364,6 +381,7 @@ class ProvenanceGraph:
                     event["trace_id"],
                     event["context_id"],
                     at,
+                    json.dumps(authority, sort_keys=True) if authority else None,
                     seq,
                 ),
             ).rowcount
@@ -371,6 +389,8 @@ class ProvenanceGraph:
                 return
             self.counts["nodes"] += 1
             self.agent_nodes[agent] = node
+            if authority:
+                self.granted_agents.update(authority["recipients"] or ())
             if task_id is not None:
                 self._upsert_task(
                     task_id,
@@ -530,11 +550,11 @@ class ProvenanceGraph:
         )
 
     def _effect(self, event: dict, seq: int, at: int) -> None:
-        """Forthcoming effect gateway events (not yet in the trace schema).
+        """agentd's effect gateway: ``requested``, then ``committed`` or ``denied``.
 
-        Expected shape: phase ``requested`` (authorized, not committed),
-        ``committed`` or ``denied``; attributes ``effect_id``, ``effect_class`` and
-        an optional ``scheduled_at_ms`` (earliest commit time).
+        An immediate effect is decided in the same transaction as its request, so
+        only a scheduled one (``scheduled_at_ms``, the earliest commit) stays
+        pending and controllable until its commit or denial arrives.
         """
         attributes = event["attributes"]
         effect_id, attempt = attributes["effect_id"], event["execution_attempt_id"]
@@ -545,7 +565,7 @@ class ProvenanceGraph:
         }.get(event["phase"])
         if state is None or attempt is None:
             return
-        scheduled = attributes.get("scheduled_at_ms")
+        scheduled = attributes["scheduled_at_ms"]
         self._record_effect(
             effect_id,
             attempt,
@@ -561,7 +581,6 @@ class ProvenanceGraph:
         self, effect_id, attempt, effect_class, node, state, scheduled, at, seq
     ) -> None:
         protected = effect_class in self.config.protected_effect_classes
-        site = self.config.effect_sites.get(effect_class, node)
         self._count_new("containment_effects", "effect_id", effect_id)
         self.db.execute(
             "INSERT INTO containment_effects"
@@ -573,7 +592,7 @@ class ProvenanceGraph:
                 effect_id,
                 attempt,
                 effect_class,
-                site,
+                node,
                 int(protected),
                 state,
                 scheduled,
@@ -582,12 +601,13 @@ class ProvenanceGraph:
             ),
         )
         self._edge(inv(attempt), fx(effect_id), DATA, at, seq)
-        current = self.db.execute(
-            "SELECT state FROM containment_effects WHERE effect_id=?", (effect_id,)
-        ).fetchone()[0]
-        if current == "pending":
+        current, scheduled = self.db.execute(
+            "SELECT state,scheduled_ms FROM containment_effects WHERE effect_id=?",
+            (effect_id,),
+        ).fetchone()
+        if current == "pending" and scheduled is not None:
             self.effects[effect_id] = PendingEffect(
-                effect_id, attempt, effect_class, site, scheduled, protected
+                effect_id, attempt, effect_class, node, scheduled, protected
             )
         else:
             self.effects.pop(effect_id, None)
@@ -792,6 +812,14 @@ class ProvenanceGraph:
             "SELECT * FROM containment_invocations WHERE attempt_id=?", (attempt,)
         )
 
+    def authority(self, attempt: str) -> dict | None:
+        """The effective authority exported on the invocation's run/started."""
+        row = self.db.execute(
+            "SELECT authority_json FROM containment_invocations WHERE attempt_id=?",
+            (attempt,),
+        ).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
     def task_row(self, task_id: str) -> dict | None:
         return self._row("SELECT * FROM containment_tasks WHERE task_id=?", (task_id,))
 
@@ -826,8 +854,11 @@ class ProvenanceGraph:
     def node_of(self, agent_id: str) -> str | None:
         return self.agent_nodes.get(agent_id) or self.config.agent_nodes.get(agent_id)
 
+    def known_nodes(self) -> set[str]:
+        return set(self.agent_nodes.values()) | set(self.config.agent_nodes.values())
+
     def known_agents(self) -> set[str]:
-        agents = set(self.agent_nodes) | set(self.config.grants)
+        agents = set(self.agent_nodes) | set(self.config.grants) | self.granted_agents
         for targets in self.config.grants.values():
             agents |= set(targets)
         agents |= {p.recipient_id for p in self.pending.values()}

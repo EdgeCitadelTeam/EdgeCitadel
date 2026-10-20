@@ -12,8 +12,15 @@ P3. Reconcile again; if the phase-2 set still separates G_C, release the phase-1
 
 Releases are only ever issued after all phase-2 confirmations, so at every
 instant after P1 converges the actions in force contain a valid cut (Theorem
-7.3). A failed phase-2 confirmation keeps every phase-1 hold. Each decision is
-stamped with a fresh, monotone policy version for the owner (agentd's fence).
+7.3). A phase-2 action that is not confirmed in force, whether rejected or
+unconfirmed, keeps every phase-1 hold. Each decision is stamped with a fresh,
+monotone policy version for the owner (agentd's fence).
+
+An action is sent to each of its sites (one node, or every node that may hold
+affected work for node-local revocations) and is in force only when every site
+confirmed it. An unconfirmed site (sent, no confirmation) stays unconfirmed: it
+is neither counted as in force nor released, and a later solve that still needs
+the action issues it again under a newer version.
 """
 
 from __future__ import annotations
@@ -24,7 +31,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from . import solver
-from .control import ControlClient, ControlError, execute, release
+from .control import (
+    ControlClient,
+    ControlError,
+    ControlUnconfirmed,
+    execute,
+    release,
+)
 from .graph import ControlGraph
 from .model import Action
 from .projection import frontier_block
@@ -36,6 +49,15 @@ def now_ms() -> int:
 
 @dataclass
 class ActionRecord:
+    """One action of one decision and what each of its sites confirmed.
+
+    ``sites`` maps a node to its outcome: ``state`` (in_force, failed or
+    unconfirmed), ``command_id``, ``t_sent``, ``t_applied`` (that node's clock),
+    ``t_confirmed`` or ``t_returned`` (monitor clock), the rejection ``error`` and
+    the node's ``enforcement`` report. The aggregate is in force only when every
+    site confirmed; ``t_applied`` is then the latest site's application time.
+    """
+
     action: Action
     incident_id: str
     phase: int
@@ -46,9 +68,26 @@ class ActionRecord:
     t_applied: int | None = None  # node clock, as reported
     t_confirmed: int | None = None
     t_release_sent: int | None = None
+    t_release_applied: int | None = None  # node clock
     t_released: int | None = None
-    state: str = "planned"  # planned | in_force | failed | released | release_failed
+    # planned | in_force | failed | unconfirmed | released | release_failed
+    # | release_unconfirmed
+    state: str = "planned"
     error: str | None = None
+    sites: dict[str, dict] = field(default_factory=dict)
+
+    def settle(self) -> None:
+        outcomes = list(self.sites.values())
+        self.t_sent = min(o["t_sent"] for o in outcomes)
+        failed = [o for o in outcomes if o["state"] == "failed"]
+        if failed:
+            self.state, self.error = "failed", failed[0]["error"]
+        elif any(o["state"] == "unconfirmed" for o in outcomes):
+            self.state, self.error = "unconfirmed", "confirmation_timeout"
+        else:
+            self.state = "in_force"
+            self.t_applied = max(o["t_applied"] for o in outcomes)
+            self.t_confirmed = max(o["t_confirmed"] for o in outcomes)
 
     def to_json(self) -> dict:
         return {
@@ -62,9 +101,11 @@ class ActionRecord:
             "t_applied": self.t_applied,
             "t_confirmed": self.t_confirmed,
             "t_release_sent": self.t_release_sent,
+            "t_release_applied": self.t_release_applied,
             "t_released": self.t_released,
             "state": self.state,
             "error": self.error,
+            "sites": self.sites,
         }
 
     @classmethod
@@ -73,20 +114,23 @@ class ActionRecord:
 
 
 class EnforcementDriver:
-    """Executes decisions concurrently and returns once every node answered."""
+    """Executes decisions concurrently and returns once every site answered.
+
+    ``sites(action)`` names the nodes an action is sent to, its own node first.
+    """
 
     def __init__(
         self,
         client: ControlClient,
-        owner: str,
         next_version: Callable[[], int],
         *,
+        sites: Callable[[Action], tuple[str, ...]] = lambda action: (action.node_id,),
         clock: Callable[[], int] = now_ms,
         max_workers: int = 8,
     ):
         self.client = client
-        self.owner = owner
         self.next_version = next_version
+        self.sites = sites
         self.clock = clock
         self._pool = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="containment-control"
@@ -113,23 +157,37 @@ class EnforcementDriver:
             for action in actions
         ]
 
-        def run(record: ActionRecord) -> ActionRecord:
-            record.t_sent = self.clock()
+        def run(job: tuple[ActionRecord, str]) -> tuple[ActionRecord, str, dict]:
+            record, site = job
+            outcome: dict = {"t_sent": self.clock()}
             try:
                 confirmation = execute(
-                    self.client, record.action, owner=self.owner, policy_version=version
+                    self.client, record.action, node_id=site, policy_version=version
                 )
+            except ControlUnconfirmed as error:
+                outcome.update(state="unconfirmed", error=error.code)
             except ControlError as error:
-                record.state, record.error = "failed", error.code
+                outcome.update(state="failed", error=error.code)
             else:
-                record.t_applied = confirmation.applied_at_ms
-                record.state = "in_force"
-            record.t_confirmed = self.clock()
-            return record
+                outcome.update(
+                    state="in_force",
+                    command_id=confirmation.command_id,
+                    t_applied=confirmation.applied_at_ms,
+                    t_confirmed=self.clock(),
+                    enforcement=dict(confirmation.enforcement),
+                )
+            outcome.setdefault("t_returned", self.clock())
+            return record, site, outcome
 
-        return list(self._pool.map(run, records))
+        jobs = [(r, site) for r in records for site in self.sites(r.action)]
+        for record, site, outcome in self._pool.map(run, jobs):
+            record.sites[site] = outcome
+        for record in records:
+            record.settle()
+        return records
 
     def release(self, records: Iterable[ActionRecord]) -> list[ActionRecord]:
+        """Release confirmed holds; one that does not confirm stays in force."""
         records = [r for r in records if r.state == "in_force"]
         if not records:
             return []
@@ -138,13 +196,16 @@ class EnforcementDriver:
         def run(record: ActionRecord) -> ActionRecord:
             record.t_release_sent = self.clock()
             try:
-                release(
-                    self.client, record.action, owner=self.owner, policy_version=version
+                confirmation = release(
+                    self.client, record.action, policy_version=version
                 )
+            except ControlUnconfirmed as error:
+                record.state, record.error = "release_unconfirmed", error.code
             except ControlError as error:
                 record.state, record.error = "release_failed", error.code
             else:
                 record.state = "released"
+                record.t_release_applied = confirmation.applied_at_ms
             record.t_released = self.clock()
             return record
 
@@ -260,8 +321,9 @@ class TwoPhaseProtocol:
             )
             decision.phase2.extend(records)
             in_force.update({r.action: r for r in records if r.state == "in_force"})
-            if any(r.state == "failed" for r in records):
-                decision.status = "phase2_unconfirmed"  # keep every phase-1 hold
+            if any(r.state != "in_force" for r in records):
+                # Rejected or unconfirmed: keep every phase-1 hold.
+                decision.status = "phase2_unconfirmed"
                 return decision
             reconcile()
             held, _ = cut_holds(project(2, frozenset(in_force)), chosen)

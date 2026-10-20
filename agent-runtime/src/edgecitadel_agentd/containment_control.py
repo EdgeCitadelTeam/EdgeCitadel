@@ -82,6 +82,11 @@ def subject_for(node_id: str) -> str:
     return f"{SUBJECT_PREFIX}.{node_id}"
 
 
+def valid_confirmation(value: object) -> bool:
+    """Whether a reply is a schema-valid confirmation; controllers check replies."""
+    return _CONFIRMATION.is_valid(value)
+
+
 def _now_ms() -> int:
     return time.time_ns() // 1_000_000
 

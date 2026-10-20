@@ -56,13 +56,14 @@ import hashlib
 import heapq
 import math
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from .config import MonitorConfig
 from .costs import CostModel
 from .graph import ControlGraph, Edge
 from .model import (
+    REVOKE,
     Action,
     fx,
     hold_effect,
@@ -75,6 +76,9 @@ from .model import (
     ver,
 )
 from .provenance import ProvenanceGraph
+
+# The op:kind pairs a node enforces (its answer to describe).
+Capabilities = Callable[[str], frozenset[str]]
 
 INF = math.inf
 MAX_SPLIT_ROUNDS = 4
@@ -119,42 +123,99 @@ class Unit:
 
 
 class ScopeMirror:
-    """agentd's effective authority: grant intersected with the dispatcher's scope."""
+    """Effective authority of invocations, and where a decision must be enforced.
+
+    agentd exports each invocation's effective authority on ``run/started``: its
+    grant intersected with what its task inherited (recipients and effect rules).
+    Only where that export is missing or null (lists over 8 KiB) does the monitor
+    fall back to configuration: the configured grant intersected with the
+    dispatcher's scope, as agentd computes it. A task that has not started yet is
+    bounded by its dispatcher's scope, since a child never exceeds its parent.
+    An agent with no configured grant may reach every known agent (sound).
+    """
 
     def __init__(self, graph: ProvenanceGraph, config: MonitorConfig):
         self.graph = graph
         self.config = config
+        self.protected = config.protected_effect_classes
         self.known = frozenset(graph.known_agents())
-        self._tasks: dict[str, frozenset[str]] = {}
+        self._tasks: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
 
     def grant(self, agent: str) -> frozenset[str]:
-        # An agent without a configured grant may reach any known agent (sound).
         return self.config.grants.get(agent, self.known)
 
     def effects(self, agent: str) -> frozenset[str]:
-        return (
-            self.config.effect_scopes.get(agent, frozenset())
-            & self.config.protected_effect_classes
-        )
+        """Protected effect classes an agent's configured grant allows."""
+        return self.config.effect_scopes.get(agent, self.protected) & self.protected
 
-    def of_task(self, task_id: str, agent: str) -> frozenset[str]:
+    def of_attempt(self, attempt: str | None) -> tuple[frozenset[str], frozenset[str]]:
+        """(recipients, protected effect classes) of an invocation."""
+        row = self.graph.invocation(attempt) if attempt else None
+        if row is None:
+            return self.known, self.protected
+        exported = self.graph.authority(attempt)
+        if row["task_id"] is None:
+            fallback = (self.grant(row["agent_id"]), self.effects(row["agent_id"]))
+        else:
+            fallback = self.of_task(row["task_id"], row["agent_id"])
+        if exported is None:
+            return fallback
+        recipients, effects = fallback
+        if exported["recipients"] is not None:
+            recipients = frozenset(exported["recipients"])
+        if exported["effects"] is not None:
+            effects = (
+                frozenset(rule["effect_class"] for rule in exported["effects"])
+                & self.protected
+            )
+        return recipients, effects
+
+    def of_task(
+        self, task_id: str, agent: str
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        """A task's scope from configuration, bounded by its dispatcher's scope."""
         if task_id in self._tasks:
             return self._tasks[task_id]
-        self._tasks[task_id] = self.grant(agent)  # guards malformed cycles
-        scope = self.grant(agent)
+        own = (self.grant(agent), self.effects(agent))
+        self._tasks[task_id] = own  # guards malformed cycles
         parent = self.graph.parent_attempt(task_id)
         if parent is not None:
-            scope = scope & self.of_attempt(parent)
-        self._tasks[task_id] = scope
-        return scope
+            recipients, effects = self.of_attempt(parent)
+            own = (own[0] & recipients, own[1] & effects)
+        self._tasks[task_id] = own
+        return own
 
-    def of_attempt(self, attempt: str) -> frozenset[str]:
-        row = self.graph.invocation(attempt)
-        if row is None:
-            return self.known
-        if row["task_id"] is None:
-            return self.grant(row["agent_id"])
-        return self.of_task(row["task_id"], row["agent_id"])
+    def sites(self, action: Action) -> tuple[str, ...]:
+        """The nodes a decision is sent to, its own node first.
+
+        agentd's revocations and filters bind only the node that applies them.
+        ``grant a>b``: a's node refuses the dispatch, b's node parks a request
+        already published. ``admission b``: b's node parks deliveries and every
+        node of an agent that may dispatch to b refuses the dispatch.
+        ``authority T``: every node that may hold T's descendants. Holds,
+        cancels and egress or credential revocations act at one node.
+        """
+        others: set[str | None] = set()
+        if action.op == REVOKE and action.kind == "grant":
+            _, _, target = action.object_id.partition(">")
+            if not target.startswith("fx:"):
+                others.add(self.graph.node_of(target))
+        elif action.op == REVOKE and action.kind == "admission":
+            others.update(
+                self.graph.node_of(agent)
+                for agent in self.known
+                if action.object_id in self.grant(agent)
+            )
+        elif action.op == REVOKE and action.kind == "authority":
+            row = self.graph.task_row(action.object_id)
+            reach = {row["recipient_id"]} if row and row["recipient_id"] else set()
+            frontier = list(reach)
+            while frontier:
+                for target in self.grant(frontier.pop()) - reach:
+                    reach.add(target)
+                    frontier.append(target)
+            others.update(self.graph.node_of(agent) for agent in reach)
+        return (action.node_id, *sorted(n for n in others if n and n != action.node_id))
 
 
 def live_units(
@@ -175,10 +236,7 @@ def live_units(
             max(now_ms, start + config.min_emission(live.agent_id)),
             False,
             inv(attempt) in graph.taint,
-            scopes.of_task(live.task_id, live.agent_id)
-            if live.task_id
-            else scopes.grant(live.agent_id),
-            scopes.effects(live.agent_id),
+            *scopes.of_attempt(attempt),
         )
     for task_id, pending in graph.pending.items():
         node = pending.recipient_node or graph.node_of(pending.recipient_id)
@@ -199,8 +257,7 @@ def live_units(
             start + config.min_emission(pending.recipient_id),
             True,
             graph.tainted_request(pending),
-            scopes.of_task(task_id, pending.recipient_id),
-            scopes.effects(pending.recipient_id),
+            *scopes.of_task(task_id, pending.recipient_id),
         )
     return units
 
@@ -233,7 +290,11 @@ class _Builder:
         self.expanded: set[tuple[str, str, str]] = set()
 
     def allowed(self, action: Action | None) -> Action | None:
-        if action is None or action.capability not in self.capabilities:
+        """The action if every node it must reach enforces it, else None."""
+        if action is None or not all(
+            action.capability in self.capabilities(site)
+            for site in self.scopes.sites(action)
+        ):
             return None
         return action
 
@@ -473,19 +534,32 @@ class _Builder:
             if ver(result.version_id) in graph.taint:
                 cg.sources.add(name)
         for effect in graph.effects.values():
+            # A scheduled effect commits at its time unless agentd refuses the
+            # commit: an effect hold keeps it requested; a hold on the issuing
+            # task denies it (and pauses the issuer). Either removes the flow, so
+            # the edge is a series of the two (immediate effects are decided at
+            # request time and are never pending). Once the issuing invocation
+            # ended, its binding is closed and agentd can no longer commit it.
+            issuer = units.get(effect.attempt_id)
+            if issuer is None:
+                continue
             pending = cg.node(f"pe:{effect.effect_id}", kind="pending_effect")
+            gated = cg.node(f"pg:{effect.effect_id}", kind="pending_effect")
             target = cg.node(f"fx:{effect.effect_id}", kind="effect")
             cg.edge(
                 pending,
+                gated,
+                "effect",
+                fn=("fixed", effect.scheduled_ms),
+                action=self.allowed(hold_effect(effect.node_id, effect.effect_id)),
+            )
+            cg.edge(
+                gated,
                 target,
                 "effect",
-                fn=(
-                    "fixed",
-                    effect.scheduled_ms
-                    if effect.scheduled_ms is not None
-                    else self.now,
-                ),
-                action=self.allowed(hold_effect(effect.node_id, effect.effect_id)),
+                action=self.allowed(hold_task(issuer.node, issuer.task_id))
+                if issuer.node and issuer.task_id
+                else None,
             )
             if effect.protected:
                 cg.sinks.add(target)
@@ -539,9 +613,13 @@ class _Builder:
         for target in unit.recipients:
             target_node = self.node_of(target)
             delay = self.config.delivery(site, target_node) + self.config.min_start_ms
-            if "revoke:admission" in self.capabilities:
+            if target_node and self.allowed(revoke_admission(target_node, target)):
                 found.append(self.t_ap(target_node) - delay)
-            if self.config.horizon > 1 and "revoke:grant" in self.capabilities:
+            if (
+                self.config.horizon > 1
+                and site
+                and self.allowed(revoke_grant(site, unit.agent, target))
+            ):
                 found.append(
                     self.t_ap(target_node) - delay - self.config.min_emission(target)
                 )
@@ -637,7 +715,7 @@ def project(
     config: MonitorConfig,
     *,
     now_ms: float,
-    capabilities: Iterable[str],
+    capabilities: Capabilities,
     static: bool = False,
     in_force: Iterable[Action] = (),
     tau_ms: float | None = None,
@@ -654,7 +732,7 @@ def project(
         units,
         scopes,
         cg,
-        frozenset(capabilities),
+        capabilities,
         now_ms,
         tau,
         static,

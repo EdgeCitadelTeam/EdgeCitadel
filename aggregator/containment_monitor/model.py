@@ -56,23 +56,34 @@ def split(node: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
-HOLD, REVOKE = "hold", "revoke"
-HOLD_KINDS = frozenset({"task", "transport", "effect"})
-# egress: new dispatches and effects of one invocation (object: its task id), which
-#   may still complete; grant: one (agent, recipient-or-effect-class) pair of the
-#   agent's delegation grant, checked at the sender's node; credential: every
-#   outbound action of an agent; admission: new tasks of an agent at its node.
-REVOKE_KINDS = frozenset({"egress", "grant", "credential", "admission"})
+HOLD, REVOKE, CANCEL = "hold", "revoke", "cancel"
+# Reversible (released by the monitor): task (a pause), egress (the invocation
+# runs and receives but nothing leaves it, its result included), transport (one
+# outbox message), effect (a scheduled effect stays uncommitted).
+HOLD_KINDS = frozenset({"task", "egress", "transport", "effect"})
+# Irreversible. egress: new dispatches and effects of one invocation (object: its
+#   task id), which may still complete; authority: a delegation (task id) and all
+#   its descendants; grant: one (agent, recipient-or-effect-class) pair of the
+#   agent's delegation grant; credential: every outbound action of an agent;
+#   admission: new tasks of an agent under any authority.
+REVOKE_KINDS = frozenset({"egress", "authority", "grant", "credential", "admission"})
+# Terminal: the task is cancelled and this owner's holds on it are removed.
+CANCEL_KINDS = frozenset({"task"})
+OP_KINDS = {HOLD: HOLD_KINDS, REVOKE: REVOKE_KINDS, CANCEL: CANCEL_KINDS}
 
 
 @dataclass(frozen=True, order=True)
 class Action:
-    """One enforceable control decision at one node.
+    """One enforceable control decision, sited at the node where it must land.
 
-    ``hold``: ``kind`` is task/transport/effect and ``object_id`` its UUID.
-    ``revoke``: ``kind`` is grant/credential/admission and ``object_id`` is
-    ``<agent>`` or ``<agent>><target>`` (target an agent or ``fx:<class>``).
-    Every strategy produces this vocabulary; the ControlClient executes it.
+    ``hold``: ``kind`` is task/egress/transport/effect and ``object_id`` its UUID.
+    ``revoke``: ``kind`` is egress/authority (a task UUID), credential/admission
+    (``<agent>``) or grant (``<agent>><target>``, target an agent or
+    ``fx:<class>``). ``cancel``: kind task. Every strategy produces this
+    vocabulary; ``control.command_for`` maps it onto agentd's control commands.
+    Revocations whose agentd state is node-local are also sent to the other nodes
+    that may hold affected work (``projection.ScopeMirror.sites``); ``node_id`` is
+    the site whose landing time decides feasibility.
     """
 
     op: str
@@ -81,15 +92,16 @@ class Action:
     object_id: str
 
     def __post_init__(self) -> None:
-        kinds = (
-            HOLD_KINDS if self.op == HOLD else REVOKE_KINDS if self.op == REVOKE else ()
-        )
-        if self.kind not in kinds:
+        if self.kind not in OP_KINDS.get(self.op, ()):
             raise ValueError("invalid_action")
 
     @property
     def capability(self) -> str:
         return f"{self.op}:{self.kind}"
+
+    @property
+    def reversible(self) -> bool:
+        return self.op == HOLD
 
     def to_json(self) -> dict[str, str]:
         return {

@@ -33,7 +33,12 @@ from pathlib import Path
 from ..trace_payload_read import read_payload
 from . import rootcause
 from .config import ConfigError, MonitorConfig
-from .control import ControlClient, LocalAgentdControlClient, UnconfiguredControlClient
+from .control import (
+    ControlClient,
+    LocalAgentdControlClient,
+    NatsControlClient,
+    UnconfiguredControlClient,
+)
 from .detectors import detect
 from .enforcement import (
     ActionRecord,
@@ -44,7 +49,7 @@ from .enforcement import (
 )
 from .graph import ControlGraph
 from .model import FAILURE_KINDS, Action, Alert, AlertError, parse_external_alert, ver
-from .projection import project
+from .projection import ScopeMirror, project
 from .provenance import ProvenanceGraph
 from .strategies import CUT_STRATEGIES, DISPLAY, STRATEGIES, Context
 
@@ -88,11 +93,14 @@ class ContainmentMonitor:
         self.log = decision_log
         self.clock = clock
         self.batch = batch
+        if control.owner != config.owner:
+            # agentd fences and authenticates decisions per owner: one identity.
+            raise ConfigError("control_owner_mismatch")
         ProvenanceGraph.initialize(monitor)
         self.graph = ProvenanceGraph(monitor, config)
         self.graph.reload()
         self.driver = EnforcementDriver(
-            control, config.owner, self._next_version, clock=clock
+            control, self._next_version, sites=self._sites, clock=clock
         )
         self.protocol = TwoPhaseProtocol(self.driver, max_rounds=config.max_rounds)
         self.in_force: dict[Action, ActionRecord] = {
@@ -222,12 +230,28 @@ class ContainmentMonitor:
             return ranking[0].roots, ranking[0].prune_level
         return rootcause.subject_nodes(self.graph, alert.subject), "subject"
 
+    def _sites(self, action: Action) -> tuple[str, ...]:
+        return ScopeMirror(self.graph, self.config).sites(action)
+
+    def _supported(self, action: Action) -> bool:
+        return all(
+            action.capability in self.control.capabilities(site)
+            for site in self._sites(action)
+        )
+
     def _project(
         self, phase: int, in_force: frozenset[Action], static: bool = False
     ) -> ControlGraph:
         capabilities = self.control.capabilities
         if phase == 1:
-            capabilities = frozenset(c for c in capabilities if c.startswith("hold:"))
+            # The frontier block is released later: reversible holds only.
+            def capabilities(node_id: str) -> frozenset[str]:
+                return frozenset(
+                    c
+                    for c in self.control.capabilities(node_id)
+                    if c.startswith("hold:")
+                )
+
         cg = project(
             self.graph,
             self.config,
@@ -248,6 +272,7 @@ class ContainmentMonitor:
         roots: list[str] | None = None,
     ) -> Decision:
         t_received = self.clock()
+        self.control.refresh(self.graph.known_nodes())
         ranking = rootcause.rank(self.graph, self.config, alert, now_ms=t_received)
         if roots is None:
             roots, basis = self._roots(alert, ranking)
@@ -293,7 +318,7 @@ class ContainmentMonitor:
                 cg,
                 lambda: self._project(2, frozenset(self.in_force), static=True),
                 roots,
-                self.control.capabilities,
+                self._supported,
             )
             return STRATEGIES[name](context)
 
@@ -312,11 +337,14 @@ class ContainmentMonitor:
     def _persist(self, decision: Decision) -> None:
         with self.db:
             for record in [*decision.phase1, *decision.phase2, *decision.released]:
-                state = {"in_force": "in_force", "released": "released"}.get(
-                    record.state, "failed"
-                )
-                if record.state == "release_failed":
-                    state = "in_force"
+                state = {
+                    "in_force": "in_force",
+                    "released": "released",
+                    "unconfirmed": "unconfirmed",
+                    # A release that was not confirmed leaves the hold in force.
+                    "release_failed": "in_force",
+                    "release_unconfirmed": "in_force",
+                }.get(record.state, "failed")
                 self.db.execute(
                     "INSERT INTO containment_actions(action_json,incident_id,phase,state,policy_version,record_json) "
                     "VALUES (?,?,?,?,?,?) ON CONFLICT(action_json) DO UPDATE SET "
@@ -369,6 +397,8 @@ class ContainmentMonitor:
         if self.fault is not None:
             return
         self.catch_up()
+        # Describe new nodes before an alert needs them (cached per node).
+        self.control.refresh(self.graph.known_nodes())
         self.handle_alerts()
         self.resolve_frontier()
 
@@ -406,6 +436,14 @@ class ContainmentMonitor:
                 r.to_json()
                 for r in sorted(self.in_force.values(), key=lambda r: r.action)
             ],
+            # Sent but never confirmed: possibly in force at their nodes.
+            "unconfirmed": [
+                json.loads(record)
+                for (record,) in self.db.execute(
+                    "SELECT record_json FROM containment_actions WHERE state='unconfirmed' "
+                    "ORDER BY action_json"
+                )
+            ],
             "incidents": [
                 {
                     "incident_id": i,
@@ -422,7 +460,13 @@ class ContainmentMonitor:
             "policy_version": self.db.execute(
                 "SELECT policy_version FROM containment_state WHERE singleton=1"
             ).fetchone()[0],
-            "control": {"capabilities": sorted(self.control.capabilities)},
+            "control": {
+                "owner": self.control.owner,
+                "capabilities": {
+                    node: sorted(self.control.capabilities(node))
+                    for node in sorted(graph.known_nodes())
+                },
+            },
             "coverage_gaps": graph.coverage_gaps,
             "blocked_dispatches": graph.blocked_dispatches,
         }
@@ -463,7 +507,7 @@ class ContainmentMonitorService:
             monitor_db or self.core_db.parent / "containment.sqlite3"
         ).resolve()
         self.config = config or MonitorConfig()
-        self.control = control or UnconfiguredControlClient()
+        self.control = control or UnconfiguredControlClient(self.config.owner)
         self.decision_log = (
             decision_log or self.core_db.parent / "containment-decisions.jsonl"
         )
@@ -500,6 +544,7 @@ class ContainmentMonitorService:
             self._thread.join(SHUTDOWN_SECONDS)
             if self._thread.is_alive():
                 raise RuntimeError("containment_monitor_shutdown_timeout")
+        self.control.close()
 
     def _set(self, **values) -> None:
         with self._lock:
@@ -569,33 +614,71 @@ class ContainmentMonitorService:
 def service_from_environment(core_db: Path) -> ContainmentMonitorService:
     """Build the service from ``EDGECITADEL_CONTAINMENT_CONFIG`` (optional JSON).
 
-    ``{"monitor": {...MonitorConfig...}, "control": {"agentd": {"<node_id>":
-    {"socket": "<agentd.sock>", "admin_token_file": "<admin.token>"}}}}``.
-    Without control endpoints, decisions are computed and logged but every
-    action is recorded as unconfirmed (``node_unreachable``).
+    ``{"monitor": {...MonitorConfig...}, "control": {"nats": {"key_file":
+    "<owner key>", "confirmation_timeout_ms": 5000, "command_lifetime_ms":
+    30000}}}`` signs commands with the owner's key and sends them on Core NATS
+    (``NATS_URL``/``NATS_TOKEN``, as the collector). ``{"control": {"agentd":
+    {"<node_id>": {"socket": "<agentd.sock>", "admin_token_file":
+    "<admin.token>"}}}}`` uses co-located admin sockets instead. Without
+    control, decisions are computed and logged but every action is recorded as
+    not applied (``node_unreachable``).
     """
     path = os.environ.get("EDGECITADEL_CONTAINMENT_CONFIG")
     document = json.loads(Path(path).read_text()) if path else {}
     if not isinstance(document, dict) or set(document) - {"monitor", "control"}:
         raise ConfigError("invalid_containment_config")
     config = MonitorConfig.from_json(document.get("monitor", {}))
-    nodes = document.get("control", {}).get("agentd", {})
+    return ContainmentMonitorService(
+        core_db, config=config, control=_control(config, document.get("control", {}))
+    )
+
+
+def _control(config: MonitorConfig, document: object) -> ControlClient:
+    if not isinstance(document, dict) or len(document) > 1:
+        raise ConfigError("invalid_containment_control")
+    if "nats" in document:
+        settings = document["nats"]
+        allowed = {"key_file", "confirmation_timeout_ms", "command_lifetime_ms"}
+        if (
+            not isinstance(settings, dict)
+            or set(settings) - allowed
+            or not isinstance(settings.get("key_file"), str)
+            or not all(
+                type(settings[key]) is int and settings[key] > 0
+                for key in allowed - {"key_file"}
+                if key in settings
+            )
+        ):
+            raise ConfigError("invalid_containment_control")
+        try:
+            return NatsControlClient.from_key_file(
+                os.environ["NATS_URL"],
+                os.environ.get("NATS_TOKEN") or None,
+                config.owner,
+                Path(settings["key_file"]),
+                confirmation_timeout_s=settings.get("confirmation_timeout_ms", 5000)
+                / 1000,
+                command_lifetime_ms=settings.get("command_lifetime_ms", 30_000),
+            )
+        except KeyError:
+            raise ConfigError("containment_control_nats_unavailable") from None
+        except (OSError, ValueError):
+            raise ConfigError("invalid_containment_control_key") from None
+    nodes = document.get("agentd", {})
     if not isinstance(nodes, dict) or not all(
         isinstance(v, dict) and set(v) == {"socket", "admin_token_file"}
         for v in nodes.values()
     ):
         raise ConfigError("invalid_containment_control")
-    control: ControlClient = (
-        LocalAgentdControlClient.from_sockets(
-            {
-                node: (Path(v["socket"]), Path(v["admin_token_file"]))
-                for node, v in nodes.items()
-            }
-        )
-        if nodes
-        else UnconfiguredControlClient()
+    if not nodes:
+        return UnconfiguredControlClient(config.owner)
+    return LocalAgentdControlClient.from_sockets(
+        config.owner,
+        {
+            node: (Path(v["socket"]), Path(v["admin_token_file"]))
+            for node, v in nodes.items()
+        },
     )
-    return ContainmentMonitorService(core_db, config=config, control=control)
 
 
 __all__ = [
