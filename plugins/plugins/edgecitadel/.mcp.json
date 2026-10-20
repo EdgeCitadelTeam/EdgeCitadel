@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "edgecitadel": {
+      "command": "edgecitadel",
+      "args": ["native-mcp", "--host-type", "codex"]
+    }
+  }
+}

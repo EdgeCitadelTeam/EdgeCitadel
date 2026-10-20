@@ -1,0 +1,87 @@
+services:
+  nats:
+    image: ${NATS_IMAGE:?required}
+    command: ["-c", "/etc/nats/nats.conf"]
+    ports:
+      - "127.0.0.1::4222"
+      - "127.0.0.1::8222"
+    environment:
+      - NATS_TOKEN=${NATS_TOKEN:?required}
+    volumes:
+      - ./test-nats.conf:/etc/nats/nats.conf:ro
+      - nats_test_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: aggregator/Dockerfile
+    ports:
+      - "127.0.0.1::8000"
+    environment:
+      - NATS_URL=nats://nats:4222
+      - NATS_TOKEN=${NATS_TOKEN:?required}
+      - DB_PATH=/data/openclaw.db
+      - EDGECITADEL_TRACE_COLLECTOR=${EDGECITADEL_TRACE_COLLECTOR:-0}
+      - EDGECITADEL_ADMIN_TOKEN=${EDGECITADEL_ADMIN_TOKEN:-}
+    volumes:
+      - test-data:/data
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      # Phase 1 retired the /health endpoint; /api/system/status returns
+      # the canonical v0.1 shape (nats_connected, jetstream_stream_ok).
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/api/system/status', timeout=2); sys.exit(0 if r.status==200 else 1)"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "127.0.0.1::80"
+    volumes:
+      - ./test-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+  fixture-agent:
+    build:
+      context: ..
+      dockerfile: e2e/fixture-agent.Dockerfile
+    command:
+      - python3
+      - -m
+      - e2e.fixture_agent.native_control
+      - --config
+      - /run/config/native-control.json
+    environment:
+      - NATS_URL=nats://nats:4222
+      - EC_CREDENTIAL_FILE=/run/secrets/transport-token
+      - EC_TERMINAL_RELEASE_DIR=/run/control
+    volumes:
+      - ${E2E_FIXTURE_CONFIG:?required}:/run/config/native-control.json:ro
+      - ${E2E_CREDENTIAL_FILE:?required}:/run/secrets/transport-token:ro
+      - ${E2E_CONTROL_DIR:?required}:/run/control:ro
+      - fixture-state:/run/state
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  test-data:
+  nats_test_data:
+  fixture-state:

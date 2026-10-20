@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "edgecitadel service start --json >/dev/null",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

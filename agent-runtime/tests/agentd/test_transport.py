@@ -1,0 +1,365 @@
+from __future__ import annotations
+
+import asyncio
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
+
+from storage_test_support import paired_connect
+
+import pytest
+from nats.aio.msg import Msg
+
+from edgecitadel_agentd.store import AgentdStore
+from edgecitadel_agentd.transport import AgentdNatsTransport
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mirror_fails", [False, True])
+async def test_transport_mirrors_durable_command_before_retiring_outbox(
+    tmp_path: Path,
+    mirror_fails: bool,
+) -> None:
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    store.create_task(
+        sender_id="caller", recipient_id="remote", payload={"body": "work"}
+    )
+    transport = AgentdNatsTransport(tmp_path, store)
+    calls = []
+
+    class JetStream:
+        async def publish(self, subject, payload, *, headers):
+            calls.append((subject, payload, headers))
+
+    class Connection:
+        async def publish(self, subject, payload):
+            calls.append((subject, payload, None))
+            transport._stop.set()
+            if mirror_fails:
+                raise RuntimeError("mirror unavailable")
+
+    try:
+        if mirror_fails:
+            with pytest.raises(RuntimeError, match="mirror unavailable"):
+                await transport._connected_loop(Connection(), JetStream())
+        else:
+            await transport._connected_loop(Connection(), JetStream())
+        assert [call[0] for call in calls] == [
+            "agents.remote.inbox",
+            "agents.caller.outbox",
+        ]
+        assert calls[0][1] == calls[1][1]
+        assert calls[0][2] == {"Nats-Msg-Id": json.loads(calls[0][1])["id"]}
+        assert bool(store.pending_transport()) is mirror_fails
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_core_node_supplies_transport_endpoint(tmp_path: Path, explicit: bool) -> None:
+    node = {
+        "version": 1,
+        "mode": "core",
+        "nats_url": "nats://core.example:4222",
+        "nats_token": "legacy-token",
+    }
+    if explicit:
+        node.update(
+            plugin_nats_url="nats://127.0.0.1:4222", plugin_nats_token="local-token"
+        )
+    (tmp_path / "node.json").write_text(json.dumps(node))
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    try:
+        actual = AgentdNatsTransport(tmp_path, store)._node()
+        assert actual is not None
+        assert actual["plugin_nats_url"] == (
+            "nats://127.0.0.1:4222" if explicit else node["nats_url"]
+        )
+        assert actual["plugin_nats_token"] == (
+            "local-token" if explicit else "legacy-token"
+        )
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"mode": "edge"},
+        {"version": 99},
+        {"nats_token": ""},
+        {"nats_url": "http://core.example"},
+        {"plugin_nats_url": ""},
+    ],
+)
+def test_core_fallback_does_not_normalize_invalid_records(
+    tmp_path: Path, updates: dict
+) -> None:
+    node = {
+        "version": 1,
+        "mode": "core",
+        "nats_url": "nats://core.example:4222",
+        "nats_token": "token",
+    }
+    node.update(updates)
+    (tmp_path / "node.json").write_text(json.dumps(node))
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    try:
+        actual = AgentdNatsTransport(tmp_path, store)._node()
+        assert actual is None or not actual.get("plugin_nats_token")
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"version": 99},
+        {"version": True},
+        {"mode": "unknown"},
+        {"plugin_nats_token": ""},
+        {"plugin_nats_url": "http://wrong"},
+        {"messaging_mode": "unknown"},
+        {"messaging_mode": "nats_leaf"},
+    ],
+)
+def test_malformed_explicit_edge_is_not_configured(
+    tmp_path: Path, updates: dict
+) -> None:
+    node = {
+        "version": 2,
+        "mode": "edge",
+        "plugin_nats_url": "nats://127.0.0.1:4222",
+        "plugin_nats_token": "test-only",
+    }
+    node.update(updates)
+    (tmp_path / "node.json").write_text(json.dumps(node))
+    store = AgentdStore(tmp_path / "agentd/agentd.sqlite3")
+    try:
+        assert AgentdNatsTransport(tmp_path, store)._node() is None
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_generated_native_card_declares_l1_transport_binding(
+    tmp_path: Path,
+) -> None:
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    store.register_connector(
+        connector_id="codex-session",
+        host_type="codex",
+        agent_id="edge-codex",
+        capabilities=["edgecitadel_delegate"],
+    )
+    connector = store.list_connectors()[0]
+    published: list[tuple[str, bytes]] = []
+
+    class Connection:
+        async def publish(self, subject: str, payload: bytes) -> None:
+            published.append((subject, payload))
+
+    (tmp_path / "node.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "mode": "edge",
+                "agent_id": "mac-host",
+                "messaging_mode": "nats_leaf",
+                "jetstream_domain": "mac_domain",
+                "plugin_nats_url": "nats://127.0.0.1:4222",
+                "plugin_nats_token": "secret-token",
+            }
+        )
+    )
+    transport = AgentdNatsTransport(tmp_path, store)
+    await transport._publish_register(cast(object, Connection()), connector)
+
+    assert published[0][0] == "agents.edge-codex.register"
+    envelope = json.loads(published[0][1])
+    card = envelope["payload"]
+    assert card["metadata"]["runtime.conformance"] == "L1"
+    assert card["metadata"]["edgecitadel.node_id"] == "mac-host"
+    assert card["metadata"]["edgecitadel.messaging_mode"] == "nats_leaf"
+    assert card["metadata"]["edgecitadel.leaf_id"] == "edgecitadel-mac-host"
+    assert card["metadata"]["edgecitadel.jetstream_domain"] == "mac_domain"
+    assert "secret-token" not in json.dumps(card)
+    assert card["capabilities"]["extensions"] == [
+        {
+            "uri": "https://edgecitadel.local/ext/nats-binding/v1",
+            "description": "Agent messaging is carried by the host-local EdgeCitadel transport.",
+            "required": True,
+        }
+    ]
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_max_delivery_diagnostic_uses_real_advisory_subject_shape(
+    tmp_path: Path,
+) -> None:
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    transport = AgentdNatsTransport(tmp_path, store)
+    message = cast(
+        Msg,
+        SimpleNamespace(
+            subject=(
+                "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.worker-1_inbox"
+            ),
+            data=json.dumps(
+                {
+                    "stream": "AGENT_INBOX",
+                    "consumer": "worker-1_inbox",
+                    "stream_seq": 42,
+                    "deliveries": 3,
+                }
+            ).encode(),
+        ),
+    )
+
+    await transport._observe_advisory(message)
+
+    with paired_connect(store.path) as connection:
+        row = connection.execute(
+            "SELECT agent_id, attributes_json FROM events "
+            "WHERE event_type = 'transport.max_deliveries'"
+        ).fetchone()
+    store.close()
+    assert row is not None
+    assert row[0] == "worker-1"
+    assert json.loads(row[1]) == {
+        "consumer": "worker-1_inbox",
+        "stream": "AGENT_INBOX",
+        "stream_seq": 42,
+    }
+
+
+@pytest.mark.asyncio
+async def test_malformed_max_delivery_advisory_is_ignored(tmp_path: Path) -> None:
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    transport = AgentdNatsTransport(tmp_path, store)
+    message = cast(
+        Msg,
+        SimpleNamespace(
+            subject=(
+                "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.AGENT_INBOX.worker-1_inbox"
+            ),
+            data=b"{}",
+        ),
+    )
+
+    await transport._observe_advisory(message)
+
+    with paired_connect(store.path) as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'transport.max_deliveries'"
+        ).fetchone()[0]
+    store.close()
+    assert count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["quota_exceeded", "storage_unavailable"])
+async def test_trace_quota_failure_keeps_valid_result_unacknowledged(
+    tmp_path, monkeypatch, failure
+):
+    from uuid import uuid4
+
+    from test_trace_crash import snapshot
+
+    from edgecitadel_agentd import trace_capacity
+    from edgecitadel_agentd.store import StoreError
+
+    (tmp_path / "node.json").write_text('{"agent_id":"owned-edge"}')
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    transport = AgentdNatsTransport(tmp_path, store)
+    acknowledgments = []
+
+    class Message:
+        data = b""
+
+        async def ack(self):
+            acknowledgments.append("ack")
+
+        async def term(self):
+            acknowledgments.append("term")
+
+    try:
+        task = store.create_task(sender_id="worker", recipient_id="remote", payload={})
+        message = Message()
+        message.data = json.dumps(
+            {
+                "v": 1,
+                "id": str(uuid4()),
+                "type": "result",
+                "task_id": task["task_id"],
+                "sender_id": "remote",
+                "recipient_id": "worker",
+                "task_state": "completed",
+                "timestamp": "2026-09-16T12:00:00.000Z",
+                "payload": {"body": "done"},
+            }
+        ).encode()
+        usage = tuple(
+            store._connection.execute("SELECT * FROM trace_storage_usage").fetchone()
+        )
+        if failure == "storage_unavailable":
+            with store._connection:
+                store._connection.execute("DELETE FROM trace_storage_usage")
+        before = snapshot(store)
+        with monkeypatch.context() as pressure:
+            if failure == "quota_exceeded":
+                pressure.setattr(trace_capacity, "NORMAL_LIMIT_BYTES", 0)
+                pressure.setattr(trace_capacity, "CONTROL_RESERVE_BYTES", 0)
+            with pytest.raises(StoreError, match=failure):
+                await transport._ingest_message(message, "worker")
+        assert acknowledgments == []
+        assert snapshot(store) == before
+        if failure == "storage_unavailable":
+            with store._connection:
+                store._connection.execute(
+                    "INSERT INTO trace_storage_usage VALUES (?,?,?)", usage
+                )
+        await transport._ingest_message(message, "worker")
+        assert acknowledgments == ["ack"]
+        assert store.get_task(task["task_id"])["state"] == "completed"
+        completed = snapshot(store)
+        await transport._ingest_message(message, "worker")
+        assert acknowledgments == ["ack", "ack"]
+        assert snapshot(store) == completed
+        message.data = b"{}"
+        await transport._ingest_message(message, "worker")
+        assert acknowledgments == ["ack", "ack", "term"]
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_trace_destination_disables_headers_without_task_failure(
+    tmp_path,
+):
+    store = AgentdStore(tmp_path / "agentd" / "agentd.sqlite3")
+    transport = AgentdNatsTransport(tmp_path, store)
+
+    from types import SimpleNamespace
+
+    requests = []
+
+    class Connection:
+        connected_server_version = SimpleNamespace(major=2, minor=14)
+
+        async def subscribe(self, subject, *, cb):
+            pass
+
+        async def request(self, subject, payload, *, timeout):
+            requests.append(subject)
+            raise asyncio.TimeoutError
+
+    try:
+        await transport._configure_broker_trace(Connection(), "owned-node")
+        assert transport._broker_tracing is False
+        assert requests == ["_EC.TRACE.owned-node.probe"]
+    finally:
+        store.close()

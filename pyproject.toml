@@ -1,0 +1,102 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "edgecitadel"
+version = "0.4.0"
+description = "Create, join, and operate an EdgeCitadel agent network"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "EdgeCitadel contributors" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+edgecitadel = "edgecitadel.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/EdgeCitadelTeam/EdgeCitadel"
+Repository = "https://github.com/EdgeCitadelTeam/EdgeCitadel"
+
+[tool.hatch.build]
+exclude = [
+  "**/.DS_Store",
+  "**/.pytest_cache/**",
+  "**/.venv/**",
+  "**/__pycache__/**",
+  "**/*.pyc",
+  "**/node_modules/**",
+  "aggregator/tests/**",
+  "agent-runtime/tests/**",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/.env.example",
+  "/README.md",
+  "/docker-compose.yml",
+  "/edgecitadel",
+  "/aggregator",
+  "/frontend",
+  "/nats",
+  "/nginx",
+  "/agent-packages",
+  "/plugins",
+  "/agent-runtime/pyproject.toml",
+  "/agent-runtime/schemas",
+  "/agent-runtime/src",
+  "/schemas",
+  "/scripts/__init__.py",
+  "/scripts/edgecitadel_cli.py",
+  "/scripts/core_network.py",
+  "/scripts/installation_assets.py",
+  "/scripts/nats_leaf.py",
+  "/scripts/plugin_installation.py",
+]
+
+[tool.hatch.build.targets.wheel]
+dev-mode-dirs = ["."]
+only-include = [
+  "edgecitadel",
+  "aggregator",
+  "frontend",
+  "nats",
+  "nginx",
+  "agent-packages",
+  "plugins",
+  "agent-runtime/schemas",
+  "agent-runtime/src",
+  "schemas",
+]
+
+[tool.hatch.build.targets.wheel.sources]
+"edgecitadel" = "edgecitadel"
+"aggregator" = "edgecitadel-0.4.0.data/data/share/edgecitadel/aggregator"
+"frontend" = "edgecitadel-0.4.0.data/data/share/edgecitadel/frontend"
+"nats" = "edgecitadel-0.4.0.data/data/share/edgecitadel/nats"
+"nginx" = "edgecitadel-0.4.0.data/data/share/edgecitadel/nginx"
+"agent-packages" = "edgecitadel-0.4.0.data/data/share/edgecitadel/agent-packages"
+"plugins" = "edgecitadel-0.4.0.data/data/share/edgecitadel/plugins"
+"agent-runtime/schemas" = "edgecitadel-0.4.0.data/data/share/edgecitadel/agent-runtime/schemas"
+"agent-runtime/src" = "edgecitadel-0.4.0.data/data/share/edgecitadel/agent-runtime/src"
+"schemas" = "edgecitadel-0.4.0.data/data/share/edgecitadel/schemas"
+
+[tool.hatch.build.targets.wheel.force-include]
+".env.example" = "edgecitadel-0.4.0.data/data/share/edgecitadel/.env.example"
+"docker-compose.yml" = "edgecitadel-0.4.0.data/data/share/edgecitadel/docker-compose.yml"
+"agent-runtime/pyproject.toml" = "edgecitadel-0.4.0.data/data/share/edgecitadel/agent-runtime/pyproject.toml"
+"scripts/__init__.py" = "edgecitadel-0.4.0.data/data/share/edgecitadel/scripts/__init__.py"
+"scripts/edgecitadel_cli.py" = "edgecitadel-0.4.0.data/data/share/edgecitadel/scripts/edgecitadel_cli.py"
+"scripts/core_network.py" = "edgecitadel-0.4.0.data/data/share/edgecitadel/scripts/core_network.py"
+"scripts/installation_assets.py" = "edgecitadel-0.4.0.data/data/share/edgecitadel/scripts/installation_assets.py"
+"scripts/nats_leaf.py" = "edgecitadel-0.4.0.data/data/share/edgecitadel/scripts/nats_leaf.py"
+"scripts/plugin_installation.py" = "edgecitadel-0.4.0.data/data/share/edgecitadel/scripts/plugin_installation.py"

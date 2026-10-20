@@ -1,0 +1,2168 @@
+from __future__ import annotations
+
+import json
+import os
+import plistlib
+import signal
+import stat
+import subprocess
+import sys
+import time
+from argparse import Namespace
+from contextlib import nullcontext
+from pathlib import Path
+
+import pytest
+
+from scripts import edgecitadel_cli as cli
+from scripts import plugin_installation as plugin_api
+
+
+REPO_ROOT = Path(__file__).parents[2]
+
+
+def test_parser_exposes_unified_and_explicit_plugin_commands():
+    parser = cli._build_parser()
+
+    unified = parser.parse_args(
+        [
+            "install",
+            "--join",
+            "ecjoin://value",
+            "--messaging-mode",
+            "nats_leaf",
+            "--plugin",
+            "codex",
+            "--yes",
+            "--dry-run",
+        ]
+    )
+    explicit = parser.parse_args(
+        ["plugin", "install", "claude-code", "--scope", "project", "--yes"]
+    )
+
+    assert unified.func is cli.command_install
+    assert unified.plugins == ["codex"]
+    assert unified.messaging_mode == "nats_leaf"
+    assert explicit.func is cli.command_native_plugin
+    assert explicit.scope == "project"
+
+
+def test_structured_step_output_has_stable_schema(capsys):
+    step = cli._installation_step(
+        "distribution", "edgecitadel", "succeeded", False, {"path": "/safe"}
+    )
+
+    cli._emit_steps("install", [step], True)
+
+    document = json.loads(capsys.readouterr().out)
+    assert set(document) == {"schema_version", "command", "ok", "changed", "steps"}
+    assert set(document["steps"][0]) == {
+        "step",
+        "target",
+        "state",
+        "changed",
+        "evidence",
+        "recovery_command",
+    }
+
+
+def test_main_maps_valid_runtime_failure_to_operational_exit_code(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "command_install",
+        lambda _args: (_ for _ in ()).throw(cli.OperationalError("not ready")),
+    )
+    parser = cli._build_parser()
+    monkeypatch.setattr(cli, "_build_parser", lambda: parser)
+
+    assert cli.main(["install", "--create", "--plugin", "codex", "--yes"]) == 1
+    assert "not ready" in capsys.readouterr().err
+
+
+def test_json_runtime_error_is_one_structured_document(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "command_install",
+        lambda _args: (_ for _ in ()).throw(cli.UserError("choose a host")),
+    )
+    parser = cli._build_parser()
+    monkeypatch.setattr(cli, "_build_parser", lambda: parser)
+
+    assert (
+        cli.main(
+            [
+                "install",
+                "--create",
+                "--plugin",
+                "codex",
+                "--yes",
+                "--json",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert document["ok"] is False
+    assert document["steps"][0]["evidence"] == {"error": "choose a host"}
+    assert captured.err == ""
+
+
+def test_unified_install_skips_missing_host_and_continues(
+    tmp_path, monkeypatch, capsys
+):
+    class FakeDriver:
+        def __init__(self, host):
+            self.host = host
+
+        def status(self, scope):
+            if self.host == "pi":
+                return plugin_api.PluginStatus(
+                    "pi", "absent", False, detail="pi executable not found"
+                )
+            return plugin_api.PluginStatus(
+                self.host, "absent", True, version="1.0.0", scope=scope
+            )
+
+        def plan(self, action, scope):
+            return plugin_api.PluginPlan(
+                self.host,
+                action,
+                scope,
+                "/plugins",
+                "/bin/host",
+                [["/bin/host", "install"]],
+            )
+
+        def apply(self, action, scope):
+            return plugin_api.PluginResult(
+                self.host,
+                "installed",
+                True,
+                plugin_api.PluginStatus(
+                    self.host,
+                    "installed",
+                    True,
+                    version="1.0.0",
+                    scope=scope,
+                    source="/plugins",
+                ),
+            )
+
+    monkeypatch.setattr(cli, "INSTALL_ROOT", REPO_ROOT)
+    monkeypatch.setattr(
+        cli,
+        "_load_node",
+        lambda _state: {"mode": "edge", "agent_id": "edge-one"},
+    )
+    monkeypatch.setattr(cli, "_agentd_process_detail", lambda _state: (True, "ok"))
+    monkeypatch.setattr(
+        cli, "_start_agentd", lambda _state: {"running": True, "detail": "ok"}
+    )
+    monkeypatch.setattr(cli, "_agentd_rpc", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        cli,
+        "driver_for",
+        lambda host, *_args, **_kwargs: FakeDriver(host),
+    )
+    args = Namespace(
+        create=False,
+        invitation=None,
+        plugins=["pi", "codex"],
+        scope="user",
+        host="localhost",
+        yes=True,
+        dry_run=False,
+        json=True,
+        state_dir=str(tmp_path),
+    )
+
+    assert cli.command_install(args) == 0
+    states = {
+        step["target"]: step["state"]
+        for step in json.loads(capsys.readouterr().out)["steps"]
+        if step["step"] == "plugin"
+    }
+    assert states == {"pi": "skipped", "codex": "installed"}
+
+
+def test_unified_install_repairs_stale_plugin_source(tmp_path, monkeypatch, capsys):
+    actions = []
+
+    class StaleDriver:
+        host = "codex"
+
+        def status(self, scope):
+            return plugin_api.PluginStatus(
+                self.host,
+                "stale",
+                True,
+                version="0.1.0",
+                scope=scope,
+                source="/old/plugins",
+            )
+
+        def plan(self, action, scope):
+            actions.append(("plan", action))
+            return plugin_api.PluginPlan(
+                self.host,
+                action,
+                scope,
+                "/plugins",
+                "/bin/codex",
+                [["/bin/codex", "plugin", "marketplace", "remove", "edgecitadel"]],
+            )
+
+        def apply(self, action, scope):
+            actions.append(("apply", action))
+            return plugin_api.PluginResult(
+                self.host,
+                "installed",
+                True,
+                plugin_api.PluginStatus(
+                    self.host,
+                    "installed",
+                    True,
+                    version="0.1.0",
+                    scope=scope,
+                    source="/plugins",
+                ),
+            )
+
+    monkeypatch.setattr(cli, "INSTALL_ROOT", REPO_ROOT)
+    monkeypatch.setattr(
+        cli,
+        "_load_node",
+        lambda _state: {"mode": "edge", "agent_id": "edge-one"},
+    )
+    monkeypatch.setattr(cli, "_agentd_process_detail", lambda _state: (True, "ok"))
+    monkeypatch.setattr(
+        cli, "_start_agentd", lambda _state: {"running": True, "detail": "ok"}
+    )
+    monkeypatch.setattr(cli, "_agentd_rpc", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "driver_for", lambda *_args, **_kwargs: StaleDriver())
+    args = Namespace(
+        create=False,
+        invitation=None,
+        messaging_mode="single-client",
+        plugins=["codex"],
+        scope="user",
+        host="localhost",
+        yes=True,
+        dry_run=False,
+        json=True,
+        state_dir=str(tmp_path),
+    )
+
+    assert cli.command_install(args) == 0
+    assert actions == [("plan", "repair"), ("apply", "repair")]
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_unified_install_forwards_nats_leaf_mode(tmp_path, monkeypatch):
+    observed = {}
+    monkeypatch.setattr(cli, "INSTALL_ROOT", REPO_ROOT)
+    monkeypatch.setattr(
+        cli,
+        "_load_node",
+        lambda _state: (_ for _ in ()).throw(cli.UserError("not enrolled")),
+    )
+
+    def join(args):
+        observed.update(vars(args))
+        raise cli.UserError("stop after join delegation")
+
+    monkeypatch.setattr(cli, "command_join", join)
+    args = Namespace(
+        create=False,
+        invitation="ecjoin://value",
+        messaging_mode="nats_leaf",
+        plugins=["codex"],
+        scope="user",
+        host=None,
+        yes=True,
+        dry_run=False,
+        json=False,
+        state_dir=str(tmp_path),
+    )
+
+    with pytest.raises(cli.UserError, match="stop after join delegation"):
+        cli.command_install(args)
+
+    assert observed["invitation"] == "ecjoin://value"
+    assert observed["messaging_mode"] == "nats_leaf"
+
+
+def test_interactive_install_collects_nats_leaf_mode(monkeypatch, capsys):
+    responses = iter(("join", "ecjoin://value", "nats_leaf"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
+    args = Namespace(create=False, invitation=None, messaging_mode="single-client")
+
+    cli._interactive_install_choices(args)
+
+    assert args.invitation == "ecjoin://value"
+    assert args.messaging_mode == "nats_leaf"
+    guidance = capsys.readouterr().err
+    assert "Step 1: Choose this host's role" in guidance
+    assert "Step 2: Join the existing Core" in guidance
+    assert "Step 3: Choose Edge messaging" in guidance
+    assert "installs a pinned local NATS" in guidance
+
+
+def test_interactive_install_defers_access_to_shared_core_guide(monkeypatch, capsys):
+    responses = iter(("create",))
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
+    args = Namespace(
+        create=False,
+        invitation=None,
+        messaging_mode="single-client",
+        host=None,
+    )
+
+    cli._interactive_install_choices(args)
+
+    assert args.create is True
+    assert args.host is None
+    guidance = capsys.readouterr().err
+    assert "Step 2: Configure the new Core" in guidance
+    assert "Reachable Core hostname" not in guidance
+
+
+def test_interactive_plugin_choices_explain_unsupported_hosts(monkeypatch, capsys):
+    class FakeDriver:
+        def __init__(self, host):
+            self.host = host
+
+        def detect(self):
+            if self.host == "codex":
+                return plugin_api.PluginStatus(
+                    self.host,
+                    "unsupported",
+                    True,
+                    version="0.116.0",
+                    detail="requires codex >= 0.151.0",
+                )
+            return plugin_api.PluginStatus(
+                self.host,
+                "absent",
+                False,
+                detail=f"{self.host} executable not found",
+            )
+
+    monkeypatch.setattr(
+        cli, "driver_for", lambda host, *_args, **_kwargs: FakeDriver(host)
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    assert cli._interactive_plugin_choices() == []
+    guidance = capsys.readouterr().err
+    assert "Available Plugin hosts: none" in guidance
+    assert "codex: requires codex >= 0.151.0" in guidance
+    assert "claude-code executable not found" not in guidance
+
+
+def test_installed_macos_agentd_uses_private_user_launch_agent(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "IS_PIP", True)
+    monkeypatch.setattr(cli, "IS_HOMEBREW", False)
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.shutil, "which", lambda command: f"/usr/bin/{command}")
+    python = tmp_path / "toolkit" / "bin" / "python"
+
+    assert cli._agentd_uses_launchd() is True
+    cli._render_agentd_launchd(tmp_path, python)
+
+    path = cli._agentd_launchd_path(tmp_path)
+    document = plistlib.loads(path.read_bytes())
+    assert document["ProgramArguments"] == [
+        str(python),
+        "-m",
+        "edgecitadel_agentd",
+        "--state-dir",
+        str(tmp_path / "agentd"),
+    ]
+    assert document["RunAtLoad"] is True
+    assert document["KeepAlive"] == {"SuccessfulExit": False}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_toolkit_python_clears_stale_virtual_environment(tmp_path, monkeypatch):
+    (tmp_path / "schemas").mkdir()
+    (tmp_path / "schemas/task-correlation.v1.json").write_text("{}")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "pyproject.toml").write_text("test build source")
+    (runtime / "src").mkdir(mode=0o555)
+    (runtime / ".venv").mkdir()
+    (runtime / ".venv/ignored").write_text("not a distribution asset")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "agent_runtime_root", lambda _root: runtime)
+    venv = tmp_path / "state" / "supervisor"
+    python = venv / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("stale", encoding="utf-8")
+    stale_source = venv / "runtime-source/src"
+    stale_source.mkdir(parents=True)
+    (stale_source / "partial.py").write_text("previous interrupted copy")
+    stale_source.chmod(0o555)
+    (venv / "schemas").mkdir(mode=0o555)
+    (venv / ".edgecitadel-toolkit-version").write_text(
+        "an older interpreter\n", encoding="utf-8"
+    )
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if command[1:4] == ["-m", "venv", "--clear"]:
+            assert stale_source.stat().st_mode & 0o777 == 0o700
+            assert (venv / "schemas").stat().st_mode & 0o777 == 0o700
+            cli.shutil.rmtree(venv / "runtime-source")
+            cli.shutil.rmtree(venv / "schemas")
+            python.parent.mkdir(parents=True, exist_ok=True)
+            python.write_text("rebuilt", encoding="utf-8")
+        elif command[1:4] == ["-m", "pip", "install"]:
+            staged = Path(command[-1])
+            assert staged != runtime
+            assert (staged / "pyproject.toml").read_text() == "test build source"
+            assert not (staged / ".venv").exists()
+            assert (
+                staged.parent / "schemas/task-correlation.v1.json"
+            ).read_text() == "{}"
+            (staged / "generated-metadata").write_text("build output")
+            (staged / "src/generated.egg-info").mkdir()
+
+    monkeypatch.setattr(cli, "_run", run)
+
+    assert cli._toolkit_python(tmp_path / "state") == python
+    assert commands[0] == [
+        cli.sys.executable,
+        "-m",
+        "venv",
+        "--clear",
+        str(venv),
+    ]
+    assert commands[1][:4] == [str(python), "-m", "pip", "install"]
+    assert "-e" in commands[1]
+    assert Path(commands[1][-1]) == venv / "runtime-source"
+    assert (venv / "runtime-source/generated-metadata").is_file()
+    assert not (runtime / "generated-metadata").exists()
+    assert (runtime / "src").stat().st_mode & 0o777 == 0o555
+    assert cli._toolkit_python(tmp_path / "state") == python
+    assert len(commands) == 2
+
+
+def test_installed_linux_agentd_uses_user_systemd_unit(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "IS_PIP", True)
+    monkeypatch.setattr(cli, "IS_HOMEBREW", False)
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", tmp_path / "installed root")
+    python = tmp_path / "toolkit runtime" / "bin" / "python"
+
+    assert cli._agentd_uses_systemd() is True
+    cli._render_agentd_systemd(tmp_path, python)
+
+    path = cli._agentd_systemd_path(tmp_path)
+    document = path.read_text()
+    assert (
+        f'ExecStart="{python}" -m edgecitadel_agentd --state-dir '
+        f'"{tmp_path / "agentd"}"' in document
+    )
+    assert f"WorkingDirectory={tmp_path / 'installed root'}" in document
+    assert f"StandardOutput=append:{tmp_path / 'agentd' / 'agentd.log'}" in document
+    assert f"StandardError=append:{tmp_path / 'agentd' / 'agentd.log'}" in document
+    assert "WantedBy=default.target" in document
+    assert "UMask=0077" in document
+    assert "NoNewPrivileges=yes" in document
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_linux_agentd_enables_and_verifies_systemd_linger(monkeypatch, capsys):
+    calls = []
+    linger_enabled = False
+
+    def run(command, **_kwargs):
+        nonlocal linger_enabled
+        calls.append(command)
+        if command[1] == "enable-linger":
+            linger_enabled = True
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(
+            command, 0, "yes\n" if linger_enabled else "no\n", ""
+        )
+
+    monkeypatch.setattr(cli.shutil, "which", lambda _command: "/usr/bin/loginctl")
+    monkeypatch.setattr(cli.pwd, "getpwuid", lambda _uid: Namespace(pw_name="alice"))
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    cli._ensure_agentd_systemd_linger()
+
+    assert calls == [
+        [
+            "/usr/bin/loginctl",
+            "show-user",
+            "alice",
+            "--property=Linger",
+            "--value",
+        ],
+        ["/usr/bin/loginctl", "enable-linger", "alice"],
+        [
+            "/usr/bin/loginctl",
+            "show-user",
+            "alice",
+            "--property=Linger",
+            "--value",
+        ],
+    ]
+    assert (
+        "Enabled persistent systemd user services for alice." in capsys.readouterr().err
+    )
+
+
+def test_linux_agentd_reports_manual_linger_recovery(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda _command: None)
+    monkeypatch.setattr(cli.pwd, "getpwuid", lambda _uid: Namespace(pw_name="alice"))
+
+    with pytest.raises(cli.UserError, match="sudo loginctl enable-linger alice"):
+        cli._ensure_agentd_systemd_linger()
+
+
+def test_linux_agentd_verifies_linger_before_reusing_running_service(
+    tmp_path, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(cli, "_agentd_uses_systemd", lambda: True)
+    monkeypatch.setattr(
+        cli, "_ensure_agentd_systemd_linger", lambda: calls.append("linger")
+    )
+    monkeypatch.setattr(
+        cli, "_agentd_process_detail", lambda _state: (True, "pid 123, ready")
+    )
+    monkeypatch.setattr(
+        cli, "_agentd_rpc", lambda *_args, **_kwargs: {"status": "ready"}
+    )
+
+    assert cli._start_agentd(tmp_path)["running"] is True
+    assert calls == ["linger"]
+
+
+def test_agentd_rpc_keeps_operation_params_separate_from_auth(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "_toolkit_python", lambda _state: Path("/toolkit/python"))
+    monkeypatch.setattr(cli, "_agentd_admin_token", lambda _state: "admin-secret")
+
+    def run(command, **kwargs):
+        captured["command"] = command
+        captured["request"] = json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"ok": True, "result": {"token": "connector-token"}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    result = cli._agentd_rpc(
+        tmp_path,
+        "connector.register",
+        connector_id="codex-local",
+        host_type="codex",
+        agent_id="edge-one-codex",
+    )
+
+    assert result == {"token": "connector-token"}
+    assert captured["request"] == {
+        "operation": "connector.register",
+        "params": {
+            "connector_id": "codex-local",
+            "host_type": "codex",
+            "agent_id": "edge-one-codex",
+        },
+        "admin_token": "admin-secret",
+    }
+
+
+def test_pip_bundled_plugin_staging_excludes_installer_bytecode(tmp_path, monkeypatch):
+    install_root = tmp_path / "share" / "edgecitadel"
+    source = install_root / "agent-packages" / "examples" / "echo"
+    (source / "runtime" / "__pycache__").mkdir(parents=True)
+    (source / "plugin.yaml").write_text("package: {}\n")
+    (source / "runtime" / "__main__.py").write_text("pass\n")
+    (source / "runtime" / "__pycache__" / "__main__.pyc").write_bytes(b"cache")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", install_root)
+    monkeypatch.setattr(cli, "IS_PIP", True)
+
+    with cli._installable_plugin_source(source, tmp_path / "state") as staged:
+        staged_root = staged.parent
+        assert staged != source
+        assert (staged / "plugin.yaml").is_file()
+        assert (staged / "runtime" / "__main__.py").is_file()
+        assert not (staged / "runtime" / "__pycache__").exists()
+
+    assert not staged_root.exists()
+
+
+def test_ensure_env_is_idempotent_and_preserves_custom_values(tmp_path, monkeypatch):
+    example = tmp_path / ".env.example"
+    target = tmp_path / ".env"
+    example.write_text(
+        "NATS_TOKEN=change-me\n"
+        "EDGECITADEL_ADMIN_TOKEN=change-me-admin\n"
+        "EC_ENABLE_MQTT=0\n"
+    )
+    monkeypatch.setattr(cli, "ENV_EXAMPLE_PATH", example)
+
+    first, changed = cli._ensure_env(target)
+    first_source = target.read_text()
+    second, changed_again = cli._ensure_env(target)
+
+    assert changed is True
+    assert changed_again is False
+    assert first == second
+    assert first["NATS_TOKEN"].startswith("ec_")
+    assert first_source == target.read_text()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_invitation_round_trip_and_expiry(capsys):
+    value = cli._invitation_encode(
+        {
+            "version": 1,
+            "core_url": "http://core.test",
+            "nats_url": "nats://core.test:4222",
+            "token": "t" * 43,
+            "agent_id": "macmini-agent",
+            "expires_at": time.time() + 60,
+        }
+    )
+    assert value.startswith("ecjoin://")
+    assert cli._invitation_decode(value)["agent_id"] == "macmini-agent"
+
+    expired = cli._invitation_encode(
+        {
+            "version": 1,
+            "core_url": "http://core.test",
+            "nats_url": "nats://core.test:4222",
+            "token": "t" * 43,
+            "agent_id": "macmini-agent",
+            "expires_at": time.time() - 1,
+        }
+    )
+    assert cli._invitation_decode(expired)["agent_id"] == "macmini-agent"
+    assert "Core decides" in capsys.readouterr().err
+
+    malformed_expiry = cli._invitation_encode(
+        {
+            "version": 1,
+            "core_url": "http://core.test",
+            "nats_url": "nats://core.test:4222",
+            "token": "t" * 43,
+            "agent_id": "macmini-agent",
+            "expires_at": {"not": "a timestamp"},
+        }
+    )
+    with pytest.raises(cli.UserError, match="expiry is malformed"):
+        cli._invitation_decode(malformed_expiry)
+
+
+def test_invite_stdout_is_only_the_capture_safe_invitation(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(cli, "CORE_RUNTIME_DIR", tmp_path / "core")
+    monkeypatch.setattr(
+        cli, "_core_administration", lambda *args: nullcontext("http://127.0.0.1")
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_node",
+        lambda _state: {"mode": "core", "core_url": "http://localhost"},
+    )
+    monkeypatch.setattr(
+        cli, "_read_env", lambda: {"EDGECITADEL_ADMIN_TOKEN": "admin-secret"}
+    )
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *_args, **_kwargs: {
+            "token": "t" * 43,
+            "agent_id": "edge-one",
+            "expires_at": time.time() + 900,
+        },
+    )
+
+    assert (
+        cli.command_invite(
+            Namespace(
+                state_dir=str(tmp_path),
+                host="core.test",
+                agent_id="edge-one",
+                expires=900,
+            )
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out.count("\n") == 1
+    assert captured.out.startswith("ecjoin://")
+    assert cli._invitation_decode(captured.out.strip())["agent_id"] == "edge-one"
+    assert "Single-use invitation" in captured.err
+    assert "Expires in 15 minute(s)." in captured.err
+
+
+@pytest.mark.parametrize(
+    ("host", "core_url", "nats_url"),
+    [
+        ("2001:db8::1", "http://[2001:db8::1]", "nats://[2001:db8::1]:4222"),
+        (
+            "https://[2001:db8::2]:8443/",
+            "https://[2001:db8::2]:8443",
+            "nats://[2001:db8::2]:4222",
+        ),
+        ("core.example:8080", "http://core.example:8080", "nats://core.example:4222"),
+    ],
+)
+def test_advertised_urls_normalize_ipv6(host, core_url, nats_url):
+    assert cli._advertised_urls(host) == (core_url, nats_url)
+
+
+def test_tailscale_detection_uses_self_not_peer(monkeypatch):
+    monkeypatch.setattr(cli, "_tailscale_binary", lambda: "/test/tailscale")
+
+    def status(command, **kwargs):
+        assert command == ["/test/tailscale", "status", "--json"]
+        assert kwargs["timeout"] == 5
+        assert kwargs["env"]["TAILSCALE_BE_CLI"] == "1"
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "BackendState": "Running",
+                    "Self": {
+                        "Online": True,
+                        "TailscaleIPs": ["fd7a:115c:a1e0::1", "100.80.0.1"],
+                    },
+                    "Peer": {"peer": {"TailscaleIPs": ["100.80.0.2"]}},
+                }
+            ),
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", status)
+    assert cli._detect_tailscale_ipv4() == "100.80.0.1"
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        ([], "malformed"),
+        ({"BackendState": "NeedsLogin"}, "sign-in"),
+        ({"BackendState": "NeedsMachineAuth"}, "authorization"),
+        ({"BackendState": "Stopped"}, "stopped"),
+        ({"BackendState": "Running", "Self": {"Online": False}}, "online self"),
+        (
+            {"BackendState": "Running", "Self": {"Online": True, "TailscaleIPs": []}},
+            "no usable",
+        ),
+        (
+            {
+                "BackendState": "Running",
+                "Self": {"Online": True, "TailscaleIPs": ["::1"]},
+            },
+            "IPv6-only",
+        ),
+        (
+            {"BackendState": "Running", "Self": {"Online": True, "TailscaleIPs": [42]}},
+            "malformed",
+        ),
+        (
+            {
+                "BackendState": "Running",
+                "Self": {"Online": True, "TailscaleIPs": ["100.80.0.1", "100.80.0.2"]},
+            },
+            "multiple",
+        ),
+    ],
+)
+def test_tailscale_detection_classifies_status(monkeypatch, status, message):
+    monkeypatch.setattr(cli, "_tailscale_binary", lambda: "/test/tailscale")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, json.dumps(status)),
+    )
+    with pytest.raises(cli.UserError, match=message):
+        cli._detect_tailscale_ipv4()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "daemon", "json"])
+def test_tailscale_detection_does_not_expose_raw_output(monkeypatch, failure):
+    monkeypatch.setattr(cli, "_tailscale_binary", lambda: "/test/tailscale")
+
+    def status(*args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 5, output="private-peer-inventory")
+        return subprocess.CompletedProcess(
+            args, 1 if failure == "daemon" else 0, "private-peer-inventory"
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", status)
+    with pytest.raises(cli.UserError) as error:
+        cli._detect_tailscale_ipv4()
+    assert "private-peer-inventory" not in str(error.value)
+
+
+def test_tailscale_mac_bundle_discovery_without_path(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    bundle = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    monkeypatch.setattr(cli.Path, "is_file", lambda path: str(path) == bundle)
+    monkeypatch.setattr(cli.os, "access", lambda path, mode: str(path) == bundle)
+    assert cli._tailscale_binary() == bundle
+
+
+def test_tailscale_missing_binary(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    with pytest.raises(cli.UserError, match="not found"):
+        cli._tailscale_binary()
+
+
+def test_advertised_urls_reject_unbracketed_ipv6_with_scheme():
+    with pytest.raises(cli.UserError, match="must use brackets"):
+        cli._advertised_urls("http://2001:db8::1")
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "bad host",
+        "0.0.0.0",
+        "::",
+        "224.0.0.1",
+        "ff02::1",
+        "http://core.example/path",
+        "http://core.example//",
+        "ftp://core.example",
+        "http://user:password@core.example",
+        "core.example?token=x",
+        "core.example#fragment",
+        "core.example\n",
+        "-core.example",
+        "core..example",
+        "core.example:0",
+        "core.example:65536",
+        "http://[fe80::1%en0]",
+    ],
+)
+def test_advertised_urls_reject_invalid_endpoints(host):
+    with pytest.raises(cli.UserError):
+        cli._advertised_urls(host)
+
+
+def test_create_validates_host_before_any_mutation(tmp_path, monkeypatch):
+    def mutation():
+        pytest.fail("invalid host reached credential generation")
+
+    monkeypatch.setattr(cli, "_ensure_env", mutation)
+    with pytest.raises(cli.UserError):
+        cli.command_create(
+            Namespace(
+                host="bad host",
+                no_start=True,
+                state_dir=str(tmp_path / "state"),
+                timeout=1,
+            )
+        )
+    assert not (tmp_path / "state").exists()
+
+
+def test_create_no_start_does_not_execute_runtime_validation(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "CORE_RUNTIME_DIR", tmp_path / "core")
+    monkeypatch.setattr(
+        cli, "_ensure_env", lambda: ({"NATS_TOKEN": "test-only"}, False)
+    )
+    monkeypatch.setattr(cli, "_render_nats_config", lambda **kwargs: None)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("--no-start executed runtime validation")
+
+    monkeypatch.setattr(cli, "_validate_core_nats_config", forbidden)
+    monkeypatch.setattr(cli, "_run", forbidden)
+    assert (
+        cli.command_create(
+            Namespace(
+                host="localhost",
+                no_start=True,
+                state_dir=str(tmp_path / "state"),
+                timeout=1,
+            )
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize("content", ["{", '{"version": 99, "mode": "core"}'])
+def test_install_does_not_replace_corrupt_node(tmp_path, monkeypatch, content):
+    node_path = tmp_path / "node.json"
+    node_path.write_text(content)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("corrupt enrollment reached create")
+
+    monkeypatch.setattr(cli, "command_create", forbidden)
+    args = cli._build_parser().parse_args(
+        [
+            "install",
+            "--create",
+            "--yes",
+            "--plugin",
+            "codex",
+            "--state-dir",
+            str(tmp_path),
+        ]
+    )
+    with pytest.raises(cli.UserError, match="node state"):
+        cli.command_install(args)
+    assert node_path.read_text() == content
+
+
+def test_join_writes_restrictive_state_and_is_idempotent(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_join_preflight", lambda *args: None)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: True)
+    invitation = cli._invitation_encode(
+        {
+            "version": 1,
+            "core_url": "http://core.test",
+            "nats_url": "nats://core.test:4222",
+            "token": "t" * 43,
+            "agent_id": "macmini-agent",
+            "expires_at": time.time() + 60,
+        }
+    )
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *args, **kwargs: {
+            "agent_id": "macmini-agent",
+            "nats_token": "broker-secret",
+        },
+    )
+    args = Namespace(invitation=invitation, state_dir=str(tmp_path))
+
+    assert cli.command_join(args) == 0
+    state_path = tmp_path / "node.json"
+    state = json.loads(state_path.read_text())
+    assert state["nats_token"] == "broker-secret"
+    assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
+
+    assert cli.command_join(args) == 0
+    assert "already joined" in capsys.readouterr().out
+
+
+def test_join_does_not_write_partial_state_when_redeem_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_join_preflight", lambda *args: None)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: True)
+    invitation = cli._invitation_encode(
+        {
+            "version": 1,
+            "core_url": "http://core.test",
+            "nats_url": "nats://core.test:4222",
+            "token": "t" * 43,
+            "agent_id": "macmini-agent",
+            "expires_at": time.time() + 60,
+        }
+    )
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(cli.UserError("rejected")),
+    )
+    args = Namespace(invitation=invitation, state_dir=str(tmp_path))
+
+    with pytest.raises(cli.OperationalError, match="consumption is uncertain"):
+        cli.command_join(args)
+    assert not (tmp_path / "node.json").exists()
+
+
+def _inventory() -> dict:
+    return {
+        "package": {
+            "id": "local.demo",
+            "version": "0.1.0",
+            "protocol": "edgecitadel.managed-agent.v1",
+            "kind": "ManagedAgent",
+        },
+        "runtime": {
+            "kind": "agent_runtime",
+            "command": ["python", "-m", "runtime"],
+            "healthTimeoutSeconds": 2,
+            "restartPolicy": "on-failure",
+        },
+        "agents": [{"id": "demo-agent", "skillNames": ["demo"]}],
+        "permissions": {
+            "knowledge": [],
+            "messaging": {"outboundAgents": []},
+            "network": {"outbound": []},
+            "devices": [],
+        },
+        "security": {"sandbox": "restricted", "secrets": []},
+    }
+
+
+def _write_node(path: Path) -> None:
+    cli._write_json(
+        path / "node.json",
+        {
+            "version": 1,
+            "mode": "edge",
+            "core_url": "http://core.test",
+            "nats_url": "nats://core.test:4222",
+            "nats_token": "secret",
+            "agent_id": "edge-one",
+        },
+    )
+
+
+def test_plugin_install_requires_explicit_noninteractive_permission_approval(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("test")
+    (source / "plugin.lock.json").write_text("{}")
+    _write_node(state_dir)
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: _inventory())
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    args = Namespace(
+        source=str(source), state_dir=str(state_dir), yes=False, keep_disabled=True
+    )
+
+    with pytest.raises(cli.UserError, match="permission approval"):
+        cli.command_plugin_install(args)
+
+    assert not (state_dir / "plugins").exists()
+
+
+def test_plugin_install_copies_to_managed_store_and_is_idempotent(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("test")
+    (source / "plugin.lock.json").write_text("{}")
+    _write_node(state_dir)
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: _inventory())
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    args = Namespace(
+        source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+    )
+
+    assert cli.command_plugin_install(args) == 0
+    assert cli.command_plugin_install(args) == 0
+
+    target = state_dir / "plugins" / "local.demo" / "0.1.0"
+    plugin_state = json.loads((state_dir / "managed-agents.json").read_text())
+    assert target.joinpath("plugin.yaml").read_text() == "test"
+    assert plugin_state["managed_agents"]["local.demo"]["path"] == str(target)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o500
+
+
+def test_managed_agent_upgrade_rolls_back_state_and_package_on_failed_readiness(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("version one")
+    (source / "plugin.lock.json").write_text('{"version": 1}')
+    _write_node(state_dir)
+    inventory = _inventory()
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: inventory)
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    disabled = Namespace(
+        source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+    )
+    assert cli.command_plugin_install(disabled) == 0
+    original_path = state_dir / "plugins/local.demo/0.1.0"
+
+    inventory = _inventory()
+    inventory["package"]["version"] = "0.2.0"
+    (source / "plugin.yaml").write_text("version two")
+    (source / "plugin.lock.json").write_text('{"version": 2}')
+    monkeypatch.setattr(
+        cli,
+        "_start_plugin",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            cli.UserError("readiness failed")
+        ),
+    )
+
+    with pytest.raises(cli.UserError, match="previous state restored"):
+        cli.command_plugin_install(
+            Namespace(
+                source=str(source),
+                state_dir=str(state_dir),
+                yes=True,
+                keep_disabled=False,
+            )
+        )
+
+    state = json.loads((state_dir / "managed-agents.json").read_text())
+    record = state["managed_agents"]["local.demo"]
+    assert record["path"] == str(original_path)
+    assert record["inventory"]["package"]["version"] == "0.1.0"
+    assert original_path.is_dir()
+    assert not (state_dir / "plugins/local.demo/0.2.0").exists()
+
+
+def test_managed_agent_upgrade_retires_replaced_connector(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("version one")
+    (source / "plugin.lock.json").write_text('{"version": 1}')
+    _write_node(state_dir)
+    inventory = _inventory()
+    inventory["package"]["kind"] = "ManagedAgent"
+    inventory["agents"][0]["id"] = "old-agent"
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: inventory)
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    args = Namespace(
+        source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+    )
+    assert cli.command_plugin_install(args) == 0
+    cli._secure_write(
+        state_dir / "connectors" / "managed-old-agent.token", "old-token\n"
+    )
+
+    upgraded = _inventory()
+    upgraded["package"].update({"kind": "ManagedAgent", "version": "0.2.0"})
+    upgraded["agents"][0]["id"] = "new-agent"
+    (source / "plugin.yaml").write_text("version two")
+    (source / "plugin.lock.json").write_text('{"version": 2}')
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: upgraded)
+    calls = []
+
+    def agentd_rpc(_state_dir, operation, **params):
+        calls.append((operation, params))
+        if operation == "connector.list":
+            return [{"connector_id": "managed-old-agent", "revoked": False}]
+        if operation == "connector.revoke":
+            return {"revoked": True}
+        raise AssertionError(operation)
+
+    monkeypatch.setattr(cli, "_agentd_rpc", agentd_rpc)
+
+    assert cli.command_plugin_install(args) == 0
+
+    assert ("connector.revoke", {"connector_id": "managed-old-agent"}) in calls
+    assert not (state_dir / "connectors" / "managed-old-agent.token").exists()
+
+
+def test_legacy_plugin_state_migrates_atomically_and_keeps_backup(tmp_path):
+    legacy = {
+        "version": 1,
+        "plugins": {"edgecitadel.gemma": {"enabled": False, "installed_at": 1}},
+    }
+    cli._write_json(tmp_path / "plugins.json", legacy)
+
+    migrated = cli._load_plugins(tmp_path)
+
+    assert migrated == {
+        "version": 2,
+        "managed_agents": {"edgecitadel.gemma": {"enabled": False, "installed_at": 1}},
+    }
+    assert json.loads((tmp_path / "plugins.json").read_text()) == legacy
+    assert stat.S_IMODE((tmp_path / "managed-agents.json").stat().st_mode) == 0o600
+    assert cli._load_plugins(tmp_path) == migrated
+
+
+def test_legacy_plugin_state_rejects_unsupported_shape(tmp_path):
+    cli._write_json(tmp_path / "plugins.json", {"version": 1, "plugins": []})
+
+    with pytest.raises(cli.UserError, match="legacy plugin state is unsupported"):
+        cli._load_plugins(tmp_path)
+
+
+def test_legacy_watchdog_record_is_not_migrated_as_managed_agent(tmp_path):
+    legacy = {
+        "version": 1,
+        "plugins": {
+            "edgecitadel.watchdog": {"enabled": True},
+            "edgecitadel.gemma": {"enabled": False},
+        },
+    }
+    cli._write_json(tmp_path / "plugins.json", legacy)
+
+    migrated = cli._load_plugins(tmp_path)
+
+    assert set(migrated["managed_agents"]) == {"edgecitadel.gemma"}
+    assert json.loads((tmp_path / "plugins.json").read_text()) == legacy
+
+
+def test_plugin_install_preserves_read_only_executable_entrypoint(
+    tmp_path, monkeypatch
+):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("test")
+    (source / "plugin.lock.json").write_text("{}")
+    entrypoint = source / "run"
+    entrypoint.write_text("#!/bin/sh\nexit 0\n")
+    entrypoint.chmod(0o755)
+    inventory = _inventory()
+    inventory["runtime"]["command"] = ["./run"]
+    _write_node(state_dir)
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: inventory)
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+
+    cli.command_plugin_install(
+        Namespace(
+            source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+        )
+    )
+
+    installed = state_dir / "plugins" / "local.demo" / "0.1.0" / "run"
+    assert stat.S_IMODE(installed.stat().st_mode) == 0o500
+
+
+def test_plugin_install_rejects_agent_id_claimed_by_local_plugin(monkeypatch):
+    state = {
+        "managed_agents": {
+            "other.plugin": {
+                "inventory": {"agents": [{"id": "demo-agent"}]},
+            }
+        }
+    }
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *_args, **_kwargs: pytest.fail("fleet must not be queried"),
+    )
+
+    with pytest.raises(
+        cli.UserError, match="belongs to local Managed Agent other.plugin"
+    ):
+        cli._assert_agent_ids_available(
+            {"core_url": "http://core.test", "agent_id": "edge-one"},
+            _inventory(),
+            state,
+        )
+
+
+def test_plugin_install_rejects_agent_id_owned_elsewhere_in_fleet(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *_args, **_kwargs: [
+            {
+                "agent_id": "demo-agent",
+                "card": {
+                    "metadata": {
+                        "edgecitadel.node_id": "edge-two",
+                        "edgecitadel.plugin_id": "other.plugin",
+                    }
+                },
+            }
+        ],
+    )
+
+    with pytest.raises(cli.UserError, match="already exists in the Core registry"):
+        cli._assert_agent_ids_available(
+            {"core_url": "http://core.test", "agent_id": "edge-one"},
+            _inventory(),
+            {"managed_agents": {}},
+        )
+
+
+def test_plugin_install_accepts_same_node_and_plugin_fleet_owner(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *_args, **_kwargs: [
+            {
+                "agent_id": "demo-agent",
+                "card": {
+                    "metadata": {
+                        "edgecitadel.node_id": "edge-one",
+                        "edgecitadel.plugin_id": "local.demo",
+                    }
+                },
+            }
+        ],
+    )
+
+    cli._assert_agent_ids_available(
+        {"core_url": "http://core.test", "agent_id": "edge-one"},
+        _inventory(),
+        {"managed_agents": {}},
+    )
+
+
+def test_plugin_remove_stops_and_deletes_managed_copy(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "plugin.yaml").write_text("test")
+    (source / "plugin.lock.json").write_text("{}")
+    _write_node(state_dir)
+    monkeypatch.setattr(cli, "_validate_plugin", lambda *args: _inventory())
+    monkeypatch.setattr(cli, "_http_json", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "_agentd_rpc", lambda *_args, **_kwargs: [])
+    cli.command_plugin_install(
+        Namespace(
+            source=str(source), state_dir=str(state_dir), yes=True, keep_disabled=True
+        )
+    )
+    runtime_root = state_dir / "plugin-runtimes" / "local.demo" / "0.1.0"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "dependency").write_text("managed")
+    plugin_data = state_dir / "plugin-state" / "local.demo" / "outcomes.db"
+    plugin_data.parent.mkdir(parents=True)
+    plugin_data.write_text("preserved")
+
+    assert (
+        cli.command_plugin_remove(
+            Namespace(plugin_id="local.demo", state_dir=str(state_dir))
+        )
+        == 0
+    )
+    assert not (state_dir / "plugins" / "local.demo" / "0.1.0").exists()
+    assert not (state_dir / "plugin-runtimes" / "local.demo").exists()
+    assert plugin_data.read_text() == "preserved"
+
+
+@pytest.mark.parametrize("distribution", ["homebrew", "pip"])
+def test_installed_create_keeps_mutable_core_files_outside_install_root(
+    tmp_path, distribution
+):
+    core_dir = tmp_path / "core"
+    state_dir = tmp_path / "state"
+    environment = {
+        **os.environ,
+        "EDGECITADEL_DISTRIBUTION": distribution,
+        "EDGECITADEL_INSTALL_ROOT": str(REPO_ROOT),
+        "EDGECITADEL_CORE_DIR": str(core_dir),
+    }
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "edgecitadel_cli.py"),
+        "create",
+        "--no-start",
+        "--state-dir",
+        str(state_dir),
+    ]
+
+    first = subprocess.run(command, env=environment, check=True, capture_output=True)
+    env_source = (core_dir / ".env").read_text()
+    second = subprocess.run(command, env=environment, check=True, capture_output=True)
+
+    assert first.returncode == second.returncode == 0
+    assert (core_dir / "nats" / "nats.conf").exists()
+    assert (core_dir / "data").is_dir()
+    assert (core_dir / "nats" / "data").is_dir()
+    assert env_source == (core_dir / ".env").read_text()
+    assert stat.S_IMODE((core_dir / ".env").stat().st_mode) == 0o600
+    assert stat.S_IMODE((state_dir / "node.json").stat().st_mode) == 0o600
+    node = json.loads((state_dir / "node.json").read_text())
+    assert node["local_core_url"] == "http://127.0.0.1"
+    assert node["plugin_nats_url"] == "nats://127.0.0.1:4222"
+    assert node["plugin_nats_token"] == node["nats_token"]
+
+
+@pytest.mark.parametrize("distribution", ["homebrew", "pip"])
+def test_installed_compose_override_redirects_all_mutable_mounts(
+    tmp_path, monkeypatch, distribution
+):
+    core_dir = tmp_path / "core"
+    monkeypatch.setattr(cli, "IS_HOMEBREW", distribution == "homebrew")
+    monkeypatch.setattr(cli, "IS_PIP", distribution == "pip")
+    monkeypatch.setattr(cli, "CORE_RUNTIME_DIR", core_dir)
+    monkeypatch.setattr(cli, "ENV_PATH", core_dir / ".env")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", REPO_ROOT)
+
+    command = cli._compose_command("config")
+    override = (core_dir / "docker-compose.runtime.yml").read_text()
+
+    assert command[:4] == ["docker", "compose", "--project-name", "edgecitadel"]
+    assert "--env-file" in command
+    assert str(core_dir / "nats" / "nats.conf") in override
+    assert str(core_dir / "nats" / "data") in override
+    assert str(core_dir / "data") in override
+    assert str(REPO_ROOT / "docker-compose.yml") in command
+
+
+def test_core_nats_image_matches_managed_leaf_version():
+    expected = f"nats:{cli.nats_leaf.NATS_SERVER_VERSION}-alpine"
+
+    assert cli.CORE_NATS_IMAGE == expected
+    assert f"image: {expected}" in (REPO_ROOT / "docker-compose.yml").read_text()
+
+
+def test_create_reports_missing_docker_before_writing_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    args = Namespace(
+        state_dir=str(tmp_path / "state"),
+        no_start=False,
+        host="localhost",
+        timeout=1,
+    )
+
+    with pytest.raises(cli.UserError, match="Docker is required"):
+        cli.command_create(args)
+
+    assert not (tmp_path / "state" / "node.json").exists()
+
+
+def test_http_json_normalizes_connection_reset(monkeypatch):
+    def reset_connection(*_args, **_kwargs):
+        raise ConnectionResetError("connection reset by peer")
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", reset_connection)
+
+    with pytest.raises(cli.UserError, match="cannot reach EdgeCitadel core"):
+        cli._http_json("http://core.example/api/system/status")
+
+
+def test_join_parser_uses_exact_messaging_mode_names():
+    parser = cli._build_parser()
+    assert (
+        parser.parse_args(["join", "ecjoin://value"]).messaging_mode == "single-client"
+    )
+    assert (
+        parser.parse_args(
+            ["join", "ecjoin://value", "--messaging-mode", "nats_leaf"]
+        ).messaging_mode
+        == "nats_leaf"
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["join", "ecjoin://value", "--messaging-mode", "leaf"])
+
+
+def test_v1_edge_state_normalizes_without_rewrite(tmp_path):
+    _write_node(tmp_path)
+    path = tmp_path / "node.json"
+    original = path.read_bytes()
+
+    node = cli._load_node(tmp_path)
+
+    assert node["messaging_mode"] == "single-client"
+    assert node["plugin_nats_url"] == "nats://core.test:4222"
+    assert node["plugin_nats_token"] == "secret"
+    assert path.read_bytes() == original
+
+
+def test_join_rejects_invalid_replacement_invitation_without_mutation(tmp_path):
+    _write_node(tmp_path)
+    original = (tmp_path / "node.json").read_bytes()
+
+    with pytest.raises(cli.UserError, match="invitation must start"):
+        cli.command_join(
+            Namespace(
+                invitation="not-consulted",
+                messaging_mode="nats_leaf",
+                state_dir=str(tmp_path),
+            )
+        )
+
+    assert (tmp_path / "node.json").read_bytes() == original
+
+
+def test_nats_leaf_join_commits_v2_only_after_local_readiness(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_join_preflight", lambda *args: None)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: True)
+    invitation = cli._invitation_encode(
+        {
+            "version": 1,
+            "core_url": "http://core.test",
+            "nats_url": "nats://core.test:4222",
+            "token": "t" * 43,
+            "agent_id": "edge-one",
+            "expires_at": time.time() + 60,
+        }
+    )
+    observed_body = {}
+
+    def redeem(*args, **kwargs):
+        observed_body.update(kwargs["body"])
+        return {
+            "agent_id": "edge-one",
+            "leaf_username": "leaf-user",
+            "leaf_password": "leaf-password",
+        }
+
+    configured = {}
+    monkeypatch.setattr(cli, "_http_json", redeem)
+    monkeypatch.setattr(
+        cli.nats_leaf, "preflight", lambda **kwargs: "/test/nats-server"
+    )
+    monkeypatch.setattr(
+        cli.nats_leaf,
+        "configure_and_start",
+        lambda **kwargs: configured.update(kwargs) or {"local_ready": True},
+    )
+
+    assert (
+        cli.command_join(
+            Namespace(
+                invitation=invitation,
+                messaging_mode="nats_leaf",
+                state_dir=str(tmp_path),
+            )
+        )
+        == 0
+    )
+
+    state = json.loads((tmp_path / "node.json").read_text())
+    assert observed_body == {"token": "t" * 43, "messaging_mode": "nats_leaf"}
+    assert state["version"] == 2
+    assert state["messaging_mode"] == "nats_leaf"
+    assert state["plugin_nats_url"] == "nats://127.0.0.1:4223"
+    assert state["upstream_nats_url"] == "nats://core.test:4222"
+    assert state["jetstream_domain"] == cli.nats_leaf.domain_for("edge-one")
+    assert "leaf_username" not in state and "leaf_password" not in state
+    assert configured["binary"] == "/test/nats-server"
+
+
+def test_nats_leaf_join_rolls_back_when_local_start_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_join_preflight", lambda *args: None)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: True)
+    invitation = cli._invitation_encode(
+        {
+            "version": 1,
+            "core_url": "http://core.test",
+            "nats_url": "nats://core.test:4222",
+            "token": "t" * 43,
+            "agent_id": "edge-one",
+            "expires_at": time.time() + 60,
+        }
+    )
+    monkeypatch.setattr(
+        cli.nats_leaf, "preflight", lambda **kwargs: "/test/nats-server"
+    )
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *args, **kwargs: {
+            "agent_id": "edge-one",
+            "leaf_username": "leaf-user",
+            "leaf_password": "leaf-password",
+        },
+    )
+    monkeypatch.setattr(
+        cli.nats_leaf,
+        "configure_and_start",
+        lambda **kwargs: (_ for _ in ()).throw(cli.nats_leaf.NatsLeafError("failed")),
+    )
+    cleaned = []
+    monkeypatch.setattr(
+        cli.nats_leaf, "cleanup_failed_join", lambda path: cleaned.append(path)
+    )
+
+    with pytest.raises(cli.UserError, match="redeemed.*new enrollment"):
+        cli.command_join(
+            Namespace(
+                invitation=invitation,
+                messaging_mode="nats_leaf",
+                state_dir=str(tmp_path),
+            )
+        )
+
+    assert cleaned == [tmp_path]
+    assert not (tmp_path / "node.json").exists()
+
+
+def test_declared_plugin_environment_excludes_unrelated_secrets(monkeypatch):
+    monkeypatch.setenv("PATH", "/safe/bin")
+    monkeypatch.setenv("HERMES_TOKEN_FILE", "/private/hermes-token")
+    monkeypatch.setenv("HA_TOKEN", "unrelated-secret")
+    monkeypatch.setenv("HERMES_MODEL", "local-model")
+    record = {
+        "inventory": {
+            "runtime": {"environmentVariables": ["HERMES_MODEL"]},
+            "security": {"secrets": ["HERMES_TOKEN_FILE"]},
+        }
+    }
+
+    environment = cli._declared_plugin_environment(record)
+
+    assert environment["PATH"] == "/safe/bin"
+    assert environment["HERMES_TOKEN_FILE"] == "/private/hermes-token"
+    assert environment["HERMES_MODEL"] == "local-model"
+    assert "HA_TOKEN" not in environment
+
+
+@pytest.mark.parametrize("connector_exists", [False, True])
+def test_managed_agent_start_delegates_lifecycle_without_nats_credentials(
+    tmp_path, monkeypatch, connector_exists
+):
+    inventory = _inventory()
+    inventory["package"]["kind"] = "ManagedAgent"
+    inventory["runtime"]["kind"] = "model_agent"
+    inventory["security"]["secrets"] = []
+    record = {
+        "path": str(tmp_path / "plugins" / "local.demo" / "1.0.0"),
+        "inventory": inventory,
+        "installed_at": 1,
+        "enabled": False,
+        "pid": None,
+    }
+    Path(record["path"]).mkdir(parents=True)
+    state = {"managed_agents": {"local.demo": record}}
+    node = {
+        "agent_id": "edge-one",
+        "core_url": "http://core.test",
+        "plugin_nats_url": "nats://core.test:4222",
+        "plugin_nats_token": "must-not-leak",
+    }
+    captured = {}
+
+    monkeypatch.setattr(cli, "_load_node", lambda *_: node)
+    monkeypatch.setattr(cli, "_plugin_record", lambda *_: (state, record))
+    monkeypatch.setattr(cli, "_plugin_python", lambda *_: Path(sys.executable))
+    monkeypatch.setattr(cli, "_start_agentd", lambda *_: {})
+    monkeypatch.setattr(cli, "_write_json", lambda *_: None)
+    monkeypatch.setattr(cli, "_sync_managed_agent_state", lambda *_: None)
+
+    def write_launch(_state_dir, _plugin_id, **kwargs):
+        captured.update(kwargs)
+        return tmp_path / "managed-launch" / "local-demo.json"
+
+    monkeypatch.setattr(cli, "_write_managed_launch", write_launch)
+    if connector_exists:
+        cli._secure_write(
+            tmp_path / "connectors" / "managed-demo-agent.token", "managed-token\n"
+        )
+
+    calls = {
+        "managed.list": 0,
+        "connector.list": 0,
+        "connector.register": 0,
+        "connector.configure": 0,
+    }
+
+    def rpc(_state_dir, operation, **_params):
+        calls[operation] += 1
+        if operation == "managed.list":
+            if calls[operation] == 1:
+                return []
+            return [
+                {
+                    "package_id": "local.demo",
+                    "runtime_state": "running",
+                    "detail": "pid 123",
+                }
+            ]
+        if operation == "connector.list":
+            if calls[operation] == 1:
+                return (
+                    [
+                        {
+                            "connector_id": "managed-demo-agent",
+                            "session_active": False,
+                            "revoked": False,
+                        }
+                    ]
+                    if connector_exists
+                    else []
+                )
+            return [
+                {
+                    "connector_id": "managed-demo-agent",
+                    "session_active": True,
+                }
+            ]
+        if operation == "connector.register":
+            return {"token": "managed-token"}
+        if operation == "connector.configure":
+            return {"configured": True}
+        raise AssertionError(operation)
+
+    monkeypatch.setattr(cli, "_agentd_rpc", rpc)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("CLI must not supervise Managed Agents"),
+    )
+
+    cli._start_plugin(tmp_path, "local.demo")
+
+    assert record["enabled"] is True
+    assert captured["environment"]["EDGECITADEL_STATE_DIR"] == str(tmp_path)
+    assert "NATS_URL" not in captured["environment"]
+    assert "NATS_TOKEN" not in captured["environment"]
+    assert (tmp_path / "connectors/managed-demo-agent.token").read_text().strip() == (
+        "managed-token"
+    )
+    assert calls["connector.register"] == (0 if connector_exists else 1)
+    assert calls["connector.configure"] == 1
+
+
+def test_plugin_stop_signals_only_verified_owned_process_group(tmp_path, monkeypatch):
+    record = {"pid": 321, "process_identity": "owned", "enabled": True}
+    state = {"managed_agents": {"local.demo": record}}
+    running = iter((True, True, False, False))
+    signals: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(cli, "_plugin_record", lambda *_args: (state, record))
+    monkeypatch.setattr(cli, "_pid_running", lambda _pid: next(running))
+    monkeypatch.setattr(cli, "_process_identity", lambda _pid: "owned")
+    monkeypatch.setattr(cli.os, "getpgid", lambda _pid: 321)
+    monkeypatch.setattr(
+        cli.os, "killpg", lambda group, signum: signals.append((group, signum))
+    )
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(cli, "_write_json", lambda *_args: None)
+
+    cli._stop_plugin(tmp_path, "local.demo")
+
+    assert signals == [(321, signal.SIGTERM)]
+    assert record["pid"] is None
+    assert record["process_identity"] is None
+    assert record["enabled"] is False
+
+
+def test_plugin_stop_refuses_reused_unverified_pid(tmp_path, monkeypatch):
+    record = {"pid": 321, "process_identity": "original", "enabled": True}
+    state = {"managed_agents": {"local.demo": record}}
+    monkeypatch.setattr(cli, "_plugin_record", lambda *_args: (state, record))
+    monkeypatch.setattr(cli, "_pid_running", lambda _pid: True)
+    monkeypatch.setattr(cli, "_process_identity", lambda _pid: "reused")
+    monkeypatch.setattr(
+        cli.os,
+        "killpg",
+        lambda *_args: pytest.fail("an unowned process group must not be signaled"),
+    )
+
+    with pytest.raises(cli.UserError, match="unverified live PID"):
+        cli._stop_plugin(tmp_path, "local.demo")
+
+    assert record["pid"] == 321
+    assert record["enabled"] is True
+
+
+def test_process_identity_changes_with_process_start_description(monkeypatch):
+    class Result:
+        returncode = 0
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    descriptions = iter(
+        (
+            Result("Mon Sep  1 01:00:00 2026 plugin-runner"),
+            Result("Mon Sep  1 01:00:01 2026 plugin-runner"),
+        )
+    )
+    monkeypatch.setattr(cli, "_pid_running", lambda _pid: True)
+    monkeypatch.setattr(Path, "is_file", lambda _path: False)
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda *_args, **_kwargs: next(descriptions)
+    )
+
+    first = cli._process_identity(321)
+    second = cli._process_identity(321)
+
+    assert first is not None
+    assert second is not None
+    assert first != second
+
+
+def test_plugin_python_builds_and_reuses_requirements_scoped_runtime(
+    tmp_path, monkeypatch
+):
+    install = tmp_path / "install"
+    runtime = install / "agent-runtime"
+    (runtime / "src/edgecitadel_agentd").mkdir(parents=True)
+    (runtime / "pyproject.toml").write_text("owned build source")
+    (runtime / "src").chmod(0o555)
+    (install / "schemas").mkdir()
+    (install / "schemas/task-correlation.v1.json").write_text("{}")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", install)
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    requirements = plugin_root / "requirements.txt"
+    requirements.write_text("httpx>=0.27\n")
+    record = {
+        "path": str(plugin_root),
+        "inventory": {
+            "package": {"version": "1.2.3"},
+            "runtime": {"pythonRequirements": "requirements.txt"},
+        },
+    }
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if command[1:3] == ["-m", "venv"]:
+            runtime_python = Path(command[3]) / "bin" / "python"
+            runtime_python.parent.mkdir(parents=True)
+            runtime_python.touch()
+
+        elif command[1:4] == ["-m", "pip", "install"]:
+            source = Path(command[command.index("-e") + 1])
+            assert source != cli.INSTALL_ROOT / "agent-runtime"
+            assert source.name == "runtime-source"
+            assert (
+                source.parent.joinpath("schemas/task-correlation.v1.json").read_text()
+                == "{}"
+            )
+            (source / "src/generated.egg-info").mkdir()
+
+    monkeypatch.setattr(cli, "_run", run)
+
+    first = cli._plugin_python(tmp_path, "edgecitadel.gemma", record)
+    second = cli._plugin_python(tmp_path, "edgecitadel.gemma", record)
+
+    assert first == second
+    assert first == (
+        tmp_path / "plugin-runtimes" / "edgecitadel.gemma" / "1.2.3" / "bin" / "python"
+    )
+    assert len(commands) == 2
+    assert commands[1][-2:] == ["-r", str(requirements)]
+    assert (first.parents[1] / ".edgecitadel-runtime").stat().st_mode & 0o777 == 0o600
+
+    upgraded_root = tmp_path / "upgraded-cellar"
+    upgraded_runtime = upgraded_root / "agent-runtime"
+    (upgraded_runtime / "src" / "edgecitadel_agentd").mkdir(parents=True)
+    (upgraded_runtime / "pyproject.toml").write_text("upgraded build source")
+    (upgraded_root / "schemas").mkdir()
+    (upgraded_root / "schemas/task-correlation.v1.json").write_text("{}")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", upgraded_root)
+    assert cli._plugin_python(tmp_path, "edgecitadel.gemma", record) == first
+    assert len(commands) == 4
+    staged = first.parents[1] / "runtime-source"
+    assert str(staged) in commands[3]
+    assert (staged / "pyproject.toml").read_text() == "upgraded build source"
+    assert not (runtime / "src/generated.egg-info").exists()
+    assert (runtime / "src").stat().st_mode & 0o777 == 0o555
+
+
+@pytest.mark.parametrize("ready", [True, False])
+def test_managed_agent_start_never_rebuilds_a_live_runtime(
+    tmp_path, monkeypatch, ready
+):
+    inventory = _inventory()
+    inventory["package"]["kind"] = "ManagedAgent"
+    record = {"path": str(tmp_path / "plugin"), "inventory": inventory, "pid": None}
+    monkeypatch.setattr(cli, "_load_node", lambda *_: {"agent_id": "owned"})
+    monkeypatch.setattr(
+        cli,
+        "_plugin_record",
+        lambda *_: ({"managed_agents": {"local.demo": record}}, record),
+    )
+    monkeypatch.setattr(cli, "_start_agentd", lambda *_: {})
+    monkeypatch.setattr(
+        cli,
+        "_plugin_python",
+        lambda *_: pytest.fail("live runtime must not be rebuilt"),
+    )
+
+    def rpc(_state, operation, **_kwargs):
+        if operation == "connector.list":
+            return [{"connector_id": "managed-demo-agent", "session_active": ready}]
+        if operation == "managed.list":
+            return [{"package_id": "local.demo", "runtime_state": "running"}]
+        pytest.fail("unexpected mutation: " + operation)
+
+    monkeypatch.setattr(cli, "_agentd_rpc", rpc)
+    if ready:
+        cli._start_plugin(tmp_path, "local.demo")
+    else:
+        with pytest.raises(cli.UserError, match="stop it before preparing its runtime"):
+            cli._start_plugin(tmp_path, "local.demo")
+
+
+def test_plugin_python_rejects_missing_declared_requirements(tmp_path):
+    record = {
+        "path": str(tmp_path / "plugin"),
+        "inventory": {
+            "package": {"version": "1.0.0"},
+            "runtime": {"pythonRequirements": "requirements.txt"},
+        },
+    }
+
+    with pytest.raises(cli.UserError, match="missing its Python requirements"):
+        cli._plugin_python(tmp_path, "edgecitadel.missing", record)
+
+
+def test_plugin_install_resolves_bundled_plugin_before_example(tmp_path, monkeypatch):
+    install_root = tmp_path / "install"
+    bundled = install_root / "agent-packages" / "gemma"
+    example = install_root / "agent-packages" / "examples" / "gemma"
+    bundled.mkdir(parents=True)
+    example.mkdir(parents=True)
+    (bundled / "plugin.yaml").write_text("kind: ManagedAgent\n")
+    (example / "plugin.yaml").write_text("kind: ManagedAgent\n")
+    monkeypatch.setattr(cli, "INSTALL_ROOT", install_root)
+    monkeypatch.setattr(cli, "_load_node", lambda state_dir: {})
+    observed = {}
+
+    def validate(source, state_dir):
+        observed["source"] = source
+        raise cli.UserError("stop after source resolution")
+
+    monkeypatch.setattr(cli, "_validate_plugin", validate)
+    args = Namespace(source="gemma", state_dir=str(tmp_path / "state"))
+
+    with pytest.raises(cli.UserError, match="stop after source resolution"):
+        cli.command_plugin_install(args)
+
+    assert observed["source"] == bundled.resolve()
+
+
+def test_doctor_json_classifies_leaf_disconnect_as_degraded(
+    tmp_path, monkeypatch, capsys
+):
+    cli._write_json(
+        tmp_path / "node.json",
+        {
+            "version": 2,
+            "mode": "edge",
+            "messaging_mode": "nats_leaf",
+            "core_url": "http://core.test",
+            "upstream_nats_url": "nats://core.test:4222",
+            "plugin_nats_url": "nats://127.0.0.1:4223",
+            "plugin_nats_token": "local-token",
+            "jetstream_domain": "edge_domain",
+            "agent_id": "edge-one",
+        },
+    )
+    observation = {
+        "state": "degraded",
+        "process_running": True,
+        "client_ready": True,
+        "jetstream_ready": True,
+        "leaf_connected": False,
+        "local_ready": True,
+        "pid": 123,
+    }
+    monkeypatch.setattr(cli.nats_leaf, "observe", lambda _: observation)
+    monkeypatch.setattr(
+        cli,
+        "_http_json",
+        lambda *args, **kwargs: {"nats_connected": False, "jetstream_stream_ok": False},
+    )
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *args, **kwargs: False)
+
+    assert cli.command_doctor(Namespace(state_dir=str(tmp_path), json=True)) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "degraded"
+    assert report["messaging_mode"] == "nats_leaf"
+    checks = {item["id"]: item for item in report["checks"]}
+    assert checks["local_agent_messaging"]["ok"] is True
+    assert checks["leaf_connection"]["ok"] is False
+    assert checks["cross_node_messaging"]["detail"] == "paused"
+
+
+def test_doctor_treats_disabled_plugin_and_agents_as_non_failing(
+    tmp_path, monkeypatch, capsys
+):
+    class AbsentPluginDriver:
+        def __init__(self, host):
+            self.host = host
+
+        def status(self, _scope):
+            return plugin_api.PluginStatus(
+                self.host,
+                "absent",
+                False,
+                detail=f"{self.host} is not installed",
+            )
+
+    cli._write_json(
+        tmp_path / "node.json",
+        {
+            "version": 2,
+            "mode": "edge",
+            "messaging_mode": "single-client",
+            "core_url": "http://core.test",
+            "upstream_nats_url": "nats://core.test:4222",
+            "plugin_nats_url": "nats://core.test:4222",
+            "plugin_nats_token": "plugin-token",
+            "nats_url": "nats://core.test:4222",
+            "nats_token": "plugin-token",
+            "agent_id": "edge-one",
+        },
+    )
+    cli._write_json(
+        tmp_path / "plugins.json",
+        {
+            "version": 1,
+            "plugins": {
+                "edgecitadel.disabled": {
+                    "enabled": False,
+                    "pid": None,
+                    "inventory": {"agents": [{"id": "disabled-agent"}]},
+                }
+            },
+        },
+    )
+    requested_urls: list[str] = []
+
+    def http_json(url, **_kwargs):
+        requested_urls.append(url)
+        return {"nats_connected": True, "jetstream_stream_ok": True}
+
+    monkeypatch.setattr(cli, "_http_json", http_json)
+    monkeypatch.setattr(cli, "_tcp_ready", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli, "_agentd_process_detail", lambda _state_dir: (True, "pid 123, ready")
+    )
+    monkeypatch.setattr(
+        cli,
+        "_agentd_rpc",
+        lambda *_args, **_kwargs: {"transport": {"connected": True}},
+    )
+    monkeypatch.setattr(
+        cli,
+        "driver_for",
+        lambda host, *_args, **_kwargs: AbsentPluginDriver(host),
+    )
+
+    assert cli.command_doctor(Namespace(state_dir=str(tmp_path), json=True)) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    checks = {item["id"]: item for item in report["checks"]}
+    assert report["status"] == "healthy"
+    assert checks["managed_agent_edgecitadel.disabled"] == {
+        "id": "managed_agent_edgecitadel.disabled",
+        "name": "Managed Agent edgecitadel.disabled",
+        "ok": True,
+        "detail": "disabled",
+    }
+    assert checks["agent_disabled-agent"]["ok"] is True
+    assert checks["agent_disabled-agent"]["detail"] == "disabled with Managed Agent"
+    assert requested_urls == ["http://core.test/api/system/status"]
+
+
+def test_messaging_stop_is_successful_when_local_service_is_stopped(
+    tmp_path, monkeypatch
+):
+    cli._write_json(
+        tmp_path / "node.json",
+        {
+            "version": 2,
+            "mode": "edge",
+            "messaging_mode": "nats_leaf",
+            "core_url": "http://core.test",
+            "upstream_nats_url": "nats://core.test:4222",
+            "plugin_nats_url": "nats://127.0.0.1:4223",
+            "plugin_nats_token": "local-token",
+            "jetstream_domain": "edge_domain",
+            "agent_id": "edge-one",
+        },
+    )
+    stopped: list[Path] = []
+    monkeypatch.setattr(cli.nats_leaf, "stop", lambda path: stopped.append(path))
+    monkeypatch.setattr(
+        cli.nats_leaf,
+        "observe",
+        lambda _: {
+            "state": "stopped",
+            "process_running": False,
+            "client_ready": False,
+            "jetstream_ready": False,
+            "leaf_connected": False,
+            "local_ready": False,
+            "pid": None,
+        },
+    )
+
+    result = cli.command_messaging(
+        Namespace(state_dir=str(tmp_path), action="stop", json=False)
+    )
+
+    assert result == 0
+    assert stopped == [tmp_path]
+
+
+def test_task_show_calls_agentd_with_connector_authority(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli, "_start_agentd", lambda _state_dir: {})
+    monkeypatch.setattr(cli, "_connector_token", lambda *_args: "connector-token")
+
+    def rpc(state_dir, operation, **params):
+        calls.append((state_dir, operation, params))
+        return {"task_id": params["task_id"], "state": "queued"}
+
+    monkeypatch.setattr(cli, "_agentd_rpc", rpc)
+    args = Namespace(
+        state_dir=str(tmp_path),
+        task_action="show",
+        connector_id="codex-local",
+        task_id="10000000-0000-4000-8000-000000000001",
+    )
+
+    assert cli.command_task(args) == 0
+    assert calls == [
+        (
+            tmp_path,
+            "task.get",
+            {
+                "auth_connector_id": "codex-local",
+                "auth_token": "connector-token",
+                "task_id": "10000000-0000-4000-8000-000000000001",
+            },
+        )
+    ]
+    assert json.loads(capsys.readouterr().out)["state"] == "queued"
+
+
+def test_storage_setup_stops_service_before_running_offline_upgrade(
+    tmp_path, monkeypatch
+):
+    calls = []
+    python = tmp_path / "runtime/bin/python"
+    monkeypatch.setenv("EDGECITADEL_SUPERVISOR_PYTHON", str(python))
+    monkeypatch.setattr(
+        cli, "_stop_agentd", lambda state: calls.append(("stop", state))
+    )
+    monkeypatch.setattr(cli, "_toolkit_python", lambda state: python)
+    monkeypatch.setattr(cli, "_run", lambda command: calls.append(("run", command)))
+    args = cli.argparse.Namespace(
+        state_dir=str(tmp_path), action="storage-setup", json=False
+    )
+    assert cli.command_service(args) == 0
+    assert calls == [
+        ("stop", tmp_path),
+        (
+            "run",
+            [
+                str(python),
+                "-m",
+                "edgecitadel_agentd.storage_setup",
+                "--state-dir",
+                str(tmp_path / "agentd"),
+            ],
+        ),
+    ]
+
+
+def test_service_start_refuses_migration_barrier_before_runtime_changes(
+    tmp_path, monkeypatch
+):
+    state = tmp_path / "agentd"
+    state.mkdir()
+    (state / "restore-barrier.json").write_text("interrupted")
+    monkeypatch.setattr(
+        cli, "_toolkit_python", lambda state: pytest.fail("must remain fenced")
+    )
+    with pytest.raises(cli.UserError, match="startup is fenced"):
+        cli._start_agentd(tmp_path)
+
+
+def test_launchd_preserves_explicit_trace_sync_opt_in(tmp_path, monkeypatch):
+    python = tmp_path / "python"
+    with monkeypatch.context() as context:
+        context.setenv("EDGECITADEL_TRACE_SYNC", "1")
+        cli._render_agentd_launchd(tmp_path, python)
+    monkeypatch.delenv("EDGECITADEL_TRACE_SYNC", raising=False)
+    cli._render_agentd_launchd(tmp_path, python)
+    value = plistlib.loads(cli._agentd_launchd_path(tmp_path).read_bytes())
+    assert value["EnvironmentVariables"]["EDGECITADEL_TRACE_SYNC"] == "1"

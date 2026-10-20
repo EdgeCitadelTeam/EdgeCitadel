@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "overlap-0",
+      "context_id": "00000000-0000-4000-8000-000000000999",
+      "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "task_ids": [
+        "00000000-0000-4000-8000-000000000100",
+        "00000000-0000-4000-8000-000000000101",
+        "00000000-0000-4000-8000-000000000102"
+      ],
+      "expected_parent_edges": [
+        [
+          "00000000-0000-4000-8000-000000000100",
+          "00000000-0000-4000-8000-000000000101"
+        ],
+        [
+          "00000000-0000-4000-8000-000000000101",
+          "00000000-0000-4000-8000-000000000102"
+        ]
+      ],
+      "expected_hops": [
+        0,
+        1,
+        2
+      ],
+      "expected_coverage": {
+        "task_correlation": "source_explicit",
+        "model_tools": "unavailable_until_instrumented"
+      }
+    },
+    {
+      "id": "overlap-10",
+      "context_id": "00000000-0000-4000-8000-000000000999",
+      "trace_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "task_ids": [
+        "00000000-0000-4000-8000-000000000110",
+        "00000000-0000-4000-8000-000000000111",
+        "00000000-0000-4000-8000-000000000112"
+      ],
+      "expected_parent_edges": [
+        [
+          "00000000-0000-4000-8000-000000000110",
+          "00000000-0000-4000-8000-000000000111"
+        ],
+        [
+          "00000000-0000-4000-8000-000000000111",
+          "00000000-0000-4000-8000-000000000112"
+        ]
+      ],
+      "expected_hops": [
+        0,
+        1,
+        2
+      ],
+      "expected_coverage": {
+        "task_correlation": "source_explicit",
+        "model_tools": "unavailable_until_instrumented"
+      }
+    }
+  ]
+}

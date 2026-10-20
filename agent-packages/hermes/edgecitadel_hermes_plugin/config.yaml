@@ -1,0 +1,20 @@
+agent_id: us-mac-hermes
+name: us-mac-hermes
+description: Hermes Agent (Nous Research) bridged through agentd to the node's configured NATS transport.
+version: 0.1.0
+runtime:
+  kind: bridge
+  upstream: hermes-agent
+  roles: [reasoner]
+  conformance: L1
+  heartbeat_interval_sec: 30
+  tags: [external-memory, openai-compat]
+capabilities:
+  streaming: true
+skills:
+  - id: reasoning.chat
+    name: hermes-reasoner
+    description: Forward a free-text prompt to a locally-installed Hermes Agent.
+    tags: [chat, reasoning, bridge]
+defaultInputModes: [text/plain]
+defaultOutputModes: [text/plain]

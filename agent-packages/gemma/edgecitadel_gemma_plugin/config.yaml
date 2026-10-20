@@ -1,0 +1,16 @@
+agent_id: gemma-1
+name: gemma-1
+description: Lightweight local Gemma chat agent.
+version: 0.4.0
+runtime:
+  kind: native
+  roles: [reasoner]
+  conformance: L1
+  heartbeat_interval_sec: 30
+capabilities:
+  streaming: false
+skills:
+  - id: reasoning.chat
+    name: gemma-chat
+    description: Send a prompt to the local Gemma model and return its response.
+    tags: [chat, local-model]

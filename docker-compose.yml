@@ -1,0 +1,71 @@
+services:
+  nats:
+    image: nats:2.14.6-alpine
+    command: ["-c", "/etc/nats/nats.conf"]
+    ports:
+      - "4222:4222"
+      - "7422:7422"
+      - "8222:8222"
+      # 1883 is bound unconditionally; the MQTT listener inside the broker
+      # is gated by the `mqtt {}` block in nats.conf (rendered from
+      # nats.conf.tpl by scripts/render-nats-conf.sh based on EC_ENABLE_MQTT).
+      # If MQTT is disabled in nats.conf, the bound port refuses connections
+      # but does not conflict with anything. Phase 5 superseded the broken
+      # `nats-mqtt` profile pattern (both services tried to bind 4222).
+      - "1883:1883"
+    volumes:
+      - ./nats/nats.conf:/etc/nats/nats.conf:ro
+      - ./nats/data:/data
+    environment:
+      - NATS_TOKEN=${NATS_TOKEN}
+      - NATS_LEAF_USERNAME=${NATS_LEAF_USERNAME}
+      - NATS_LEAF_PASSWORD=${NATS_LEAF_PASSWORD}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  aggregator:
+    build:
+      context: .
+      dockerfile: aggregator/Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 40s
+    volumes:
+      - ./data:/data
+    environment:
+      # Historical filename retained for state compatibility.
+      - DB_PATH=/data/openclaw.db
+      - EDGECITADEL_TRACE_COLLECTOR=${EDGECITADEL_TRACE_COLLECTOR:-0}
+      - EDGECITADEL_TRACE_READS=${EDGECITADEL_TRACE_READS:-0}
+      - NATS_URL=nats://nats:4222
+      - NATS_TOKEN=${NATS_TOKEN}
+      - NATS_LEAF_USERNAME=${NATS_LEAF_USERNAME}
+      - NATS_LEAF_PASSWORD=${NATS_LEAF_PASSWORD}
+      - EDGECITADEL_ADMIN_TOKEN=${EDGECITADEL_ADMIN_TOKEN}
+    expose:
+      - "8000"
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - aggregator
+      - dashboard

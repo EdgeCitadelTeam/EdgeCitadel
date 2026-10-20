@@ -1,0 +1,1 @@
+../../../.agents/skills/verify-infra/SKILL.md

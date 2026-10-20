@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+.vite/
+
+# Data
+data/*.db
+data/*.sqlite
+!data/.gitkeep
+nats/data/
+
+# Claude Code local settings
+.claude/.claude/
+.claude/settings.local.json
+.claude/*.local.md
+CLAUDE.local.md
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local working documentation (plans, acceptance transcripts, and research)
+local-docs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+test-artifacts/
+e2e/test-results/
+e2e/playwright-report/
+tmp/e2e/
+tmp/operator-evidence*/
+
+# Raw video (keep only final mp4/gif)
+docs/demo-raw.webm
+
+# Docker
+*.log
+
+# Git worktrees
+.worktrees/
+
+adapters/*/agent.env
+
+# Phase 5: deploy script's runtime log files (the deploy script writes timestamped logs)
+deploy/*.log
+
+# Operator note: scheduled tasks lock from claude harness
+.claude/scheduled_tasks.lock
+
+# Frontend dev-only configs (developer working artifacts; not part of the
+# canonical vite config). e.g. vite.config.prodproxy.js — points the local
+# dev server at a remote aggregator for ad-hoc verification.
+frontend/vite.config.*.js
+!frontend/vite.config.js
+
+# E2E manual probes — one-off browser-driven scripts that target real
+# (often production) data. Not part of the regular Playwright suite.
+e2e/scripts/

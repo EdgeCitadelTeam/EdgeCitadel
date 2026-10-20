@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/envelope.v1.json",
+  "title": "EdgeCitadel Agent Contract Envelope",
+  "description": "Wire format for every message published under agents.*, tasks.*, or system.* subjects. v0.1 / A2A v1.0-aligned. Strict: unknown top-level fields rejected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "id", "type", "sender_id", "timestamp", "payload"],
+  "properties": {
+    "v": {"const": 1},
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["register", "heartbeat", "status", "command", "result",
+               "delegation", "cancel", "log", "broadcast", "task.progress"]
+    },
+    "sender_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+    "recipient_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "task_id": {"type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"},
+    "context_id": {"type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"},
+    "task_state": {
+      "type": "string",
+      "enum": ["submitted", "working", "input-required", "completed",
+               "failed", "canceled", "rejected", "auth-required"]
+    },
+    "agent_state": {
+      "type": "string",
+      "enum": ["online", "offline", "busy", "error"]
+    },
+    "hop_count": {"type": "integer", "minimum": 0},
+    "payload": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"type": {"const": "command"}}, "required": ["type"]},
+      "then": {"required": ["recipient_id", "task_id"],
+               "not": {"required": ["agent_state"]}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "result"}}, "required": ["type"]},
+      "then": {"required": ["recipient_id", "task_id", "task_state"],
+               "not": {"required": ["agent_state"]}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "delegation"}}, "required": ["type"]},
+      "then": {"required": ["recipient_id", "task_id", "context_id", "hop_count"],
+               "not": {"required": ["agent_state"]}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "cancel"}}, "required": ["type"]},
+      "then": {"required": ["recipient_id", "task_id"],
+               "not": {"required": ["agent_state"]}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "task.progress"}}, "required": ["type"]},
+      "then": {"required": ["task_id", "task_state"],
+               "not": {"required": ["agent_state"]}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "status"}}, "required": ["type"]},
+      "then": {"required": ["agent_state"],
+               "not": {"required": ["task_state"]}}
+    },
+    {
+      "if": {"properties": {"type": {"enum": ["register", "heartbeat", "log", "broadcast"]}},
+             "required": ["type"]},
+      "then": {"not": {"anyOf": [
+                {"required": ["agent_state"]},
+                {"required": ["task_state"]}
+              ]}}
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+.git
+.env*
+data/
+tmp/
+**/*credential*
+**/*token*
+**/*.webm
+**/*.mp4
+test-artifacts/
+e2e/test-results/
+e2e/playwright-report/
+**/.venv/
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/

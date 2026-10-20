@@ -1,0 +1,8 @@
+apiVersion: edgecitadel.io/v1alpha1
+kind: AgentSkillBinding
+skillId: homeassistant.experiment
+version: 0.1.0
+execution: {kind: runtime-handler, name: homeassistant.experiment}
+schemas: {input: schemas/input.json, output: schemas/output.json}
+requires: {knowledge: [], network: [home-assistant], devices: [smart-home]}
+extensions: {}

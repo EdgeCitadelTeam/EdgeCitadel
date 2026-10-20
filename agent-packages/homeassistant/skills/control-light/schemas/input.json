@@ -1,0 +1,1 @@
+{"type":"object","properties":{"operation":{"enum":["turn_on","turn_off"]},"entity_id":{"type":"string"},"brightness":{"type":"integer","minimum":0,"maximum":255}},"required":["operation","entity_id"],"additionalProperties":true}
