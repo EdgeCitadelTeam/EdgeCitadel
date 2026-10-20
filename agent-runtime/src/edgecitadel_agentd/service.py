@@ -56,8 +56,7 @@ ADMIN_OPERATIONS = frozenset(
         "managed.reconcile",
         "managed.list",
         "managed.connector.reissue",
-        "containment.hold",
-        "containment.release",
+        "containment.control",
         "containment.list",
     }
 )
@@ -300,6 +299,21 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
     raise StoreError("connector is not authorized for this operation")
 
 
+def _node_id(store: AgentdStore) -> str | None:
+    """The enrolled node identity from daemon-owned node.json, if any.
+
+    Never accept a node claim in connector params or copy its credentials into
+    a diagnostic.
+    """
+    try:
+        with (store.state_directory.parent / "node.json").open("rb") as source:
+            node = json.loads(source.read(65537))
+        node_id = node["agent_id"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return node_id if isinstance(node_id, str) else None
+
+
 def _trace_operation(
     store: AgentdStore,
     connector_id: str,
@@ -321,16 +335,9 @@ def _trace_operation(
             raise ValueError
     except (TypeError, ValueError, AttributeError) as error:
         raise StoreError("invalid trace request identity") from error
-    # node.json is daemon-owned enrollment state. Never accept a node claim in
-    # connector params or copy its credentials into a diagnostic.
-    try:
-        with (store.state_directory.parent / "node.json").open("rb") as source:
-            node = json.loads(source.read(65537))
-        node_id = node["agent_id"]
-        if not isinstance(node_id, str):
-            raise ValueError
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise StoreError("trace node identity is unavailable") from error
+    node_id = _node_id(store)
+    if node_id is None:
+        raise StoreError("trace node identity is unavailable")
     methods: dict[str, Callable[..., dict[str, Any]]] = {
         "trace.import": partial(import_trace, store, administrator_authenticated=True),
         "trace.bind": store.bind_trace,
@@ -502,15 +509,15 @@ def dispatch(
         )
         return {"token": token}
 
-    if operation in {"containment.hold", "containment.release"}:
-        hold = {
-            key: params.get(key)
-            for key in ("kind", "object_id", "owner", "policy_version")
-        }
-        return (
-            store.place_hold(**hold)
-            if operation == "containment.hold"
-            else store.release_hold(**hold)
+    if operation == "containment.control":
+        from .containment_control import execute, local_command
+
+        node_id = _node_id(store) or "local"
+        return execute(
+            store,
+            local_command(params, node_id=node_id),
+            node_id=node_id,
+            gate=transport,
         )
     if operation == "containment.list":
         return store.list_containment()

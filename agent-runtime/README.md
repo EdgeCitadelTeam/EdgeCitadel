@@ -343,8 +343,11 @@ keeps all uncertain work held. Operator commands, enrollment switching and
 individual restore-hold reconciliation are not yet implemented.
 
 Schema 30 stores these as `reason: restore` rows of a general `holds` table, beside
-`reason: containment` holds that a monitor places and releases through the admin
-RPCs `containment.hold`, `containment.release` and `containment.list`. Each hold
+`reason: containment` holds that a monitor places and releases through the
+[containment control protocol](../docs/architecture/execution-trace-contract.md#containment-control-protocol)
+(NATS `edgecitadel.control.v1.<node_id>` with an owner key in
+`<agentd state>/control-keys/<owner>.key`, or the admin RPC `containment.control`);
+`containment.list` shows them. Each hold
 names its owner and carries the owner's policy version. agentd rejects any
 decision older than the newest version it has accepted from that owner. A held
 task cannot be claimed, transitioned or used to dispatch. Its unpublished outbound

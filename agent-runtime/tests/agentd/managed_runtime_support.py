@@ -49,23 +49,25 @@ class ManagedHarness:
         with self.store() as store:
             return store.get_task(task_id)
 
-    def hold(self, task_id: str, version: int = 1, kind: str = "task") -> object:
-        return self.admin.call(
-            "containment.hold",
-            kind=kind,
-            object_id=task_id,
-            owner="core-monitor",
-            policy_version=version,
+    def control(self, action: str, target: Mapping[str, object], version: int) -> Any:
+        confirmation = cast(
+            Mapping[str, Any],
+            self.admin.call(
+                "containment.control",
+                action=action,
+                target=dict(target),
+                owner="core-monitor",
+                policy_version=version,
+            ),
         )
+        assert confirmation["status"] == "applied", confirmation
+        return confirmation
 
-    def release(self, task_id: str, version: int = 1, kind: str = "task") -> object:
-        return self.admin.call(
-            "containment.release",
-            kind=kind,
-            object_id=task_id,
-            owner="core-monitor",
-            policy_version=version,
-        )
+    def hold(self, task_id: str, version: int = 1, kind: str = "task") -> Any:
+        return self.control("hold", {"kind": kind, "id": task_id}, version)
+
+    def release(self, task_id: str, version: int = 1, kind: str = "task") -> Any:
+        return self.control("release", {"kind": kind, "id": task_id}, version)
 
     def journal(self, kind: str) -> list[dict[str, Any]]:
         import json

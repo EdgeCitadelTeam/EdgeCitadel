@@ -27,7 +27,10 @@ every later dispatch and effect of that task and its descendants on this node;
 it is irreversible. An **ingress filter** ``(authority, target)`` denies only
 traffic under that authority into one target: delegations into a recipient
 agent (refused at dispatch, withheld in the outbox, parked at ingest) or
-effects matching an effect rule. Other traffic into the target continues.
+effects matching an effect rule. Other traffic into the target continues. The
+authority is a delegation (a task ID, reaching its descendants through their
+chains) or a credential (an agent ID: everything that agent sends or does).
+Filters match authority keys ``task:<id>`` and ``agent:<id>``.
 
 ``restore`` holds are owned by the restored source epoch and are only reviewed by
 restore activation. Every containment decision is placed by one owner (the
@@ -86,14 +89,14 @@ CREATE TABLE task_state.revocations (
     revoked_at_ms INTEGER NOT NULL
 );
 CREATE TABLE task_state.ingress_filters (
-    authority_id TEXT NOT NULL,
+    authority TEXT NOT NULL,
     target_kind TEXT NOT NULL CHECK(target_kind IN ('agent', 'effect')),
     effect_class TEXT NOT NULL,
     target TEXT NOT NULL,
     owner TEXT NOT NULL,
     policy_version INTEGER NOT NULL CHECK(policy_version >= 1),
     created_at_ms INTEGER NOT NULL,
-    PRIMARY KEY(authority_id, target_kind, effect_class, target)
+    PRIMARY KEY(authority, target_kind, effect_class, target)
 );
 CREATE TABLE task_state.authority_ledger (
     task_id TEXT PRIMARY KEY,
@@ -127,9 +130,11 @@ PUBLICATION_BLOCKED_SQL = """(
           AND (
             EXISTS (SELECT 1 FROM holds h WHERE h.kind IN ('task','egress')
                     AND h.object_id=json_extract(c.context_json,'$.parent_task_id'))
-            OR EXISTS (SELECT 1 FROM json_each(c.context_json,'$.authority_chain') a
-                       JOIN ingress_filters f ON f.authority_id=a.value
-                       WHERE f.target_kind='agent' AND f.target=t.recipient_id)
+            OR EXISTS (SELECT 1 FROM ingress_filters f
+                       WHERE f.target_kind='agent' AND f.target=t.recipient_id
+                         AND (f.authority='agent:'||t.sender_id
+                              OR f.authority IN (SELECT 'task:'||a.value FROM
+                                 json_each(c.context_json,'$.authority_chain') a)))
           )
     )
 )"""
@@ -327,6 +332,25 @@ def _tasks_under_locked(db: sqlite3.Connection, authority_id: str) -> int:
     )
 
 
+def authority_keys(task_ids: Iterable[str], agent_id: str | None) -> tuple[str, ...]:
+    """The filter keys traffic acts under: its delegations and its credential."""
+    return (
+        *(f"task:{task_id}" for task_id in task_ids),
+        *((f"agent:{agent_id}",) if agent_id else ()),
+    )
+
+
+def filter_authority(authority: object) -> str:
+    """``{"task_id"}`` (a delegation) or ``{"agent_id"}`` (a credential) as a key."""
+    if isinstance(authority, Mapping) and set(authority) == {"task_id"}:
+        return f"task:{_uuid4(authority['task_id'], 'invalid_authority')}"
+    if isinstance(authority, Mapping) and set(authority) == {"agent_id"}:
+        agent = authority["agent_id"]
+        if isinstance(agent, str) and AGENT_PATTERN.fullmatch(agent):
+            return f"agent:{agent}"
+    raise ContainmentError("invalid_authority")
+
+
 def filter_target(target: object) -> tuple[str, str, str]:
     """``{"agent_id"}`` or ``{"effect_class","target"}`` as a stored key."""
     if isinstance(target, Mapping) and set(target) == {"agent_id"}:
@@ -346,51 +370,49 @@ def filter_target(target: object) -> tuple[str, str, str]:
 def place_filter(
     store: AgentdStore,
     *,
-    authority_id: str,
+    authority: object,
     target: object,
     owner: str,
     policy_version: int,
 ) -> dict[str, object]:
-    _uuid4(authority_id, "invalid_authority")
+    key = (filter_authority(authority), *filter_target(target))
     _validate_decision(owner, policy_version)
-    key = filter_target(target)
     with store._task_transaction():
         db = store._connection
         _fence(db, owner, policy_version)
         existing = db.execute(
-            "SELECT owner FROM ingress_filters WHERE authority_id=? AND target_kind=? "
+            "SELECT owner FROM ingress_filters WHERE authority=? AND target_kind=? "
             "AND effect_class=? AND target=?",
-            (authority_id, *key),
+            key,
         ).fetchone()
         if existing is not None and existing["owner"] != owner:
             raise ContainmentError("filter_owned_by_another")
         db.execute(
-            "INSERT INTO ingress_filters(authority_id,target_kind,effect_class,target,"
+            "INSERT INTO ingress_filters(authority,target_kind,effect_class,target,"
             "owner,policy_version,created_at_ms) VALUES (?,?,?,?,?,?,?) "
-            "ON CONFLICT(authority_id,target_kind,effect_class,target) "
+            "ON CONFLICT(authority,target_kind,effect_class,target) "
             "DO UPDATE SET policy_version=excluded.policy_version",
-            (authority_id, *key, owner, policy_version, _now_ms()),
+            (*key, owner, policy_version, _now_ms()),
         )
-    return {"authority_id": authority_id, "target": target}
+    return {"authority": authority, "target": target}
 
 
 def remove_filter(
     store: AgentdStore,
     *,
-    authority_id: str,
+    authority: object,
     target: object,
     owner: str,
     policy_version: int,
 ) -> dict[str, object]:
-    _uuid4(authority_id, "invalid_authority")
+    key = (filter_authority(authority), *filter_target(target))
     _validate_decision(owner, policy_version)
-    key = filter_target(target)
     with store._task_transaction():
         db = store._connection
         existing = db.execute(
-            "SELECT owner FROM ingress_filters WHERE authority_id=? AND target_kind=? "
+            "SELECT owner FROM ingress_filters WHERE authority=? AND target_kind=? "
             "AND effect_class=? AND target=?",
-            (authority_id, *key),
+            key,
         ).fetchone()
         if existing is None:
             raise ContainmentError("filter_not_found")
@@ -398,9 +420,9 @@ def remove_filter(
             raise ContainmentError("filter_owned_by_another")
         _fence(db, owner, policy_version)
         db.execute(
-            "DELETE FROM ingress_filters WHERE authority_id=? AND target_kind=? "
+            "DELETE FROM ingress_filters WHERE authority=? AND target_kind=? "
             "AND effect_class=? AND target=?",
-            (authority_id, *key),
+            key,
         )
     return {"removed": True, "applied_deliveries": apply_released_deliveries(store)}
 
@@ -456,6 +478,11 @@ def cancel_task(
     return {"state": "cancelled", "released_holds": sorted(h["kind"] for h in holds)}
 
 
+def _authority_mapping(key: str) -> dict[str, str]:
+    kind, _, value = key.partition(":")
+    return {f"{kind}_id": value}
+
+
 def list_containment(store: AgentdStore) -> dict[str, list[dict[str, object]]]:
     with store._lock:
         db = store._connection
@@ -473,7 +500,7 @@ def list_containment(store: AgentdStore) -> dict[str, list[dict[str, object]]]:
         ]
         filters = [
             {
-                "authority_id": row["authority_id"],
+                "authority": _authority_mapping(row["authority"]),
                 "target": {"agent_id": row["target"]}
                 if row["target_kind"] == "agent"
                 else {"effect_class": row["effect_class"], "target": row["target"]},
@@ -481,7 +508,7 @@ def list_containment(store: AgentdStore) -> dict[str, list[dict[str, object]]]:
                 "policy_version": row["policy_version"],
             }
             for row in db.execute(
-                "SELECT * FROM ingress_filters ORDER BY authority_id,target_kind,target"
+                "SELECT * FROM ingress_filters ORDER BY authority,target_kind,target"
             )
         ]
     return {
@@ -530,14 +557,14 @@ def ingress_filter_locked(
     agent_id: str | None = None,
     effect: EffectRule | None = None,
 ) -> sqlite3.Row | None:
-    """The filter denying traffic under these authorities into the target."""
+    """The filter denying traffic under these authority keys into the target."""
     authorities = tuple(authorities)
     if not authorities:
         return None
     marks = ",".join("?" for _ in authorities)
     rows = db.execute(
-        "SELECT authority_id,target_kind,effect_class,target,owner,policy_version "
-        f"FROM ingress_filters WHERE authority_id IN ({marks}) "  # noqa: S608
+        "SELECT authority,target_kind,effect_class,target,owner,policy_version "
+        f"FROM ingress_filters WHERE authority IN ({marks}) "  # noqa: S608
         "ORDER BY created_at_ms",
         authorities,
     ).fetchall()
@@ -598,7 +625,11 @@ def park_delivery_locked(
     *,
     authorities: Iterable[str] = (),
 ) -> None:
-    """Caller holds the task transaction and found the delivery blocked."""
+    """Caller holds the task transaction and found the delivery blocked.
+
+    ``authorities`` are the delivery's filter keys, kept in clear so a filter's
+    removal can find what it parked.
+    """
     store._connection.execute(
         "INSERT OR IGNORE INTO held_deliveries(message_id,task_id,envelope_json,"
         "received_at_ms,recipient_id,authorities_json) VALUES (?,?,?,?,?,?)",
@@ -629,7 +660,7 @@ def apply_released_deliveries(store: AgentdStore, *, task_id: str | None = None)
             "WHERE (? IS NULL OR d.task_id=?) AND NOT EXISTS("
             "SELECT 1 FROM holds h WHERE h.kind='task' AND h.object_id=d.task_id) "
             "AND NOT EXISTS(SELECT 1 FROM json_each(d.authorities_json) a "
-            "JOIN ingress_filters f ON f.authority_id=a.value "
+            "JOIN ingress_filters f ON f.authority=a.value "
             "WHERE f.target_kind='agent' AND f.target=d.recipient_id) "
             "ORDER BY received_at_ms,message_id LIMIT ?",
             (task_id, task_id, APPLY_BATCH),

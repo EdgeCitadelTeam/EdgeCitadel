@@ -1278,10 +1278,11 @@ to the transport as accepted, so the broker delivery is acknowledged rather than
 redelivered or terminated. A held transport message is not published. Task reads
 expose `restore_status` and/or `containment_hold: {owner, policy_version}`.
 
-Containment holds are managed through admin RPCs that require the management
-credential. `containment.hold` and `containment.release` both take
-`{kind, object_id, owner, policy_version}`, and `containment.list` returns every
-hold with its parked delivery count. The policy version is a fencing token:
+Containment holds are placed and released through the
+[containment control protocol](#containment-control-protocol), locally with the
+admin RPC `containment.control` (management credential) or remotely on NATS.
+The admin RPC `containment.list` returns every hold with its parked delivery
+count, every revocation and every ingress filter. The policy version is a fencing token:
 `containment_fences` keeps, per owner, the highest version agentd has accepted,
 and any hold or release with a lower version fails with `stale_policy_version`.
 Other stable errors are `hold_not_found`, `hold_owned_by_another` and the
@@ -1290,9 +1291,12 @@ arrival order through the normal ingest path. Maintenance repeats this for any
 delivery whose task is no longer held, which finishes a release interrupted by a
 crash. Ingest is idempotent for already-applied envelopes.
 
-A containment hold does not recall a message that the live outbox loop has
-already selected; that publication is recorded as it happened. Restore-held
-messages are placed offline and can never be marked published.
+A containment hold does not recall a message that the outbox loop has already
+handed to the broker; that publication is recorded as it happened, and the
+command's confirmation lists it as `in_flight`. The loop rechecks each selected
+message just before publishing it, so only that one message can escape a
+decision. Restore-held messages are placed offline and can never be marked
+published.
 
 `trace.dispatch` admission runs inside the dispatch transaction, after binding
 authority and the receipt lookup. It checks these conditions in order, and the
@@ -1438,6 +1442,103 @@ an open design decision, which is why the mechanism is opt-in.
 
 The gateway is cooperative: it constrains harnesses that call it. It is not an
 OS sandbox, and a harness with unrestricted tools can still act without asking.
+
+### Containment control protocol
+
+A controller drives a node's containment with versioned commands
+(`schemas/containment-control.v1.json`, `$defs.command`). The node answers each
+with an enforcement confirmation (`$defs.confirmation`).
+
+**Transports.** NATS request/reply on `edgecitadel.control.v1.<node_id>`, where
+`node_id` is the node's enrolled identity (`node.json` `agent_id`, the same name
+as in `edgecitadel.telemetry.v1.<node_id>`). agentd subscribes on every
+connection and applies a command off its event loop. Locally, the admin RPC
+`containment.control` takes `{action, target, owner, policy_version,
+command_id?}` and issues the same command with a five-minute expiry.
+
+**Command.**
+
+```json
+{"schema_version":1,"command_id":"<uuid4>","node_id":"endurance","owner":"core-monitor",
+ "policy_version":7,"issued_at_ms":1760000000000,"expires_at_ms":1760000030000,
+ "action":"hold","target":{"kind":"egress","id":"<task uuid>"},"mac":"<64 hex>"}
+```
+
+| `action` | `target` | Effect |
+|---|---|---|
+| `hold` / `release` | `{kind: task\|egress\|transport, id}` | pause, egress block, or one outbox message |
+| `revoke` | `{task_id}` | irreversible revocation of a delegation and its descendants |
+| `filter` / `unfilter` | `{authority: {task_id}\|{agent_id}, into: {agent_id}\|{effect_class, target}}` | ingress filter for one authority (delegation or credential) into one target |
+| `cancel` | `{task_id}` | remove this owner's holds on the task and cancel it (terminal) |
+| `renew` | `{}` | renew the fail-closed controller lease, when configured |
+
+**Authentication.** The broker has no per-subject permissions, so a NATS command
+carries `mac = HMAC-SHA256(key, "edgecitadel.containment.control.v1\0" ||
+canonical JSON of the command without mac)`. Canonical JSON is the trace v1
+form: UTF-8, sorted keys, no whitespace. The key is read from
+`<agentd state>/control-keys/<owner>.key` (a regular file, not a symbolic link;
+at least 32 bytes after surrounding whitespace is stripped; provision the same
+key bytes to the controller). The command's owner is thereby
+authenticated, so its fencing token cannot be spent by another owner. Unknown
+owners and wrong MACs are rejected as `not_authenticated` and counted as
+authentication rejections.
+
+**Once and only before expiry.** A command must name this node (`wrong_node`),
+have `0 < expires_at_ms - issued_at_ms <= 300000` (`invalid_command`) and arrive
+before `expires_at_ms` by this node's clock (`command_expired`); keep controller
+and node clocks synchronized. Its confirmation is stored under `command_id` until
+expiry, so a retried or replayed command returns the original confirmation, and
+the same ID with a different body is `idempotency_conflict`. Every decision is
+fenced per owner as for holds (`stale_policy_version`); a renewal checks the
+fence without advancing state.
+
+**Confirmation.**
+
+```json
+{"schema_version":1,"command_id":"…","node_id":"endurance","action":"hold",
+ "status":"applied","code":null,"received_at_ms":…,"applied_at_ms":…,
+ "enforcement":{"gates":["result","dispatch","effect","publication"],
+   "task":{"state":"running","claimed":true},
+   "outbound":{"held":1,"pending":0,"in_flight":["<message uuid>"],"published":0}}}
+```
+
+`status` is `applied` or `rejected` with a stable `code` (the containment error
+codes above, `task_not_found`, `restore_hold`, `task_terminal`, `invalid_authority`,
+`invalid_filter_target`). `applied_at_ms` is when the gates took effect at this
+node. `enforcement` reports what was enforced at that instant:
+
+- `gates`: what the decision closed: `claim`, `transition`, `result`,
+  `dispatch`, `effect`, `publication`, `inbound`.
+- `task`: the local task's state and whether a session holds its claim, or
+  `null` when the task is not (yet) on this node; a hold placed first applies
+  when it arrives.
+- `outbound`: the object's outbound messages: for a task or egress hold, the
+  task's own messages and the requests and cancels it sent its children; for an
+  agent filter, the requests under that authority into that agent. `held` will
+  not be published while the decision stands; `pending` will be (after a
+  release); `in_flight` lists messages the outbox had already handed to the
+  broker, which cannot be recalled and are recorded as published; `published`
+  were sent before.
+- `parked_deliveries` / `applied_deliveries`: inbound deliveries withheld, or
+  applied by a release or unfilter.
+- `local_tasks` (revoke): local non-terminal tasks under the revoked authority.
+- `released_holds` (cancel); `controller_lease_until_ms` and
+  `controller_lease_enforced` (renew).
+
+The outbox and the command executor serialize on one publication lock: the
+outbox rechecks a message and registers it as in flight under the lock, and a
+command applies its decision and snapshots the in-flight set under it, so a
+message is either in `in_flight` or withheld. A paused handler is interrupted by
+its runtime within the runtime's watch interval (0.5 s) after `applied_at_ms`;
+its gates hold from `applied_at_ms`.
+
+Revocations and filters affect only the node that applies them. A controller
+revoking a delegation sends `revoke` to every node that may hold its
+descendants; descendants arriving later carry the revoked ID in their chain.
+Not provided here: holding a single pending effect (effects are decided
+synchronously; use an effect-rule filter), and agent-wide revocation or
+admission control (use `connector.revoke`, `connector.grant` or the package
+grant).
 
 ### Pause, resume and cancel of running managed work
 

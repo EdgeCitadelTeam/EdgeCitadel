@@ -2046,7 +2046,11 @@ class AgentdStore:
         task_id = envelope.get("task_id")
         if not isinstance(task_id, str) or not task_id:
             raise StoreError("transport envelope task_id is required")
-        from .containment import ingress_filter_locked, park_delivery_locked
+        from .containment import (
+            authority_keys,
+            ingress_filter_locked,
+            park_delivery_locked,
+        )
 
         # Holding the store lock across the checks and the application keeps a
         # concurrent containment decision from slipping between them.
@@ -2065,18 +2069,19 @@ class AgentdStore:
                     arriving = TaskTraceContext.from_envelope(envelope)
                 except TraceContractError as error:
                     raise StoreError(error.code) from error
+                # The delivery acts under the delegations that led to it and
+                # under its sender's credential.
+                keys = authority_keys(
+                    arriving.authority_chain, str(envelope.get("sender_id", ""))
+                )
                 if ingress_filter_locked(
                     self._connection,
-                    arriving.authority_chain,
+                    keys,
                     agent_id=str(envelope.get("recipient_id", "")),
                 ):
-                    # Delivered under a filtered authority into this recipient.
                     with self._task_transaction():
                         park_delivery_locked(
-                            self,
-                            dict(envelope),
-                            task_id,
-                            authorities=arriving.authority_chain,
+                            self, dict(envelope), task_id, authorities=keys
                         )
                     return {"task_id": task_id, "held": True}
             return self._apply_transport_envelope(envelope, message_type, task_id)
@@ -2514,6 +2519,17 @@ class AgentdStore:
         # Finishes a release interrupted between its commit and applying the
         # deliveries it had parked.
         apply_released_deliveries(self)
+        # A control command past its expiry is rejected without being applied,
+        # so its receipt is no longer needed for replay protection.
+        with self._lock:
+            expired = self._connection.execute(
+                "SELECT 1 FROM control_commands WHERE expires_at_ms<=? LIMIT 1", (now,)
+            ).fetchone()
+        if expired is not None:
+            with self._task_transaction():
+                self._connection.execute(
+                    "DELETE FROM control_commands WHERE expires_at_ms<=?", (now,)
+                )
         with self._lock:
             with self._connection:
                 rows = self._connection.execute(

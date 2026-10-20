@@ -18,6 +18,7 @@ import pytest
 from nats.aio.client import Client as NATS
 
 from edgecitadel_agentd.client import AgentdClient
+from edgecitadel_agentd.containment_control import command_mac
 from service_test_support import serve
 from edgecitadel_agentd.service import socket_path_for
 from edgecitadel_plugin_runtime.jetstream import ensure_consumer, ensure_stream
@@ -151,6 +152,32 @@ async def test_connector_round_trip_through_owned_real_nats(
             )
 
         await _wait_for(transport_ready)
+        # A signed containment command answered on the node's control subject.
+        keys = state_dir / "agentd" / "control-keys"
+        keys.mkdir(mode=0o700)
+        control_key = secrets.token_bytes(32).hex().encode()
+        (keys / "core-monitor.key").write_bytes(control_key)
+        issued = int(time.time() * 1000)
+        command = {
+            "schema_version": 1,
+            "command_id": str(uuid.uuid4()),
+            "node_id": node["agent_id"],
+            "owner": "core-monitor",
+            "policy_version": 1,
+            "issued_at_ms": issued,
+            "expires_at_ms": issued + 30_000,
+            "action": "hold",
+            "target": {"kind": "task", "id": str(uuid.uuid4())},
+        }
+        command["mac"] = command_mac(control_key, command)
+        reply = await nc.request(
+            f"edgecitadel.control.v1.{node['agent_id']}",
+            json.dumps(command).encode(),
+            timeout=5,
+        )
+        confirmation = json.loads(reply.data)
+        assert confirmation["status"] == "applied"
+        assert confirmation["command_id"] == command["command_id"]
         js = nc.jetstream()
         await ensure_stream(js, "remote-agent")
         await ensure_consumer(js, "remote-agent")

@@ -182,7 +182,7 @@ def test_ingress_filter_withholds_one_authority_into_one_target(nodes):
     target = {"agent_id": "child"}
     containment.place_filter(
         worker.store,
-        authority_id=parent_id,
+        authority={"task_id": parent_id},
         target=target,
         owner=MONITOR,
         policy_version=1,
@@ -202,7 +202,7 @@ def test_ingress_filter_withholds_one_authority_into_one_target(nodes):
     # At the sending node the same filter refuses the dispatch outright.
     containment.place_filter(
         root.store,
-        authority_id=unrelated,
+        authority={"task_id": unrelated},
         target={"agent_id": "other"},
         owner=MONITOR,
         policy_version=2,
@@ -212,7 +212,7 @@ def test_ingress_filter_withholds_one_authority_into_one_target(nodes):
 
     removed = containment.remove_filter(
         worker.store,
-        authority_id=parent_id,
+        authority={"task_id": parent_id},
         target=target,
         owner=MONITOR,
         policy_version=3,
@@ -337,3 +337,39 @@ def test_schema_31_upgrade_keeps_holds_and_extends_saved_contexts(tmp_path):
         )
     finally:
         upgraded.close()
+
+
+def test_credential_filter_stops_one_sender_into_one_target(nodes):
+    root, worker = nodes
+    _, binding, child_id = delegate(root)
+    containment.place_filter(
+        worker.store,
+        authority={"agent_id": "parent"},
+        target={"agent_id": "child"},
+        owner=MONITOR,
+        policy_version=1,
+    )
+    other_id = root.dispatch("parent", binding, "other")["result"]["task_id"]
+    assert deliver(root, worker) == 2
+    # Only the parent's traffic into the child is withheld.
+    assert worker.store.get_task(other_id)["state"] == "offered"
+    with pytest.raises(StoreError, match="not found"):
+        worker.store.get_task(child_id)
+    containment.place_filter(
+        root.store,
+        authority={"agent_id": "parent"},
+        target={"agent_id": "other"},
+        owner=MONITOR,
+        policy_version=1,
+    )
+    assert root.dispatch("parent", binding, "other")["code"] == "ingress_filtered"
+    assert root.dispatch("parent", binding, "child")["status"] == "ok"
+    listed = worker.store.list_containment()["ingress_filters"]
+    assert listed == [
+        {
+            "authority": {"agent_id": "parent"},
+            "target": {"agent_id": "child"},
+            "owner": MONITOR,
+            "policy_version": 1,
+        }
+    ]

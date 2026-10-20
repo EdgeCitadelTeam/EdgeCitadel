@@ -136,7 +136,7 @@ def test_holds_revocation_and_filters_deny_effects_with_their_policy(nodes):
     )
     containment.place_filter(
         worker.store,
-        authority_id=parent_id,
+        authority={"task_id": parent_id},
         target={"effect_class": "fs.write", "target": "workspace/secret*"},
         owner=MONITOR,
         policy_version=2,

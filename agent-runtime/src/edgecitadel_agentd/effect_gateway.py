@@ -88,6 +88,7 @@ def _decide(
     now_ms: int,
 ) -> EffectDecision:
     from .containment import (
+        authority_keys,
         egress_hold_locked,
         ingress_filter_locked,
         revocation_locked,
@@ -122,7 +123,9 @@ def _decide(
     scope = grant.effect_scope(context.effect_scope if context else None)
     if not effect_allowed(scope, effect):
         return EffectDecision(grant.policy, grant.version, "outside_effect_scope")
-    filtered = ingress_filter_locked(db, authorities, effect=effect)
+    filtered = ingress_filter_locked(
+        db, authority_keys(authorities, str(connector["agent_id"])), effect=effect
+    )
     if filtered is not None:
         return EffectDecision(
             "ingress_filter", str(filtered["policy_version"]), "ingress_filtered"

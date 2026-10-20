@@ -6,7 +6,6 @@ import pytest
 
 from containment_test_support import Node, deliver
 from edgecitadel_agentd.containment import ContainmentError
-from edgecitadel_agentd.service import dispatch as rpc_dispatch
 from edgecitadel_agentd.store import StoreError
 
 MONITOR = "core-monitor"
@@ -151,39 +150,6 @@ def test_fencing_rejects_stale_and_foreign_decisions(nodes):
         }
         with pytest.raises(ContainmentError):
             root.store.place_hold(**params)
-
-
-def test_containment_rpc_requires_the_management_credential(nodes):
-    root, _ = nodes
-    task_id = str(uuid4())
-    request = {
-        "version": 1,
-        "operation": "containment.hold",
-        "params": {
-            "kind": "task",
-            "object_id": task_id,
-            "owner": MONITOR,
-            "policy_version": 1,
-        },
-    }
-    with pytest.raises(StoreError, match="management authentication"):
-        rpc_dispatch(root.store, request, admin_token="a" * 48)
-    held = rpc_dispatch(
-        root.store, {**request, "admin_token": "a" * 48}, admin_token="a" * 48
-    )
-    assert held["object_id"] == task_id and held["reason"] == "containment"
-    listed = rpc_dispatch(
-        root.store,
-        {"version": 1, "operation": "containment.list", "admin_token": "a" * 48},
-        admin_token="a" * 48,
-    )
-    assert [item["object_id"] for item in listed["holds"]] == [task_id]
-    released = rpc_dispatch(
-        root.store,
-        {**request, "operation": "containment.release", "admin_token": "a" * 48},
-        admin_token="a" * 48,
-    )
-    assert released == {"released": True, "applied_deliveries": 0}
 
 
 def test_holds_and_parked_deliveries_survive_restart(tmp_path):

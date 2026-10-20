@@ -76,6 +76,7 @@ def _admit(
     """
     # containment imports the store, which imports this module.
     from .containment import (
+        authority_keys,
         egress_hold_locked,
         ingress_filter_locked,
         revocation_locked,
@@ -111,7 +112,11 @@ def _admit(
             "outside_authority_scope",
             "outside_authority_scope",
         )
-    filtered = ingress_filter_locked(db, authorities, agent_id=recipient_id)
+    filtered = ingress_filter_locked(
+        db,
+        authority_keys(authorities, str(connector["agent_id"])),
+        agent_id=recipient_id,
+    )
     if filtered is not None:
         return _denied(filtered, "ingress_filter", "ingress_filtered")
     parent_lease = parent.lease if parent is not None else None
