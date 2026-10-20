@@ -94,6 +94,7 @@ skills:
         trace_id=uuid4().hex,
         parent_task_id=str(uuid4()),
         hop_count=2,
+        authority_scope=("gemma-1",),
     )
 
     async def handler(
@@ -142,6 +143,9 @@ skills:
                 agent_id="edge-one-pi",
                 capabilities=["edgecitadel_delegate", "edgecitadel_task_status"],
             ),
+        )
+        admin.call(
+            "connector.grant", connector_id="pi-local", outbound_agents=["gemma-1"]
         )
         sender = AgentdClient(
             socket_path,

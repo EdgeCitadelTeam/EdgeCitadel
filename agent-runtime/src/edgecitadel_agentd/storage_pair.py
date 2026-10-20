@@ -32,7 +32,7 @@ CROSS_REFERENCES = (
     ("trace_task_contexts", "task_id", "tasks", "task_id"),
 )
 PAIR_VERSION = 24
-CURRENT_VERSION = 30
+CURRENT_VERSION = 31
 
 
 def task_database_path(trace_path: Path) -> Path:

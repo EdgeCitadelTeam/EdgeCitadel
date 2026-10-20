@@ -131,7 +131,7 @@ def test_health_and_authenticated_connector_session(
     assert health == {
         "status": "ready",
         "database": "ok",
-        "schema_version": 30,
+        "schema_version": 31,
         "active_sessions": 0,
         "database_bytes": health["database_bytes"],
         "storage_backend": {"backend": "unverified", "mount_verified": False},
@@ -263,6 +263,7 @@ def test_local_rpc_records_real_message_bodies_without_nats_and_deduplicates_rea
             socket_path, connector_id=name, token=registration["token"]
         )
         clients.append((client, client.call("session.open")["session_id"]))
+    admin.call("connector.grant", connector_id="codex", outbound_agents=["reviewer"])
     sender, recipient = clients[0][0], clients[1][0]
     task = sender.call(
         "task.create",

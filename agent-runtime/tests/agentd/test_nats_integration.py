@@ -131,6 +131,11 @@ async def test_connector_round_trip_through_owned_real_nats(
                 "edgecitadel_task_status",
             ],
         )
+        admin.call(
+            "connector.grant",
+            connector_id="pi-local",
+            outbound_agents=["remote-agent", "core-local-codex"],
+        )
         client = AgentdClient(
             socket_path,
             connector_id="pi-local",
@@ -195,6 +200,11 @@ async def test_connector_round_trip_through_owned_real_nats(
             host_type="codex",
             agent_id="core-local-codex",
             capabilities=["edgecitadel_delegate", "edgecitadel_inbox"],
+        )
+        admin.call(
+            "connector.grant",
+            connector_id="codex-local",
+            outbound_agents=["edge-one-pi"],
         )
         client_two = AgentdClient(
             socket_path,

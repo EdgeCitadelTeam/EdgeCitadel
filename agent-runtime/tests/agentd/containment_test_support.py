@@ -111,7 +111,7 @@ class Node:
             agent_id,
             "trace.dispatch",
             schema_version=1,
-            request_id=str(uuid4()),
+            request_id=extra.pop("request_id", str(uuid4())),
             binding_id=binding["binding_id"],
             recipient_id=recipient,
             request=extra.pop("request", "child request"),

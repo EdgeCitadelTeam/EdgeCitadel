@@ -693,8 +693,8 @@ closure does not qualify process-kill recovery or adapter shutdown behavior.
 ### M3 bound dispatch and durable task context
 
 Private trace.dispatch now reauthorizes the active binding and evaluates the
-current native delegation capability or installed managed-package recipient
-grant while holding the store transaction. Permission and dispatch decisions,
+current native connector or installed managed-package recipient grant (see
+containment holds and dispatch admission) while holding the store transaction. Permission and dispatch decisions,
 child creation, command outbox, task context, queued observation and request
 receipt commit together. Denied requests persist bounded decision evidence but
 create no child. Raw request bodies stay in the encrypted task/outbox content.
@@ -1293,6 +1293,30 @@ crash. Ingest is idempotent for already-applied envelopes.
 A containment hold does not recall a message that the live outbox loop has
 already selected; that publication is recorded as it happened. Restore-held
 messages are placed offline and can never be marked published.
+
+`trace.dispatch` admission runs inside the dispatch transaction, after binding
+authority and the receipt lookup. It checks these conditions in order, and the
+first that fails decides the reply:
+
+1. The invocation's task has no hold. Otherwise the reply is
+   `execution_held`. The policy names the hold's reason (`containment_hold` or
+   `restore_hold`), and `policy_version` is the hold's fencing token.
+2. The connector's grant allows the recipient. A Managed Agent's grant is its
+   installed package `outboundAgents`. A native connector's grant is the
+   `outbound_agents` list set through the admin `connector.grant`, which is empty
+   by default; the `edgecitadel_delegate` capability alone no longer reaches any
+   recipient. Otherwise the reply is `not_authorized` (`permission_denied`).
+3. The task's inherited `authority_scope` includes the recipient. Otherwise the
+   reply is `outside_authority_scope`.
+
+Each decision records `permission` and `dispatch` events with that reason and a
+durable receipt, and denials create no child. An allowed child inherits the
+dispatching invocation's effective scope (its grant intersected with the scope it
+inherited), so a child's scope is always a subset of its parent's. The scope
+travels in `payload.execution_context.authority_scope`. It is `null` only for root
+tasks, and ingest rejects a delegated envelope without it (`missing_authority_scope`).
+Native and Managed `task.create` check the same connector grant. Unbound
+`task.create` has no invocation, so it is not attenuated.
 
 ### Reviewed activation with unresolved work held
 

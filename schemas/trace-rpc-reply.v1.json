@@ -258,7 +258,9 @@
             "identity_mismatch",
             "idempotency_conflict",
             "storage_unavailable",
-            "quota_exceeded"
+            "quota_exceeded",
+            "execution_held",
+            "outside_authority_scope"
           ]
         },
         "retryable": {

@@ -139,6 +139,11 @@ def native_pair(tmp_path):
             agent_id="owned-codex",
             capabilities=[tool["name"] for tool in TOOLS],
         )
+        admin.call(
+            "connector.grant",
+            connector_id="codex-owned",
+            outbound_agents=["owned-remote"],
+        )
         token = state / "connectors/codex-owned.token"
         token.parent.mkdir(mode=0o700)
         token.write_text(registration["token"] + "\n")

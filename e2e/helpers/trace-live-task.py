@@ -108,6 +108,8 @@ registration = admin.call(
         "edgecitadel_task_status",
     ],
 )
+# Native connectors delegate only to administrator-granted recipients.
+admin.call("connector.grant", connector_id=name, outbound_agents=["jim-eq-hermes"])
 client = AgentdClient(
     socket_path_for(ROOT), connector_id=name, token=registration["token"]
 )

@@ -69,6 +69,7 @@ def test_activated_daemon_accepts_fresh_work_and_keeps_old_work_held(tmp_path):
                 "edgecitadel_task_update",
             ],
         )
+        admin.call("connector.grant", connector_id="remote", outbound_agents=["remote"])
         client = AgentdClient(
             socket_path_for(new), connector_id="remote", token=registration["token"]
         )
@@ -190,7 +191,7 @@ def test_v13_migration_preserves_holds_and_adds_empty_activation_receipts(tmp_pa
         db.execute("PRAGMA user_version=13")
     store = AgentdStore(new / "agentd.sqlite3")
     try:
-        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 30
+        assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 31
         assert [
             tuple(r) for r in store._connection.execute("SELECT * FROM holds")
         ] == before

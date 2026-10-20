@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from . import trace_capacity
 from . import trace_lineage as lineage
+from .delegation_authority import GRANT_POLICY_VERSION, delegation_grant
 from .trace_binding_access import authorized_binding_locked
 from .trace_contract import (
     TraceContractError,
@@ -24,6 +26,66 @@ from .trace_journal import TraceJournal
 
 if TYPE_CHECKING:
     from .store import AgentdStore
+
+
+@dataclass(frozen=True)
+class Admission:
+    """One dispatch decision; ``code`` is None when the dispatch is allowed."""
+
+    policy: str
+    policy_version: str
+    grant_version: str | None
+    reason: str | None
+    code: str | None
+    scope: frozenset[str] = frozenset()
+
+
+def _admit(
+    store: AgentdStore,
+    connector: sqlite3.Row,
+    *,
+    hold: sqlite3.Row | None,
+    inherited: tuple[str, ...] | None,
+    recipient_id: str,
+) -> Admission:
+    """Admission after binding authority: containment, grant, then inherited scope.
+
+    A held invocation cannot delegate whatever its grant says. The policy
+    version of a containment denial is the hold's fencing token.
+    """
+    if hold is not None:
+        return Admission(
+            f"{hold['reason']}_hold",
+            str(hold["policy_version"]),
+            None,
+            "execution_held",
+            "execution_held",
+        )
+    grant = delegation_grant(store, connector)
+    if not grant.usable or recipient_id not in grant.recipients:
+        return Admission(
+            grant.policy,
+            GRANT_POLICY_VERSION,
+            grant.version,
+            "permission_denied",
+            "not_authorized",
+        )
+    if inherited is not None and recipient_id not in inherited:
+        return Admission(
+            grant.policy,
+            GRANT_POLICY_VERSION,
+            grant.version,
+            "outside_authority_scope",
+            "outside_authority_scope",
+        )
+    return Admission(
+        grant.policy,
+        GRANT_POLICY_VERSION,
+        grant.version,
+        None,
+        None,
+        grant.scope(inherited),
+    )
 
 
 def dispatch_trace(
@@ -67,31 +129,23 @@ def dispatch_trace(
         connector = db.execute(
             "SELECT * FROM connectors WHERE connector_id=?", (connector_id,)
         ).fetchone()
-        grant_version = None
-        if connector["host_type"] == "managed-agent":
-            owners = [
-                r
-                for r in store.list_managed_agents()
-                if binding["agent_id"] in cast(list[str], r.get("agent_ids", []))
-            ]
-            policy = "managed_package_grant"
-            grant_version = hashlib.sha256(
-                json.dumps(owners, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-            allowed = (
-                connector_id == f"managed-{binding['agent_id']}"
-                and len(owners) == 1
-                and owners[0].get("desired_state") == "running"
-                and params["recipient_id"]
-                in cast(list[str], owners[0].get("outbound_agents", []))
-            )
-        else:
-            policy = "native_connector_capability"
-            capabilities = json.loads(connector["capabilities_json"])["items"]
-            grant_version = hashlib.sha256(
-                canonical_bytes(sorted(capabilities))
-            ).hexdigest()
-            allowed = "edgecitadel_delegate" in capabilities
+        saved = (
+            db.execute(
+                "SELECT context_json FROM trace_task_contexts WHERE task_id=?",
+                (task.task_id,),
+            ).fetchone()
+            if task is not None
+            else None
+        )
+        parent = TaskTraceContext(**json.loads(saved[0])) if saved is not None else None
+        admission = _admit(
+            store,
+            connector,
+            hold=store._task_hold_locked(task.task_id) if task is not None else None,
+            inherited=parent.authority_scope if parent is not None else None,
+            recipient_id=params["recipient_id"],
+        )
+        allowed = admission.code is None
         root = db.execute(
             "SELECT event_json FROM trace_journal_all WHERE trace_id=? AND json_extract(event_json,'$.execution_attempt_id')=? AND json_extract(event_json,'$.kind')='run' AND json_extract(event_json,'$.phase')='started'",
             (binding["trace_id"], binding["execution_attempt_id"]),
@@ -116,10 +170,10 @@ def dispatch_trace(
                 "phase": decision,
                 "attributes": {
                     "dispatch_id": params["request_id"],
-                    "policy": policy,
-                    "policy_version": "1",
-                    "grant_version": grant_version,
-                    "reason": None if allowed else "permission_denied",
+                    "policy": admission.policy,
+                    "policy_version": admission.policy_version,
+                    "grant_version": admission.grant_version,
+                    "reason": admission.reason,
                 },
             },
             selected=True,
@@ -135,8 +189,8 @@ def dispatch_trace(
                     "dispatch_id": params["request_id"],
                     "recipient_id": params["recipient_id"],
                     "skill_id": params["skill_id"],
-                    "grant_version": grant_version,
-                    "reason": None if allowed else "permission_denied",
+                    "grant_version": admission.grant_version,
+                    "reason": admission.reason,
                     **({"child_task_id": child_id} if child_id else {}),
                 },
             },
@@ -152,17 +206,11 @@ def dispatch_trace(
                     context_origin="source_explicit"
                     if binding["context_id"]
                     else "legacy_default",
+                    authority_scope=tuple(admission.scope),
                 )
             else:
-                saved = db.execute(
-                    "SELECT context_json FROM trace_task_contexts WHERE task_id=?",
-                    (task.task_id,),
-                ).fetchone()
-                if saved:
-                    parent = replace(
-                        TaskTraceContext(**json.loads(saved[0])),
-                        trace_id=binding["trace_id"],
-                    )
+                if parent is not None:
+                    parent = replace(parent, trace_id=binding["trace_id"])
                 else:
                     current = store.get_task(task.task_id)
                     if cast(dict[str, Any], current["payload"]).get("parent_task_id"):
@@ -175,14 +223,10 @@ def dispatch_trace(
                         if binding["context_id"]
                         else "legacy_default",
                     )
-                context = parent.child(child_id)
+                context = parent.child(child_id, admission.scope)
             payload = {
                 "body": params["request"],
-                "execution_context": {
-                    "schema_version": 1,
-                    "context_origin": context.context_origin,
-                    "parent_run_id": context.parent_run_id,
-                },
+                "execution_context": context.execution_context(),
             }
             if context.parent_task_id is not None:
                 payload["parent_task_id"] = context.parent_task_id
@@ -231,7 +275,7 @@ def dispatch_trace(
                 "operation": "dispatch",
                 "request_id": params["request_id"],
                 "status": "error",
-                "code": "not_authorized",
+                "code": admission.code,
                 "retryable": False,
             }
         validate_rpc_reply(reply, operation="dispatch", request_id=params["request_id"])

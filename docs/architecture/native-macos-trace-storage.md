@@ -51,7 +51,7 @@ plist and retained across ordinary service restarts. Core collection must also
 be enabled on the existing Core deployment.
 
 Schema 6 is upgraded using `AgentdStore`'s existing schema transformations.
-Schema 30 pairs retain the existing byte-preserving layout migration. No
+Schema 31 pairs retain the existing byte-preserving layout migration. No
 additional backup is created. Shared-schema conversion uses these durable phases:
 
 1. `staging`: install the startup barrier, recover the closed SQLite source into

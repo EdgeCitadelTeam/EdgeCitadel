@@ -282,6 +282,18 @@ edgecitadel connector status codex-local
 edgecitadel connector revoke codex-local
 ```
 
+A native connector can delegate only to recipients an administrator has granted.
+A new connector has an empty grant. Each `grant` call replaces the previous set,
+and calling it with no `--outbound-agent` removes delegation:
+
+```bash
+edgecitadel connector grant pi-local --outbound-agent endurance-pi --outbound-agent jim-eq-hermes
+```
+
+A delegated task inherits its delegator's recipient scope. An Agent it reaches can
+delegate further only to recipients that are both in its own grant and in that
+inherited scope.
+
 ## Local state and diagnostics
 
 ```bash

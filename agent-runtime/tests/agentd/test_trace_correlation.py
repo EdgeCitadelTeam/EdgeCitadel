@@ -12,6 +12,9 @@ from edgecitadel_agentd.trace_contract import TraceContractError
 from edgecitadel_agentd.trace_correlation import TaskTraceContext
 from edgecitadel_plugin_runtime.validator import default_validator
 
+# Every delegated context carries the scope its delegator could reach.
+SCOPE = frozenset({"agent-1", "agent-2", "agent-3"})
+
 FIXTURES = json.loads(
     (Path(__file__).parents[1] / "fixtures/traces/delegation.v1.json").read_text()
 )["fixtures"]
@@ -40,7 +43,7 @@ def test_three_levels_preserve_context_across_wire_and_results(fixture: dict) ->
     edges = []
     for index, task_id in enumerate([root, child, grandchild]):
         if index:
-            contexts.append(contexts[-1].child(task_id))
+            contexts.append(contexts[-1].child(task_id, SCOPE))
         context = contexts[-1]
         envelope = context.apply(
             message(task_id, f"agent-{index}", f"agent-{index + 1}")
@@ -70,7 +73,7 @@ def test_two_roots_in_same_conversation_never_share_ancestry() -> None:
     contexts = [
         TaskTraceContext(
             item["task_ids"][0], item["context_id"], item["trace_id"]
-        ).child(item["task_ids"][1])
+        ).child(item["task_ids"][1], SCOPE)
         for item in FIXTURES
     ]
     assert contexts[0].context_id == contexts[1].context_id
@@ -85,7 +88,7 @@ def test_legacy_root_does_not_gain_invented_trace_evidence() -> None:
     assert context.context_id == task_id
     assert context.context_origin == "legacy_default"
     assert context.trace_id is None
-    upgraded = context.child(str(uuid.uuid4()))
+    upgraded = context.child(str(uuid.uuid4()), SCOPE)
     wire = upgraded.apply(message(upgraded.task_id, "worker", "next"))
     assert "trace_id" not in wire["payload"]
     assert TaskTraceContext.from_envelope(wire).context_origin == "legacy_default"
@@ -96,7 +99,9 @@ def test_existing_receiver_executes_new_delegated_envelope(tmp_path: Path) -> No
     context = TaskTraceContext(
         fixture["task_ids"][0], fixture["context_id"], fixture["trace_id"]
     )
-    context = context.child(fixture["task_ids"][1]).child(fixture["task_ids"][2])
+    context = context.child(fixture["task_ids"][1], SCOPE).child(
+        fixture["task_ids"][2], SCOPE
+    )
     wire = context.apply(message(context.task_id, "sender", "worker"))
     store = AgentdStore(tmp_path / "agentd.sqlite3")
     try:
@@ -131,7 +136,7 @@ def test_reserved_handler_output_cannot_change_task_correlation() -> None:
     item = FIXTURES[0]
     context = TaskTraceContext(
         item["task_ids"][0], item["context_id"], item["trace_id"]
-    ).child(item["task_ids"][1])
+    ).child(item["task_ids"][1], SCOPE)
     wire = message(context.task_id, "worker", "sender", "result")
     wire["payload"].update(
         trace_id="b" * 32,

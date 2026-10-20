@@ -583,6 +583,43 @@ def test_agentd_rpc_keeps_operation_params_separate_from_auth(tmp_path, monkeypa
     }
 
 
+def test_connector_grant_replaces_native_delegation_recipients(
+    tmp_path, monkeypatch, capsys
+):
+    calls = []
+    monkeypatch.setattr(cli, "_start_agentd", lambda state_dir: None)
+    monkeypatch.setattr(
+        cli,
+        "_agentd_rpc",
+        lambda state_dir, operation, **params: calls.append((operation, params)),
+    )
+    assert "connector.grant" in cli.AGENTD_ADMIN_OPERATIONS
+    args = cli._build_parser().parse_args(
+        [
+            "connector",
+            "grant",
+            "pi-local",
+            "--outbound-agent",
+            "jim-eq-hermes",
+            "--outbound-agent",
+            "endurance-pi",
+            "--state-dir",
+            str(tmp_path),
+        ]
+    )
+    assert args.func(args) == 0
+    assert calls == [
+        (
+            "connector.grant",
+            {
+                "connector_id": "pi-local",
+                "outbound_agents": ["endurance-pi", "jim-eq-hermes"],
+            },
+        )
+    ]
+    assert "endurance-pi, jim-eq-hermes" in capsys.readouterr().out
+
+
 def test_pip_bundled_plugin_staging_excludes_installer_bytecode(tmp_path, monkeypatch):
     install_root = tmp_path / "share" / "edgecitadel"
     source = install_root / "agent-packages" / "examples" / "echo"

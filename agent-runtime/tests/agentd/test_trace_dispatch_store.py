@@ -21,6 +21,8 @@ def configured(tmp_path):
         agent_id="agent-a",
         capabilities=["edgecitadel_trace", "edgecitadel_delegate"],
     )
+    # Native connectors delegate only to administrator-granted recipients.
+    store.grant_connector(connector_id="native", outbound_agents=["worker", "third"])
     session = store.open_session(connector_id="native", token=token)["session_id"]
     binding = store.bind_trace(
         node_id="edge-a",
@@ -289,6 +291,7 @@ def test_receiver_persists_ancestry_for_next_dispatch_and_result(configured, tmp
             agent_id="worker",
             capabilities=["edgecitadel_trace", "edgecitadel_delegate"],
         )
+        receiver.grant_connector(connector_id="native", outbound_agents=["third"])
         session = receiver.open_session(connector_id="native", token=receiver_token)[
             "session_id"
         ]
@@ -407,7 +410,7 @@ def test_v9_migration_preserves_existing_journal(configured):
         flatten_connection(store._connection)
         store._connection.execute("PRAGMA user_version=9")
     with closing(AgentdStore(path)) as migrated:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 30
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 31
         assert [
             tuple(row)
             for row in migrated._connection.execute("SELECT * FROM trace_journal")

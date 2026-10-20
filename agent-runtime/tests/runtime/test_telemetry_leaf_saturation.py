@@ -168,6 +168,7 @@ async def test_configured_stream_saturation_keeps_cross_leaf_tasks_running(
                     "schema_version": 1,
                     "context_origin": "legacy_default",
                     "parent_run_id": None,
+                    "authority_scope": None,
                 },
             }
             assert all(t.status()["connected"] for t in transports)

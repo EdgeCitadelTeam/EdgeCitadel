@@ -82,6 +82,9 @@ async def exercise(socket, directory, recipient_services=None):
         name: register(name, "managed-agent", [], endpoint)
         for name, endpoint in endpoints.items()
     }
+    admin.call(
+        "connector.grant", connector_id="fixture-a", outbound_agents=sorted(recipients)
+    )
     if recipient_services:
         for target_socket, _ in [(socket, directory), *endpoints.values()]:
             deadline = asyncio.get_running_loop().time() + 10
@@ -207,6 +210,7 @@ async def exercise(socket, directory, recipient_services=None):
                     "schema_version": 1,
                     "context_origin": "legacy_default",
                     "parent_run_id": expected["trace_id"],
+                    "authority_scope": sorted(recipients),
                 },
             )
         assert task["state"] == "completed" and task["result"] == expected_result

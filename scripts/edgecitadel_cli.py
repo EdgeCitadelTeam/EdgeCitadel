@@ -80,6 +80,7 @@ AGENTD_ADMIN_OPERATIONS = frozenset(
     {
         "connector.register",
         "connector.configure",
+        "connector.grant",
         "connector.list",
         "connector.revoke",
         "managed.reconcile",
@@ -2633,6 +2634,19 @@ def command_connector(args: argparse.Namespace) -> int:
             action = "registered"
         print(f"Native connector {args.connector_id} {action} for {agent_id}.")
         return 0
+    if args.connector_action == "grant":
+        recipients = sorted(set(args.outbound_agent or ()))
+        _agentd_rpc(
+            state_dir,
+            "connector.grant",
+            connector_id=args.connector_id,
+            outbound_agents=recipients,
+        )
+        print(
+            f"Native connector {args.connector_id} may delegate to: "
+            f"{', '.join(recipients) if recipients else 'no recipients'}."
+        )
+        return 0
     if args.connector_action == "list":
         connectors = _agentd_rpc(state_dir, "connector.list")
         if args.json:
@@ -2667,6 +2681,10 @@ def command_connector(args: argparse.Namespace) -> int:
             print(f"Host: {connector['host_type']}")
             print(f"Agent: {connector['agent_id']}")
             print(f"Credential: {'revoked' if connector['revoked'] else 'active'}")
+            print(
+                "Delegates to: "
+                + (", ".join(connector.get("outbound_agents", [])) or "no recipients")
+            )
             print(f"Session: {'active' if connector['session_active'] else 'closed'}")
         return 0 if not connector["revoked"] else 1
     _agentd_rpc(
@@ -4452,6 +4470,19 @@ def _build_parser() -> argparse.ArgumentParser:
     connector_register.add_argument("--agent-id")
     connector_register.add_argument("--state-dir", help=argparse.SUPPRESS)
     connector_register.set_defaults(func=command_connector)
+    connector_grant = connector_commands.add_parser(
+        "grant",
+        help="Set the recipients a Plugin Connector may delegate to (replaces the grant)",
+    )
+    connector_grant.add_argument("connector_id")
+    connector_grant.add_argument(
+        "--outbound-agent",
+        action="append",
+        metavar="AGENT_ID",
+        help="Recipient Agent ID; repeat for several, omit to revoke delegation",
+    )
+    connector_grant.add_argument("--state-dir", help=argparse.SUPPRESS)
+    connector_grant.set_defaults(func=command_connector)
     connector_list = connector_commands.add_parser(
         "list", help="List Plugin Connector sessions"
     )

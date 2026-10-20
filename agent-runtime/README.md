@@ -253,7 +253,7 @@ paired super-journal at full inode quota. Passes that change rows still use norm
 commit and may refuse for lack of capacity; bounded reclamation under full quota
 is not yet qualified.
 
-For a stopped, clean schema-30 DELETE pair already owned by the dedicated UID,
+For a stopped, clean schema-31 DELETE pair already owned by the dedicated UID,
 provision its private `trace/` quota mount, then run under that UID with
 `no_new_privs` enabled and no capabilities:
 
@@ -1064,7 +1064,7 @@ Native macOS uses a private, fully allocated 512 MiB journaled HFS+ disk image
 with the existing 256 MiB application admission thresholds. Task state and its
 key stay outside the trace volume. Run `edgecitadel service storage-setup` after
 installing matching runtime code; this stops the service and resumes any recorded
-schema-6/shared or schema-30/paired migration without creating another backup.
+schema-6/shared or schema-31/paired migration without creating another backup.
 Use `EDGECITADEL_TRACE_SYNC=1 edgecitadel service start` to persist the launchd
 export opt-in. See [native storage and migration](../docs/architecture/native-macos-trace-storage.md)
 for the trust boundary, crash recovery, diagnostics and qualification commands.

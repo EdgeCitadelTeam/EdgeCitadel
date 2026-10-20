@@ -49,6 +49,10 @@ def prepare(path, *, managed=False):
         agent_id="owner",
         capabilities=["edgecitadel_trace", "edgecitadel_delegate"],
     )
+    if not managed:
+        store.grant_connector(
+            connector_id="owner", outbound_agents=["owned-worker", "worker"]
+        )
     session = store.open_session(connector_id="owner", token=token)
     task_id = None
     if managed:

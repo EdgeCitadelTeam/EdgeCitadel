@@ -50,6 +50,7 @@ ADMIN_OPERATIONS = frozenset(
         "trace.sync.control",
         "connector.register",
         "connector.configure",
+        "connector.grant",
         "connector.list",
         "connector.revoke",
         "managed.reconcile",
@@ -441,6 +442,12 @@ def dispatch(
             capabilities=list(params.get("capabilities", [])),
         )
         return {"configured": True}
+    if operation == "connector.grant":
+        store.grant_connector(
+            connector_id=str(params.get("connector_id", "")),
+            outbound_agents=params.get("outbound_agents"),
+        )
+        return {"granted": True}
     if operation == "connector.list":
         return store.list_connectors()
     if operation == "connector.revoke":
@@ -538,12 +545,7 @@ def dispatch(
     if operation == "agent.list":
         return store.list_agents()
     if operation == "task.create":
-        if connector["host_type"] == "managed-agent":
-            store.authorize_managed_recipient(
-                connector_id,
-                str(connector["agent_id"]),
-                str(params.get("recipient_id", "")),
-            )
+        store.authorize_recipient(connector, str(params.get("recipient_id", "")))
         payload = params.get("payload", {})
         if not isinstance(payload, Mapping):
             raise StoreError("task payload must be an object")

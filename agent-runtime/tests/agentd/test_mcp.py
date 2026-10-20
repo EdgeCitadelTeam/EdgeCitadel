@@ -40,6 +40,11 @@ def test_native_mcp_session_tools_and_cleanup(tmp_path: Path) -> None:
                 capabilities=[str(tool["name"]) for tool in TOOLS],
             ),
         )
+        admin.call(
+            "connector.grant",
+            connector_id="codex-local",
+            outbound_agents=["remote-agent"],
+        )
         token_path = state_dir / "connectors/codex-local.token"
         token_path.parent.mkdir(mode=0o700, parents=True)
         token_path.write_text(str(codex_registration["token"]) + "\n")
@@ -83,6 +88,11 @@ def test_native_mcp_session_tools_and_cleanup(tmp_path: Path) -> None:
                 agent_id="edge-one-pi",
                 capabilities=["edgecitadel_delegate", "edgecitadel_task_status"],
             ),
+        )
+        admin.call(
+            "connector.grant",
+            connector_id="pi-local",
+            outbound_agents=["edge-one-codex"],
         )
         sender = AgentdClient(
             socket_path,

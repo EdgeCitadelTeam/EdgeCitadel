@@ -61,7 +61,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -639,6 +639,22 @@ class AgentdStore:
             self._connection.execute("PRAGMA main.user_version=30")
             self._connection.execute("PRAGMA task_state.user_version=30")
 
+        if version < 31:
+            columns = {
+                row[1]
+                for row in self._connection.execute(
+                    "PRAGMA task_state.table_info(connectors)"
+                )
+            }
+            if "outbound_agents_json" not in columns:
+                # Native connectors start with no delegation recipients.
+                self._connection.execute(
+                    "ALTER TABLE task_state.connectors ADD COLUMN "
+                    "outbound_agents_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            self._connection.execute("PRAGMA main.user_version=31")
+            self._connection.execute("PRAGMA task_state.user_version=31")
+
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.
 
@@ -994,6 +1010,7 @@ class AgentdStore:
             rows = self._connection.execute(
                 """
                 SELECT connector_id, host_type, agent_id, capabilities_json,
+                       outbound_agents_json,
                        card_json, revoked_at_ms, created_at_ms, updated_at_ms,
                        EXISTS (
                            SELECT 1 FROM sessions s
@@ -1011,6 +1028,7 @@ class AgentdStore:
                 "host_type": row["host_type"],
                 "agent_id": row["agent_id"],
                 "capabilities": json.loads(row["capabilities_json"])["items"],
+                "outbound_agents": json.loads(row["outbound_agents_json"]),
                 "card": json.loads(row["card_json"]) if row["card_json"] else None,
                 "revoked": row["revoked_at_ms"] is not None,
                 "session_active": bool(row["session_active"]),
@@ -1275,22 +1293,60 @@ class AgentdStore:
             ).fetchall()
         return [cast(dict[str, object], json.loads(row["record_json"])) for row in rows]
 
-    def authorize_managed_recipient(
-        self, connector_id: str, agent_id: str, recipient_id: str
-    ) -> None:
-        """Use the administrator-reconciled package grant, never the Agent card."""
-        owners = [
-            record
-            for record in self.list_managed_agents()
-            if agent_id in record.get("agent_ids", [])
-        ]
+    def authorize_recipient(self, connector: sqlite3.Row, recipient_id: str) -> None:
+        """Use the administrator-held delegation grant, never the Agent card."""
+        from .delegation_authority import delegation_grant
+
+        grant = delegation_grant(self, connector)
+        if not grant.usable or recipient_id not in grant.recipients:
+            raise StoreError(
+                "Managed Agent recipient is not authorized by its package"
+                if connector["host_type"] == "managed-agent"
+                else "native connector recipient is not authorized by its grant"
+            )
+
+    def grant_connector(self, *, connector_id: str, outbound_agents: object) -> None:
+        """Set a native connector's delegation recipients (management authority only)."""
         if (
-            connector_id != f"managed-{agent_id}"
-            or len(owners) != 1
-            or owners[0].get("desired_state") != "running"
-            or recipient_id not in owners[0].get("outbound_agents", [])
+            not isinstance(outbound_agents, list)
+            or len(outbound_agents) > 256
+            or not all(
+                isinstance(agent, str) and AGENT_ID_PATTERN.fullmatch(agent)
+                for agent in outbound_agents
+            )
+            or len(set(outbound_agents)) != len(outbound_agents)
         ):
-            raise StoreError("Managed Agent recipient is not authorized by its package")
+            raise StoreError("outbound_agents must be unique Agent identities")
+        with self._lock, self._connection:
+            existing = self._connection.execute(
+                "SELECT agent_id,host_type,outbound_agents_json FROM connectors "
+                "WHERE connector_id=? AND revoked_at_ms IS NULL",
+                (connector_id,),
+            ).fetchone()
+            if existing is None:
+                raise StoreError("connector does not exist or is revoked")
+            if existing["host_type"] == "managed-agent":
+                raise StoreError("Managed Agent recipients come from its package grant")
+            encoded = json.dumps(sorted(outbound_agents), separators=(",", ":"))
+            if existing["outbound_agents_json"] == encoded:
+                return
+            now = _now_ms()
+            self._connection.execute(
+                "UPDATE connectors SET outbound_agents_json=?, updated_at_ms=? "
+                "WHERE connector_id=?",
+                (encoded, now, connector_id),
+            )
+            self._record_event_locked(
+                event_type="connector.grant_reconciled",
+                agent_id=str(existing["agent_id"]),
+                task_id=None,
+                trace_id=None,
+                attributes={
+                    "connector_id": connector_id,
+                    "recipient_count": len(outbound_agents),
+                },
+                now=now,
+            )
 
     def open_session(
         self, *, connector_id: str, token: str, lease_seconds: int = 45
@@ -1991,6 +2047,11 @@ class AgentdStore:
         payload = envelope.get("payload", {})
         if not isinstance(payload, Mapping):
             raise StoreError("transport envelope payload must be an object")
+        try:
+            correlation = TaskTraceContext.from_envelope(envelope)
+        except TraceContractError as error:
+            # An invalid capsule is poison for the broker, like any invalid envelope.
+            raise StoreError(error.code) from error
         existing: dict[str, object] | None = None
         try:
             existing = self.get_task(task_id)
@@ -2030,7 +2091,7 @@ class AgentdStore:
                     (task_id,),
                 ).fetchone()
             if saved_context is not None and json.loads(saved_context[0]) != asdict(
-                TaskTraceContext.from_envelope(envelope)
+                correlation
             ):
                 conflicts.append("execution_context")
             if conflicts:
@@ -2058,7 +2119,7 @@ class AgentdStore:
             payload=payload,
             deadline_at_ms=(int(deadline) if deadline is not None else None),
             queue_transport=False,
-            correlation=TaskTraceContext.from_envelope(envelope),
+            correlation=correlation,
         )
         return self.transition_task(
             task_id=str(task["task_id"]),

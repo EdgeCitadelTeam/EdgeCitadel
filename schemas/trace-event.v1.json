@@ -482,7 +482,9 @@
                       "unsupported_version",
                       "retention_expired",
                       "quota_exceeded",
-                      "unknown"
+                      "unknown",
+                      "execution_held",
+                      "outside_authority_scope"
                     ]
                   },
                   {
@@ -574,7 +576,9 @@
                       "unsupported_version",
                       "retention_expired",
                       "quota_exceeded",
-                      "unknown"
+                      "unknown",
+                      "execution_held",
+                      "outside_authority_scope"
                     ]
                   },
                   {

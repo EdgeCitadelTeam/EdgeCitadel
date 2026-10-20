@@ -7,7 +7,8 @@
   "required": [
     "schema_version",
     "context_origin",
-    "parent_run_id"
+    "parent_run_id",
+    "authority_scope"
   ],
   "properties": {
     "schema_version": {
@@ -24,6 +25,23 @@
         {
           "type": "string",
           "pattern": "^[a-f0-9]{32}$(?![\\s\\S])"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "authority_scope": {
+      "description": "Recipients the delegating invocation could reach; a child can only narrow it. Null only for root tasks.",
+      "anyOf": [
+        {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+          }
         },
         {
           "type": "null"
