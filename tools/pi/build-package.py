@@ -53,6 +53,11 @@ permissions:
   network:
     outbound: {('["https://api.typesafe.ai", "http://127.0.0.1"]' if role == "root" else '["http://127.0.0.1:11434"]')}
   devices: []
+  # Pi worker tools, gated by effect.authorize. The root holds them only to
+  # delegate them: a child's effects never exceed its delegator's.
+  effects:
+    - {{effect_class: fs.write, target: "workspace/*"}}
+    - {{effect_class: process.exec, target: bash}}
 security:
   sandbox: restricted
   secrets: {("[TYPESAFE_API_KEY]" if role == "root" else "[]")}

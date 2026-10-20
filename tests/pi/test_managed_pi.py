@@ -297,3 +297,37 @@ def test_a_cancelled_turn_is_never_resumed_or_repeated(pi, monkeypatch):
     result, state = asyncio.run(asyncio.wait_for(scenario(), 10))
     assert state == "failed" and "not repeated" in result["body"]
     assert len(harness.process.of_type("prompt")) == 1
+
+
+def test_effect_authorization_fails_closed(pi):
+    from edgecitadel_agentd.client import AgentdClientError
+
+    harness = pi.Harness()
+    event = {"effect_class": "fs.write", "target": "workspace/a", "tool_call_id": "c"}
+    replies = iter(
+        [
+            {"status": "ok", "result": {}},
+            {"status": "error", "code": "egress_held"},
+            AgentdClientError("agentd is unavailable"),
+        ]
+    )
+    calls = []
+
+    def call(operation, **params):
+        calls.append((operation, params))
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    context = SimpleNamespace(
+        client=SimpleNamespace(call=call), trace=SimpleNamespace(binding_id="b")
+    )
+    decide = lambda: asyncio.run(harness.authorize_effect(event, context))  # noqa: E731
+    assert decide() == {"allowed": True, "code": None}
+    assert decide() == {"allowed": False, "code": "egress_held"}
+    assert decide() == {"allowed": False, "code": "effect_authorization_unavailable"}
+    assert calls[0][1]["binding_id"] == "b" and calls[0][1]["target"] == "workspace/a"
+    context.trace.binding_id = None
+    assert decide()["code"] == "execution_binding_unavailable"
+    assert len(calls) == 3

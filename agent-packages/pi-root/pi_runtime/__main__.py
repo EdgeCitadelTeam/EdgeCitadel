@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from edgecitadel_agentd.client import AgentdClientError
 from edgecitadel_agentd.managed_runtime import run
 
 STATE = Path(os.environ["EDGECITADEL_PLUGIN_STATE_DIR"])
@@ -237,6 +238,29 @@ class Harness:
                 context.trace.task_id, body=f"Pi executing {event['name']}"
             )
 
+    async def authorize_effect(self, event, context):
+        """Ask agentd before a Pi tool's external effect; deny on any doubt."""
+        if context.trace.binding_id is None:
+            return {"allowed": False, "code": "execution_binding_unavailable"}
+        try:
+            reply = await asyncio.to_thread(
+                context.client.call,
+                "effect.authorize",
+                schema_version=1,
+                request_id=str(uuid4()),
+                binding_id=context.trace.binding_id,
+                effect_class=event["effect_class"],
+                target=event["target"],
+                tool_call_id=event.get("tool_call_id"),
+            )
+        except AgentdClientError:
+            return {"allowed": False, "code": "effect_authorization_unavailable"}
+        allowed = isinstance(reply, dict) and reply.get("status") == "ok"
+        return {
+            "allowed": allowed,
+            "code": None if allowed else str(reply.get("code", "denied")),
+        }
+
     async def route(self, event, context, record):
         roster = await asyncio.to_thread(context.client.call, "agent.list")
         agents = roster.get("agents", []) if isinstance(roster, dict) else roster
@@ -425,9 +449,11 @@ class Harness:
                     elif event["type"] == "call":
                         self.open_call = event["id"]
                         try:
-                            if ROLE != "root":
+                            if event["operation"] == "effect":
+                                result = await self.authorize_effect(event, context)
+                            elif ROLE != "root":
                                 raise ValueError("worker cannot delegate")
-                            if event["operation"] == "route":
+                            elif event["operation"] == "route":
                                 result = await self.route(event, context, record)
                             elif event["operation"] == "delegate":
                                 result = await self.delegate(event, context, record)

@@ -2,7 +2,7 @@
   "files": [
     {
       "path": "pi_runtime/__main__.py",
-      "sha256": "0d8a5017b882bddfc78ac0eba4a5805d866239e1b25e08432e64cfb28752ec58"
+      "sha256": "6c2d96e39824741fecb606d927d4fc09cdbad6e2d006a67de30e2804e3f1ef81"
     },
     {
       "path": "pi_runtime/config.yaml",
@@ -10,11 +10,11 @@
     },
     {
       "path": "pi_runtime/session.mjs",
-      "sha256": "754183b3ba965db9340cc6b80d86165e74a9e3a47d55b22b91d72a739c003502"
+      "sha256": "33e66cfcd44f7a751aa6d619cb49012b5be1d0311f3d1d715a85c93fa9ff3ee0"
     },
     {
       "path": "plugin.yaml",
-      "sha256": "f3249e5750d8523783c98444e52788a62e92119292e2470ab6c0c89abbcdae75"
+      "sha256": "7bb4bb8736b3a50b5d75395712c5ea6a8f1e267b2dcca2adf084a242562f3b47"
     },
     {
       "path": "skills/pi-task/SKILL.md",
