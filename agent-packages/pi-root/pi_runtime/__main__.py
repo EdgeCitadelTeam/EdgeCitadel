@@ -17,6 +17,12 @@ from edgecitadel_agentd.managed_runtime import run
 
 STATE = Path(os.environ["EDGECITADEL_PLUGIN_STATE_DIR"])
 ROLE = os.environ["PI_ROLE"]
+ABORT_SECONDS = 5
+RESUME_NOTE = (
+    "An operator paused this task and has now resumed it. Continue the original "
+    "task from where it stopped. Check the current state first and do not repeat "
+    "actions that already completed.\n\nOriginal task:\n"
+)
 AUTHORIZED = {"endurance-pi": "pi.execute", "jim-eq-hermes": "reasoning.chat"}
 TERMINAL = {
     "completed",
@@ -120,6 +126,8 @@ class Harness:
         )
         self.db.commit()
         self.process = None
+        # The private IPC call the Pi turn is waiting on, if any.
+        self.open_call = None
 
     def save(self, record):
         with self.db:
@@ -149,6 +157,46 @@ class Harness:
     async def send(self, value):
         self.process.stdin.write((json.dumps(value) + "\n").encode())
         await self.process.stdin.drain()
+
+    async def stop_process(self):
+        if self.process and self.process.returncode is None:
+            self.process.terminate()
+            try:
+                await asyncio.wait_for(self.process.wait(), 5)
+            except TimeoutError:
+                self.process.kill()
+                await self.process.wait()
+
+    async def abort_turn(self):
+        """Abort the current Pi turn so the session can take the next prompt.
+
+        The turn may be waiting on an IPC call this adapter will never answer;
+        reject it so the Pi stream ends. A turn that does not end in time is
+        stopped with its process, as for any failure. Never rerun tools.
+        """
+        if not self.process or self.process.returncode is not None:
+            return
+        try:
+            await self.send({"type": "abort"})
+            if self.open_call is not None:
+                await self.send(
+                    {"type": "reply", "id": self.open_call, "error": "interrupted"}
+                )
+                self.open_call = None
+            async with asyncio.timeout(ABORT_SECONDS):
+                while True:
+                    line = await self.process.stdout.readline()
+                    if not line:
+                        return
+                    event = json.loads(line)
+                    if event["type"] == "call":
+                        await self.send(
+                            {"type": "reply", "id": event["id"], "error": "interrupted"}
+                        )
+                    elif event["type"] in {"result", "error"}:
+                        return
+        except (TimeoutError, OSError, ValueError):
+            await self.stop_process()
 
     async def observe_event(self, event, context, spans):
         key = (event["kind"], event["id"])
@@ -211,14 +259,7 @@ class Harness:
             else "No authorized online agent currently matches this request. No task was dispatched."
         }
 
-    async def delegate(self, event, context, record):
-        recipient = event["recipient"]
-        if recipient not in AUTHORIZED or recipient != record.get("decision", {}).get(
-            "choice"
-        ):
-            raise ValueError("recipient was not selected from the authorized roster")
-        if record.get("child_task_id"):
-            raise ValueError("one dispatch per Pi turn; repeated execution refused")
+    async def dispatch(self, recipient, context, record):
         child = str(uuid4())
         record.update(child_task_id=child, recipient=recipient, dispatch_attempted=True)
         self.save(record)  # Reserve the ID before the single dispatch attempt.
@@ -252,6 +293,22 @@ class Harness:
             body=f"Jev selected {recipient}; Pi dispatched {child}",
             extra={"executor": recipient, "child_task_id": child},
         )
+        return child
+
+    async def delegate(self, event, context, record):
+        recipient = event["recipient"]
+        if recipient not in AUTHORIZED or recipient != record.get("decision", {}).get(
+            "choice"
+        ):
+            raise ValueError("recipient was not selected from the authorized roster")
+        if record.get("child_task_id"):
+            # A resumed turn waits for the child it already dispatched to the
+            # same recipient; it never dispatches again.
+            if not record.get("resumed") or record.get("recipient") != recipient:
+                raise ValueError("one dispatch per Pi turn; repeated execution refused")
+            child = record["child_task_id"]
+        else:
+            child = await self.dispatch(recipient, context, record)
         until = time.monotonic() + 1200
         while time.monotonic() < until:
             task = await asyncio.to_thread(
@@ -320,31 +377,40 @@ class Harness:
         previous = self.db.execute(
             "SELECT document FROM requests WHERE id=?", (identity,)
         ).fetchone()
+        resumed = bool(getattr(context, "resumed", False))
         if previous:
             saved = json.loads(previous[0])
             if saved["body"] != body or saved["session_key"] != session_key:
                 return {
                     "body": "request_id already used for a different request."
                 }, "rejected"
-            return saved.get(
-                "result",
-                {
+            if not (resumed and saved.get("state") == "paused"):
+                if saved.get("state") in {"completed", "failed"}:
+                    return saved["result"], saved["state"]
+                return {
                     "body": "Prior execution interrupted or still unconfirmed; not repeated.",
                     "child_task_id": saved.get("child_task_id"),
-                },
-            ), saved.get("state", "failed")
-        record = {
-            "id": identity,
-            "task_id": envelope["task_id"],
-            "body": body,
-            "session_key": session_key,
-        }
+                }, "failed"
+            # The runtime resumes the invocation a containment hold paused: the
+            # same Pi session continues, and a dispatched child is awaited.
+            record = {**saved, "resumed": True}
+            del record["state"]
+        else:
+            record = {
+                "id": identity,
+                "task_id": envelope["task_id"],
+                "body": body,
+                "session_key": session_key,
+            }
         self.save(record)
+        prompt = (
+            RESUME_NOTE + body if record.get("resumed") and ROLE != "root" else body
+        )
         spans = {}
         try:
             await self.start()
             await self.send(
-                {"type": "prompt", "body": body, "session_key": session_key}
+                {"type": "prompt", "body": prompt, "session_key": session_key}
             )
             async with asyncio.timeout(1500):
                 while True:
@@ -357,6 +423,7 @@ class Harness:
                     if event["type"] == "event":
                         await self.observe_event(event, context, spans)
                     elif event["type"] == "call":
+                        self.open_call = event["id"]
                         try:
                             if ROLE != "root":
                                 raise ValueError("worker cannot delegate")
@@ -366,9 +433,6 @@ class Harness:
                                 result = await self.delegate(event, context, record)
                             else:
                                 raise ValueError("unknown Pi operation")
-                            await self.send(
-                                {"type": "reply", "id": event["id"], "result": result}
-                            )
                         except Exception as error:
                             record["error_type"] = type(error).__name__
                             self.save(record)
@@ -379,7 +443,12 @@ class Harness:
                                     "error": f"{type(error).__name__}: operation failed; no automatic retry. Child: {record.get('child_task_id', 'none')}",
                                 }
                             )
+                            self.open_call = None
                             raise
+                        await self.send(
+                            {"type": "reply", "id": event["id"], "result": result}
+                        )
+                        self.open_call = None
                     elif event["type"] in {"result", "error"}:
                         if event["type"] == "error":
                             raise RuntimeError(
@@ -399,15 +468,17 @@ class Harness:
                         record.update(result=result, state="completed")
                         self.save(record)
                         return result, "completed"
+        except asyncio.CancelledError:
+            # The runtime paused or cancelled this invocation. End the Pi turn
+            # so no further tool runs; a pause may later resume this record.
+            await self.abort_turn()
+            paused = getattr(context, "interruption", None) == "pause"
+            record.update(state="paused" if paused else "cancelled")
+            self.save(record)
+            raise
         except Exception as error:
             # Stop this Pi turn before another task can reuse IPC. Never rerun tools.
-            if self.process and self.process.returncode is None:
-                self.process.terminate()
-                try:
-                    await asyncio.wait_for(self.process.wait(), 5)
-                except TimeoutError:
-                    self.process.kill()
-                    await self.process.wait()
+            await self.stop_process()
             result = {
                 "body": f"{type(error).__name__}: Pi execution failed or is unconfirmed. No automatic retry.",
                 "child_task_id": record.get("child_task_id"),
