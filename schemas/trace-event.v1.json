@@ -138,7 +138,8 @@
         "security",
         "transport",
         "broker",
-        "infrastructure"
+        "infrastructure",
+        "lineage"
       ]
     },
     "phase": {
@@ -488,6 +489,10 @@
                     "type": "null"
                   }
                 ]
+              },
+              "child_task_id": {
+                "type": "string",
+                "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
               }
             },
             "required": [
@@ -1483,6 +1488,77 @@
             },
             "required": [
               "provenance"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "lineage"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "phase": {
+            "type": "string",
+            "enum": [
+              "used",
+              "generated"
+            ]
+          },
+          "trace_id": {
+            "type": "string",
+            "pattern": "^(?!.*[\\r\\n])[0-9a-f]{32}$"
+          },
+          "execution_attempt_id": {
+            "type": "string",
+            "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "span_id": {
+            "type": "null"
+          },
+          "parent_span_id": {
+            "type": "null"
+          },
+          "duration_ms": {
+            "type": "null"
+          },
+          "attributes": {
+            "type": "object",
+            "properties": {
+              "lineage_version": {
+                "const": 1
+              },
+              "entity": {
+                "type": "string",
+                "enum": [
+                  "request",
+                  "result"
+                ]
+              },
+              "entity_task_id": {
+                "type": "string",
+                "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "version_id": {
+                "type": "string",
+                "pattern": "^(?!.*[\\r\\n])[0-9a-f]{64}$"
+              },
+              "external": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "lineage_version",
+              "entity",
+              "entity_task_id",
+              "version_id",
+              "external"
             ],
             "additionalProperties": false
           }

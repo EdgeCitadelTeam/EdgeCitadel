@@ -51,6 +51,7 @@ from .trace_finish import close_session_bindings_locked, finish_trace
 from .trace_import import IMPORT_SCHEMA_SQL
 from .trace_journal import TRACE_SCHEMA_SQL
 from .trace_lifecycle import record_task_boundary
+from .trace_lineage import record_result_generated
 from .trace_marker_compaction import coalesce_loss_markers
 from .trace_retention import maintain_capacity
 from .trace_settlement_apply import SETTLEMENT_SCHEMA_SQL
@@ -1343,6 +1344,7 @@ class AgentdStore:
         queue_transport: bool = True,
         correlation: TaskTraceContext | None = None,
         trace_node_id: str | None = None,
+        trace_causes: list[dict[str, str]] | None = None,
     ) -> dict[str, object]:
         if not sender_id or not recipient_id:
             raise StoreError("sender_id and recipient_id are required")
@@ -1430,6 +1432,7 @@ class AgentdStore:
                 # Receipt queues work at the daemon; only the worker's later
                 # acceptance/execution can claim the recipient perspective.
                 trace_source_role="sender" if queue_transport else "daemon",
+                trace_causes=trace_causes,
             )
             if queue_transport and not self._agent_is_local_locked(recipient_id):
                 message_id = str(uuid.uuid4())
@@ -1709,31 +1712,39 @@ class AgentdStore:
                 if state == "cancelled" and actor_id == row["sender_id"]:
                     recipient_id = str(row["recipient_id"])
                     message_type = "cancel"
-                if self._agent_is_local_locked(recipient_id):
-                    return self._task_mapping(
-                        self._connection.execute(
-                            "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
-                        ).fetchone()
+                if not self._agent_is_local_locked(recipient_id):
+                    envelope: dict[str, object] = {
+                        "v": 1,
+                        "id": message_id,
+                        "type": message_type,
+                        "sender_id": actor_id,
+                        "recipient_id": recipient_id,
+                        "task_id": task_id,
+                        "timestamp": self._iso_timestamp(now),
+                        "payload": dict(
+                            result or ({"reason": reason} if reason else {})
+                        ),
+                    }
+                    if message_type == "result":
+                        envelope["task_state"] = wire_state
+                    self._queue_transport_locked(
+                        message_id=message_id,
+                        task_id=task_id,
+                        subject=f"agents.{recipient_id}.inbox",
+                        envelope=envelope,
+                        now=now,
                     )
-                envelope: dict[str, object] = {
-                    "v": 1,
-                    "id": message_id,
-                    "type": message_type,
-                    "sender_id": actor_id,
-                    "recipient_id": recipient_id,
-                    "task_id": task_id,
-                    "timestamp": self._iso_timestamp(now),
-                    "payload": dict(result or ({"reason": reason} if reason else {})),
-                }
-                if message_type == "result":
-                    envelope["task_state"] = wire_state
-                self._queue_transport_locked(
-                    message_id=message_id,
-                    task_id=task_id,
-                    subject=f"agents.{recipient_id}.inbox",
-                    envelope=envelope,
-                    now=now,
-                )
+        if (
+            state == "completed"
+            and result is not None
+            and session_id is not None
+            and not self._connection.in_transaction
+        ):
+            # Only the executing recipient supplies a session; remote results
+            # and daemon outcomes have no local producing invocation.
+            record_result_generated(
+                self, task_id=task_id, session_id=session_id, now_ms=now
+            )
         return self.get_task(task_id)
 
     def claim_next_task(
@@ -2622,6 +2633,7 @@ class AgentdStore:
         trace_node_id: str | None = None,
         trace_source_role: str | None = None,
         trace_evidence_kind: str = "source_observed",
+        trace_causes: list[dict[str, str]] | None = None,
         record_lifecycle: bool = True,
     ) -> str:
         event_id = str(uuid.uuid4())
@@ -2639,6 +2651,7 @@ class AgentdStore:
                     node_id=trace_node_id,
                     source_role=trace_source_role,
                     evidence_kind=trace_evidence_kind,
+                    causes=trace_causes,
                 )
             except TraceContractError as error:
                 raise StoreError(error.code) from error

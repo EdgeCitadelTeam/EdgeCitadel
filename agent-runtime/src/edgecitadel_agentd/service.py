@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
@@ -27,6 +28,7 @@ from .store import AgentdStore, StoreError
 from .storage_layout import StorageLayout
 from .supervisor import ManagedAgentSupervisor
 from .trace_contract import TraceContractError, validate_rpc_reply
+from .trace_lineage import record_result_used
 from .trace_security import (
     flush_authentication_rejections,
     note_authentication_rejection,
@@ -590,9 +592,18 @@ def dispatch(
             include_terminal=bool(params.get("include_terminal", True)),
         )
     if operation == "task.get":
-        return store.get_task_for(
+        task = store.get_task_for(
             str(params.get("task_id", "")), str(connector["agent_id"])
         )
+        if task["state"] == "completed" and task["sender_id"] == connector["agent_id"]:
+            # Reading a completed child is the parent's consumption of its result.
+            record_result_used(
+                store,
+                task_id=str(task["task_id"]),
+                reader_id=str(connector["agent_id"]),
+                now_ms=time.time_ns() // 1_000_000,
+            )
+        return task
     if operation == "task.transition":
         task_id = str(params.get("task_id", ""))
         requested_state = str(params.get("state", ""))

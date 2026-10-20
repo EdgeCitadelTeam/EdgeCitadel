@@ -227,6 +227,14 @@ def validate_event(event: dict[str, Any]) -> bytes:
         attributes = event["attributes"]
         if attributes["from_task_id"] == attributes["to_task_id"]:
             raise TraceContractError("invalid_join")
+    if event["kind"] == "dispatch":
+        # Only an allowed dispatch creates a child; it must name exactly that child.
+        if (event["phase"] == "allowed") != ("child_task_id" in event["attributes"]):
+            raise TraceContractError("invalid_dispatch_child")
+    if event["kind"] == "lineage":
+        # A producer is never "external"; only a consumed root input can be.
+        if event["phase"] == "generated" and event["attributes"]["external"]:
+            raise TraceContractError("invalid_lineage_origin")
     return encoded
 
 

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from . import trace_capacity
+from . import trace_lineage as lineage
 from .trace_authority import (
     BindingAuthority,
     ExecutionAuthority,
@@ -198,7 +199,25 @@ def bind_trace(
             metadata = payload.get("execution_context", {})
             if not isinstance(metadata, dict):
                 raise TraceContractError("unsupported_execution_context")
-            TraceJournal(db).record(
+            parent_task_id = (
+                correlation["parent_task_id"]
+                if correlation
+                else payload.get("parent_task_id")
+            )
+            parent_run_id = (
+                correlation["parent_run_id"]
+                if correlation
+                else metadata.get("parent_run_id")
+            )
+            # The task's arrival on this node (its dispatch-created or ingested
+            # first lifecycle event) is what started this invocation.
+            arrival = (
+                lineage.task_event(db, result["trace_id"], result["task_id"])
+                if task_row
+                else None
+            )
+            causes = [lineage.reference(arrival)] if arrival else []
+            started = TraceJournal(db).record(
                 node_id,
                 {
                     "schema_version": 1,
@@ -207,12 +226,8 @@ def bind_trace(
                     "trace_id": result["trace_id"],
                     "task_id": result["task_id"],
                     "context_id": result["context_id"],
-                    "parent_task_id": correlation["parent_task_id"]
-                    if correlation
-                    else payload.get("parent_task_id"),
-                    "parent_run_id": correlation["parent_run_id"]
-                    if correlation
-                    else metadata.get("parent_run_id"),
+                    "parent_task_id": parent_task_id,
+                    "parent_run_id": parent_run_id,
                     "execution_attempt_id": result["execution_attempt_id"],
                     "span_id": None,
                     "parent_span_id": None,
@@ -223,12 +238,27 @@ def bind_trace(
                     .replace("+00:00", "Z"),
                     "duration_ms": None,
                     "evidence_kind": "source_observed",
-                    "causes": [],
+                    "causes": causes,
                     "attributes": {},
                     "supersedes_event_id": None,
                 },
                 selected=True,
             )
+            if task_row is not None:
+                # A root task's request has no producer inside the trace: it is
+                # declared external input rather than left as an open edge.
+                lineage.record(
+                    db,
+                    node_id,
+                    started,
+                    phase="used",
+                    entity="request",
+                    entity_task_id=result["task_id"],
+                    version=lineage.version_id("request", result["task_id"], payload),
+                    external=parent_task_id is None and parent_run_id is None,
+                    causes=causes,
+                    occurred_at=started["occurred_at"],
+                )
         else:
             result = {
                 key: existing[key]

@@ -34,6 +34,17 @@ _REASONS = {
 }
 
 
+def configured_node_id(store: AgentdStore) -> str | None:
+    """The enrolled host identity; standalone stores have none."""
+    identity_path = store.state_directory.parent / "node.json"
+    try:
+        return str(json.loads(identity_path.read_text())["agent_id"])
+    except FileNotFoundError:
+        return None
+    except (ValueError, KeyError, TypeError) as error:
+        raise TraceContractError("invalid_source_node") from error
+
+
 def record_task_boundary(
     store: AgentdStore,
     *,
@@ -46,17 +57,12 @@ def record_task_boundary(
     node_id: str | None = None,
     source_role: str | None = None,
     evidence_kind: str = "source_observed",
+    causes: list[dict[str, str]] | None = None,
 ) -> Obligation | None:
     phase = event_type.removeprefix("task.")
     if not event_type.startswith("task.") or phase not in _PHASES or task_id is None:
         return
-    identity_path = store.state_directory.parent / "node.json"
-    try:
-        configured = json.loads(identity_path.read_text())["agent_id"]
-    except FileNotFoundError:
-        configured = None
-    except (ValueError, KeyError, TypeError) as error:
-        raise TraceContractError("invalid_source_node") from error
+    configured = configured_node_id(store)
     if node_id is not None and configured is not None and node_id != configured:
         raise TraceContractError("source_node_mismatch")
     node_id = node_id or configured
@@ -148,7 +154,7 @@ def record_task_boundary(
             "occurred_at": store._iso_timestamp(now),
             "duration_ms": None,
             "evidence_kind": evidence_kind,
-            "causes": [],
+            "causes": causes or [],
             "attributes": attributes,
             "supersedes_event_id": None,
         },

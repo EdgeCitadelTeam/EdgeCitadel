@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from . import trace_capacity
+from . import trace_lineage as lineage
 from .trace_binding_access import authorized_binding_locked
 from .trace_contract import (
     TraceContractError,
@@ -106,6 +107,7 @@ def dispatch_trace(
         }
         journal = TraceJournal(db)
         decision = "allowed" if allowed else "denied"
+        child_id = (params.get("child_task_id") or str(uuid4())) if allowed else None
         journal.record(
             node_id,
             {
@@ -122,7 +124,7 @@ def dispatch_trace(
             },
             selected=True,
         )
-        journal.record(
+        dispatched = journal.record(
             node_id,
             {
                 **base,
@@ -135,12 +137,12 @@ def dispatch_trace(
                     "skill_id": params["skill_id"],
                     "grant_version": grant_version,
                     "reason": None if allowed else "permission_denied",
+                    **({"child_task_id": child_id} if child_id else {}),
                 },
             },
             selected=True,
         )
-        if allowed:
-            child_id = params.get("child_task_id") or str(uuid4())
+        if child_id is not None:
             if task is None:
                 context = TaskTraceContext(
                     child_id,
@@ -195,6 +197,19 @@ def dispatch_trace(
                 context_id=context.context_id,
                 correlation=context,
                 trace_node_id=node_id,
+                trace_causes=[lineage.reference(dispatched)],
+            )
+            lineage.record(
+                db,
+                node_id,
+                base,
+                phase="generated",
+                entity="request",
+                entity_task_id=child_id,
+                version=lineage.version_id("request", child_id, payload),
+                external=False,
+                causes=[lineage.reference(dispatched)],
+                occurred_at=base["occurred_at"],
             )
             reply = {
                 "schema_version": 1,

@@ -132,7 +132,8 @@ def test_task_binding_reuses_claim_attempt_and_rejects_foreign_task(configured):
     first = bind(store, token, first_params)
     second = bind(store, token, request(session, task["task_id"]))
     assert first["result"] == second["result"]
-    assert counts(store) == (1, 1, 2, 1, 1)
+    # One run/started plus the run's lineage use of its task request.
+    assert counts(store) == (1, 1, 2, 2, 2)
     other_session = store.open_session(connector_id="native", token=token)["session_id"]
     with pytest.raises(TraceContractError, match="execution_not_owned"):
         bind(store, token, request(other_session, task["task_id"]))
@@ -362,7 +363,8 @@ def test_reused_binding_receipts_hit_real_pinned_wal_pressure(configured, monkey
         assert max(wal.st_size, wal.st_blocks * 512) >= 64 * 1024
         assert counts(store)[1] == 1  # One execution binding, many retry receipts.
         assert counts(store)[2] > initial_receipts
-        assert counts(store)[3:] == (1, 1)  # No journal or spool growth.
+        # No journal or spool growth beyond the first bind's run and input use.
+        assert counts(store)[3:] == (2, 2)
         assert bind(store, token, original) == committed
         assert snapshot(store) == before
         store.reconcile()
