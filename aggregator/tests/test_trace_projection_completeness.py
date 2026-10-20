@@ -6,7 +6,9 @@ ingest and lineage boundaries; Core ingests those exact events and projects them
 
 import json
 import sys
+import time
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -101,3 +103,54 @@ def test_consumed_result_without_recorded_producer_stays_partial(core, delegatio
     assert value["coverage"]["partial"] and not value["coverage"]["unknown_sources"]
     assert value["coverage_reasons"]["unproduced_input"]
     assert not value["coverage_reasons"]["input_unreported"]
+
+
+def test_core_accepts_effect_and_containment_evidence(core, tmp_path):
+    root = Node(tmp_path / "fx-root", "root-node")
+    worker = Node(tmp_path / "fx-worker", "worker-node")
+    write = {"effect_class": "fs.write", "target": "workspace/*"}
+    try:
+        root.managed("parent", outbound=["child"], effects=[write])
+        worker.managed("child", effects=[write])
+        root.submit("parent")
+        _, binding = root.start("parent")
+        reply = root.dispatch("parent", binding, "child", lease={"max_effects": 1})
+        deliver(root, worker)
+        _, child_binding = worker.start("child")
+
+        def effect(target, **extra):
+            return worker.rpc(
+                "child",
+                "effect.authorize",
+                schema_version=1,
+                request_id=str(uuid4()),
+                binding_id=child_binding["binding_id"],
+                effect_class="fs.write",
+                target=target,
+                tool_call_id=None,
+                **extra,
+            )
+
+        assert effect("workspace/a")["status"] == "ok"
+        assert effect("/etc/passwd")["code"] == "outside_effect_scope"
+        assert effect("workspace/b")["code"] == "lease_exceeded"
+        later = time.time_ns() // 1_000_000 + 60_000
+        assert effect("workspace/c", scheduled_at_ms=later)["code"] == (
+            "lease_exceeded"
+        )
+        events = journal(worker)
+        kinds = {(e["kind"], e["phase"]) for e in events}
+        assert {
+            ("effect", "requested"),
+            ("effect", "committed"),
+            ("effect", "denied"),
+            ("containment", "alert"),
+        } <= kinds
+        outcomes = {ingest(core, event).outcome for event in events}
+        assert outcomes == {"accepted"}
+        export(core, [])
+        graph = projection.read_graph(core, trace_id=reply["result"]["trace_id"])
+        assert graph["nodes"]
+    finally:
+        root.close()
+        worker.close()

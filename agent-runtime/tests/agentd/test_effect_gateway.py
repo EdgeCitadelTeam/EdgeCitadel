@@ -55,7 +55,7 @@ def delegated_worker(nodes, *, parent_effects, worker_effects, lease=None):
     return parent_id, task["task_id"], worker_binding
 
 
-def test_allowed_effect_is_recorded_as_provenance_and_retried_idempotently(nodes):
+def test_committed_effect_is_recorded_as_provenance_and_retried_idempotently(nodes):
     _, worker = nodes
     _, task_id, binding = delegated_worker(
         nodes, parent_effects=[WRITE], worker_effects=[WRITE], lease={"max_effects": 3}
@@ -66,18 +66,20 @@ def test_allowed_effect_is_recorded_as_provenance_and_retried_idempotently(nodes
     )
     assert reply["status"] == "ok"
     assert reply["result"]["effects_remaining"] == 2
-    attempted, allowed = worker.events("effect")
-    assert (attempted["phase"], allowed["phase"]) == ("attempted", "allowed")
-    assert allowed["causes"] == [ref(attempted)]
-    assert allowed["event_id"] == reply["result"]["event_id"]
-    assert allowed["task_id"] == task_id
-    assert allowed["execution_attempt_id"] == binding["execution_attempt_id"]
-    assert allowed["attributes"] | {"policy_version": None} == {
+    requested, committed = worker.events("effect")
+    assert (requested["phase"], committed["phase"]) == ("requested", "committed")
+    assert committed["causes"] == [ref(requested)]
+    assert committed["event_id"] == reply["result"]["event_id"]
+    assert reply["result"]["state"] == "committed"
+    assert committed["task_id"] == task_id
+    assert committed["execution_attempt_id"] == binding["execution_attempt_id"]
+    assert committed["attributes"] | {"policy_version": None} == {
         "effect_version": 1,
         "effect_id": request_id,
         "effect_class": "fs.write",
         "target": "workspace/a.txt",
         "tool_call_id": "call-1",
+        "scheduled_at_ms": None,
         "policy": "managed_package_grant",
         "policy_version": None,
         "reason": None,
@@ -260,3 +262,104 @@ def test_native_root_effects_follow_its_connector_grant(nodes):
         connector_id="pi-local", outbound_agents=[], effects=[EXEC]
     )
     assert decide()["status"] == "ok"
+
+
+def test_a_scheduled_effect_can_be_held_until_it_commits(nodes):
+    _, worker = nodes
+    _, _, binding = delegated_worker(
+        nodes, parent_effects=[WRITE], worker_effects=[WRITE], lease={"max_effects": 2}
+    )
+    effect_id = str(uuid4())
+    scheduled = worker.rpc(
+        "worker",
+        "effect.authorize",
+        schema_version=1,
+        request_id=effect_id,
+        binding_id=binding["binding_id"],
+        effect_class="fs.write",
+        target="workspace/later",
+        tool_call_id=None,
+        scheduled_at_ms=time.time_ns() // 1_000_000 + 60_000,
+    )
+    assert scheduled["result"]["state"] == "scheduled"
+    # Checked and requested, but not committed or charged yet.
+    assert [e["phase"] for e in worker.events("effect")] == ["requested"]
+    assert scheduled["result"]["effects_remaining"] == 2
+
+    def commit(request_id):
+        return worker.rpc(
+            "worker",
+            "effect.commit",
+            schema_version=1,
+            request_id=request_id,
+            binding_id=binding["binding_id"],
+            effect_id=effect_id,
+        )
+
+    request_id = str(uuid4())
+
+    containment.place_hold(
+        worker.store,
+        kind="effect",
+        object_id=effect_id,
+        owner=MONITOR,
+        policy_version=1,
+    )
+    held = commit(request_id)
+    assert held["code"] == "effect_held"
+    assert [e["phase"] for e in worker.events("effect")] == ["requested"]
+    containment.release_hold(
+        worker.store,
+        kind="effect",
+        object_id=effect_id,
+        owner=MONITOR,
+        policy_version=1,
+    )
+    # The held attempt left no receipt, so the same request now commits.
+    committed = commit(request_id)
+    assert committed["result"] == {
+        "event_id": committed["result"]["event_id"],
+        "state": "committed",
+        "effects_remaining": 1,
+        "lease_expires_at_ms": None,
+    }
+    requested, decided = worker.events("effect")
+    assert decided["phase"] == "committed"
+    assert decided["causes"] == [ref(requested)]
+    assert decided["attributes"]["effect_id"] == effect_id
+    assert decided["attributes"]["scheduled_at_ms"] is not None
+    # A retry gets the same answer; a committed effect cannot commit again.
+    assert commit(request_id) == committed
+    assert commit(str(uuid4()))["code"] == "invalid_metadata"
+
+
+def test_a_scheduled_effect_is_checked_again_when_it_commits(nodes):
+    _, worker = nodes
+    parent_id, _, binding = delegated_worker(
+        nodes, parent_effects=[WRITE], worker_effects=[WRITE]
+    )
+    effect_id = str(uuid4())
+    worker.rpc(
+        "worker",
+        "effect.authorize",
+        schema_version=1,
+        request_id=effect_id,
+        binding_id=binding["binding_id"],
+        effect_class="fs.write",
+        target="workspace/later",
+        tool_call_id=None,
+        scheduled_at_ms=time.time_ns() // 1_000_000 + 60_000,
+    )
+    containment.revoke_authority(
+        worker.store, task_id=parent_id, owner=MONITOR, policy_version=1
+    )
+    denied = worker.rpc(
+        "worker",
+        "effect.commit",
+        schema_version=1,
+        request_id=str(uuid4()),
+        binding_id=binding["binding_id"],
+        effect_id=effect_id,
+    )
+    assert denied["code"] == "authority_revoked"
+    assert [e["phase"] for e in worker.events("effect")] == ["requested", "denied"]

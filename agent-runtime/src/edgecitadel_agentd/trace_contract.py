@@ -54,6 +54,7 @@ def _validators() -> dict[str, Draft202012Validator]:
             "loss-request",
             "dispatch-request",
             "effect-request",
+            "effect-commit-request",
             "import-request",
             "rpc-reply",
             "event",
@@ -237,9 +238,9 @@ def validate_event(event: dict[str, Any]) -> bytes:
         if event["phase"] == "generated" and event["attributes"]["external"]:
             raise TraceContractError("invalid_lineage_origin")
     if event["kind"] == "effect":
-        # An attempt carries no decision; a denial always names its reason.
+        # A request carries no decision; a denial always names its reason.
         attributes = event["attributes"]
-        decided = event["phase"] != "attempted"
+        decided = event["phase"] != "requested"
         if (attributes["policy"] is not None) != decided or (
             attributes["reason"] is not None
         ) != (event["phase"] == "denied"):
@@ -324,6 +325,10 @@ def validate_dispatch_request(request: dict[str, Any]) -> bytes:
 
 def validate_effect_request(request: dict[str, Any]) -> bytes:
     return _validate("effect-request", request, 2048)
+
+
+def validate_effect_commit_request(request: dict[str, Any]) -> bytes:
+    return _validate("effect-commit-request", request, 1024)
 
 
 def validate_finish_request(request: dict[str, Any]) -> bytes:

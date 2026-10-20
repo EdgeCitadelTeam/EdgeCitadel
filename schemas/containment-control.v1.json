@@ -92,7 +92,8 @@
                     "enum": [
                       "task",
                       "egress",
-                      "transport"
+                      "transport",
+                      "effect"
                     ]
                   },
                   "object_id": {
@@ -126,7 +127,8 @@
                     "enum": [
                       "task",
                       "egress",
-                      "transport"
+                      "transport",
+                      "effect"
                     ]
                   },
                   "object_id": {
@@ -705,6 +707,20 @@
                     "type": "string",
                     "pattern": "^[a-z]+:[a-z]+$"
                   }
+                },
+                "effect_state": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "scheduled",
+                        "committed",
+                        "denied"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               }
             }

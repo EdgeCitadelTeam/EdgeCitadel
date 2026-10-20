@@ -51,6 +51,19 @@
           "type": "null"
         }
       ]
+    },
+    "scheduled_at_ms": {
+      "description": "When set in the future, the effect is checked and requested now and must be committed with effect.commit.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   }
 }

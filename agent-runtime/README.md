@@ -362,7 +362,9 @@ Before an external effect (a writing tool, an HTTP request, a device command), a
 harness asks `effect.authorize` with its execution binding. agentd decides from
 holds, revocations, ingress filters, the effect scope (package
 `permissions.effects` narrowed by what the task inherited) and the task's lease,
-and records `effect/attempted` and `effect/allowed|denied` in the run. See the
+and records `effect/requested` and `effect/committed|denied` in the run. A
+scheduled effect is requested now and committed later with `effect.commit`, and
+can be held in between. See the
 [effect gateway](../docs/architecture/execution-trace-contract.md#effect-gateway).
 
 If reconciliation encounters a SQLite storage error, agentd stays available and

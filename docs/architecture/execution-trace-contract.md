@@ -47,6 +47,8 @@ export-position ledgers belong to the later journal/collector implementation.
 | source | Source/export-generation start, restore or selection-policy change |
 | link | Explicit join between tasks, separate from ancestry |
 | lineage | `used`/`generated` of a versioned request or result by one invocation (`lineage_version`, `entity`, `entity_task_id`, `version_id`, `external`) |
+| effect | `requested` and then `committed` or `denied` external effect of one invocation (`effect_version`, `effect_id`, `effect_class`, `target`, `tool_call_id`, `scheduled_at_ms`; decision `policy`, `policy_version`, `reason`, `effects_remaining`); see the effect gateway |
+| containment | `alert` from an enforcement gate (`containment_version`, `alert`, `request_id`, `lease_dimension`) |
 
 The schemas define the exact phase and attribute sets. All unknown fields are
 rejected. Raw prompts, arguments, outputs, arbitrary exception messages and
@@ -1420,7 +1422,8 @@ each external effect and performs it only on an `ok` reply:
 
 ```json
 {"schema_version":1,"request_id":"<uuid4>","binding_id":"<uuid4>",
- "effect_class":"fs.write","target":"workspace/notes.md","tool_call_id":"<harness id>|null"}
+ "effect_class":"fs.write","target":"workspace/notes.md","tool_call_id":"<harness id>|null",
+ "scheduled_at_ms":null}
 ```
 
 The request is bound to the invocation by its execution binding (Managed Agents,
@@ -1433,19 +1436,34 @@ the invocation (`authority_revoked`), the controller lease when configured
 (`controller_lease_expired`), the effect scope, which is the connector's effect
 grant narrowed by the inherited `effect_scope` (`outside_effect_scope`),
 effect-rule ingress filters on the invocation's authorities (`ingress_filtered`),
-and the lease's expiry and remaining effects (`lease_exceeded`). An allowed
+and the lease's expiry and remaining effects (`lease_exceeded`). A committed
 effect is charged to the task's lease, and the reply returns
-`{event_id, effects_remaining, lease_expires_at_ms}`. A retry with the same
-`request_id` returns the stored decision and is charged once.
+`{event_id, state: "committed", effects_remaining, lease_expires_at_ms}`. A retry
+with the same `request_id` returns the stored decision and is charged once.
 
-Every request records two events in the invocation's run: `effect/attempted`
-and then `effect/allowed` or `effect/denied`, citing the attempt in `causes`.
-Their attributes (`effect_version: 1`) are `effect_id` (the request ID),
-`effect_class`, `target`, `tool_call_id`, and for the decision `policy`,
-`policy_version`, `reason` and `effects_remaining`. Lease and controller-lease
-denials also record `containment/alert`. These are attempt and decision
-evidence, not proof that the effect happened; the harness performs it after the
-decision.
+Each effect records `effect/requested` and then `effect/committed` or
+`effect/denied` in the invocation's run, the decision citing the request in
+`causes`. Their attributes (`effect_version: 1`) are `effect_id` (the
+authorizing request ID), `effect_class`, `target`, `tool_call_id`,
+`scheduled_at_ms` (`null` for an immediate effect), and for the decision
+`policy`, `policy_version`, `reason` and `effects_remaining`. Lease and
+controller-lease denials also record `containment/alert`. `committed` means
+agentd released the effect to the harness, not that the harness performed it.
+
+**Scheduled effects and effect holds.** With `scheduled_at_ms` in the future,
+`effect.authorize` runs the same checks and, if they pass, records only
+`effect/requested` and replies `state: "scheduled"`; nothing is charged. When
+the effect is due, the harness sends `effect.commit`
+(`schemas/trace-effect-commit-request.v1.json`,
+`{schema_version, request_id, binding_id, effect_id}`). The checks run again then,
+and the effect is committed (charged) or denied. Between request and commit a
+controller can hold the effect by its ID (`hold {kind: effect, object_id:
+effect_id}`): a commit while held is refused with `effect_held`, records no event
+and stores no receipt, so the same commit request succeeds after release. An
+immediate effect is decided in one step and cannot be held individually; hold
+its task or egress instead. A committed or denied effect cannot be committed
+again (`invalid_metadata`). No harness schedules effects yet; Pi authorizes
+immediate effects only.
 
 **Fail-closed controller lease (off by default).** With
 `EDGECITADEL_CONTROLLER_LEASE_MS` set in the agentd environment, effects are
@@ -1485,6 +1503,7 @@ command_id?}` and issues the same command with a five-minute expiry.
 | `hold` / `release` | `{kind: task, object_id}` | pause a task (reversible) |
 | | `{kind: egress, object_id}` | egress block of a task, or of a task-less native root by its binding ID |
 | | `{kind: transport, object_id}` | withhold one outbox message |
+| | `{kind: effect, object_id: effect_id}` | keep a scheduled effect uncommitted |
 | `revoke` | `{kind: authority, object_id: task}` | a delegation and all its descendants |
 | | `{kind: egress, object_id: task or binding}` | one invocation's new dispatches and effects; it may still complete |
 | | `{kind: credential, object_id: agent}` | the agent's dispatches, effects, `task.create`, and publication of everything it emits |
@@ -1497,7 +1516,7 @@ command_id?}` and issues the same command with a five-minute expiry.
 
 `hold`, `release` and `revoke` with `{kind, object_id}` are the monitor's
 ControlClient operations; `describe` lists what a node enforces (`hold:task`,
-`hold:egress`, `hold:transport`, `revoke:authority`, `revoke:egress`,
+`hold:egress`, `hold:transport`, `hold:effect`, `revoke:authority`, `revoke:egress`,
 `revoke:credential`, `revoke:grant`, `revoke:admission`, `filter:agent`,
 `filter:effect`, `cancel:task`, `renew:controller`). Revocations are
 irreversible; `grant` and `admission` revocations are stored as ingress filters
@@ -1553,6 +1572,8 @@ node. `enforcement` reports what was enforced at that instant:
 - `parked_deliveries` / `applied_deliveries`: inbound deliveries withheld, or
   applied by a release or unfilter.
 - `local_tasks` (revoke): local non-terminal tasks under the revoked authority.
+- `effect_state` (effect hold/release): `scheduled`, `committed`, `denied`, or
+  `null` when the effect is not (yet) known here.
 - `released_holds` (cancel); `controller_lease_until_ms` and
   `controller_lease_enforced` (renew).
 

@@ -267,7 +267,8 @@
             "ingress_filtered",
             "lease_exceeded",
             "outside_effect_scope",
-            "controller_lease_expired"
+            "controller_lease_expired",
+            "effect_held"
           ]
         },
         "retryable": {
@@ -439,6 +440,7 @@
           "additionalProperties": false,
           "required": [
             "event_id",
+            "state",
             "effects_remaining",
             "lease_expires_at_ms"
           ],
@@ -446,6 +448,12 @@
             "event_id": {
               "type": "string",
               "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "state": {
+              "enum": [
+                "scheduled",
+                "committed"
+              ]
             },
             "effects_remaining": {
               "anyOf": [

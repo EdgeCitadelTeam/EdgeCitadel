@@ -255,7 +255,11 @@ class Harness:
             )
         except AgentdClientError:
             return {"allowed": False, "code": "effect_authorization_unavailable"}
-        allowed = isinstance(reply, dict) and reply.get("status") == "ok"
+        allowed = (
+            isinstance(reply, dict)
+            and reply.get("status") == "ok"
+            and reply["result"].get("state") == "committed"
+        )
         return {
             "allowed": allowed,
             "code": None if allowed else str(reply.get("code", "denied")),

@@ -36,6 +36,7 @@ def legacy_holds(db):
     )
     for table in (
         "control_commands",
+        "scheduled_effects",
         "authority_ledger",
         "ingress_filters",
         "revocations",

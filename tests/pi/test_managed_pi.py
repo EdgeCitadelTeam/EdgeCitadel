@@ -306,7 +306,7 @@ def test_effect_authorization_fails_closed(pi):
     event = {"effect_class": "fs.write", "target": "workspace/a", "tool_call_id": "c"}
     replies = iter(
         [
-            {"status": "ok", "result": {}},
+            {"status": "ok", "result": {"state": "committed"}},
             {"status": "error", "code": "egress_held"},
             AgentdClientError("agentd is unavailable"),
         ]

@@ -254,6 +254,7 @@ CAPABILITIES = (
     "hold:task",
     "hold:egress",
     "hold:transport",
+    "hold:effect",
     "revoke:authority",
     "revoke:egress",
     "revoke:credential",
@@ -384,6 +385,7 @@ _GATES = {
     ],
     "hold:egress": ["result", "dispatch", "effect", "publication"],
     "hold:transport": ["publication"],
+    "hold:effect": ["effect"],
     "revoke:authority": ["dispatch", "effect"],
     "revoke:egress": ["dispatch", "effect"],
     "revoke:credential": ["dispatch", "effect", "task_create", "publication"],
@@ -409,6 +411,13 @@ def _snapshot(
             kind, object_id = target["kind"], target["object_id"]
             if action == "hold":
                 enforcement["gates"] = _GATES[f"hold:{kind}"]
+            if kind == "effect":
+                row = db.execute(
+                    "SELECT state FROM scheduled_effects WHERE effect_id=?",
+                    (object_id,),
+                ).fetchone()
+                enforcement["effect_state"] = row["state"] if row else None
+                return enforcement
             if kind == "transport":
                 messages = db.execute(
                     f"SELECT o.message_id,o.published_at_ms,{_BLOCKED} "

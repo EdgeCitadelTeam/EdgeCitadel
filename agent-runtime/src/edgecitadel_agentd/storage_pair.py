@@ -30,6 +30,7 @@ TASK_TABLES = (
     "revocations",
     "ingress_filters",
     "authority_ledger",
+    "scheduled_effects",
     "control_commands",
 )
 CROSS_REFERENCES = (

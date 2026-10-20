@@ -704,11 +704,11 @@ class AgentdStore:
             self._connection.execute("PRAGMA task_state.user_version=32")
 
     def _migrate_holds_v32_locked(self) -> None:
-        """Allow egress holds; holds created before schema 32 cannot."""
+        """Allow egress and effect holds; holds before schema 32 cannot."""
         definition = self._connection.execute(
             "SELECT sql FROM task_state.sqlite_schema WHERE name='holds'"
         ).fetchone()[0]
-        if "'egress'" in definition:
+        if "'effect'" in definition:
             return
         self._connection.execute("ALTER TABLE task_state.holds RENAME TO holds_v31")
         from .containment import HOLDS_SCHEMA_SQL
@@ -787,6 +787,15 @@ class AgentdStore:
         from .effect_gateway import authorize_effect
 
         return authorize_effect(
+            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
+
+    def commit_effect(
+        self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        from .effect_gateway import commit_effect
+
+        return commit_effect(
             self, node_id=node_id, connector_id=connector_id, token=token, params=params
         )
 

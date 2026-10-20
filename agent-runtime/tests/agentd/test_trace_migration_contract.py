@@ -108,6 +108,7 @@ def upgraded(before):
         "revocations",
         "ingress_filters",
         "authority_ledger",
+        "scheduled_effects",
         "control_commands",
     )
     return {**rows, **{name: [] for name in empty}}

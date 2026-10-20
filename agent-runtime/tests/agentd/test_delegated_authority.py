@@ -307,6 +307,7 @@ def test_schema_31_upgrade_keeps_holds_and_extends_saved_contexts(tmp_path):
             "revocations",
             "ingress_filters",
             "authority_ledger",
+            "scheduled_effects",
             "control_commands",
         ):
             db.execute(f"DROP TABLE task_state.{table}")

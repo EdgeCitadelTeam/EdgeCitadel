@@ -265,6 +265,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.history",
         "trace.loss",
         "effect.authorize",
+        "effect.commit",
     }
     native_capabilities = {
         "agent.list": "edgecitadel_agents",
@@ -284,6 +285,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.finish": "edgecitadel_trace",
         "trace.dispatch": "edgecitadel_trace",
         "effect.authorize": "edgecitadel_trace",
+        "effect.commit": "edgecitadel_trace",
     }
     if operation in common:
         return
@@ -346,6 +348,7 @@ def _trace_operation(
         "trace.dispatch": store.dispatch_trace,
         "trace.loss": partial(report_loss, store),
         "effect.authorize": store.authorize_effect,
+        "effect.commit": store.commit_effect,
     }
     method = methods[operation]
     code = "storage_unavailable"
@@ -387,7 +390,7 @@ def _trace_operation(
         pass
     reply_operation = (
         "effect"
-        if operation == "effect.authorize"
+        if operation.startswith("effect.")
         else operation.removeprefix("trace.")
     )
     reply = {
@@ -540,6 +543,7 @@ def dispatch(
         "trace.dispatch",
         "trace.loss",
         "effect.authorize",
+        "effect.commit",
     }:
         return _trace_operation(store, connector_id, token, operation, dict(params))
     if operation == "connector.update":

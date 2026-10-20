@@ -17,6 +17,7 @@ is held while any row names it, whatever the reason:
   include requests and cancels it already queued for its children. The object
   may also be the binding ID of a task-less native root.
 - ``transport``: that outbox message is not published.
+- ``effect``: a scheduled effect (by its effect ID) is not committed.
 
 A task or egress hold may be placed before the task exists on this node.
 
@@ -68,7 +69,7 @@ if TYPE_CHECKING:
 
 HOLDS_SCHEMA_SQL = """
 CREATE TABLE task_state.holds (
-    kind TEXT NOT NULL CHECK(kind IN ('task', 'transport', 'egress')),
+    kind TEXT NOT NULL CHECK(kind IN ('task', 'transport', 'egress', 'effect')),
     object_id TEXT NOT NULL,
     reason TEXT NOT NULL CHECK(reason IN ('restore', 'containment')),
     owner TEXT NOT NULL,
@@ -112,6 +113,15 @@ CREATE TABLE task_state.authority_ledger (
     effects_used INTEGER NOT NULL DEFAULT 0 CHECK(effects_used >= 0),
     effects_reserved INTEGER NOT NULL DEFAULT 0 CHECK(effects_reserved >= 0)
 );
+CREATE TABLE task_state.scheduled_effects (
+    effect_id TEXT PRIMARY KEY,
+    binding_id TEXT NOT NULL,
+    effect_class TEXT NOT NULL,
+    target TEXT NOT NULL,
+    identity_json TEXT NOT NULL,
+    requested_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('scheduled', 'committed', 'denied'))
+);
 CREATE TABLE task_state.control_commands (
     command_id TEXT PRIMARY KEY,
     owner TEXT NOT NULL,
@@ -121,7 +131,7 @@ CREATE TABLE task_state.control_commands (
 );
 CREATE INDEX task_state.control_commands_expiry ON control_commands(expires_at_ms)
 """
-HOLD_KINDS = frozenset({"task", "transport", "egress"})
+HOLD_KINDS = frozenset({"task", "transport", "egress", "effect"})
 OWNER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
 AGENT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MAX_POLICY_VERSION = 9_007_199_254_740_991
@@ -601,6 +611,13 @@ def list_containment(store: AgentdStore) -> dict[str, list[dict[str, object]]]:
 
 
 # Gates. Callers hold the store lock, normally inside the deciding transaction.
+
+
+def effect_hold_locked(db: sqlite3.Connection, effect_id: str) -> sqlite3.Row | None:
+    return db.execute(
+        "SELECT reason,owner,policy_version FROM holds WHERE kind='effect' AND object_id=?",
+        (effect_id,),
+    ).fetchone()
 
 
 def egress_hold_locked(
