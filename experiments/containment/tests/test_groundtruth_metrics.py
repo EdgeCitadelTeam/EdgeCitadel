@@ -67,6 +67,8 @@ def decision(confirmed: int = 6090, failed: bool = False) -> dict:
 
     return {
         "type": "decision",
+        "incident_id": "i1",
+        "alert": {"kind": "operator", "origin": "external"},
         "status": "contained",
         "t_received": 6020,
         "phase1": [record("edge-1"), record("edge-2")],
@@ -208,6 +210,21 @@ def test_a_failed_control_action_leaves_containment_time_undefined(run):
     assert math.isnan(row["time_to_containment_s"]) and math.isnan(
         row["contained_after_confirm"]
     )
+
+
+def test_a_detector_incident_is_not_the_strategys_response(run):
+    finish_b_n(run)
+    detector = {
+        **decision(confirmed=4090),
+        "incident_id": "i0",
+        "alert": {"kind": "lease_violation", "origin": "detector"},
+        "t_received": 4000,
+    }
+    row = evaluate(run, decisions=[detector, decision()])
+    assert row["n_detector_decisions"] == 1 and row["n_decisions"] == 1
+    assert row["time_to_containment_s"] == pytest.approx(0.09)
+    alone = evaluate(run, decisions=[detector])
+    assert alone["decision_status"] == "none" and alone["n_actions"] == 0
 
 
 def test_undeclared_contamination_before_the_alert_removes_work_from_normal(run):

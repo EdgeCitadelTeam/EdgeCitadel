@@ -538,6 +538,9 @@ def infrastructure_failure(meta: Mapping[str, Any]) -> str | None:
             "exited early" in error
             or "did not become ready" in error
             or "cannot reach" in error
+            # Nothing strategy-specific runs before the alert, so a run that
+            # never reached its alert point stalled on the testbed.
+            or "never fired" in error
         ):
             return error
     if meta.get("t0_ms") is None:

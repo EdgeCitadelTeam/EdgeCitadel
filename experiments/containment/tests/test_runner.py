@@ -116,7 +116,8 @@ def test_netem_profiles_only_delay_experiment_ports():
         ({"t0_ms": 1, "errors": [], "rpc_failures": 1}, True),
         ({"t0_ms": 1, "errors": ["processes exited early: ['worker-a']"]}, True),
         ({"t0_ms": None, "errors": ["StackError: NATS did not become ready"]}, True),
-        ({"t0_ms": 1, "errors": ["alert trigger never fired"]}, False),
+        ({"t0_ms": 1, "errors": ["alert trigger never fired"]}, True),
+        ({"t0_ms": 1, "errors": [], "status": "timeout"}, False),
     ],
 )
 def test_testbed_failures_are_told_apart_from_outcomes(meta, failed):

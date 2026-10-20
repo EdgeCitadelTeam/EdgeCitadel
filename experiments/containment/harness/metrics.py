@@ -107,11 +107,29 @@ def decision_metrics(
     every strategy, so the initial response is the first record that issued
     actions; its solve, G_C size and timing describe the decision, and its
     last confirmation is when the response was in force.
+
+    Only the incidents the harness's operator alert opened (or joined) are the
+    strategy's response. Incidents the monitor's own detectors opened (for
+    example a lease violation when a worker loses its session) are counted in
+    ``n_detector_decisions`` and otherwise left out.
     """
-    responses = [d for d in decisions if d.get("type") in {"decision", "resolve"}]
+    opened = [d for d in decisions if d.get("type") == "decision"]
+    operator = {
+        d.get("incident_id")
+        for d in opened
+        if (d.get("alert") or {}).get("kind") == "operator"
+    }
+    responses = [
+        d
+        for d in decisions
+        if d.get("type") in {"decision", "resolve"} and d.get("incident_id") in operator
+    ]
     row: dict[str, Any] = {
         "n_decisions": sum(1 for d in responses if d["type"] == "decision"),
         "n_resolves": sum(1 for d in responses if d["type"] == "resolve"),
+        "n_detector_decisions": sum(
+            1 for d in opened if d.get("incident_id") not in operator
+        ),
     }
     actions: dict[str, Mapping[str, Any]] = {}
     failed = phase1 = released = 0
