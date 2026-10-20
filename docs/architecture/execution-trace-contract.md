@@ -1394,6 +1394,51 @@ chain holding only their parent, so revocation reaches them through their
 parent. A redelivered delegation is now compared by its saved JSON, which fixes
 a schema 31 false `execution_context` conflict on duplicate delivery.
 
+### Effect gateway
+
+A harness calls `effect.authorize` (`schemas/trace-effect-request.v1.json`) before
+each external effect and performs it only on an `ok` reply:
+
+```json
+{"schema_version":1,"request_id":"<uuid4>","binding_id":"<uuid4>",
+ "effect_class":"fs.write","target":"workspace/notes.md","tool_call_id":"<harness id>|null"}
+```
+
+The request is bound to the invocation by its execution binding (Managed Agents,
+and native connectors with `edgecitadel_trace`), and only an `accepted` or
+`running` task may authorize. The target is exact; the harness classifies it.
+In one transaction agentd checks, and the first failure decides the error code:
+execution hold (`execution_held`), egress hold (`egress_held`), revocation of the
+task or its chain (`authority_revoked`), the controller lease when configured
+(`controller_lease_expired`), the effect scope, which is the connector's effect
+grant narrowed by the inherited `effect_scope` (`outside_effect_scope`),
+effect-rule ingress filters on the invocation's authorities (`ingress_filtered`),
+and the lease's expiry and remaining effects (`lease_exceeded`). An allowed
+effect is charged to the task's lease, and the reply returns
+`{event_id, effects_remaining, lease_expires_at_ms}`. A retry with the same
+`request_id` returns the stored decision and is charged once.
+
+Every request records two events in the invocation's run: `effect/attempted`
+and then `effect/allowed` or `effect/denied`, citing the attempt in `causes`.
+Their attributes (`effect_version: 1`) are `effect_id` (the request ID),
+`effect_class`, `target`, `tool_call_id`, and for the decision `policy`,
+`policy_version`, `reason` and `effects_remaining`. Lease and controller-lease
+denials also record `containment/alert`. These are attempt and decision
+evidence, not proof that the effect happened; the harness performs it after the
+decision.
+
+**Fail-closed controller lease (off by default).** With
+`EDGECITADEL_CONTROLLER_LEASE_MS` set in the agentd environment, effects are
+denied unless a controller `renew` command was applied within that period. The
+renewal is held in memory, so a restarted daemon denies effects until renewed.
+A renewal never extends past the renewing command's own `expires_at_ms`, so a
+replayed renewal cannot keep the lease alive. Only effects are gated; dispatch
+and task execution continue. Whether losing the controller should fail closed is
+an open design decision, which is why the mechanism is opt-in.
+
+The gateway is cooperative: it constrains harnesses that call it. It is not an
+OS sandbox, and a harness with unrestricted tools can still act without asking.
+
 ### Pause, resume and cancel of running managed work
 
 A hold on an `accepted` or `running` task **pauses** it; it is reversible. A

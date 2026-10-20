@@ -355,6 +355,12 @@ A hold on running Managed Agent work pauses it: the runtime cancels the handler
 (`context.interruption == "pause"`) and resumes it on release with
 `context.resumed` set. A cancel ends it (`context.interruption == "cancel"`).
 See [pause, resume and cancel](../docs/architecture/execution-trace-contract.md#pause-resume-and-cancel-of-running-managed-work).
+Before an external effect (a writing tool, an HTTP request, a device command), a
+harness asks `effect.authorize` with its execution binding. agentd decides from
+holds, revocations, ingress filters, the effect scope (package
+`permissions.effects` narrowed by what the task inherited) and the task's lease,
+and records `effect/attempted` and `effect/allowed|denied` in the run. See the
+[effect gateway](../docs/architecture/execution-trace-contract.md#effect-gateway).
 
 If reconciliation encounters a SQLite storage error, agentd stays available and
 reports `status: degraded` with `reconciliation: storage_unavailable` in health.

@@ -53,6 +53,7 @@ def _validators() -> dict[str, Draft202012Validator]:
             "finish-request",
             "loss-request",
             "dispatch-request",
+            "effect-request",
             "import-request",
             "rpc-reply",
             "event",
@@ -235,6 +236,14 @@ def validate_event(event: dict[str, Any]) -> bytes:
         # A producer is never "external"; only a consumed root input can be.
         if event["phase"] == "generated" and event["attributes"]["external"]:
             raise TraceContractError("invalid_lineage_origin")
+    if event["kind"] == "effect":
+        # An attempt carries no decision; a denial always names its reason.
+        attributes = event["attributes"]
+        decided = event["phase"] != "attempted"
+        if (attributes["policy"] is not None) != decided or (
+            attributes["reason"] is not None
+        ) != (event["phase"] == "denied"):
+            raise TraceContractError("invalid_effect_decision")
     return encoded
 
 
@@ -311,6 +320,10 @@ def validate_dispatch_request(request: dict[str, Any]) -> bytes:
     # Commands can contain raw user content locally; this request must never be
     # copied into exported event attributes. Unicode can occupy four UTF-8 bytes.
     return _validate("dispatch-request", request, 68 * 1024)
+
+
+def validate_effect_request(request: dict[str, Any]) -> bytes:
+    return _validate("effect-request", request, 2048)
 
 
 def validate_finish_request(request: dict[str, Any]) -> bytes:

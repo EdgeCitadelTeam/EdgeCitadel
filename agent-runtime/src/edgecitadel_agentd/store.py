@@ -209,6 +209,11 @@ class AgentdStore:
             self._last_retention_ms = 0
             self._reconciliation_storage_unavailable = False
             self._maintenance_checkpoint_blocked = False
+            # Fail-closed controller lease for effects; None disables it. The
+            # renewal is deliberately volatile: a restarted daemon denies
+            # effects until the controller renews again.
+            self.controller_lease_ms: int | None = None
+            self._controller_lease_until_ms = 0
             schema_version = int(
                 self._connection.execute("PRAGMA user_version").fetchone()[0]
             )
@@ -775,6 +780,33 @@ class AgentdStore:
         return bind_trace(
             self, node_id=node_id, connector_id=connector_id, token=token, params=params
         )
+
+    def authorize_effect(
+        self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        from .effect_gateway import authorize_effect
+
+        return authorize_effect(
+            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        )
+
+    def controller_lease_valid(self, now_ms: int) -> bool:
+        with self._lock:
+            return (
+                self.controller_lease_ms is None
+                or now_ms < self._controller_lease_until_ms
+            )
+
+    def renew_controller_lease(self, now_ms: int, bound_ms: int) -> int | None:
+        """Extend the controller lease, never past the renewing command's expiry."""
+        with self._lock:
+            if self.controller_lease_ms is None:
+                return None
+            self._controller_lease_until_ms = max(
+                self._controller_lease_until_ms,
+                min(now_ms + self.controller_lease_ms, bound_ms),
+            )
+            return self._controller_lease_until_ms
 
     def place_hold(
         self, *, kind: str, object_id: str, owner: str, policy_version: int

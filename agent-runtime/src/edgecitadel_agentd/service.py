@@ -108,6 +108,23 @@ def _write_process_record(state_dir: Path, pid: int | None) -> None:
     path.chmod(0o600)
 
 
+def _controller_lease_ms() -> int | None:
+    """EDGECITADEL_CONTROLLER_LEASE_MS: deny effects unless renewed this recently.
+
+    Unset or 0 leaves the fail-closed controller lease off (the default).
+    """
+    value = os.environ.get("EDGECITADEL_CONTROLLER_LEASE_MS", "0")
+    try:
+        lease_ms = int(value)
+    except ValueError as error:
+        raise StoreError(
+            "EDGECITADEL_CONTROLLER_LEASE_MS must be an integer"
+        ) from error
+    if not 0 <= lease_ms <= 3_600_000:
+        raise StoreError("EDGECITADEL_CONTROLLER_LEASE_MS must be at most one hour")
+    return lease_ms or None
+
+
 def _load_or_create_admin_token(state_dir: Path) -> str:
     path = state_dir / ADMIN_TOKEN_NAME
     if path.exists():
@@ -248,6 +265,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.dispatch",
         "trace.history",
         "trace.loss",
+        "effect.authorize",
     }
     native_capabilities = {
         "agent.list": "edgecitadel_agents",
@@ -266,6 +284,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.append": "edgecitadel_trace",
         "trace.finish": "edgecitadel_trace",
         "trace.dispatch": "edgecitadel_trace",
+        "effect.authorize": "edgecitadel_trace",
     }
     if operation in common:
         return
@@ -319,6 +338,7 @@ def _trace_operation(
         "trace.finish": store.finish_trace,
         "trace.dispatch": store.dispatch_trace,
         "trace.loss": partial(report_loss, store),
+        "effect.authorize": store.authorize_effect,
     }
     method = methods[operation]
     code = "storage_unavailable"
@@ -358,17 +378,20 @@ def _trace_operation(
             code = "invalid_metadata"
     except sqlite3.Error:
         pass
+    reply_operation = (
+        "effect"
+        if operation == "effect.authorize"
+        else operation.removeprefix("trace.")
+    )
     reply = {
         "schema_version": 1,
-        "operation": operation.removeprefix("trace."),
+        "operation": reply_operation,
         "request_id": request_id,
         "status": "error",
         "code": code,
         "retryable": code == "storage_unavailable",
     }
-    validate_rpc_reply(
-        reply, operation=operation.removeprefix("trace."), request_id=request_id
-    )
+    validate_rpc_reply(reply, operation=reply_operation, request_id=request_id)
     return reply
 
 
@@ -509,6 +532,7 @@ def dispatch(
         "trace.finish",
         "trace.dispatch",
         "trace.loss",
+        "effect.authorize",
     }:
         return _trace_operation(store, connector_id, token, operation, dict(params))
     if operation == "connector.update":
@@ -743,6 +767,7 @@ def _serve_locked(
             store.close()
             raise
     admin_token = _load_or_create_admin_token(state_dir)
+    store.controller_lease_ms = _controller_lease_ms()
     transport = AgentdNatsTransport(state_dir.parent, store)
     supervisor = ManagedAgentSupervisor(state_dir.parent, store)
     telemetry = TraceSyncService(
