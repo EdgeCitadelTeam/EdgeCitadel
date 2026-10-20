@@ -25,8 +25,16 @@ from harness import deploy, groundtruth, nodectl
 from harness import spec as S
 from harness.services import RunServices, make_handler
 
+
+def _has_effect_gateway() -> bool:
+    try:  # a submodule lookup imports its parent package, which may be absent
+        return importlib.util.find_spec("edgecitadel_agentd.effect_gateway") is not None
+    except ModuleNotFoundError:
+        return False
+
+
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("edgecitadel_agentd.effect_gateway") is None,
+    not _has_effect_gateway(),
     reason="needs the integrated runtime (m2/agentd effect gateway) on PYTHONPATH",
 )
 SCALE = 0.4

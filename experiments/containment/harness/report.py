@@ -32,7 +32,7 @@ from typing import Any
 
 from .metrics import evaluate
 from .names import CODE_NAME, COLOR, FAMILY, MAIN_NAMES, MARKER
-from .runner import infrastructure_failure
+from .runner import infrastructure_failure, testbed_counts
 from .spec import from_dict
 
 IDENTITY = (
@@ -94,8 +94,18 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "n_errors": len(meta.get("errors", [])),
         "attempts": meta.get("attempts", 1),
         # A run whose last attempt still failed on the testbed stays in every
-        # denominator; this column lets a reader see (or exclude) it.
-        "testbed_failure": infrastructure_failure(meta) or "",
+        # denominator; this column lets a reader see (or exclude) it. The
+        # counts are also re-read from the collected records.
+        "testbed_failure": infrastructure_failure(
+            {
+                **meta,
+                **{
+                    key: max(int(meta.get(key) or 0), count)
+                    for key, count in testbed_counts(run_dir).items()
+                },
+            }
+        )
+        or "",
     }
     actions: list[dict[str, Any]] = []
     if meta.get("t0_ms") is None or (
@@ -395,6 +405,19 @@ def _panel_point(
     return kept.mean(), contained.mean(), bootstrap_ci(kept), bootstrap_ci(contained)
 
 
+def _no_runs(ax: Any) -> None:
+    ax.text(
+        0.5,
+        0.5,
+        "no runs in this cell",
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        color="#7a7a7a",
+        fontsize=9,
+    )
+
+
 def _save(fig: Any, path: Path) -> None:
     import matplotlib.pyplot as plt
 
@@ -427,6 +450,8 @@ def fig_pareto(runs: Any, path: Path, mode: str) -> None:
             part = r[
                 (r.latency == latency) & ((r.rogue_rate.astype(float) > 0) == rogue)
             ]
+            if part.empty:
+                _no_runs(ax)
             for name in MAIN_NAMES:
                 g = part[part.strategy == name]
                 if g.empty:
@@ -481,6 +506,8 @@ def fig_latency(runs: Any, path: Path, mode: str, metric: str = "contained") -> 
     panels = [(False, "Well-behaved (rogue rate 0)"), (True, "Rogue rate > 0")]
     for ax, (rogue, label) in zip(axes, panels):
         part = r[(r.rogue_rate.astype(float) > 0) == rogue]
+        if part.empty:
+            _no_runs(ax)
         for name in MAIN_NAMES:
             g = part[part.strategy == name]
             if g.empty:
@@ -507,8 +534,18 @@ def fig_latency(runs: Any, path: Path, mode: str, metric: str = "contained") -> 
     axes[0].set_ylabel(
         "fully contained runs (%)" if metric == "contained" else "normal work kept (%)"
     )
-    h, l_ = axes[0].get_legend_handles_labels()
-    fig.legend(h, l_, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.17))
+    legend: dict[str, Any] = {}
+    for ax in axes:  # either panel may be empty
+        for handle, name in zip(*ax.get_legend_handles_labels()):
+            legend.setdefault(name, handle)
+    names = [n for n in MAIN_NAMES if n in legend]
+    fig.legend(
+        [legend[n] for n in names],
+        names,
+        loc="lower center",
+        ncol=4,
+        bbox_to_anchor=(0.5, -0.17),
+    )
     fig.tight_layout()
     _save(fig, path)
 
