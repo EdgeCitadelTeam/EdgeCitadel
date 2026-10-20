@@ -75,7 +75,7 @@ def delegate(root):
 def test_signed_hold_is_applied_once_and_confirms_its_gates(nodes):
     root, _ = nodes
     parent_id, _, child_id = delegate(root)
-    hold = command(root, "hold", {"kind": "egress", "id": parent_id})
+    hold = command(root, "hold", {"kind": "egress", "object_id": parent_id})
     confirmation = send(root, hold)
     assert confirmation["status"] == "applied" and confirmation["code"] is None
     assert confirmation["applied_at_ms"] >= confirmation["received_at_ms"]
@@ -87,11 +87,13 @@ def test_signed_hold_is_applied_once_and_confirms_its_gates(nodes):
     }
     # A retried or replayed command returns the original confirmation.
     assert send(root, hold) == confirmation
-    altered = {**hold, "target": {"kind": "task", "id": parent_id}}
+    altered = {**hold, "target": {"kind": "task", "object_id": parent_id}}
     altered["mac"] = command_mac(KEY, {k: v for k, v in altered.items() if k != "mac"})
     assert send(root, altered)["code"] == "idempotency_conflict"
 
-    release = send(root, command(root, "release", {"kind": "egress", "id": parent_id}))
+    release = send(
+        root, command(root, "release", {"kind": "egress", "object_id": parent_id})
+    )
     assert release["enforcement"]["outbound"] == {
         "held": 0,
         "pending": 1,
@@ -104,7 +106,7 @@ def test_signed_hold_is_applied_once_and_confirms_its_gates(nodes):
 def test_unauthenticated_stale_misaddressed_and_expired_commands_are_rejected(nodes):
     root, _ = nodes
     task_id = str(uuid4())
-    target = {"kind": "task", "id": task_id}
+    target = {"kind": "task", "object_id": task_id}
     forged = command(root, "hold", target, key=b"x" * 48)
     assert send(root, forged)["code"] == "not_authenticated"
     unknown = command(root, "hold", target)
@@ -136,7 +138,12 @@ def test_revoke_filter_cancel_and_renew_through_the_control_path(nodes):
             {"authority": {"task_id": parent_id}, "into": {"agent_id": "child"}},
         ),
     )
-    assert filtered["enforcement"]["gates"] == ["dispatch", "publication", "inbound"]
+    assert filtered["enforcement"]["gates"] == [
+        "dispatch",
+        "task_create",
+        "publication",
+        "inbound",
+    ]
     deliver(root, worker)
     unfiltered = send(
         worker,
@@ -149,7 +156,12 @@ def test_revoke_filter_cancel_and_renew_through_the_control_path(nodes):
     )
     assert unfiltered["enforcement"]["applied_deliveries"] == 1
     assert unfiltered["enforcement"]["parked_deliveries"] == 0
-    revoked = send(worker, command(worker, "revoke", {"task_id": parent_id}, version=3))
+    revoked = send(
+        worker,
+        command(
+            worker, "revoke", {"kind": "authority", "object_id": parent_id}, version=3
+        ),
+    )
     assert revoked["enforcement"] == {
         "gates": ["dispatch", "effect"],
         "local_tasks": 1,
@@ -171,7 +183,7 @@ def test_admin_rpc_issues_the_same_command_locally(nodes):
         "operation": "containment.control",
         "params": {
             "action": "hold",
-            "target": {"kind": "task", "id": task_id},
+            "target": {"kind": "task", "object_id": task_id},
             "owner": MONITOR,
             "policy_version": 1,
         },
@@ -221,7 +233,7 @@ async def test_confirmation_reports_a_message_already_in_flight(nodes):
     confirmation = await asyncio.to_thread(
         send,
         root,
-        command(root, "hold", {"kind": "egress", "id": parent_id}),
+        command(root, "hold", {"kind": "egress", "object_id": parent_id}),
         transport,
     )
     assert confirmation["enforcement"]["outbound"] == {
@@ -253,7 +265,7 @@ async def test_transport_answers_control_requests_on_its_subject(nodes):
     message = SimpleNamespace(
         subject="edgecitadel.control.v1.root-node",
         data=json.dumps(
-            command(root, "hold", {"kind": "task", "id": task_id})
+            command(root, "hold", {"kind": "task", "object_id": task_id})
         ).encode(),
         reply="_INBOX.reply",
         respond=respond,
@@ -269,7 +281,7 @@ def test_receipts_expire_with_their_commands(nodes):
     hold = command(
         root,
         "hold",
-        {"kind": "task", "id": str(uuid4())},
+        {"kind": "task", "object_id": str(uuid4())},
         issued_at_ms=now,
         expires_at_ms=now + 300,
     )

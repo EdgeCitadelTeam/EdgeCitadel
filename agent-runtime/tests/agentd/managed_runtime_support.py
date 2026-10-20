@@ -64,10 +64,10 @@ class ManagedHarness:
         return confirmation
 
     def hold(self, task_id: str, version: int = 1, kind: str = "task") -> Any:
-        return self.control("hold", {"kind": kind, "id": task_id}, version)
+        return self.control("hold", {"kind": kind, "object_id": task_id}, version)
 
     def release(self, task_id: str, version: int = 1, kind: str = "task") -> Any:
-        return self.control("release", {"kind": kind, "id": task_id}, version)
+        return self.control("release", {"kind": kind, "object_id": task_id}, version)
 
     def journal(self, kind: str) -> list[dict[str, Any]]:
         import json

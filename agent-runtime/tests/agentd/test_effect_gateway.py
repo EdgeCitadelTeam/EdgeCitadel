@@ -154,7 +154,7 @@ def test_holds_revocation_and_filters_deny_effects_with_their_policy(nodes):
     ] == [
         ("containment_egress_hold", "1"),
         ("ingress_filter", "2"),
-        ("revocation", "3"),
+        ("authority_revocation", "3"),
     ]
     containment.place_hold(
         worker.store, kind="task", object_id=task_id, owner=MONITOR, policy_version=4

@@ -14,7 +14,8 @@ is held while any row names it, whatever the reason:
 - ``egress`` (egress block): the task keeps running and receiving, but nothing
   leaves it: no dispatch, no effect, no result (its recipient's terminal
   transitions wait), and none of its outbound messages is published. These
-  include requests and cancels it already queued for its children.
+  include requests and cancels it already queued for its children. The object
+  may also be the binding ID of a task-less native root.
 - ``transport``: that outbox message is not published.
 
 A task or egress hold may be placed before the task exists on this node.
@@ -22,15 +23,21 @@ A task or egress hold may be placed before the task exists on this node.
 Authority
 ---------
 A delegated task acts under its own authority and its ancestors'
-(``TaskTraceContext.authorities``). A **revocation** of a task's authority denies
-every later dispatch and effect of that task and its descendants on this node;
-it is irreversible. An **ingress filter** ``(authority, target)`` denies only
+(``TaskTraceContext.authorities``). Revocations are irreversible and deny later
+dispatches and effects on this node:
+
+- ``authority`` (a task ID): of that task and every descendant;
+- ``egress`` (a task ID, or the binding ID of a task-less native root): of that
+  invocation only; it may still complete;
+- ``credential`` (an agent ID): of every invocation of that agent, its
+  ``task.create``, and the publication of every message it emits. An **ingress filter** ``(authority, target)`` denies only
 traffic under that authority into one target: delegations into a recipient
 agent (refused at dispatch, withheld in the outbox, parked at ingest) or
 effects matching an effect rule. Other traffic into the target continues. The
 authority is a delegation (a task ID, reaching its descendants through their
-chains) or a credential (an agent ID: everything that agent sends or does).
-Filters match authority keys ``task:<id>`` and ``agent:<id>``.
+chains), a credential (an agent ID: everything that agent sends or does), or
+any authority (admission control: no new task for the target agent). Filters
+match authority keys ``task:<id>``, ``agent:<id>`` and ``any:*``.
 
 ``restore`` holds are owned by the restored source epoch and are only reviewed by
 restore activation. Every containment decision is placed by one owner (the
@@ -83,10 +90,12 @@ CREATE INDEX task_state.held_deliveries_task ON held_deliveries(task_id, receive
 """
 AUTHORITY_SCHEMA_SQL = """
 CREATE TABLE task_state.revocations (
-    task_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('authority', 'egress', 'credential')),
+    object_id TEXT NOT NULL,
     owner TEXT NOT NULL,
     policy_version INTEGER NOT NULL CHECK(policy_version >= 1),
-    revoked_at_ms INTEGER NOT NULL
+    revoked_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(kind, object_id)
 );
 CREATE TABLE task_state.ingress_filters (
     authority TEXT NOT NULL,
@@ -125,14 +134,23 @@ PUBLICATION_BLOCKED_SQL = """(
     o.message_id IN (SELECT object_id FROM holds WHERE kind='transport')
     OR o.task_id IN (SELECT object_id FROM holds WHERE kind IN ('task','egress'))
     OR EXISTS (
-        SELECT 1 FROM tasks t JOIN trace_task_contexts c ON c.task_id=t.task_id
+        SELECT 1 FROM tasks t WHERE t.task_id=o.task_id AND EXISTS (
+            SELECT 1 FROM revocations r WHERE r.kind='credential'
+              AND r.object_id=CASE WHEN o.subject='agents.'||t.recipient_id||'.inbox'
+                                   THEN t.sender_id ELSE t.recipient_id END))
+    OR EXISTS (
+        SELECT 1 FROM tasks t LEFT JOIN trace_task_contexts c ON c.task_id=t.task_id
         WHERE t.task_id=o.task_id AND o.subject='agents.'||t.recipient_id||'.inbox'
           AND (
             EXISTS (SELECT 1 FROM holds h WHERE h.kind IN ('task','egress')
                     AND h.object_id=json_extract(c.context_json,'$.parent_task_id'))
+            OR EXISTS (SELECT 1 FROM holds h JOIN trace_bindings_all b
+                       ON b.binding_id=h.object_id
+                       WHERE h.kind='egress' AND b.task_id IS NULL
+                         AND b.trace_id=json_extract(c.context_json,'$.parent_run_id'))
             OR EXISTS (SELECT 1 FROM ingress_filters f
                        WHERE f.target_kind='agent' AND f.target=t.recipient_id
-                         AND (f.authority='agent:'||t.sender_id
+                         AND (f.authority IN ('any:*', 'agent:'||t.sender_id)
                               OR f.authority IN (SELECT 'task:'||a.value FROM
                                  json_each(c.context_json,'$.authority_chain') a)))
           )
@@ -291,31 +309,83 @@ def _recover_if_orphaned_locked(store: AgentdStore, task_id: str) -> None:
         store._recover_session_tasks_locked(str(row[0]), _now_ms())
 
 
-def revoke_authority(
-    store: AgentdStore, *, task_id: str, owner: str, policy_version: int
-) -> dict[str, object]:
-    """Revoke a delegation's authority here, for the task and its descendants.
+REVOCATION_KINDS = frozenset({"authority", "egress", "credential"})
 
-    The task need not exist on this node: descendants that arrive later carry
-    it in their authority chain. Revocation is irreversible.
+
+def revoke(
+    store: AgentdStore, *, kind: str, object_id: str, owner: str, policy_version: int
+) -> dict[str, object]:
+    """Revoke authority on this node; irreversible.
+
+    ``authority``: a task and its descendants; the task need not exist here,
+    because descendants that arrive later carry it in their chain. ``egress``:
+    one invocation, by task ID or by a task-less native root's binding ID.
+    ``credential``: an agent.
     """
-    _uuid4(task_id, "invalid_authority")
+    if kind not in REVOCATION_KINDS:
+        raise ContainmentError("invalid_revocation_kind")
+    if kind == "credential":
+        if not isinstance(object_id, str) or AGENT_PATTERN.fullmatch(object_id) is None:
+            raise ContainmentError("invalid_authority")
+    else:
+        _uuid4(object_id, "invalid_authority")
     _validate_decision(owner, policy_version)
     with store._task_transaction():
         db = store._connection
         _fence(db, owner, policy_version)
         db.execute(
-            "INSERT OR IGNORE INTO revocations(task_id,owner,policy_version,revoked_at_ms) "
-            "VALUES (?,?,?,?)",
-            (task_id, owner, policy_version, _now_ms()),
+            "INSERT OR IGNORE INTO revocations(kind,object_id,owner,policy_version,"
+            "revoked_at_ms) VALUES (?,?,?,?,?)",
+            (kind, object_id, owner, policy_version, _now_ms()),
         )
         row = db.execute(
-            "SELECT revoked_at_ms FROM revocations WHERE task_id=?", (task_id,)
+            "SELECT revoked_at_ms FROM revocations WHERE kind=? AND object_id=?",
+            (kind, object_id),
         ).fetchone()
         return {
             "revoked_at_ms": int(row[0]),
-            "local_tasks": _tasks_under_locked(db, task_id),
+            "local_tasks": _tasks_affected_locked(db, kind, object_id),
         }
+
+
+def revoke_authority(
+    store: AgentdStore, *, task_id: str, owner: str, policy_version: int
+) -> dict[str, object]:
+    """Revoke a delegation's authority here, for the task and its descendants."""
+    return revoke(
+        store,
+        kind="authority",
+        object_id=task_id,
+        owner=owner,
+        policy_version=policy_version,
+    )
+
+
+def _tasks_affected_locked(db: sqlite3.Connection, kind: str, object_id: str) -> int:
+    if kind == "authority":
+        return _tasks_under_locked(db, object_id)
+    terminal = "('completed','failed','rejected','cancelled','expired','undeliverable')"
+    if kind == "credential":
+        query = (
+            f"SELECT COUNT(*) FROM tasks WHERE state NOT IN {terminal} "  # noqa: S608
+            "AND (sender_id=? OR recipient_id=?)"
+        )
+        return int(db.execute(query, (object_id, object_id)).fetchone()[0])
+    query = (
+        f"SELECT COUNT(*) FROM tasks WHERE state NOT IN {terminal} AND "  # noqa: S608
+        "(task_id=? OR task_id IN (SELECT task_id FROM trace_bindings_all "
+        "WHERE binding_id=? AND task_id IS NOT NULL))"
+    )
+    count = int(db.execute(query, (object_id, object_id)).fetchone()[0])
+    if (
+        count == 0
+        and db.execute(
+            "SELECT 1 FROM trace_bindings_all WHERE binding_id=? AND closed_at_ms IS NULL",
+            (object_id,),
+        ).fetchone()
+    ):
+        return 1  # A live task-less native root.
+    return count
 
 
 def _tasks_under_locked(db: sqlite3.Connection, authority_id: str) -> int:
@@ -333,15 +403,19 @@ def _tasks_under_locked(db: sqlite3.Connection, authority_id: str) -> int:
 
 
 def authority_keys(task_ids: Iterable[str], agent_id: str | None) -> tuple[str, ...]:
-    """The filter keys traffic acts under: its delegations and its credential."""
+    """The filter keys traffic acts under: its delegations, its credential, any."""
     return (
         *(f"task:{task_id}" for task_id in task_ids),
         *((f"agent:{agent_id}",) if agent_id else ()),
+        "any:*",
     )
 
 
 def filter_authority(authority: object) -> str:
-    """``{"task_id"}`` (a delegation) or ``{"agent_id"}`` (a credential) as a key."""
+    """``{"task_id"}`` (a delegation), ``{"agent_id"}`` (a credential) or
+    ``{"any": true}`` (admission control) as a filter key."""
+    if isinstance(authority, Mapping) and dict(authority) == {"any": True}:
+        return "any:*"
     if isinstance(authority, Mapping) and set(authority) == {"task_id"}:
         return f"task:{_uuid4(authority['task_id'], 'invalid_authority')}"
     if isinstance(authority, Mapping) and set(authority) == {"agent_id"}:
@@ -478,9 +552,9 @@ def cancel_task(
     return {"state": "cancelled", "released_holds": sorted(h["kind"] for h in holds)}
 
 
-def _authority_mapping(key: str) -> dict[str, str]:
+def _authority_mapping(key: str) -> dict[str, object]:
     kind, _, value = key.partition(":")
-    return {f"{kind}_id": value}
+    return {"any": True} if kind == "any" else {f"{kind}_id": value}
 
 
 def list_containment(store: AgentdStore) -> dict[str, list[dict[str, object]]]:
@@ -496,7 +570,7 @@ def list_containment(store: AgentdStore) -> dict[str, list[dict[str, object]]]:
         )
         revocations = [
             dict(row)
-            for row in db.execute("SELECT * FROM revocations ORDER BY task_id")
+            for row in db.execute("SELECT * FROM revocations ORDER BY kind,object_id")
         ]
         filters = [
             {
@@ -529,24 +603,53 @@ def list_containment(store: AgentdStore) -> dict[str, list[dict[str, object]]]:
 # Gates. Callers hold the store lock, normally inside the deciding transaction.
 
 
-def egress_hold_locked(db: sqlite3.Connection, task_id: str) -> sqlite3.Row | None:
+def egress_hold_locked(
+    db: sqlite3.Connection, task_id: str | None, binding_id: str | None = None
+) -> sqlite3.Row | None:
+    """An egress hold on the invocation's task or on its task-less binding."""
     return db.execute(
-        "SELECT reason,owner,policy_version FROM holds WHERE kind='egress' AND object_id=?",
-        (task_id,),
+        "SELECT reason,owner,policy_version FROM holds WHERE kind='egress' "
+        "AND object_id IN (?,?) LIMIT 1",
+        (task_id, binding_id),
     ).fetchone()
 
 
 def revocation_locked(
-    db: sqlite3.Connection, authorities: Iterable[str]
+    db: sqlite3.Connection,
+    *,
+    authorities: Iterable[str],
+    invocation: Iterable[str | None],
+    agent_id: str | None,
 ) -> sqlite3.Row | None:
+    """The revocation denying this invocation, if any.
+
+    ``authorities`` are its task and ancestors (``authority`` revocations),
+    ``invocation`` its own task and binding IDs (``egress``), and ``agent_id``
+    its credential.
+    """
     authorities = tuple(authorities)
-    if not authorities:
+    invocation = tuple(value for value in invocation if value)
+    clauses, values = [], []
+    if authorities:
+        clauses.append(
+            f"(kind='authority' AND object_id IN ({','.join('?' * len(authorities))}))"
+        )
+        values.extend(authorities)
+    if invocation:
+        clauses.append(
+            f"(kind='egress' AND object_id IN ({','.join('?' * len(invocation))}))"
+        )
+        values.extend(invocation)
+    if agent_id:
+        clauses.append("(kind='credential' AND object_id=?)")
+        values.append(agent_id)
+    if not clauses:
         return None
-    marks = ",".join("?" for _ in authorities)
     return db.execute(
-        f"SELECT task_id,owner,policy_version FROM revocations WHERE task_id IN ({marks}) "  # noqa: S608
-        "ORDER BY revoked_at_ms LIMIT 1",
-        authorities,
+        "SELECT kind,object_id,owner,policy_version FROM revocations WHERE "  # noqa: S608
+        + " OR ".join(clauses)
+        + " ORDER BY revoked_at_ms LIMIT 1",
+        values,
     ).fetchone()
 
 

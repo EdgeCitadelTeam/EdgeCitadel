@@ -90,7 +90,7 @@ def test_revoking_a_parent_denies_its_descendants_on_another_node(nodes):
     denied = worker.dispatch("child", child_binding, "grandchild")
     assert denied["code"] == "authority_revoked"
     [permission] = worker.events("permission", "denied")
-    assert permission["attributes"]["policy"] == "revocation"
+    assert permission["attributes"]["policy"] == "authority_revocation"
     assert permission["attributes"]["policy_version"] == "1"
 
     containment.revoke_authority(

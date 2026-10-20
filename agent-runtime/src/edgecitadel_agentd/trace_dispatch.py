@@ -62,6 +62,7 @@ def _admit(
     connector: sqlite3.Row,
     *,
     task_id: str | None,
+    binding_id: str,
     parent: TaskTraceContext | None,
     recipient_id: str,
     lease: LeaseRequest,
@@ -88,12 +89,17 @@ def _admit(
         hold = store._task_hold_locked(task_id)
         if hold is not None:
             return _denied(hold, f"{hold['reason']}_hold", "execution_held")
-        egress = egress_hold_locked(db, task_id)
-        if egress is not None:
-            return _denied(egress, "containment_egress_hold", "egress_held")
-    revoked = revocation_locked(db, authorities)
+    egress = egress_hold_locked(db, task_id, binding_id)
+    if egress is not None:
+        return _denied(egress, "containment_egress_hold", "egress_held")
+    revoked = revocation_locked(
+        db,
+        authorities=authorities,
+        invocation=(task_id, binding_id),
+        agent_id=str(connector["agent_id"]),
+    )
     if revoked is not None:
-        return _denied(revoked, "revocation", "authority_revoked")
+        return _denied(revoked, f"{revoked['kind']}_revocation", "authority_revoked")
     grant = delegation_grant(store, connector)
     if not grant.usable or recipient_id not in grant.recipients:
         return Admission(
@@ -203,6 +209,7 @@ def dispatch_trace(
             store,
             connector,
             task_id=task.task_id if task is not None else None,
+            binding_id=binding["binding_id"],
             parent=parent,
             recipient_id=params["recipient_id"],
             lease=LeaseRequest(**requested),

@@ -1382,13 +1382,20 @@ Containment state managed by the same fenced owners as holds:
   until release, and none of its outbound messages is published. This includes
   requests and cancels it had already queued for its children. Task reads show
   `containment_egress_hold`. The managed runtime does not pause on it; a result
-  waits for release.
-- **Revocation** (`revocations`): irreversible. Every later dispatch and effect
-  of the named task and of any task whose `authority_chain` contains it is
-  denied on this node. The task may be unknown here; descendants that arrive
-  later carry it in their chain.
+  waits for release. A task-less native root is egress-held by its binding ID,
+  which withholds the requests of the children it dispatched.
+- **Revocation** (`revocations`, kind `authority`, `egress` or `credential`):
+  irreversible. `authority` denies every later dispatch and effect of the named
+  task and of any task whose `authority_chain` contains it; the task may be
+  unknown here, since descendants that arrive later carry it in their chain.
+  `egress` denies those of one invocation only (a task, or a task-less native
+  root by binding ID), which may still complete. `credential` denies every
+  dispatch, effect and `task.create` of an agent and withholds the publication of
+  every message it emits. Denials name the policy `<kind>_revocation`.
 - **Ingress filter** (`ingress_filters`, key `(authority, target)`): denies only
-  traffic under that authority into that target. An agent target refuses the
+  traffic under that authority into that target. The authority is a delegation
+  (`task:<id>`, reaching descendants), a credential (`agent:<id>`), or any
+  (`any:*`, admission control). An agent target refuses the
   dispatch at the sender, withholds an already queued request in the outbox,
   and parks the delivery at the receiver (acknowledged to the broker, applied
   when the filter is removed). An effect-rule target denies matching effects.
@@ -1396,8 +1403,10 @@ Containment state managed by the same fenced owners as holds:
 
 The outbox gate (`PUBLICATION_BLOCKED_SQL`) is one predicate used both to select
 messages and to recheck each message just before publication: transport and
-task holds, the requester's execution or egress hold for a child's request or
-cancel, and agent filters on the child's chain.
+task holds, the requester's execution or egress hold (or a native root's
+binding egress hold) for a child's request or cancel, a credential revocation
+of the emitting agent, and agent filters on the child's chain, its sender's
+credential, or any authority.
 
 Contexts saved before schema 32 gain `effect_scope: null`, `lease: null` and a
 chain holding only their parent, so revocation reaches them through their
@@ -1418,8 +1427,9 @@ The request is bound to the invocation by its execution binding (Managed Agents,
 and native connectors with `edgecitadel_trace`), and only an `accepted` or
 `running` task may authorize. The target is exact; the harness classifies it.
 In one transaction agentd checks, and the first failure decides the error code:
-execution hold (`execution_held`), egress hold (`egress_held`), revocation of the
-task or its chain (`authority_revoked`), the controller lease when configured
+execution hold (`execution_held`), egress hold of the task or binding
+(`egress_held`), an `authority`, `egress` or `credential` revocation applying to
+the invocation (`authority_revoked`), the controller lease when configured
 (`controller_lease_expired`), the effect scope, which is the connector's effect
 grant narrowed by the inherited `effect_scope` (`outside_effect_scope`),
 effect-rule ingress filters on the invocation's authorities (`ingress_filtered`),
@@ -1467,16 +1477,31 @@ command_id?}` and issues the same command with a five-minute expiry.
 ```json
 {"schema_version":1,"command_id":"<uuid4>","node_id":"endurance","owner":"core-monitor",
  "policy_version":7,"issued_at_ms":1760000000000,"expires_at_ms":1760000030000,
- "action":"hold","target":{"kind":"egress","id":"<task uuid>"},"mac":"<64 hex>"}
+ "action":"hold","target":{"kind":"egress","object_id":"<task uuid>"},"mac":"<64 hex>"}
 ```
 
 | `action` | `target` | Effect |
 |---|---|---|
-| `hold` / `release` | `{kind: task\|egress\|transport, id}` | pause, egress block, or one outbox message |
-| `revoke` | `{task_id}` | irreversible revocation of a delegation and its descendants |
-| `filter` / `unfilter` | `{authority: {task_id}\|{agent_id}, into: {agent_id}\|{effect_class, target}}` | ingress filter for one authority (delegation or credential) into one target |
+| `hold` / `release` | `{kind: task, object_id}` | pause a task (reversible) |
+| | `{kind: egress, object_id}` | egress block of a task, or of a task-less native root by its binding ID |
+| | `{kind: transport, object_id}` | withhold one outbox message |
+| `revoke` | `{kind: authority, object_id: task}` | a delegation and all its descendants |
+| | `{kind: egress, object_id: task or binding}` | one invocation's new dispatches and effects; it may still complete |
+| | `{kind: credential, object_id: agent}` | the agent's dispatches, effects, `task.create`, and publication of everything it emits |
+| | `{kind: grant, object_id: "<agent>><agent>"\|"<agent>>fx:<class>"}` | one sender into one recipient or effect class (a filter) |
+| | `{kind: admission, object_id: agent}` | no new task for the agent at this node, under any authority (a filter) |
+| `filter` / `unfilter` | `{authority: {task_id}\|{agent_id}\|{any: true}, into: {agent_id}\|{effect_class, target}}` | reversible ingress filter for one authority into one target |
 | `cancel` | `{task_id}` | remove this owner's holds on the task and cancel it (terminal) |
 | `renew` | `{}` | renew the fail-closed controller lease, when configured |
+| `describe` | `{}` | report `capabilities`, the supported `op:kind` pairs |
+
+`hold`, `release` and `revoke` with `{kind, object_id}` are the monitor's
+ControlClient operations; `describe` lists what a node enforces (`hold:task`,
+`hold:egress`, `hold:transport`, `revoke:authority`, `revoke:egress`,
+`revoke:credential`, `revoke:grant`, `revoke:admission`, `filter:agent`,
+`filter:effect`, `cancel:task`, `renew:controller`). Revocations are
+irreversible; `grant` and `admission` revocations are stored as ingress filters
+and listed with them.
 
 **Authentication.** The broker has no per-subject permissions, so a NATS command
 carries `mac = HMAC-SHA256(key, "edgecitadel.containment.control.v1\0" ||
@@ -1514,7 +1539,7 @@ codes above, `task_not_found`, `restore_hold`, `task_terminal`, `invalid_authori
 node. `enforcement` reports what was enforced at that instant:
 
 - `gates`: what the decision closed: `claim`, `transition`, `result`,
-  `dispatch`, `effect`, `publication`, `inbound`.
+  `dispatch`, `effect`, `task_create`, `publication`, `inbound`.
 - `task`: the local task's state and whether a session holds its claim, or
   `null` when the task is not (yet) on this node; a hold placed first applies
   when it arrives.
@@ -1541,10 +1566,9 @@ its gates hold from `applied_at_ms`.
 Revocations and filters affect only the node that applies them. A controller
 revoking a delegation sends `revoke` to every node that may hold its
 descendants; descendants arriving later carry the revoked ID in their chain.
-Not provided here: holding a single pending effect (effects are decided
-synchronously; use an effect-rule filter), and agent-wide revocation or
-admission control (use `connector.revoke`, `connector.grant` or the package
-grant).
+A credential revocation is enforced through agentd's gates; it does not revoke
+the connector's local token (`connector.revoke` does that and fails running
+work).
 
 ### Pause, resume and cancel of running managed work
 

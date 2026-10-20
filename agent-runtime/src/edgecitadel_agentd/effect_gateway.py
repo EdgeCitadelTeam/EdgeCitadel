@@ -83,6 +83,7 @@ def _decide(
     connector: Any,
     *,
     task_id: str | None,
+    binding_id: str,
     context: TaskTraceContext | None,
     effect: EffectRule,
     now_ms: int,
@@ -102,15 +103,22 @@ def _decide(
             return EffectDecision(
                 f"{hold['reason']}_hold", str(hold["policy_version"]), "execution_held"
             )
-        egress = egress_hold_locked(db, task_id)
-        if egress is not None:
-            return EffectDecision(
-                "containment_egress_hold", str(egress["policy_version"]), "egress_held"
-            )
-    revoked = revocation_locked(db, authorities)
+    egress = egress_hold_locked(db, task_id, binding_id)
+    if egress is not None:
+        return EffectDecision(
+            "containment_egress_hold", str(egress["policy_version"]), "egress_held"
+        )
+    revoked = revocation_locked(
+        db,
+        authorities=authorities,
+        invocation=(task_id, binding_id),
+        agent_id=str(connector["agent_id"]),
+    )
     if revoked is not None:
         return EffectDecision(
-            "revocation", str(revoked["policy_version"]), "authority_revoked"
+            f"{revoked['kind']}_revocation",
+            str(revoked["policy_version"]),
+            "authority_revoked",
         )
     if not store.controller_lease_valid(now_ms):
         return EffectDecision(
@@ -208,6 +216,7 @@ def authorize_effect(
             store,
             connector,
             task_id=task_id,
+            binding_id=binding["binding_id"],
             context=context,
             effect=effect,
             now_ms=now,

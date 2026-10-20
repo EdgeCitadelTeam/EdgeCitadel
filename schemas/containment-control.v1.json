@@ -52,12 +52,13 @@
         "action": {
           "enum": [
             "hold",
+            "release",
             "revoke",
             "filter",
+            "unfilter",
             "cancel",
             "renew",
-            "release",
-            "unfilter"
+            "describe"
           ]
         },
         "target": {
@@ -84,7 +85,7 @@
                 "additionalProperties": false,
                 "required": [
                   "kind",
-                  "id"
+                  "object_id"
                 ],
                 "properties": {
                   "kind": {
@@ -94,7 +95,7 @@
                       "transport"
                     ]
                   },
-                  "id": {
+                  "object_id": {
                     "type": "string",
                     "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                   }
@@ -118,7 +119,7 @@
                 "additionalProperties": false,
                 "required": [
                   "kind",
-                  "id"
+                  "object_id"
                 ],
                 "properties": {
                   "kind": {
@@ -128,7 +129,7 @@
                       "transport"
                     ]
                   },
-                  "id": {
+                  "object_id": {
                     "type": "string",
                     "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                   }
@@ -148,17 +149,66 @@
           "then": {
             "properties": {
               "target": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "task_id"
-                ],
-                "properties": {
-                  "task_id": {
-                    "type": "string",
-                    "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "object_id"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "authority",
+                          "egress"
+                        ]
+                      },
+                      "object_id": {
+                        "type": "string",
+                        "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "object_id"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "credential",
+                          "admission"
+                        ]
+                      },
+                      "object_id": {
+                        "type": "string",
+                        "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "object_id"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "grant"
+                      },
+                      "object_id": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}>([a-z0-9][a-z0-9_-]{0,63}|fx:(fs\\.write|process\\.exec|network\\.http|device\\.command))$"
+                      }
+                    }
                   }
-                }
+                ]
               }
             }
           }
@@ -206,6 +256,18 @@
                           "agent_id": {
                             "type": "string",
                             "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "any"
+                        ],
+                        "properties": {
+                          "any": {
+                            "const": true
                           }
                         }
                       }
@@ -302,6 +364,18 @@
                             "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
                           }
                         }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "any"
+                        ],
+                        "properties": {
+                          "any": {
+                            "const": true
+                          }
+                        }
                       }
                     ]
                   },
@@ -395,6 +469,25 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "describe"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {}
+              }
+            }
+          }
         }
       ]
     },
@@ -436,12 +529,13 @@
             {
               "enum": [
                 "hold",
+                "release",
                 "revoke",
                 "filter",
+                "unfilter",
                 "cancel",
                 "renew",
-                "release",
-                "unfilter"
+                "describe"
               ]
             },
             {
@@ -501,6 +595,7 @@
                       "result",
                       "dispatch",
                       "effect",
+                      "task_create",
                       "publication",
                       "inbound"
                     ]
@@ -602,6 +697,14 @@
                 },
                 "controller_lease_enforced": {
                   "type": "boolean"
+                },
+                "capabilities": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z]+:[a-z]+$"
+                  }
                 }
               }
             }

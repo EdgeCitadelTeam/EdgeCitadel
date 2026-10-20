@@ -249,10 +249,27 @@ def _decision(command: Mapping[str, Any]) -> dict[str, Any]:
     return {"owner": command["owner"], "policy_version": command["policy_version"]}
 
 
+# The op:kind pairs this node enforces, in the monitor's vocabulary.
+CAPABILITIES = (
+    "hold:task",
+    "hold:egress",
+    "hold:transport",
+    "revoke:authority",
+    "revoke:egress",
+    "revoke:credential",
+    "revoke:grant",
+    "revoke:admission",
+    "filter:agent",
+    "filter:effect",
+    "cancel:task",
+    "renew:controller",
+)
+
+
 def _hold(store: AgentdStore, command: Mapping[str, Any]) -> dict[str, Any]:
     target = command["target"]
     containment.place_hold(
-        store, kind=target["kind"], object_id=target["id"], **_decision(command)
+        store, kind=target["kind"], object_id=target["object_id"], **_decision(command)
     )
     return {}
 
@@ -260,14 +277,40 @@ def _hold(store: AgentdStore, command: Mapping[str, Any]) -> dict[str, Any]:
 def _release(store: AgentdStore, command: Mapping[str, Any]) -> dict[str, Any]:
     target = command["target"]
     released = containment.release_hold(
-        store, kind=target["kind"], object_id=target["id"], **_decision(command)
+        store, kind=target["kind"], object_id=target["object_id"], **_decision(command)
     )
     return {"applied_deliveries": released["applied_deliveries"]}
 
 
+def _revocation_filter(
+    kind: str, object_id: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``grant`` and ``admission`` revocations are filters with no lifted state.
+
+    ``grant``: ``<agent>><target>``, the target an agent ID or ``fx:<class>``
+    (every effect of that class). ``admission``: an agent ID, which admits no
+    new task under any authority.
+    """
+    if kind == "admission":
+        return {"any": True}, {"agent_id": object_id}
+    agent, separator, target = object_id.partition(">")
+    if not separator:
+        raise ContainmentError("invalid_authority")
+    if target.startswith("fx:"):
+        return {"agent_id": agent}, {"effect_class": target[3:], "target": "*"}
+    return {"agent_id": agent}, {"agent_id": target}
+
+
 def _revoke(store: AgentdStore, command: Mapping[str, Any]) -> dict[str, Any]:
-    revoked = containment.revoke_authority(
-        store, task_id=command["target"]["task_id"], **_decision(command)
+    kind, object_id = command["target"]["kind"], command["target"]["object_id"]
+    if kind in {"grant", "admission"}:
+        authority, into = _revocation_filter(kind, object_id)
+        containment.place_filter(
+            store, authority=authority, target=into, **_decision(command)
+        )
+        return {}
+    revoked = containment.revoke(
+        store, kind=kind, object_id=object_id, **_decision(command)
     )
     return {"local_tasks": revoked["local_tasks"]}
 
@@ -313,6 +356,11 @@ def _renew(store: AgentdStore, command: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _describe(store: AgentdStore, command: Mapping[str, Any]) -> dict[str, Any]:
+    del store, command
+    return {"capabilities": list(CAPABILITIES)}
+
+
 _APPLY: dict[str, Callable[[AgentdStore, Mapping[str, Any]], dict[str, Any]]] = {
     "hold": _hold,
     "release": _release,
@@ -321,11 +369,12 @@ _APPLY: dict[str, Callable[[AgentdStore, Mapping[str, Any]], dict[str, Any]]] = 
     "unfilter": _unfilter,
     "cancel": _cancel,
     "renew": _renew,
+    "describe": _describe,
 }
 
-# What each decision closes (or, for release, reopens) at this node.
+# What each decision closes at this node.
 _GATES = {
-    ("hold", "task"): [
+    "hold:task": [
         "claim",
         "transition",
         "dispatch",
@@ -333,11 +382,13 @@ _GATES = {
         "publication",
         "inbound",
     ],
-    ("hold", "egress"): ["result", "dispatch", "effect", "publication"],
-    ("hold", "transport"): ["publication"],
-    ("revoke", None): ["dispatch", "effect"],
-    ("filter", "agent"): ["dispatch", "publication", "inbound"],
-    ("filter", "effect"): ["effect"],
+    "hold:egress": ["result", "dispatch", "effect", "publication"],
+    "hold:transport": ["publication"],
+    "revoke:authority": ["dispatch", "effect"],
+    "revoke:egress": ["dispatch", "effect"],
+    "revoke:credential": ["dispatch", "effect", "task_create", "publication"],
+    "filter:agent": ["dispatch", "task_create", "publication", "inbound"],
+    "filter:effect": ["effect"],
 }
 
 
@@ -349,36 +400,48 @@ def _snapshot(
 ) -> dict[str, Any]:
     """Describe the enforced state of the command's object at this instant."""
     action, target = command["action"], command["target"]
+    if action == "revoke" and target["kind"] in {"grant", "admission"}:
+        authority, into = _revocation_filter(target["kind"], target["object_id"])
+        action, target = "filter", {"authority": authority, "into": into}
     db = store._connection
     with store._lock:
         if action in {"hold", "release"}:
-            kind = target["kind"]
+            kind, object_id = target["kind"], target["object_id"]
             if action == "hold":
-                enforcement["gates"] = _GATES[("hold", kind)]
+                enforcement["gates"] = _GATES[f"hold:{kind}"]
             if kind == "transport":
                 messages = db.execute(
                     f"SELECT o.message_id,o.published_at_ms,{_BLOCKED} "
                     "FROM transport_outbox o WHERE o.message_id=?",
-                    (target["id"],),
+                    (object_id,),
                 ).fetchall()
             else:
-                messages = _egress_messages(db, target["id"])
-                enforcement["task"] = _task(db, target["id"])
+                messages = _egress_messages(db, object_id)
+                enforcement["task"] = _task(db, object_id)
                 if kind == "task":
                     enforcement["parked_deliveries"] = int(
                         db.execute(
                             "SELECT COUNT(*) FROM held_deliveries WHERE task_id=?",
-                            (target["id"],),
+                            (object_id,),
                         ).fetchone()[0]
                     )
             enforcement["outbound"] = _outbound(messages, in_flight)
         elif action == "revoke":
-            enforcement["gates"] = _GATES[("revoke", None)]
+            enforcement["gates"] = _GATES[f"revoke:{target['kind']}"]
+            if target["kind"] == "credential":
+                messages = db.execute(
+                    f"SELECT o.message_id,o.published_at_ms,{_BLOCKED} "
+                    "FROM transport_outbox o JOIN tasks t ON t.task_id=o.task_id "
+                    "WHERE ?=CASE WHEN o.subject='agents.'||t.recipient_id||'.inbox' "
+                    "THEN t.sender_id ELSE t.recipient_id END",
+                    (target["object_id"],),
+                ).fetchall()
+                enforcement["outbound"] = _outbound(messages, in_flight)
         elif action in {"filter", "unfilter"}:
             into = target["into"]
             kind = "agent" if "agent_id" in into else "effect"
             if action == "filter":
-                enforcement["gates"] = _GATES[("filter", kind)]
+                enforcement["gates"] = _GATES[f"filter:{kind}"]
             if kind == "agent":
                 key = containment.filter_authority(target["authority"])
                 messages = db.execute(
@@ -386,9 +449,9 @@ def _snapshot(
                     "FROM transport_outbox o JOIN tasks t ON t.task_id=o.task_id "
                     "LEFT JOIN trace_task_contexts c ON c.task_id=t.task_id "
                     "WHERE t.recipient_id=? AND o.subject='agents.'||t.recipient_id||'.inbox' "
-                    "AND (?='agent:'||t.sender_id OR ? IN (SELECT 'task:'||a.value "
-                    "FROM json_each(c.context_json,'$.authority_chain') a))",
-                    (into["agent_id"], key, key),
+                    "AND (?='any:*' OR ?='agent:'||t.sender_id OR ? IN (SELECT "
+                    "'task:'||a.value FROM json_each(c.context_json,'$.authority_chain') a))",
+                    (into["agent_id"], key, key, key),
                 ).fetchall()
                 enforcement["outbound"] = _outbound(messages, in_flight)
                 enforcement["parked_deliveries"] = int(
@@ -407,15 +470,21 @@ def _snapshot(
     return enforcement
 
 
-def _egress_messages(db: Any, task_id: str) -> list[Any]:
-    """The task's own messages and the requests or cancels it sent its children."""
+def _egress_messages(db: Any, object_id: str) -> list[Any]:
+    """An invocation's own messages and the requests or cancels it sent children.
+
+    ``object_id`` is a task, or the binding of a task-less native root whose
+    children name its run as their parent.
+    """
     return db.execute(
         f"SELECT o.message_id,o.published_at_ms,{_BLOCKED} FROM transport_outbox o "
         "WHERE o.task_id=? OR EXISTS (SELECT 1 FROM tasks t "
         "JOIN trace_task_contexts c ON c.task_id=t.task_id WHERE t.task_id=o.task_id "
         "AND o.subject='agents.'||t.recipient_id||'.inbox' "
-        "AND json_extract(c.context_json,'$.parent_task_id')=?)",
-        (task_id, task_id),
+        "AND (json_extract(c.context_json,'$.parent_task_id')=? "
+        "OR json_extract(c.context_json,'$.parent_run_id')=(SELECT trace_id FROM "
+        "trace_bindings_all WHERE binding_id=? AND task_id IS NULL)))",
+        (object_id, object_id, object_id),
     ).fetchall()
 
 

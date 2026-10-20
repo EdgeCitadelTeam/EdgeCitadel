@@ -1392,7 +1392,16 @@ class AgentdStore:
         return [cast(dict[str, object], json.loads(row["record_json"])) for row in rows]
 
     def authorize_recipient(self, connector: sqlite3.Row, recipient_id: str) -> None:
-        """Use the administrator-held delegation grant, never the Agent card."""
+        """Use the administrator-held delegation grant, never the Agent card.
+
+        Containment also applies: a revoked credential creates no task, and an
+        ingress filter on its credential or on admission refuses the recipient.
+        """
+        from .containment import (
+            authority_keys,
+            ingress_filter_locked,
+            revocation_locked,
+        )
         from .delegation_authority import delegation_grant
 
         grant = delegation_grant(self, connector)
@@ -1402,6 +1411,16 @@ class AgentdStore:
                 if connector["host_type"] == "managed-agent"
                 else "native connector recipient is not authorized by its grant"
             )
+        agent_id = str(connector["agent_id"])
+        with self._lock:
+            if revocation_locked(
+                self._connection, authorities=(), invocation=(), agent_id=agent_id
+            ):
+                raise StoreError("authority_revoked")
+            if ingress_filter_locked(
+                self._connection, authority_keys((), agent_id), agent_id=recipient_id
+            ):
+                raise StoreError("ingress_filtered")
 
     def grant_connector(
         self, *, connector_id: str, outbound_agents: object, effects: object = ()
