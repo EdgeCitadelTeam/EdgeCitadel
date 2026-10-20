@@ -167,7 +167,7 @@ async def test_connector_round_trip_through_owned_real_nats(
             "issued_at_ms": issued,
             "expires_at_ms": issued + 30_000,
             "action": "hold",
-            "target": {"kind": "task", "id": str(uuid.uuid4())},
+            "target": {"kind": "task", "object_id": str(uuid.uuid4())},
         }
         command["mac"] = command_mac(control_key, command)
         reply = await nc.request(
