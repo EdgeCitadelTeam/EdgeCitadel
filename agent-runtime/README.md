@@ -366,6 +366,8 @@ and records `effect/requested` and `effect/committed|denied` in the run. A
 scheduled effect is requested now and committed later with `effect.commit`, and
 can be held in between. See the
 [effect gateway](../docs/architecture/execution-trace-contract.md#effect-gateway).
+Each `run/started` event exports the invocation's effective authority
+(recipients, effect rules, lease and authority chain) as `attributes.authority`.
 
 If reconciliation encounters a SQLite storage error, agentd stays available and
 reports `status: degraded` with `reconciliation: storage_unavailable` in health.

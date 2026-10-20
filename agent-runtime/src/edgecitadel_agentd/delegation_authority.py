@@ -28,13 +28,14 @@ import json
 import re
 import sqlite3
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING, Any, cast
 
 from .trace_contract import TraceContractError, canonical_bytes
 
 if TYPE_CHECKING:
     from .store import AgentdStore
+    from .trace_correlation import TaskTraceContext
 
 # Version 3: effect rules and leases join recipients in the delegated authority.
 GRANT_POLICY_VERSION = "3"
@@ -42,6 +43,9 @@ EFFECT_CLASSES = frozenset(
     {"fs.write", "process.exec", "network.http", "device.command"}
 )
 MAX_EFFECT_RULES = 64
+# run/started lists an invocation's recipients and effect rules up to this
+# size; a larger scope is exported as null (consult the grant instead).
+MAX_EXPORTED_SCOPE_BYTES = 8 * 1024
 MAX_INTEGER = 9_007_199_254_740_991
 _TARGET = re.compile(r"[^\x00-\x1f\x7f]{1,512}")
 
@@ -289,3 +293,44 @@ def delegation_grant(store: AgentdStore, connector: sqlite3.Row) -> DelegationGr
         frozenset(recipients),
         effect_rules(effects),
     )
+
+
+def exported_authority(
+    grant: DelegationGrant, inherited: TaskTraceContext | None
+) -> dict[str, Any]:
+    """An invocation's effective authority when it starts, as run/started exports it.
+
+    It is the grant intersected with what the task inherited, exactly as
+    dispatch and effect admission compute it. Holds, revocations and filters
+    are separate controller decisions and are not folded in; a grant changed
+    during the run is not exported again.
+    """
+    recipients = sorted(
+        grant.scope(inherited.authority_scope if inherited is not None else None)
+    )
+    effects = [
+        asdict(rule)
+        for rule in sorted(
+            grant.effect_scope(
+                inherited.effect_scope if inherited is not None else None
+            )
+        )
+    ]
+    if len(canonical_bytes([recipients, effects])) > MAX_EXPORTED_SCOPE_BYTES:
+        recipients_value: list[str] | None = None
+        effects_value: list[dict[str, str]] | None = None
+    else:
+        recipients_value, effects_value = recipients, effects
+    lease = inherited.lease if inherited is not None else None
+    return {
+        "authority_version": 1,
+        "policy": grant.policy,
+        "policy_version": GRANT_POLICY_VERSION,
+        "grant_version": grant.version,
+        "recipients": recipients_value,
+        "effects": effects_value,
+        "lease": asdict(lease) if lease is not None else None,
+        "authority_chain": list(inherited.authority_chain)
+        if inherited is not None
+        else [],
+    }

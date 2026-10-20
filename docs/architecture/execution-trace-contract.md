@@ -37,7 +37,7 @@ export-position ledgers belong to the later journal/collector implementation.
 
 | Kind | Evidence and allowed attributes |
 |---|---|
-| run | Explicit run outcome; bounded reason code |
+| run | Explicit run outcome; bounded reason code; `started` carries the invocation's effective `authority` |
 | task | Original lifecycle state, sender/recipient/daemon role, reason code |
 | dispatch | Dispatch identity, recipient, optional skill/grant version, reason; `allowed` names the `child_task_id` it created |
 | permission | Dispatch identity, policy/version, grant version, reason |
@@ -1409,6 +1409,26 @@ task holds, the requester's execution or egress hold (or a native root's
 binding egress hold) for a child's request or cancel, a credential revocation
 of the emitting agent, and agent filters on the child's chain, its sender's
 credential, or any authority.
+
+**Exported authority.** Each `run/started` carries the invocation's effective
+authority when it started, so a controller need not mirror grants from
+configuration:
+
+```json
+"attributes":{"authority":{"authority_version":1,"policy":"managed_package_grant",
+  "policy_version":"3","grant_version":"<sha256>","recipients":["child"],
+  "effects":[{"effect_class":"fs.write","target":"workspace/*"}],
+  "lease":{"expires_at_ms":1760000060000,"max_effects":2,"max_tokens":null},
+  "authority_chain":["<parent task>"]}}
+```
+
+`recipients` and `effects` are the grant intersected with what the task
+inherited, as admission computes them (a task-less native root: its connector
+grant; `lease: null` and an empty chain). When the two lists would exceed 8 KiB
+they are exported as `null`; read the grant instead. The snapshot does not fold
+in holds, revocations or filters, which are separate controller decisions, and
+a grant changed during the run is not exported again. Only `run/started` may
+carry `authority` (`invalid_run_authority` otherwise).
 
 Contexts saved before schema 32 gain `effect_scope: null`, `lease: null` and a
 chain holding only their parent, so revocation reaches them through their

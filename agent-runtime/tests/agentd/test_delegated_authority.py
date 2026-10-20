@@ -6,12 +6,19 @@ descendants through the authority chain carried in the execution context.
 """
 
 import json
+from uuid import uuid4
+
 import pytest
 
 from containment_test_support import Node, deliver
 from edgecitadel_agentd import containment
 from edgecitadel_agentd.containment import ContainmentError
+from edgecitadel_agentd.delegation_authority import (
+    DelegationGrant,
+    exported_authority,
+)
 from edgecitadel_agentd.store import StoreError
+from edgecitadel_agentd.trace_contract import TraceContractError, validate_event
 
 MONITOR = "core-monitor"
 WRITE = {"effect_class": "fs.write", "target": "workspace/*"}
@@ -374,3 +381,102 @@ def test_credential_filter_stops_one_sender_into_one_target(nodes):
             "policy_version": 1,
         }
     ]
+
+
+def started_authority(node, task_id):
+    [started] = [
+        event for event in node.events("run", "started") if event["task_id"] == task_id
+    ]
+    return started["attributes"]["authority"]
+
+
+def test_run_started_exports_the_effective_authority(nodes):
+    root, worker = nodes
+    parent_id, _, child_id = delegate(
+        root, lease={"wall_time_ms": 60_000, "max_effects": 2}
+    )
+    root_authority = started_authority(root, parent_id)
+    assert root_authority | {"grant_version": None} == {
+        "authority_version": 1,
+        "policy": "managed_package_grant",
+        "policy_version": "3",
+        "grant_version": None,
+        "recipients": ["child", "grandchild", "other"],
+        "effects": [WRITE, EXEC],
+        "lease": None,
+        "authority_chain": [],
+    }
+    deliver(root, worker)
+    worker.start("child")
+    child_authority = started_authority(worker, child_id)
+    # The worker's grant intersected with what the parent delegated.
+    assert child_authority["recipients"] == ["grandchild"]
+    assert child_authority["effects"] == [WRITE]
+    assert child_authority["lease"]["max_effects"] == 2
+    assert child_authority["lease"]["expires_at_ms"] is not None
+    assert child_authority["authority_chain"] == [parent_id]
+
+
+def test_a_task_less_native_root_exports_its_connector_grant(nodes):
+    root, _ = nodes
+    token = root.store.register_connector(
+        connector_id="pi-local",
+        host_type="pi",
+        agent_id="edge-pi",
+        capabilities=["edgecitadel_trace", "edgecitadel_delegate"],
+    )
+    root.store.grant_connector(
+        connector_id="pi-local", outbound_agents=["child"], effects=[EXEC]
+    )
+    session = root.store.open_session(connector_id="pi-local", token=token)
+    binding = root.store.bind_trace(
+        node_id="root-node",
+        connector_id="pi-local",
+        token=token,
+        params={
+            "schema_version": 1,
+            "request_id": str(uuid4()),
+            "session_id": session["session_id"],
+            "task_id": None,
+            "context_id": None,
+        },
+    )["result"]
+    [started] = [
+        event
+        for event in root.events("run", "started")
+        if event["execution_attempt_id"] == binding["execution_attempt_id"]
+    ]
+    authority = started["attributes"]["authority"]
+    assert authority["policy"] == "native_connector_grant"
+    assert (authority["recipients"], authority["effects"]) == (["child"], [EXEC])
+    assert (authority["lease"], authority["authority_chain"]) == (None, [])
+
+
+def test_an_oversized_scope_is_exported_without_its_lists():
+    grant = DelegationGrant(
+        "native_connector_grant",
+        "0" * 64,
+        True,
+        frozenset(f"agent-{index:03d}-{'x' * 50}" for index in range(256)),
+        frozenset(),
+    )
+    exported = exported_authority(grant, None)
+    assert (exported["recipients"], exported["effects"]) == (None, None)
+    small = exported_authority(
+        DelegationGrant(
+            "native_connector_grant", "0" * 64, True, frozenset(), frozenset()
+        ),
+        None,
+    )
+    assert (small["recipients"], small["effects"]) == ([], [])
+
+
+def test_only_run_started_may_carry_authority(nodes):
+    root, _ = nodes
+    parent_id = root.submit("parent")
+    root.start("parent")
+    [started] = root.events("run", "started")
+    validate_event(started)
+    with pytest.raises(TraceContractError, match="invalid_run_authority"):
+        validate_event({**started, "phase": "completed"})
+    assert started["task_id"] == parent_id

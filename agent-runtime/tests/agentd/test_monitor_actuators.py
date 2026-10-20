@@ -32,6 +32,7 @@ def nodes(tmp_path):
         keys = node.store.state_directory / "control-keys"
         keys.mkdir(mode=0o700)
         (keys / f"{MONITOR}.key").write_bytes(KEY)
+        (keys / "operator.key").write_bytes(KEY)
     try:
         yield root, worker
     finally:
@@ -45,14 +46,14 @@ class Monitor:
     def __init__(self) -> None:
         self.version = 0
 
-    def call(self, node, action, target):
+    def send(self, node, action, target, owner=MONITOR):
         self.version += 1
         now = time.time_ns() // 1_000_000
         command = {
             "schema_version": 1,
             "command_id": str(uuid4()),
             "node_id": node.node_id,
-            "owner": MONITOR,
+            "owner": owner,
             "policy_version": self.version,
             "issued_at_ms": now,
             "expires_at_ms": now + 30_000,
@@ -60,9 +61,12 @@ class Monitor:
             "target": target,
         }
         command["mac"] = command_mac(KEY, command)
-        reply = handle_wire(
+        return handle_wire(
             node.store, json.dumps(command).encode(), node_id=node.node_id, gate=None
         )
+
+    def call(self, node, action, target):
+        reply = self.send(node, action, target)
         assert reply["status"] == "applied", reply
         return reply
 
@@ -291,3 +295,17 @@ def test_a_scheduled_effect_is_held_by_its_effect_id(nodes):
     assert commit()["result"]["state"] == "committed"
     phases = [e["phase"] for e in root.events("effect")]
     assert phases == ["requested", "committed"]
+
+
+def test_rejections_use_the_monitor_error_codes(nodes):
+    root, _ = nodes
+    monitor = Monitor()
+    parent_id = root.submit("parent")
+    target = {"kind": "task", "object_id": parent_id}
+    assert monitor.send(root, "release", target)["code"] == "hold_not_found"
+    monitor.call(root, "hold", target)
+    other = monitor.send(root, "release", target, owner="operator")
+    assert (other["status"], other["code"]) == ("rejected", "hold_owned_by_another")
+    monitor.call(root, "release", target)
+    monitor.version = 1  # Older than the versions this node already accepted.
+    assert monitor.send(root, "hold", target)["code"] == "stale_policy_version"

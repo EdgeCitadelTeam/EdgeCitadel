@@ -233,6 +233,13 @@ def validate_event(event: dict[str, Any]) -> bytes:
         # Only an allowed dispatch creates a child; it must name exactly that child.
         if (event["phase"] == "allowed") != ("child_task_id" in event["attributes"]):
             raise TraceContractError("invalid_dispatch_child")
+    if (
+        event["kind"] == "run"
+        and event["phase"] != "started"
+        and "authority" in event["attributes"]
+    ):
+        # Authority is what an invocation started with, never a later claim.
+        raise TraceContractError("invalid_run_authority")
     if event["kind"] == "lineage":
         # A producer is never "external"; only a consumed root input can be.
         if event["phase"] == "generated" and event["attributes"]["external"]:

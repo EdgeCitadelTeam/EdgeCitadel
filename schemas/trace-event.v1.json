@@ -326,6 +326,159 @@
                     "type": "null"
                   }
                 ]
+              },
+              "authority": {
+                "description": "run/started only: the invocation's effective authority when it started (its grant intersected with what its task inherited). recipients and effects are null when too large to export.",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "authority_version",
+                  "policy",
+                  "policy_version",
+                  "grant_version",
+                  "recipients",
+                  "effects",
+                  "lease",
+                  "authority_chain"
+                ],
+                "properties": {
+                  "authority_version": {
+                    "const": 1
+                  },
+                  "policy": {
+                    "type": "string",
+                    "enum": [
+                      "managed_package_grant",
+                      "native_connector_grant"
+                    ]
+                  },
+                  "policy_version": {
+                    "type": "string",
+                    "pattern": "^(?!.*[\\r\\n])[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"
+                  },
+                  "grant_version": {
+                    "type": "string",
+                    "pattern": "^(?!.*[\\r\\n])[0-9a-f]{64}$"
+                  },
+                  "recipients": {
+                    "description": "Recipients it may dispatch to; null when not exported.",
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "maxItems": 256,
+                        "uniqueItems": true,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?![\\s\\S])"
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "effects": {
+                    "description": "Effect rules it may authorize; null when not exported.",
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "effect_class",
+                            "target"
+                          ],
+                          "properties": {
+                            "effect_class": {
+                              "enum": [
+                                "fs.write",
+                                "process.exec",
+                                "network.http",
+                                "device.command"
+                              ]
+                            },
+                            "target": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 512,
+                              "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]+$"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lease": {
+                    "description": "Hard limits of the delegated task, within the delegator's remainder. Null means unlimited. max_tokens is carried but not metered.",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "expires_at_ms",
+                          "max_effects",
+                          "max_tokens"
+                        ],
+                        "properties": {
+                          "expires_at_ms": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "max_effects": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "max_tokens": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "authority_chain": {
+                    "description": "Delegated task IDs from the root to the parent; revocations and ingress filters naming any of them apply to this task.",
+                    "type": "array",
+                    "maxItems": 64,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    }
+                  }
+                }
               }
             },
             "required": [],
