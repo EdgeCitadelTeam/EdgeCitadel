@@ -562,3 +562,32 @@ def test_no_source_reaches_an_avoidable_sink_after_enforcement(tmp_path, seed):
         s for s in instance.sinks if "@early" in s or "ctx:" in s
     }
     harness.close()
+
+
+def test_node_local_revocations_reach_every_node_that_enforces_them(tmp_path):
+    config = MonitorConfig(
+        grants={
+            "r": frozenset({"a", "b"}),
+            "a": frozenset({"c"}),
+            "b": frozenset(),
+            "c": frozenset(),
+        },
+        agent_nodes={"r": "n0", "a": "n1", "b": "n2", "c": "n3"},
+    )
+    harness = Harness(tmp_path, config)
+    trace = TraceBuilder()
+    task_a = trace.dispatch(trace.start(trace.root("r", "n0", 0), 1), "a", "n1", 2)
+    harness.feed(trace.events)
+    sites = ScopeMirror(harness.monitor.graph, config).sites
+    try:
+        assert sites(hold_task("n1", task_a)) == ("n1",)
+        assert sites(revoke_egress("n1", task_a)) == ("n1",)
+        # Sender's node refuses the dispatch, recipient's node parks a published one.
+        assert sites(Action("revoke", "n0", "grant", "r>a")) == ("n0", "n1")
+        assert sites(Action("revoke", "n0", "grant", "r>fx:device.command")) == ("n0",)
+        # Target's node first, then the nodes of every agent that may send to it.
+        assert sites(revoke_admission("n3", "c")) == ("n3", "n1")
+        # Everywhere the delegation's descendants may run: a, and c below it.
+        assert sites(Action("revoke", "n1", "authority", task_a)) == ("n1", "n3")
+    finally:
+        harness.close()
