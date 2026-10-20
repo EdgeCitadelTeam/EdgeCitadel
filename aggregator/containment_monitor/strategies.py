@@ -3,7 +3,7 @@
 | name                  | display                     | rule                                                    |
 |-----------------------|-----------------------------|---------------------------------------------------------|
 | reject_source         | Reject source               | park every output of the root invocation(s)/version     |
-| stop_team             | Stop team                   | hold every live unit of the root agent's subtree        |
+| stop_team             | Stop team                   | hold every live unit of the root agent's team           |
 | stop_downstream       | Stop everything downstream  | every action inside the full G_C closure of the sources |
 | trace_and_stop        | Trace & stop                | every action inside the declared-flow closure           |
 | greedy_cut            | Greedy cut                  | greedy cover on the deadline-aware G_C                  |
@@ -140,14 +140,16 @@ def reject_source(ctx: Context) -> StrategyResult:
     return _finish(ctx, "reject_source", actions, started)
 
 
-def stop_team(ctx: Context, level: int = 0) -> StrategyResult:
+def stop_team(ctx: Context) -> StrategyResult:
+    """The org subtree ``stop_team_level`` levels above the root's agent (0: its
+    own subtree; 1: the team a leaf belongs to)."""
     started = time.perf_counter()
     attempts = _root_attempts(ctx.graph, ctx.roots, producers=True)
     actions = []
     if attempts:
         row = ctx.graph.invocation(attempts[0])
         agent = row["agent_id"]
-        for _ in range(level):
+        for _ in range(ctx.config.stop_team_level):
             agent = ctx.config.org_parent.get(agent, agent)
         team = subtree(ctx.graph, ctx.config, agent)
         for unit in ctx.cg.units.values():

@@ -95,6 +95,8 @@ class MonitorConfig:
     untrusted_prior: float = 0.5
     type_prior: float = 0.25
     strategy: str = "firebreak"
+    # Stop team: how many org levels above the root's agent its team starts.
+    stop_team_level: int = 0
     enum_limit: int = 12
     max_rounds: int = 3
     # G_C horizon: new invocations predicted per level; 1 is the main pipeline.
@@ -180,6 +182,10 @@ class MonitorConfig:
                 "best_effort_guard",
             }:
                 if not isinstance(item, bool):
+                    raise ConfigError(f"invalid_{key}")
+                kwargs[key] = item
+            elif key == "stop_team_level":
+                if type(item) is not int or item < 0:
                     raise ConfigError(f"invalid_{key}")
                 kwargs[key] = item
             elif key == "boundary":

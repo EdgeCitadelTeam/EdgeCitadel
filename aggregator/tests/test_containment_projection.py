@@ -591,3 +591,39 @@ def test_node_local_revocations_reach_every_node_that_enforces_them(tmp_path):
         assert sites(Action("revoke", "n1", "authority", task_a)) == ("n1", "n3")
     finally:
         harness.close()
+
+
+@pytest.mark.parametrize(("level", "team"), [(0, {"x"}), (1, {"l", "x", "y"})])
+def test_stop_team_holds_the_team_the_configured_levels_up(tmp_path, level, team):
+    from aggregator.containment_monitor.strategies import stop_team
+
+    config = MonitorConfig(
+        agent_nodes={"r": "n0", "l": "n1", "x": "n1", "y": "n1"},
+        org_parent={"l": "r", "x": "l", "y": "l"},
+        stop_team_level=level,
+    )
+    harness = Harness(tmp_path, config)
+    trace = TraceBuilder()
+    root = trace.start(trace.root("r", "n0", 0), 1)
+    lead = trace.start(trace.dispatch(root, "l", "n1", 2), 3)
+    tasks = {
+        agent: trace.dispatch(lead, agent, "n1", 4 + index)
+        for index, agent in enumerate(("x", "y"))
+    }
+    culprit = trace.start(tasks["x"], 7)
+    trace.start(tasks["y"], 8)
+    harness.feed(trace.events)
+    cg = gc(harness, 10)
+    context = Context(
+        harness.monitor.graph,
+        config,
+        cg,
+        lambda: cg,
+        [inv(culprit)],
+        supported_everywhere,
+    )
+    held = {
+        trace.tasks[action.object_id]["agent"] for action in stop_team(context).actions
+    }
+    assert held == team
+    harness.close()
