@@ -52,6 +52,8 @@ TRACE_TABLES = (
     "trace_projection_run_scopes",
     "trace_projection_run_coverage",
     "trace_projection_run_losses",
+    "trace_projection_lineage",
+    "trace_projection_dispatched",
 )
 
 

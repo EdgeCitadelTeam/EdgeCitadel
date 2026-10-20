@@ -92,7 +92,10 @@ def test_sparse_receipts_do_not_read_ahead_of_projection_snapshot(core):
     after = graph(core, value["trace_id"])
     assert not after["coverage"]["catching_up"]
     assert list(positions(after).values()) == [2]
-    assert after["coverage"]["partial"] and after["coverage"]["unknown_sources"]
+    # The executed task never reported its input, so caught-up evidence is
+    # still partial; nothing was dispatched, so no participant is unknown.
+    assert after["coverage"]["partial"] and not after["coverage"]["unknown_sources"]
+    assert after["coverage_reasons"]["input_unreported"]
 
 
 def test_checkpoint_requirement_and_duplicate_generation_do_not_add_nodes(core):

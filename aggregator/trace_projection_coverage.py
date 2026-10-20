@@ -2,7 +2,10 @@
 
 Only accepted trace identities establish run membership. Source-wide loss or a
 rejection cannot identify its missing run; it stays source-level uncertainty.
-Reconciliation describes known source positions, never a closed participant set.
+Completeness is derived from evidence, never asserted: the participant set is
+closed when every dispatched child has executor-side evidence, and lineage is
+closed when every executed task reported its input and every consumed internal
+version has a recorded producer (or the input was declared external).
 """
 
 from __future__ import annotations
@@ -47,6 +50,16 @@ SCHEMA = (
         trace_id TEXT NOT NULL,node_id TEXT NOT NULL,source_epoch TEXT NOT NULL,
         export_generation TEXT NOT NULL,first_seq INTEGER NOT NULL,last_seq INTEGER NOT NULL,
         PRIMARY KEY(trace_id,node_id,source_epoch,export_generation,first_seq,last_seq)
+    )""",
+    """CREATE TABLE IF NOT EXISTS {trace_projection_lineage} (
+        trace_id TEXT NOT NULL,version_id TEXT NOT NULL,entity TEXT NOT NULL,
+        entity_task_id TEXT NOT NULL,used_internal INTEGER NOT NULL DEFAULT 0,
+        used_external INTEGER NOT NULL DEFAULT 0,generated INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(trace_id,version_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS {trace_projection_dispatched} (
+        trace_id TEXT NOT NULL,child_task_id TEXT NOT NULL,
+        PRIMARY KEY(trace_id,child_task_id)
     )""",
 )
 
@@ -166,6 +179,35 @@ def _record_fact(db: ProjectionTables, fact: tuple) -> None:
     )
 
 
+def _record_edges(db: ProjectionTables, event: dict) -> None:
+    """Keep the dispatch and lineage facts that completeness is derived from."""
+    attrs = event["attributes"]
+    if event["kind"] == "dispatch" and event["phase"] == "allowed":
+        db.execute(
+            "INSERT OR IGNORE INTO {trace_projection_dispatched} VALUES(?,?)",
+            (event["trace_id"], attrs["child_task_id"]),
+        )
+    elif event["kind"] == "lineage":
+        column = (
+            "generated"
+            if event["phase"] == "generated"
+            else "used_external"
+            if attrs["external"]
+            else "used_internal"
+        )
+        db.execute(
+            "INSERT INTO {trace_projection_lineage}"
+            f"(trace_id,version_id,entity,entity_task_id,{column}) VALUES(?,?,?,?,1) "
+            f"ON CONFLICT(trace_id,version_id) DO UPDATE SET {column}=1",
+            (
+                event["trace_id"],
+                attrs["version_id"],
+                attrs["entity"],
+                attrs["entity_task_id"],
+            ),
+        )
+
+
 def _scope_update(db: ProjectionTables, scope: tuple) -> dict:
     row = db.execute(
         "SELECT through_seq FROM {trace_projection_scope_progress} WHERE node_id=? "
@@ -209,6 +251,7 @@ def project_facts(
                     event["agent_id"],
                 ),
             )
+            _record_edges(db, event)
         if event["kind"] in {"coverage", "source", "security"}:
             scope_epoch = event["source_epoch"]
             attrs = event["attributes"]
@@ -341,8 +384,9 @@ def _scope_progress(db: ProjectionTables, scope: tuple) -> tuple | None:
 def run_coverage(db: ProjectionTables, trace_id: str, *, unresolved: bool) -> dict:
     """Read coverage from the caller's projection snapshot, with honest scope.
 
-    There is no authoritative participant-set closure in event v1. Known-source
-    reconciliation must therefore never be advertised as complete forever.
+    A run is complete only when every condition below is backed by evidence in
+    this snapshot; any missing evidence keeps it partial. Unresolved ancestry is
+    supplied by graph readers that resolve edges.
     """
     if not db.in_transaction:
         raise ValueError("projection_transaction_required")
@@ -386,16 +430,57 @@ def run_coverage(db: ProjectionTables, trace_id: str, *, unresolved: bool) -> di
         ).fetchone()
         is not None
     )
+    # A dispatched child with no executor-side evidence is a participant whose
+    # source has not reported (or not yet run): the source set is not closed.
+    unknown_sources = (
+        db.execute(
+            "SELECT 1 FROM {trace_projection_dispatched} d WHERE d.trace_id=? AND NOT EXISTS("
+            "SELECT 1 FROM {trace_task_perspectives} p WHERE p.trace_id=d.trace_id "
+            "AND p.task_id=d.child_task_id AND p.source_role='recipient') LIMIT 1",
+            (trace_id,),
+        ).fetchone()
+        is not None
+    )
+    # Every executed task must report what it consumed, and every consumed
+    # internal version needs a recorded producer.
+    input_unreported = (
+        db.execute(
+            "SELECT 1 FROM {trace_task_perspectives} p WHERE p.trace_id=? "
+            "AND p.source_role='recipient' AND NOT EXISTS("
+            "SELECT 1 FROM {trace_projection_lineage} l WHERE l.trace_id=p.trace_id "
+            "AND l.entity='request' AND l.entity_task_id=p.task_id "
+            "AND (l.used_internal=1 OR l.used_external=1)) LIMIT 1",
+            (trace_id,),
+        ).fetchone()
+        is not None
+    )
+    unproduced_input = (
+        db.execute(
+            "SELECT 1 FROM {trace_projection_lineage} WHERE trace_id=? "
+            "AND used_internal=1 AND generated=0 LIMIT 1",
+            (trace_id,),
+        ).fetchone()
+        is not None
+    )
+    catching_up = any(through < required for _, _, _, required, through, _, _ in scopes)
+    # No accepted event in this snapshot (for example after payload expiry):
+    # nothing establishes the run, so nothing can make it complete.
+    unobserved = not scopes
     return {
         "coverage": {
-            # Partial also includes the unclosed participant set. Successful task
-            # outcome and a caught-up known source cannot remove that uncertainty.
-            "partial": True,
-            "catching_up": any(
-                through < required for _, _, _, required, through, _, _ in scopes
-            ),
+            "partial": unobserved
+            or catching_up
+            or gap
+            or unknown_sources
+            or input_unreported
+            or unproduced_input
+            or source_uncertainty
+            or unknown
+            or bool(unsupported)
+            or unresolved,
+            "catching_up": catching_up,
             "gap": gap,
-            "unknown_sources": True,
+            "unknown_sources": unknown_sources,
             "unsupported_families": sorted(unsupported),
             "reconciled_through": [
                 dict(
@@ -408,7 +493,10 @@ def run_coverage(db: ProjectionTables, trace_id: str, *, unresolved: bool) -> di
             ],
         },
         "coverage_reasons": {
-            "participant_set_unknown": True,
+            "run_unobserved": unobserved,
+            "participant_set_unknown": unknown_sources,
+            "input_unreported": input_unreported,
+            "unproduced_input": unproduced_input,
             "unresolved_ancestry": unresolved,
             "source_uncertainty": source_uncertainty,
             "run_coverage_unknown": unknown,

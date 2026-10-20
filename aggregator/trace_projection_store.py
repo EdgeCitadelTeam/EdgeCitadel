@@ -28,7 +28,7 @@ from .trace_task_projection import (
     task_node,
 )
 
-VERSION = 8
+VERSION = 9
 MAX_BATCH = 64
 
 SCHEMA = (
@@ -526,6 +526,7 @@ def read_graph(
     completeness["coverage_reasons"]["unresolved_ancestry"] = graph[
         "unresolved_ancestry"
     ]
+    completeness["coverage"]["partial"] |= graph["unresolved_ancestry"]
     return {"state": state, **graph, **completeness}
 
 

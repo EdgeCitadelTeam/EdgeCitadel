@@ -39,13 +39,14 @@ export-position ledgers belong to the later journal/collector implementation.
 |---|---|
 | run | Explicit run outcome; bounded reason code |
 | task | Original lifecycle state, sender/recipient/daemon role, reason code |
-| dispatch | Dispatch identity, recipient, optional skill/grant version, reason |
+| dispatch | Dispatch identity, recipient, optional skill/grant version, reason; `allowed` names the `child_task_id` it created |
 | permission | Dispatch identity, policy/version, grant version, reason |
 | model | Operation name, reported input/output tokens, unavailable-usage reason |
 | tool | Operation name, reason, content availability and opaque local reference |
 | coverage | Export generation/checkpoint, bounded loss ranges, unsupported families |
 | source | Source/export-generation start, restore or selection-policy change |
 | link | Explicit join between tasks, separate from ancestry |
+| lineage | `used`/`generated` of a versioned request or result by one invocation (`lineage_version`, `entity`, `entity_task_id`, `version_id`, `external`) |
 
 The schemas define the exact phase and attribute sets. All unknown fields are
 rejected. Raw prompts, arguments, outputs, arbitrary exception messages and
@@ -715,6 +716,41 @@ saved correlation as well as task content.
 This does not yet instrument all task lifecycle paths. Actual adapter producers, automatic closure,
 retention/quota, scoped inspection and crash/performance qualification remain M3
 work. Native app model hooks remain unqualified.
+
+### Provenance edges and evidence-derived completeness
+
+`dispatch/allowed` carries the `child_task_id` it created, and the child's first
+local `task` event cites that dispatch in `causes`. A task-bound `run/started`
+cites the task's first local lifecycle event (its dispatch-created or ingested
+arrival). Causes only name events on the recording node; cross-node joins use
+task identity and lineage versions.
+
+Lineage events (`kind: lineage`, `lineage_version: 1`) record which invocation
+(`execution_attempt_id`) consumed or produced which version, at the boundaries
+agentd already observes:
+
+| Boundary | Event | Cause |
+|---|---|---|
+| allowed dispatch | parent `generated` the child's `request` | the dispatch decision |
+| bind of a task | invocation `used` its task's `request`; `external: true` only for a root task (no parent task or run) | the task's arrival |
+| recipient completion with a result | invocation `generated` its task's `result` | the local completion |
+| first `task.get` of a completed child by its sender | parent invocation `used` that `result` | the local completion or ingested result |
+
+`version_id` is the SHA-256 of `{entity, task_id, content}`, where content excludes
+the daemon-stamped `trace_id`, `parent_task_id`, `execution_context`, `skill_id` and
+`deadline_at_ms`. Sender and recipient therefore derive the same version without
+sharing an identifier. Consumption fails closed: a `used` that cannot be recorded
+fails the bind or read. A result's `generated` is written in its own transaction
+after the reserved completion commits; if it is lost, the result has no recorded
+producer and the run stays partial.
+
+Core derives completeness from this evidence. `unknown_sources` is true while any
+dispatched child lacks executor (recipient-role) evidence. A run is complete only
+when the snapshot holds accepted evidence for it (`run_unobserved` otherwise), it is caught up, gap-free, free of source uncertainty, unsupported families and
+unresolved ancestry, its source set is closed, every executed task reported its
+input (`input_unreported`), and every consumed internal version has a recorded
+producer (`unproduced_input`). Projection v9 adds the lineage and dispatched-child
+tables; earlier generations need a rebuild.
 
 ### Managed handler correlation and atomic claim
 
