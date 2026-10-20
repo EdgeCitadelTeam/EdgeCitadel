@@ -1,0 +1,34 @@
+apiVersion: edgecitadel.io/v1alpha2
+kind: ManagedAgent
+metadata:
+  name: pi-root
+  displayName: Jim-eq Pi + Jev
+  description: Persistent Pi harness connected through actual EdgeCitadel task transport.
+  version: 0.1.1
+  publisher: edgecitadel
+compatibility:
+  supervisorApi: ">=0.1.0,<0.2.0"
+  protocols: [edgecitadel.managed-agent.v1]
+runtime:
+  kind: agent_runtime
+  command: [python, -m, pi_runtime]
+  environmentVariables: [PI_ROLE, PI_NODE, PI_SDK_DIR, PI_WORKSPACE]
+  healthTimeoutSeconds: 60
+  restartPolicy: on-failure
+skills:
+  directory: skills
+agents:
+  - id: jim-eq-pi
+    skillNames: [pi-task]
+    listensBroadcast: false
+permissions:
+  knowledge: []
+  messaging:
+    outboundAgents: [aggregator, endurance-pi, jim-eq-hermes]
+  network:
+    outbound: ["https://api.typesafe.ai", "http://127.0.0.1"]
+  devices: []
+security:
+  sandbox: restricted
+  secrets: [TYPESAFE_API_KEY]
+extensions: {}

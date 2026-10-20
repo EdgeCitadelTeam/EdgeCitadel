@@ -55,6 +55,10 @@
   Report meaningful verification gaps instead of treating skips as passes.
 
 ## Working references
+- For EdgeCitadel research planning, provenance/containment work, or a session
+  handoff, first read `docs/research-context.zh.md`. It separates historical
+  deployment evidence, agreed directions and unvalidated proposals; verify dated
+  deployment facts before treating them as current state.
 - Setup, commands and repository map: `CONTRIBUTING.md`.
 - Detailed verification recipes: `.agents/skills/`; runtime/packages: `agent-runtime/README.md`.
 - Keep credentials and local runtime data out of committed code. Update affected

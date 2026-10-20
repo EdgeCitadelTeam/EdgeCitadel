@@ -1,0 +1,2 @@
+FROM edgecitadel-dashboard:jev-live-20260926
+COPY pi.html /usr/share/nginx/html/pi.html

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EdgeCitadel · Pi</title>
+<style>
+:root{color-scheme:dark;font:16px/1.55 system-ui;background:#10151d;color:#e2e8f0}*{box-sizing:border-box}body{max-width:1000px;margin:auto;padding:28px 24px}header{display:flex;justify-content:space-between;gap:20px;align-items:start;border-bottom:1px solid #334155;padding-bottom:20px}h1{margin:0;font-size:25px;font-weight:650}p{margin:6px 0;color:#94a3b8}a{color:#7dd3fc}button{border:1px solid #475569;background:#202c3d;color:#e2e8f0;border-radius:8px;padding:9px 15px;cursor:pointer}button:disabled{opacity:.4;cursor:default}.status{font-size:13px;margin:15px 0;padding:12px;background:#172130;border-radius:9px}.session{font:12px ui-monospace,monospace;color:#94a3b8;overflow-wrap:anywhere}#chat{min-height:34vh;margin:20px 0}.turn{margin-bottom:24px}.label{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;margin-bottom:6px}.body{white-space:pre-wrap;overflow-wrap:anywhere;background:#172130;border-radius:12px;padding:18px}.user .body{background:#203245}.evidence{font:12px/1.7 ui-monospace,monospace;color:#94a3b8;margin:7px 3px}.progress{border-left:2px solid #4cb7cb;padding:8px 14px;white-space:pre-wrap;font-size:13px;color:#b6c6d9;margin:12px 0}form{position:sticky;bottom:0;background:#10151df5;padding:14px 0}textarea{font:inherit;resize:vertical;min-height:94px;width:100%;background:#172130;color:#e2e8f0;border:1px solid #475569;border-radius:10px;padding:14px}footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;font-size:12px;color:#94a3b8}.error{color:#fda4af}#send{background:#155e75;border-color:#0891b2}.hidden{display:none}
+</style>
+<header><div><h1>EdgeCitadel · Pi</h1><p>Talk to jim-eq. Jev routes; connected agents execute.</p><div class="session" id="session"></div></div><div><a href="/" target="_blank">Fleet & traces ↗</a><br><button id="new" style="margin-top:12px">New conversation</button></div></header>
+<div class="status" id="status">Connecting to the production fleet…</div>
+<main id="chat" aria-live="polite"></main><div id="progress" class="progress hidden"></div><div id="error" class="error" role="alert"></div>
+<form><textarea id="input" aria-label="Message" placeholder="Ask Endurance to inspect, code, analyze, or create a file…" required maxlength="16000"></textarea><footer><span>Pi sessions persist on the agents. Requests use the existing fleet access policy.</span><button id="send">Send to jim-eq</button></footer></form>
+<script type="module">
+const $=id=>document.getElementById(id);
+function uuid(){const b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;return [...b].map((x,i)=>([4,6,8,10].includes(i)?'-':'')+x.toString(16).padStart(2,'0')).join('')}
+let state;try{state=JSON.parse(localStorage.getItem('edgecitadel.pi.chat.v1'))}catch{}
+state ||= {session:uuid(),turns:[],pending:null};
+function save(){localStorage.setItem('edgecitadel.pi.chat.v1',JSON.stringify(state))}
+function render(){
+ $('session').textContent=`Conversation ${state.session}`;$('chat').replaceChildren();
+ for(const turn of state.turns){const box=document.createElement('section');box.className='turn '+turn.role;
+ const label=document.createElement('div');label.className='label';label.textContent=turn.role==='user'?'You':(turn.executor?`jim-eq Pi · ${turn.executor}`:'jim-eq Pi');
+ const body=document.createElement('div');body.className='body';body.textContent=turn.body;box.append(label,body);
+ if(turn.task){const details=document.createElement('div');details.className='evidence';
+ const a=document.createElement('a');a.href='/#execution?task='+encodeURIComponent(turn.task);a.target='_blank';a.textContent='Task '+turn.task;details.append(a);
+ if(turn.child){const child=document.createElement('a');child.href='/#execution?task='+encodeURIComponent(turn.child);child.target='_blank';child.textContent=' · Child '+turn.child;details.append(child)}box.append(details)}
+ $('chat').append(box)}
+ const busy=!!state.pending;$('new').disabled=busy;$('input').disabled=busy;$('send').disabled=busy;
+ $('progress').classList.toggle('hidden',!busy);
+}
+async function api(path,options){const r=await fetch('/api'+path,options);if(!r.ok)throw Error(`HTTP ${r.status}`);return r.json()}
+let polling=false;
+async function poll(){if(polling||!state.pending?.task)return;polling=true;
+ try{const p=state.pending;const events=await api('/messages?task_id='+encodeURIComponent(p.task)+'&limit=200');
+ const ordered=[...events].sort((a,b)=>(a.observation_index||0)-(b.observation_index||0));
+ const result=ordered.findLast(e=>e.type==='result'&&e.sender_id==='jim-eq-pi');
+ const progress=ordered.filter(e=>e.type==='task.progress');const child=progress.findLast(e=>e.payload?.child_task_id)?.payload?.child_task_id;
+ let lines=progress.map(e=>e.payload.message||'').filter(Boolean);
+ if(child){const childEvents=await api('/messages?task_id='+encodeURIComponent(child)+'&limit=100');lines.push(...childEvents.filter(e=>e.type==='task.progress').sort((a,b)=>(a.observation_index||0)-(b.observation_index||0)).map(e=>e.payload?.message||''))}
+ $('progress').textContent=lines.join('\n')||'Accepted by EdgeCitadel; awaiting the agent…';
+ if(result){state.turns.push({role:'assistant',body:result.payload?.body||`Task ${result.task_state}`,task:p.task,child:result.payload?.child_task_id,executor:result.payload?.executor});state.pending=null;save();render();$('input').focus()}
+ $('error').textContent='';
+ }catch(e){$('error').textContent='Connection interrupted. The remote task may still be running; this page will keep checking without resubmitting.'}
+ finally{polling=false}}
+$('new').onclick=()=>{state={session:uuid(),turns:[],pending:null};save();render()};
+document.querySelector('form').onsubmit=async event=>{event.preventDefault();if(state.pending)return;const body=$('input').value.trim();if(!body)return;
+ const id=uuid();state.pending={id,body,task:null};state.turns.push({role:'user',body});save();render();$('input').value='';$('progress').textContent='Submitting to jim-eq Pi…';
+ try{const r=await api('/command/jim-eq-pi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,skill_id:'pi.coordinate',args:{session_id:state.session,request_id:id}})});state.pending.task=r.task_id;state.turns.at(-1).task=r.task_id;save();render();await poll()}
+ catch{ $('error').textContent='Submission status is unknown. Use “Check submission” below to repeat the same request ID safely.';showRecover() }};
+function showRecover(){if($('recover'))return;const b=document.createElement('button');b.id='recover';b.textContent='Check submission';b.onclick=async()=>{const p=state.pending;if(!p||p.task)return;try{const r=await api('/command/jim-eq-pi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:p.body,skill_id:'pi.coordinate',args:{session_id:state.session,request_id:p.id}})});p.task=r.task_id;state.turns.at(-1).task=r.task_id;save();b.remove();render();await poll()}catch{$('error').textContent='Still unable to confirm submission. No new request ID was created.'}};$('error').after(b)}
+async function roster(){try{const a=await api('/agents');$('status').textContent=['jim-eq-pi','endurance-pi','jim-eq-hermes'].map(id=>`${id}: ${a.find(x=>x.agent_id===id)?.agent_state||'unknown'}`).join('   ·   ')}catch{$('status').textContent='Fleet connection unavailable'}}
+render();if(state.pending&&!state.pending.task)showRecover();await roster();await poll();setInterval(poll,2000);setInterval(roster,15000);
+</script></html>

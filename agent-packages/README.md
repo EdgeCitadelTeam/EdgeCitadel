@@ -11,6 +11,8 @@ manifest, runtime, skills, permissions, dependencies, and integrity lock stay
 together so the supervisor can validate, install, upgrade, and remove that unit
 without relying on repository-global state:
 
+- `pi-root/` runs a persistent Pi harness with Jev routing; the worker package is
+  generated from the same runtime. See [operation guide](../docs/pi-harness.md).
 - `gemma/` runs a lightweight local-model Agent owned by EdgeCitadel.
 - `homeassistant/` runs an EdgeCitadel-owned adapter to an independently managed
   Home Assistant service.

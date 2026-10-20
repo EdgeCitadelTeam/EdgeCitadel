@@ -1,0 +1,15 @@
+apiVersion: edgecitadel.io/v1alpha1
+kind: AgentSkillBinding
+skillId: pi.coordinate
+version: 0.1.1
+execution:
+  kind: runtime-handler
+  name: pi-task
+schemas:
+  input: schemas/input.json
+  output: schemas/output.json
+requires:
+  knowledge: []
+  network: []
+  devices: []
+extensions: {}
