@@ -25,7 +25,8 @@ SIM_FAULTS = frozenset({"wrong_value", "stale_version"})
 TAU_S = 0.05
 
 COLUMNS = {
-    "contained": "contained",
+    # The simulator has no confirmations: its "contained" is outcome (a).
+    "clean_after_alert": "contained",
     "kept_cfrac": "retained_cfrac",
     "kept_frac": "retained_frac",
     "violations": "violations",
@@ -58,6 +59,10 @@ def run_grid(
     for cell in grid(experiment):
         if cell.strategy == "reference" or cell.rep != 0:
             continue
+        if cell.strategy not in SIM_CODE:
+            continue  # a runtime-only strategy (names.EXTRA)
+        if cell.root_mode != "given":
+            continue  # the simulator always starts from the known source
         blocks[(cell.instance, cell.rogue_rate, cell.alert, cell.latency.name)].append(
             cell
         )
@@ -88,7 +93,9 @@ def run_grid(
                 "strategy": name,
                 "family": FAMILY.get(name, ""),
                 "alert": cell.alert,
+                "root_mode": cell.root_mode,
                 "latency": cell.latency.name,
+                "latency_regime": cell.latency.regime(experiment.measured_rtt_ms),
                 "control_latency_ms": mean_ms,
                 "rep": 0,
                 "time_scale": experiment.time_scale,

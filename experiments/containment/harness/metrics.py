@@ -15,18 +15,28 @@ rows are comparable (times in seconds from the run's start ``t0``):
   task that consumed faulty content; **collateral**: at risk, neither kept nor
   contaminated; **interrupted**: at risk and paused at least once.
 - **violation**: a tainted (fault-labelled) effect of a protected class that
-  the ledger committed after the alert; also counted after the last
-  confirmation of the first decision. **fully contained**: no violation after
-  the alert and the run did not time out. Timeouts and failed control actions
-  stay in every denominator.
-- **time to containment**: alert to the last confirmation of the monitor's
-  initial response (its first decision that issued actions; NaN when one of
-  them failed or stayed unconfirmed, or none was ever issued); ``first_action_s`` / ``last_action_s``
-  are the first and last confirmation over the whole incident.
+  the ledger committed.
+
+Containment outcomes are split (no single "fully contained" headline):
+
+- (a) ``clean_after_alert``: no violation committed after the alert (a run
+  that timed out is not clean: its observation is incomplete);
+- (b) ``tainted_after_established``: violations committed after containment
+  was established (NaN when it never was);
+- (c) ``established``: every action of the monitor's initial response (its
+  first decision that chose actions) was confirmed, and
+  ``time_to_established_s`` from the alert to the last confirmation;
+- (d) ``unconfirmed``, ``control_failed``, ``infeasible`` and ``timeout`` flags.
+
+Every run stays in every denominator. Control accounting per run (logical
+actions, control messages per node, confirmations) comes from the decision
+log; ``first_action_s`` / ``last_action_s`` are the first and last
+confirmation over the whole incident.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -102,21 +112,11 @@ def correct_content(
     return out
 
 
-def decision_metrics(
-    decisions: list[Mapping[str, Any]], t_alert_ms: float
-) -> dict[str, Any]:
-    """Timing and size of the monitor's response, from its decision log.
-
-    The monitor re-solves on every taint advance (``resolve`` records) for
-    every strategy, so the initial response is the first record that issued
-    actions; its solve, G_C size and timing describe the decision, and its
-    last confirmation is when the response was in force.
-
-    Only the incidents the harness's operator alert opened (or joined) are the
-    strategy's response. Incidents the monitor's own detectors opened (for
-    example a lease violation when a worker loses its session) are counted in
-    ``n_detector_decisions`` and otherwise left out.
-    """
+def _operator_responses(
+    decisions: list[Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], int]:
+    """The operator alert's decision and re-solve records, and how many
+    incidents the monitor's own detectors opened."""
     opened = [d for d in decisions if d.get("type") == "decision"]
     operator = {
         d.get("incident_id")
@@ -128,34 +128,121 @@ def decision_metrics(
         for d in decisions
         if d.get("type") in {"decision", "resolve"} and d.get("incident_id") in operator
     ]
+    return responses, sum(1 for d in opened if d.get("incident_id") not in operator)
+
+
+def _records(d: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [*d.get("phase1", ()), *d.get("phase2", ())]
+
+
+def _sites(record: Mapping[str, Any]) -> list[tuple[str, str, Mapping[str, Any]]]:
+    """(node, message key, outcome) per node the action was sent to.
+
+    From m3/integration ab174ed on, a record lists its per-node outcomes
+    (``sites``, each with its ``command_id``); earlier logs have one outcome,
+    the record itself, at the action's node.
+    """
+    label = _action_label(record["action"])
+    sites = record.get("sites")
+    if isinstance(sites, Mapping) and sites:
+        return [
+            (node, str(o.get("command_id") or f"{label}@{node}@{o.get('t_sent')}"), o)
+            for node, o in sites.items()
+        ]
+    return [(record["action"]["node_id"], f"{label}@{record.get('t_sent')}", record)]
+
+
+def control_accounting(responses: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Logical actions, control messages per node and confirmations.
+
+    A logical action is one monitor action (op, kind, object, deciding node).
+    Every command a node was sent is one message (a revocation may go to
+    several nodes), and so is every release; a confirmation is a message the
+    node confirmed. Retransmissions of one command (NATS retries keep its
+    ``command_id``) and the monitor's controller-lease renewals are not in the
+    decision log and not counted.
+    """
+    logical: set[str] = set()
+    messages: dict[tuple[str, str], tuple[str, bool]] = {}
+    for d in responses:
+        for record in [*_records(d), *d.get("released", ())]:
+            logical.add(_action_label(record["action"]))
+            for node, key, outcome in _sites(record):
+                if outcome.get("t_sent") is None:
+                    continue  # planned, never sent
+                state = outcome.get("state", record.get("state"))
+                messages[("send", key)] = (
+                    node,
+                    outcome.get("t_confirmed") is not None
+                    and state not in CONTROL_FAILURES,
+                )
+                if record.get("t_release_sent") is not None:
+                    messages[("release", key)] = (node, record["state"] == "released")
+    by_node: dict[str, int] = {}
+    for node, _ in messages.values():
+        by_node[node] = by_node.get(node, 0) + 1
+    return {
+        "n_logical_actions": len(logical),
+        "n_control_messages": len(messages),
+        "n_release_messages": sum(1 for kind, _ in messages if kind == "release"),
+        "n_confirmations": sum(1 for _, ok in messages.values() if ok),
+        "control_messages_by_node": json.dumps(by_node, sort_keys=True),
+    }
+
+
+def decision_metrics(
+    decisions: list[Mapping[str, Any]], t_alert_ms: float
+) -> dict[str, Any]:
+    """The monitor's response, from its decision log.
+
+    Only the incidents the harness's operator alert opened (or joined) are the
+    strategy's response. Incidents the monitor's own detectors opened (for
+    example a lease violation when a worker loses its session) are counted in
+    ``n_detector_decisions`` and otherwise left out.
+
+    The monitor re-solves on every taint advance (``resolve`` records) for
+    every strategy, so its initial response is the first record that chose
+    actions; containment is **established** when every one of those actions
+    was confirmed, at the last confirmation. Its solve and G_C size describe
+    the decision. The flags count, never exclude: ``unconfirmed`` (an action
+    sent without a confirmation, or a phase 2 left unconfirmed),
+    ``control_failed`` (an action or release a node rejected or never got)
+    and ``infeasible`` (the strategy's solver found no cut, or the applied cut
+    did not verify).
+    """
+    responses, detector = _operator_responses(decisions)
     row: dict[str, Any] = {
         "n_decisions": sum(1 for d in responses if d["type"] == "decision"),
         "n_resolves": sum(1 for d in responses if d["type"] == "resolve"),
-        "n_detector_decisions": sum(
-            1 for d in opened if d.get("incident_id") not in operator
-        ),
+        "n_detector_decisions": detector,
+        **control_accounting(responses),
     }
-    actions: dict[str, Mapping[str, Any]] = {}
-    failed = unconfirmed = phase1 = released = 0
-    confirmed_all = []
+    latest: dict[str, Mapping[str, Any]] = {}
+    released: dict[str, Mapping[str, Any]] = {}
     for d in responses:
-        for record in [*d.get("phase1", ()), *d.get("phase2", ())]:
-            actions.setdefault(_action_label(record["action"]), record)
-            failed += record["state"] in CONTROL_FAILURES
-            unconfirmed += record["state"] == "unconfirmed"
-            phase1 += record["phase"] == 1
-            if (
-                record.get("t_confirmed") is not None
-                and record["state"] not in CONTROL_FAILURES
-            ):
-                confirmed_all.append(record["t_confirmed"])
-        released += sum(1 for r in d.get("released", ()) if r["state"] == "released")
+        for record in _records(d):
+            latest[_action_label(record["action"])] = record
+        for record in d.get("released", ()):
+            released[_action_label(record["action"])] = record
+    states = [r["state"] for r in latest.values()]
+    release_states = [r["state"] for r in released.values()]
+    confirmed_all = [
+        r["t_confirmed"]
+        for r in latest.values()
+        if r.get("t_confirmed") is not None and r["state"] not in CONTROL_FAILURES
+    ]
     row.update(
-        n_actions=len(actions),
-        n_phase1=phase1,
-        n_released=released,
-        n_failed_actions=failed,
-        n_unconfirmed_actions=unconfirmed,
+        n_actions=len(latest),
+        n_phase1=sum(1 for r in latest.values() if r["phase"] == 1),
+        n_released=sum(1 for s in release_states if s == "released"),
+        n_failed_actions=sum(1 for s in states if s in CONTROL_FAILURES),
+        n_unconfirmed_actions=sum(1 for s in states if s == "unconfirmed"),
+        unconfirmed=int(
+            "unconfirmed" in states
+            or "release_unconfirmed" in release_states
+            or any(d.get("status") == "phase2_unconfirmed" for d in responses)
+        ),
+        control_failed=int("failed" in states or "release_failed" in release_states),
         first_action_s=(min(confirmed_all) - t_alert_ms) / 1000
         if confirmed_all
         else NAN,
@@ -163,15 +250,20 @@ def decision_metrics(
         if confirmed_all
         else NAN,
     )
-    first = next((d for d in responses if d.get("phase1") or d.get("phase2")), None)
+    first = next((d for d in responses if _records(d)), None)
     first = first or next((d for d in responses if d["type"] == "decision"), None)
     if first is None:
         row.update(
             decision_status="none",
+            root_basis="",
+            roots="[]",
+            ranking="[]",
             t_received_s=NAN,
             decision_s=NAN,
-            time_to_containment_s=NAN,
-            t_confirmed_ms=None,
+            established=0,
+            time_to_established_s=NAN,
+            t_established_ms=None,
+            infeasible=0,
             solve_ms=NAN,
             solver_ms=NAN,
             gc_nodes=NAN,
@@ -180,25 +272,43 @@ def decision_metrics(
             cut_valid=NAN,
         )
         return row
-    records = [*first.get("phase1", ()), *first.get("phase2", ())]
+    records = _records(first)
     decided = [r["t_decision"] for r in records]
-    confirmed = [r["t_confirmed"] for r in records if r.get("t_confirmed") is not None]
-    # In force only when every action was confirmed (an unconfirmed one may or
-    # may not have landed, so it counts as a control failure).
-    complete = records and all(
+    established = bool(records) and all(
         r["state"] not in CONTROL_FAILURES and r.get("t_confirmed") is not None
         for r in records
     )
-    t_confirmed = max(confirmed) if complete and confirmed else None
+    t_established = max(r["t_confirmed"] for r in records) if established else None
     solve = first.get("solve") or {}
     graph = first.get("graph") or {}
+    opened = next((d for d in responses if d["type"] == "decision"), first)
     received = next(d["t_received"] for d in responses if "t_received" in d)
     row.update(
         decision_status=first.get("status"),
+        root_basis=opened.get("root_basis", ""),
+        roots=json.dumps(list(opened.get("roots") or [])),
+        ranking=json.dumps(
+            [
+                c.get("node")
+                for c in opened.get("ranking") or []
+                if isinstance(c, Mapping)
+            ]
+        ),
         t_received_s=(received - t_alert_ms) / 1000,
         decision_s=(min(decided) - t_alert_ms) / 1000 if decided else NAN,
-        time_to_containment_s=(t_confirmed - t_alert_ms) / 1000 if t_confirmed else NAN,
-        t_confirmed_ms=t_confirmed,
+        established=int(established),
+        time_to_established_s=(t_established - t_alert_ms) / 1000
+        if t_established is not None
+        else NAN,
+        t_established_ms=t_established,
+        # The strategy could not produce a valid cut: its solver found none,
+        # or the cut it applied did not verify. (``unavoidable`` sinks alone
+        # are not infeasibility: they include potential future flows.)
+        infeasible=int(
+            str(solve.get("status") or "") == "infeasible"
+            or first.get("cut_valid") is False
+            or any(d.get("status") == "phase2_check_failed" for d in responses)
+        ),
         solve_ms=solve.get("ms", NAN),
         solver_ms=solve.get("solver_ms", NAN),
         gc_nodes=graph.get("nodes", NAN),
@@ -276,7 +386,7 @@ def evaluate(
         and (e["class"] in protected or e["class"] not in classes)
     ]
     decision = decision_metrics(decisions or [], horizon) if t_alert is not None else {}
-    t_confirmed = decision.get("t_confirmed_ms")
+    t_established = decision.get("t_established_ms")
     after_alert = [e for e in violations if e["t_committed"] > horizon]
     timed_out = meta.get("status") == "timeout"
     item = spec.fault.item
@@ -314,12 +424,15 @@ def evaluate(
         "violations_total": len(violations),
         "viol_declared": sum(1 for e in after_alert if e["declared"]),
         "viol_undeclared": sum(1 for e in after_alert if not e["declared"]),
-        "violations_after_confirm": (
-            sum(1 for e in violations if e["t_committed"] > t_confirmed)
-            if t_confirmed is not None
+        # (a) no tainted effect committed after the alert (a timed-out run's
+        # observation is incomplete, so it does not count as clean)
+        "clean_after_alert": int(not after_alert and not timed_out),
+        # (b) tainted effects committed after containment was established
+        "tainted_after_established": (
+            sum(1 for e in violations if e["t_committed"] > t_established)
+            if t_established is not None
             else NAN
         ),
-        "contained": int(not after_alert and not timed_out),
         "n_spawned": len(records.spawned),
         "rogue_effects_committed": sum(
             1
@@ -330,13 +443,22 @@ def evaluate(
         "slot_restarts": sum(1 for e in records.events if e["kind"] == "slot_restart"),
         "rpc_retries": sum(1 for e in records.events if e["kind"] == "rpc_retry"),
     }
-    row["contained_after_confirm"] = (
-        NAN
-        if t_confirmed is None
-        else int(row["violations_after_confirm"] == 0 and not timed_out)
-    )
     row.update(decision)
-    row.pop("t_confirmed_ms", None)
+    row.pop("t_established_ms", None)
+    origin = meta.get("origin_attempt")
+    roots = json.loads(row.get("roots") or "[]")
+    # Whether the response started from the faulty source: always when the
+    # harness names it (root mode "given"), the ranking's pick otherwise.
+    row["root_mode"] = meta.get("root_mode", "given")
+    row["root_correct"] = (
+        int(any(origin in str(r) for r in roots)) if origin and roots else NAN
+    )
+    ranking = json.loads(row.pop("ranking", None) or "[]")
+    # 1-based position of the faulty invocation among the ranked candidates.
+    row["root_rank"] = next(
+        (i + 1 for i, node in enumerate(ranking) if origin and origin in str(node)),
+        NAN,
+    )
     if status:
         row["gp_nodes"] = status.get("g_p", {}).get("nodes", NAN)
         row["gp_edges"] = status.get("g_p", {}).get("edges", NAN)

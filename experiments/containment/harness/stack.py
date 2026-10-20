@@ -277,6 +277,15 @@ class StackConfig:
     # (remote admin sockets forwarded over SSH, for older monitors).
     control_transport: str = "local"
     netem: dict[str, Any] = field(default_factory=dict)
+    # How workers carry out effects (det_worker.effects): "authorize_perform"
+    # (agentd authorizes and commits, the worker calls the sink) or
+    # "gateway_execute" (agentd's gateway calls the sink; m4/design).
+    effect_path: str = "authorize_perform"
+
+    def netem_rtt_ms(self, profile: str | None) -> float:
+        from .netem import added_rtt_ms
+
+        return added_rtt_ms(self.netem, profile)
 
     @classmethod
     def load(cls, path: str | Path) -> StackConfig:
@@ -307,7 +316,8 @@ class StackConfig:
             tau_ms=float(document.get("tau_ms", 50.0)),
             monitor_overrides=dict(document.get("monitor_overrides", {})),
             control_transport=_transport(document.get("control_transport", "local")),
-            netem=dict(document.get("netem", {})),
+            netem=_netem(document.get("netem", {})),
+            effect_path=_effect_path(document.get("effect_path", "authorize_perform")),
         )
 
 
@@ -315,6 +325,23 @@ CONTROL_TRANSPORTS = ("local", "nats", "ssh_forward")
 # The NATS control client retries one command until this timeout, then records
 # it as unconfirmed (neither in force nor absent).
 NATS_CONFIRMATION_TIMEOUT_MS = 5000
+
+
+def _netem(document: Mapping[str, Any]) -> dict[str, Any]:
+    from .netem import check_profiles
+
+    check_profiles(document)
+    return dict(document)
+
+
+def _effect_path(name: str) -> str:
+    from ._worker import effects
+
+    try:
+        effects.make_effect_path(name)
+    except ValueError as error:
+        raise StackError(f"effect_path: {error}") from None
+    return name
 
 
 def _transport(name: str) -> str:

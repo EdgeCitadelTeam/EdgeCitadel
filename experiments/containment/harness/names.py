@@ -19,10 +19,21 @@ MAIN = [
     ("Cut without deadlines", FAMILY_FUT, "#CC79A7", "P"),
     ("Firebreak (ours)", FAMILY_FUT, "#D55E00", "*"),
 ]
+# Runtime-only strategies (team-approved 2026-10-21; implemented in the monitor
+# on m4/design). They have no simulator pipeline yet, so they are not part of
+# the simulator's MAIN list; their colours and markers are the Okabe-Ito
+# entries MAIN leaves free. Families are provisional until the monitor's
+# definitions land.
+EXTRA = [
+    ("Trace & quarantine", FAMILY_PAST, "#56B4E9", "o"),
+    ("Sink guard", FAMILY_PAST, "#009E73", "h"),
+]
 MAIN_NAMES = [m[0] for m in MAIN]
-COLOR = {m[0]: m[2] for m in MAIN}
-MARKER = {m[0]: m[3] for m in MAIN}
-FAMILY = {m[0]: m[1] for m in MAIN}
+PLOTTED = [*MAIN, *EXTRA]
+PLOTTED_NAMES = [m[0] for m in PLOTTED]
+COLOR = {m[0]: m[2] for m in PLOTTED}
+MARKER = {m[0]: m[3] for m in PLOTTED}
+FAMILY = {m[0]: m[1] for m in PLOTTED}
 
 CODE_NAME = {
     "reject_source": "Reject source",
@@ -32,10 +43,15 @@ CODE_NAME = {
     "greedy_cut": "Greedy cut",
     "cut_without_deadlines": "Cut without deadlines",
     "firebreak": "Firebreak (ours)",
+    "trace_and_quarantine": "Trace & quarantine",
+    "sink_guard": "Sink guard",
     "none": "No containment",
     "reference": "No fault (reference)",
 }
-# The simulator's internal codes of the same strategies (its v2 registry).
+# Monitor strategy codes the harness can run (``none`` is no alert at all).
+STRATEGY_CODES = tuple(c for c in CODE_NAME if c not in {"none", "reference"})
+# The simulator's internal codes of the same strategies (its v2 registry);
+# strategies without one are skipped by the simulator backend.
 SIM_CODE = {
     "reject_source": "B1",
     "stop_team": "B2",

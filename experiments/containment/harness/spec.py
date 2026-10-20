@@ -167,9 +167,10 @@ class AlertTrigger:
     run start); fires ``delay_s`` (spec seconds) after the ``count``-th match.
     ``consume`` counts reader tasks that started computing with the item.
     ``sim_t`` is the simulator's alert time for this instance, when known.
-    The alert is an operator alert naming the faulty task; with
-    ``designate_root`` it is also the root cause handed to the monitor, so the
-    comparison isolates containment from root-cause ranking.
+    The alert is an operator alert. Whether it also hands the monitor the
+    faulty source as the root cause is the experiment's root mode (see
+    ``runner``), not this field: ``designate_root`` is read for older specs
+    and otherwise ignored.
     """
 
     event: str
@@ -1003,8 +1004,17 @@ def effect_target(cls: str, effect_id: str) -> str:
     return f"actuator://{cls}/{effect_id}"
 
 
-def compile_plan(spec: Spec, *, run_id: str, time_scale: float) -> dict[str, Any]:
-    """The JSON plan workers execute; derived relations are resolved here only."""
+def compile_plan(
+    spec: Spec,
+    *,
+    run_id: str,
+    time_scale: float,
+    effect_path: str = "authorize_perform",
+) -> dict[str, Any]:
+    """The JSON plan workers execute; derived relations are resolved here only.
+
+    ``effect_path`` names how workers carry out effects (``det_worker.effects``).
+    """
     derived = derive(spec)
     fault = spec.fault
     origin = fault_origin(spec)
@@ -1061,6 +1071,7 @@ def compile_plan(spec: Spec, *, run_id: str, time_scale: float) -> dict[str, Any
     return {
         "plan_version": 1,
         "run_id": run_id,
+        "effect_path": effect_path,
         "spec": spec.name,
         "time_scale": time_scale,
         "root_agent": next(a.id for a in spec.agents if a.parent is None),

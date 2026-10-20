@@ -17,5 +17,6 @@
     "edge-2": "local"
   },
   "tau_ms": 50,
-  "control_transport": "nats"
+  "control_transport": "nats",
+  "effect_path": "authorize_perform"
 }

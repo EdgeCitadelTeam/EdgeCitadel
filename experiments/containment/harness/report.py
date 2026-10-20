@@ -4,21 +4,26 @@
 ``runs.csv`` (``metrics.evaluate`` plus the run's identity) and its control
 actions into ``actions.csv``. ``report`` (pandas, numpy, matplotlib) writes:
 
-- ``summary.csv``: per cell (mode, rogue rate, alert, latency, strategy):
-  runs, fully contained runs (%), normal work kept (% compute) with 95 %
-  percentile-bootstrap CIs over runs, time to containment, actions,
-  collateral, interruptions, timeouts and control failures;
+- ``summary.csv``: per cell (mode, rogue rate, alert, root mode, latency and
+  its regime, strategy) the split outcomes with 95 % percentile-bootstrap CIs
+  over runs: (a) runs with no tainted effect after the alert, (b) tainted
+  effects after containment was established, (c) runs where it was
+  established and the alert-to-established time, (d) unconfirmed, control
+  failure, infeasible and timeout counts; normal work kept (% compute);
+  control accounting (logical actions, control messages, confirmations);
+  root-cause accuracy in ranked mode;
 - ``paired.csv``: Firebreak against every other strategy on matched runs (same
-  instance, rogue rate, alert, latency, repetition): mean differences with
-  bootstrap CIs, an exact McNemar test on containment and a paired sign-flip
-  permutation test on kept work;
+  instance, rogue rate, alert, root mode, latency, repetition): mean
+  differences with bootstrap CIs, exact McNemar tests on (a) and (c) and a
+  paired sign-flip permutation test on kept work;
 - ``sim_vs_runtime.csv`` when ``sim_runs.csv`` exists: the simulator's
   prediction next to the runtime's mean for each cell;
 - figures in the simulator's v2 style: the Pareto 2x2 (rogue rate 0 / > 0 by
-  the lowest / highest latency setting) and containment vs latency.
+  the lowest / highest latency setting; (a) against kept work) and (a), (c)
+  and kept work against control latency, with stress settings marked.
 
-Timeouts and failed control actions stay in every denominator (``score`` keeps
-those runs; their uncontained effects count against them).
+Timeouts, unconfirmed and failed control actions and infeasible decisions stay
+in every denominator (``score`` keeps those runs; they count against (a)-(c)).
 """
 
 from __future__ import annotations
@@ -31,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from .metrics import evaluate
-from .names import CODE_NAME, COLOR, FAMILY, MAIN_NAMES, MARKER
+from .names import CODE_NAME, COLOR, FAMILY, MARKER, PLOTTED_NAMES
 from .runner import infrastructure_failure, testbed_counts
 from .spec import from_dict
 
@@ -47,7 +52,9 @@ IDENTITY = (
     "strategy",
     "family",
     "alert",
+    "root_mode",
     "latency",
+    "latency_regime",
     "control_latency_ms",
     "rep",
     "time_scale",
@@ -85,7 +92,10 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "strategy": CODE_NAME.get(code, code),
         "family": FAMILY.get(CODE_NAME.get(code, ""), ""),
         "alert": meta.get("alert"),
+        "root_mode": meta.get("root_mode") or ("given" if meta.get("alert") else None),
         "latency": meta.get("latency"),
+        "latency_regime": meta.get("latency_regime", ""),
+        "effect_path": meta.get("effect_path", "authorize_perform"),
         "control_latency_ms": sum(latency.values()) / len(latency)
         if latency
         else math.nan,
@@ -114,7 +124,8 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         # Failed to start, or its alert never fired: kept as a failed run.
         row["status"] = meta.get("status", "failed_to_start")
         row["timeout"] = int(meta.get("status") == "timeout")
-        row["contained"] = 0
+        row["clean_after_alert"] = 0
+        row["established"] = 0
         return row, actions
     spec = from_dict(json.loads((run_dir / "spec.json").read_text()))
     decisions = _jsonl(run_dir / "decisions.jsonl")
@@ -195,8 +206,16 @@ def score(out: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Summaries, paired comparisons and figures (pandas / matplotlib)
 # ---------------------------------------------------------------------------
-CELL = ["mode", "rogue_rate", "alert", "latency", "control_latency_ms"]
-PAIR = ["instance", "rogue_rate", "alert", "latency", "rep"]
+CELL = [
+    "mode",
+    "rogue_rate",
+    "alert",
+    "root_mode",
+    "latency",
+    "latency_regime",
+    "control_latency_ms",
+]
+PAIR = ["instance", "rogue_rate", "alert", "root_mode", "latency", "rep"]
 
 
 def bootstrap_ci(values: Any, *, seed: int = 0) -> tuple[float, float]:
@@ -244,40 +263,65 @@ def _column(g: Any, name: str) -> Any:
     return pd.to_numeric(g[name], errors="coerce")
 
 
+def _flags(g: Any, name: str) -> int:
+    return int(_column(g, name).fillna(0).astype(bool).sum())
+
+
 def summarize(runs: Any) -> Any:
     import pandas as pd
 
     rows = []
     faulted = runs[runs.strategy_code != "reference"]
+    for column in CELL:
+        if column not in faulted:
+            faulted = faulted.assign(**{column: math.nan})
     for keys, g in faulted.groupby(CELL + ["strategy_code", "strategy"], dropna=False):
-        contained = _column(g, "contained") * 100
+        clean = _column(g, "clean_after_alert") * 100
+        established = _column(g, "established") * 100
         kept = _column(g, "kept_cfrac") * 100
         rows.append(
             {
                 **dict(zip(CELL + ["strategy_code", "strategy"], keys)),
                 "runs": len(g),
-                "contained": contained.mean(),
-                "contained_lo": bootstrap_ci(contained)[0],
-                "contained_hi": bootstrap_ci(contained)[1],
+                # (a) no tainted effect committed after the alert
+                "clean_after_alert": clean.mean(),
+                "clean_after_alert_lo": bootstrap_ci(clean)[0],
+                "clean_after_alert_hi": bootstrap_ci(clean)[1],
+                # (b) tainted effects after containment was established
+                "tainted_after_established": _column(
+                    g, "tainted_after_established"
+                ).mean(),
+                "tainted_after_established_runs": int(
+                    (_column(g, "tainted_after_established") > 0).sum()
+                ),
+                # (c) containment established, and how fast
+                "established": established.mean(),
+                "established_lo": bootstrap_ci(established)[0],
+                "established_hi": bootstrap_ci(established)[1],
+                "time_to_established_s_median": _column(
+                    g, "time_to_established_s"
+                ).median(),
+                # (d) never excluded, only counted
+                "unconfirmed_runs": _flags(g, "unconfirmed"),
+                "control_failed_runs": _flags(g, "control_failed"),
+                "infeasible_runs": _flags(g, "infeasible"),
+                "timeouts": _flags(g, "timeout"),
                 "kept": kept.mean(),
                 "kept_lo": bootstrap_ci(kept)[0],
                 "kept_hi": bootstrap_ci(kept)[1],
                 "kept_runs": int(kept.notna().sum()),
-                "contained_after_confirm": _column(g, "contained_after_confirm").mean()
-                * 100,
                 "violations": _column(g, "violations").mean(),
-                "time_to_containment_s_median": _column(
-                    g, "time_to_containment_s"
-                ).median(),
                 "decision_s_median": _column(g, "decision_s").median(),
                 "solve_ms_median": _column(g, "solve_ms").median(),
-                "actions": _column(g, "n_actions").mean(),
+                "logical_actions": _column(g, "n_logical_actions").mean(),
+                "control_messages": _column(g, "n_control_messages").mean(),
+                "confirmations": _column(g, "n_confirmations").mean(),
+                "root_correct": _column(g, "root_correct").mean() * 100,
+                "root_rank_median": _column(g, "root_rank").median(),
                 "collateral": _column(g, "n_collateral").mean(),
                 "interrupted": _column(g, "n_interrupted").mean(),
                 "kept_gpu_s": _column(g, "kept_gpu_s").mean(),
                 "kept_tokens": _column(g, "kept_tokens").mean(),
-                "timeouts": int(_column(g, "timeout").fillna(0).sum()),
-                "control_failures": int(_column(g, "n_failed_actions").fillna(0).sum()),
                 "slot_restarts": int(_column(g, "slot_restarts").fillna(0).sum()),
                 "testbed_failures": int(
                     (g["testbed_failure"].fillna("") != "").sum()
@@ -289,10 +333,29 @@ def summarize(runs: Any) -> Any:
     return pd.DataFrame(rows)
 
 
+def _mcnemar(j: Any, column: str) -> dict[str, Any]:
+    ours, other = j[f"{column}_fb"].astype(float), j[f"{column}_other"].astype(float)
+    b = int(((ours == 1) & (other == 0)).sum())
+    c = int(((ours == 0) & (other == 1)).sum())
+    d = (ours - other) * 100
+    return {
+        f"d_{column}": d.mean(),
+        f"d_{column}_lo": bootstrap_ci(d)[0],
+        f"d_{column}_hi": bootstrap_ci(d)[1],
+        f"only_firebreak_{column}": b,
+        f"only_other_{column}": c,
+        f"mcnemar_p_{column}": mcnemar_exact(b, c),
+    }
+
+
 def paired(runs: Any, reference: str = "firebreak") -> Any:
     import pandas as pd
 
     rows = []
+    runs = runs.copy()
+    for column in PAIR:
+        if column not in runs:
+            runs[column] = math.nan
     base = runs[runs.strategy_code == reference].set_index(PAIR)
     for code, g in runs[~runs.strategy_code.isin([reference, "reference"])].groupby(
         "strategy_code"
@@ -301,26 +364,18 @@ def paired(runs: Any, reference: str = "firebreak") -> Any:
         joined = base.join(other, lsuffix="_fb", rsuffix="_other", how="inner")
         if joined.empty:
             continue
-        for cell, j in joined.groupby(["rogue_rate", "alert", "latency"], dropna=False):
+        cells = ["rogue_rate", "alert", "root_mode", "latency"]
+        for cell, j in joined.groupby(cells, dropna=False):
             dk = (
                 j.kept_cfrac_fb.astype(float) - j.kept_cfrac_other.astype(float)
             ) * 100
-            dc = (j.contained_fb.astype(float) - j.contained_other.astype(float)) * 100
-            b = int(((j.contained_fb == 1) & (j.contained_other == 0)).sum())
-            c = int(((j.contained_fb == 0) & (j.contained_other == 1)).sum())
             rows.append(
                 {
-                    "rogue_rate": cell[0],
-                    "alert": cell[1],
-                    "latency": cell[2],
+                    **dict(zip(cells, cell)),
                     "against": CODE_NAME.get(code, code),
                     "pairs": len(j),
-                    "d_contained": dc.mean(),
-                    "d_contained_lo": bootstrap_ci(dc)[0],
-                    "d_contained_hi": bootstrap_ci(dc)[1],
-                    "only_firebreak_contained": b,
-                    "only_other_contained": c,
-                    "mcnemar_p": mcnemar_exact(b, c),
+                    **_mcnemar(j, "clean_after_alert"),
+                    **_mcnemar(j, "established"),
                     "d_kept": dk.mean(),
                     "d_kept_lo": bootstrap_ci(dk)[0],
                     "d_kept_hi": bootstrap_ci(dk)[1],
@@ -336,16 +391,19 @@ def sim_vs_runtime(runs: Any, sim: Any) -> Any:
         runs[runs.strategy_code != "reference"]
         .groupby(keys, dropna=False)
         .agg(
-            runtime_runs=("contained", "size"),
-            runtime_contained=("contained", "mean"),
+            runtime_runs=("clean_after_alert", "size"),
+            runtime_clean_after_alert=("clean_after_alert", "mean"),
             runtime_kept=("kept_cfrac", "mean"),
         )
     )
     sm = sim.groupby(keys, dropna=False).agg(
-        sim_contained=("contained", "mean"), sim_kept=("kept_cfrac", "mean")
+        sim_clean_after_alert=("clean_after_alert", "mean"),
+        sim_kept=("kept_cfrac", "mean"),
     )
     out = rt.join(sm, how="left").reset_index()
-    out["d_contained"] = (out.runtime_contained - out.sim_contained) * 100
+    out["d_clean_after_alert"] = (
+        out.runtime_clean_after_alert - out.sim_clean_after_alert
+    ) * 100
     out["d_kept"] = (out.runtime_kept - out.sim_kept) * 100
     return out
 
@@ -399,10 +457,10 @@ def _marker(name: str, ms: float | None = None) -> dict[str, Any]:
 def _panel_point(
     g: Any,
 ) -> tuple[float, float, tuple[float, float], tuple[float, float]]:
-    """Mean kept / contained (%) over a panel's runs, with bootstrap CIs."""
+    """Mean kept / clean-after-alert (%) over a panel's runs, with bootstrap CIs."""
     kept = g.kept_cfrac.astype(float) * 100
-    contained = g.contained.astype(float) * 100
-    return kept.mean(), contained.mean(), bootstrap_ci(kept), bootstrap_ci(contained)
+    clean = g.clean_after_alert.astype(float) * 100
+    return kept.mean(), clean.mean(), bootstrap_ci(kept), bootstrap_ci(clean)
 
 
 def _no_runs(ax: Any) -> None:
@@ -426,11 +484,32 @@ def _save(fig: Any, path: Path) -> None:
     plt.close(fig)
 
 
+METRICS = {
+    "clean": ("clean_after_alert", "runs with no tainted effect\nafter the alert (%)"),
+    "established": ("established", "runs with containment\nestablished (%)"),
+    "kept": ("kept_cfrac", "normal work kept (%)"),
+}
+STRESS_NOTE = "stress: above the measured LAN round trip"
+
+
+def _main_runs(runs: Any, mode: str) -> Any:
+    """Runs of one mode in the main design: plotted strategies, root given."""
+    r = runs[(runs["mode"] == mode) & runs.strategy.isin(PLOTTED_NAMES)]
+    if "root_mode" in r:
+        r = r[r.root_mode.isna() | (r.root_mode == "given")]
+    return r
+
+
+def _is_stress(part: Any) -> bool:
+    return "latency_regime" in part and (part.latency_regime == "stress").any()
+
+
 def fig_pareto(runs: Any, path: Path, mode: str) -> None:
-    """Fully contained runs vs normal work kept, pooled over each panel's runs:
-    rogue rate 0 / > 0 (rows) by the lowest / highest latency setting (columns)."""
+    """(a) runs with no tainted effect after the alert vs normal work kept,
+    pooled over each panel's runs: rogue rate 0 / > 0 (rows) by the lowest /
+    highest latency setting (columns); stress settings say so in the title."""
     plt = _setup_style()
-    r = runs[(runs["mode"] == mode) & runs.strategy.isin(MAIN_NAMES)]
+    r = _main_runs(runs, mode)
     if r.empty:
         return
     by_latency = r.groupby("latency").control_latency_ms.mean().sort_values()
@@ -452,7 +531,7 @@ def fig_pareto(runs: Any, path: Path, mode: str) -> None:
             ]
             if part.empty:
                 _no_runs(ax)
-            for name in MAIN_NAMES:
+            for name in PLOTTED_NAMES:
                 g = part[part.strategy == name]
                 if g.empty:
                     continue
@@ -477,38 +556,61 @@ def fig_pareto(runs: Any, path: Path, mode: str) -> None:
                 mec="#7a7a7a",
                 mew=0.9,
             )
-            ax.set_title(f"{label}\nlatency {latency}", fontsize=9)
+            stress = " (stress)" if _is_stress(r[r.latency == latency]) else ""
+            ax.set_title(f"{label}\nlatency {latency}{stress}", fontsize=9)
             ax.set_xlim(-3, 106)
             ax.set_ylim(-3, 106)
             if i == 1:
                 ax.set_xlabel("normal work kept (%)")
             if j == 0:
-                ax.set_ylabel("fully contained runs (%)")
+                ax.set_ylabel(METRICS["clean"][1])
+    present = [n for n in PLOTTED_NAMES if (r.strategy == n).any()]
     handles = [
         plt.Line2D(
             [], [], ls="", label=n, **_marker(n, 11 if n == "Firebreak (ours)" else 7)
         )
-        for n in MAIN_NAMES
+        for n in present
     ]
     fig.legend(handles=handles, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.08))
     fig.tight_layout()
     _save(fig, path)
 
 
-def fig_latency(runs: Any, path: Path, mode: str, metric: str = "contained") -> None:
-    """A metric vs the control latency, one line per strategy (rogue 0 / > 0)."""
+def fig_latency(runs: Any, path: Path, mode: str, metric: str = "clean") -> None:
+    """A split outcome (or kept work) vs the control latency, one line per
+    strategy (rogue 0 / > 0); settings above the measured LAN round trip are
+    shaded and labelled stress."""
     plt = _setup_style()
-    r = runs[(runs["mode"] == mode) & runs.strategy.isin(MAIN_NAMES)]
-    if r.empty:
+    r = _main_runs(runs, mode)
+    column, ylabel = METRICS[metric]
+    if r.empty or column not in r or r[column].isna().all():
         return
-    column = {"contained": "contained", "kept": "kept_cfrac"}[metric]
     fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.3), sharey=True)
     panels = [(False, "Well-behaved (rogue rate 0)"), (True, "Rogue rate > 0")]
+    stress = r[r.latency_regime == "stress"] if "latency_regime" in r else r.iloc[:0]
     for ax, (rogue, label) in zip(axes, panels):
         part = r[(r.rogue_rate.astype(float) > 0) == rogue]
         if part.empty:
             _no_runs(ax)
-        for name in MAIN_NAMES:
+        if not stress.empty:
+            lo = (
+                r[r.latency_regime != "stress"].control_latency_ms.max()
+                if (r.latency_regime != "stress").any()
+                else 0.0
+            )
+            hi = stress.control_latency_ms.max()
+            ax.axvspan(lo / 1000, hi / 1000 * 1.05, color="#f2f2f2", zorder=0, lw=0)
+            ax.text(
+                0.98,
+                0.02,
+                STRESS_NOTE,
+                transform=ax.transAxes,
+                ha="right",
+                va="bottom",
+                fontsize=7,
+                color="#7a7a7a",
+            )
+        for name in PLOTTED_NAMES:
             g = part[part.strategy == name]
             if g.empty:
                 continue
@@ -531,14 +633,12 @@ def fig_latency(runs: Any, path: Path, mode: str, metric: str = "contained") -> 
         ax.set_title(label, fontsize=9)
         ax.set_xlabel("control latency (s)")
         ax.set_ylim(-3, 104)
-    axes[0].set_ylabel(
-        "fully contained runs (%)" if metric == "contained" else "normal work kept (%)"
-    )
+    axes[0].set_ylabel(ylabel)
     legend: dict[str, Any] = {}
     for ax in axes:  # either panel may be empty
         for handle, name in zip(*ax.get_legend_handles_labels()):
             legend.setdefault(name, handle)
-    names = [n for n in MAIN_NAMES if n in legend]
+    names = [n for n in PLOTTED_NAMES if n in legend]
     fig.legend(
         [legend[n] for n in names],
         names,
@@ -565,12 +665,17 @@ def report(out: Path, *, figures: bool = True) -> None:
         runs = pd.concat([runs, sim], ignore_index=True)
     summary.to_csv(out / "summary.csv", index=False)
     if figures:
-        (out / "figures").mkdir(exist_ok=True)
+        figures_dir = out / "figures"
+        figures_dir.mkdir(exist_ok=True)
         for mode in runs["mode"].dropna().unique():
-            fig_pareto(runs, out / "figures" / f"fig_pareto_{mode}", mode)
+            fig_pareto(runs, figures_dir / f"fig_pareto_{mode}", mode)
+            fig_latency(runs, figures_dir / f"fig_clean_vs_latency_{mode}", mode)
             fig_latency(
-                runs, out / "figures" / f"fig_containment_vs_latency_{mode}", mode
+                runs,
+                figures_dir / f"fig_established_vs_latency_{mode}",
+                mode,
+                "established",
             )
             fig_latency(
-                runs, out / "figures" / f"figA_kept_vs_latency_{mode}", mode, "kept"
+                runs, figures_dir / f"figA_kept_vs_latency_{mode}", mode, "kept"
             )

@@ -10,6 +10,16 @@ instance also gets a no-fault reference run per latency setting and repetition
 One run: fresh stack, root task(s) submitted at ``t0``, the alert posted when
 its trigger fires on the workers' events (same trigger for every strategy),
 then wait until every task ended, the run is quiescent, or it times out.
+
+Root modes decouple containment from root-cause analysis: in the main runs
+(``given``) the alert names the faulty invocation and hands it to the monitor
+as the root; in the smaller ``ranked`` mode the alert names only the symptom
+(the reader whose consumption tripped the trigger, or the faulty invocation
+for a trigger without a reader) and the monitor's root-cause ranking picks.
+
+Latency settings that inject more than the measured LAN round trip between
+sites (``measured_rtt_ms``, 4 ms on the lab testbed) are stress settings and
+must say so in their name; ``latency_regime`` records it per run.
 Collected into ``<out>/runs/<run_id>/``: ``run.json`` (identity, times,
 status, alert), ``spec.json``, ``plan.json``, ``events.jsonl``,
 ``ledger.jsonl``, ``marks.jsonl``, ``decisions.jsonl`` (the monitor's
@@ -28,7 +38,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from . import deploy
+from . import deploy, netem
 from .spec import (
     AlertTrigger,
     Fault,
@@ -46,6 +56,10 @@ POLL_S = 0.2
 START_MARGIN_MS = 1500
 # Core ingests the faulty task's run/started about a second after it happened.
 ATTEMPT_LOOKUP_S = 1.0
+# How long a ranked-mode alert waits for Core to know the symptom invocation.
+SYMPTOM_LOOKUP_S = 5.0
+ROOT_MODES = ("given", "ranked")
+MEASURED_RTT_MS = netem.MEASURED_RTT_MS
 
 
 @dataclass(frozen=True)
@@ -64,8 +78,18 @@ class Latency:
     netem: str | None = None
 
     def per_node(self, nodes: Iterable[str]) -> dict[str, float]:
-        default = float(self.control_latency_ms.get("*", 50.0))
+        default = float(self.control_latency_ms.get("*", MEASURED_RTT_MS))
         return {n: float(self.control_latency_ms.get(n, default)) for n in nodes}
+
+    def regime(self, measured_rtt_ms: float, netem_rtt_ms: float = 0.0) -> str:
+        """``stress`` when the setting assumes or injects more control latency
+        than the measured round trip, or its netem profile adds more."""
+        values = [
+            *map(float, self.control_latency_ms.values()),
+            *map(float, self.control_delay_ms.values()),
+            float(netem_rtt_ms),
+        ]
+        return "stress" if max(values, default=0.0) > measured_rtt_ms else "measured"
 
 
 @dataclass(frozen=True)
@@ -87,6 +111,8 @@ class Experiment:
     # died, a service never came up): such a run measures the machine, not the
     # strategy. The failed attempt is kept next to it as <run_id>.infra<n>.
     infra_retries: int = 1
+    root_modes: tuple[str, ...] = ("given",)
+    measured_rtt_ms: float = MEASURED_RTT_MS
 
     @classmethod
     def load(cls, path: str | Path) -> Experiment:
@@ -97,12 +123,20 @@ class Experiment:
         for s in strategies:
             if s not in deploy.STRATEGIES and s != "none":
                 raise ValueError(f"unknown strategy '{s}'")
+        root_modes = tuple(document.get("root_modes", ["given"]))
+        for mode in root_modes:
+            if mode not in ROOT_MODES:
+                raise ValueError(f"unknown root mode '{mode}'")
+        measured = float(document.get("measured_rtt_ms", MEASURED_RTT_MS))
+        latencies = tuple(Latency(**latency) for latency in document["latencies"])
+        for latency in latencies:
+            check_stress_label(latency.name, latency.regime(measured), measured)
         return cls(
             name=document["name"],
             instances=tuple((base / p).resolve() for p in document["instances"]),
             strategies=strategies,
             alerts=tuple(document["alerts"]),
-            latencies=tuple(Latency(**latency) for latency in document["latencies"]),
+            latencies=latencies,
             repetitions=int(document.get("repetitions", 1)),
             time_scale=float(document.get("time_scale", 1.0)),
             rogue_rates=tuple(document["rogue_rates"])
@@ -114,6 +148,17 @@ class Experiment:
             timeout_extra_s=float(document.get("timeout_extra_s", 60.0)),
             keep_state=bool(document.get("keep_state", False)),
             infra_retries=int(document.get("infra_retries", 1)),
+            root_modes=root_modes,
+            measured_rtt_ms=measured,
+        )
+
+
+def check_stress_label(name: str, regime: str, measured_rtt_ms: float) -> None:
+    """A latency setting above the measured round trip must be labelled stress."""
+    if regime == "stress" and "stress" not in name.lower():
+        raise ValueError(
+            f"latency '{name}' is above the measured LAN round trip "
+            f"({measured_rtt_ms:g} ms): label it as a stress setting (e.g. 'stress-{name}')"
         )
 
 
@@ -125,13 +170,17 @@ class RunCell:
     alert: str | None
     latency: Latency
     rep: int
+    root_mode: str = "given"
 
     @property
     def run_id(self) -> str:
         rogue = "" if self.rogue_rate is None else f"__p{self.rogue_rate:g}"
+        alert = self.alert or "nofault"
+        if self.alert and self.root_mode != "given":
+            alert = f"{alert}.{self.root_mode}"
         parts = [
             self.instance.stem + rogue,
-            self.alert or "nofault",
+            alert,
             self.latency.name,
             f"r{self.rep}",
             self.strategy,
@@ -152,10 +201,19 @@ def grid(experiment: Experiment) -> list[RunCell]:
                             RunCell(instance, rate, "reference", None, latency, rep)
                         )
                     for alert in experiment.alerts:
-                        for strategy in experiment.strategies:
-                            cells.append(
-                                RunCell(instance, rate, strategy, alert, latency, rep)
-                            )
+                        for mode in experiment.root_modes:
+                            for strategy in experiment.strategies:
+                                cells.append(
+                                    RunCell(
+                                        instance,
+                                        rate,
+                                        strategy,
+                                        alert,
+                                        latency,
+                                        rep,
+                                        mode,
+                                    )
+                                )
     return cells
 
 
@@ -183,6 +241,7 @@ class TriggerWatch:
         self.scale = time_scale
         self.readers = set(derive(spec).readers.get(trigger.item or "", ()))
         self.consumers: dict[str, int] = {}
+        self.consumer_rt: dict[str, str] = {}
         self.matched: int | None = None
 
     def observe(self, event: Mapping[str, Any]) -> None:
@@ -208,6 +267,7 @@ class TriggerWatch:
                 and event["task"] in self.readers
             ):
                 self.consumers.setdefault(event["task"], int(event["t_ms"]))
+                self.consumer_rt.setdefault(event["task"], str(event.get("rt", "")))
                 if trigger.count and len(self.consumers) >= trigger.count:
                     self.matched = int(event["t_ms"])
         elif (
@@ -218,6 +278,14 @@ class TriggerWatch:
             self.matched = int(event["t_ms"])
         elif trigger.event == "fault" and kind == "fault":
             self.matched = int(event["t_ms"])
+
+    def symptom(self) -> str | None:
+        """The runtime task of the latest reader that consumed the item, if any:
+        where an operator would first see the fault's symptom."""
+        if not self.consumers:
+            return None
+        task = max(self.consumers, key=lambda t: (self.consumers[t], t))
+        return self.consumer_rt.get(task) or None
 
     def fire_at(self) -> int | None:
         delay = int(self.trigger.delay_s * self.scale * 1000)
@@ -238,7 +306,12 @@ def run_cell(
     run_dir.mkdir(parents=True, exist_ok=True)
     spec = cell_spec(cell)
     scale = experiment.time_scale
-    plan = compile_plan(spec, run_id=cell.run_id, time_scale=scale)
+    plan = compile_plan(
+        spec,
+        run_id=cell.run_id,
+        time_scale=scale,
+        effect_path=stack_config.effect_path,
+    )
     (run_dir / "spec.json").write_text(json.dumps(to_dict(spec), indent=1))
     (run_dir / "plan.json").write_text(json.dumps(plan))
     nodes = deploy.nodes(spec)
@@ -252,7 +325,12 @@ def run_cell(
         "rogue_rate": spec.rogue.rate,
         "strategy": cell.strategy,
         "alert": cell.alert,
+        "root_mode": cell.root_mode if cell.alert else None,
         "latency": cell.latency.name,
+        "latency_regime": cell.latency.regime(
+            experiment.measured_rtt_ms, stack_config.netem_rtt_ms(cell.latency.netem)
+        ),
+        "effect_path": stack_config.effect_path,
         "control_latency_ms": cell.latency.per_node(nodes),
         "control_delay_ms": dict(cell.latency.control_delay_ms),
         "rep": cell.rep,
@@ -401,7 +479,7 @@ def _drive(
         ):
             meta["alert_trigger_ms"] = watch.fire_at()
             if alert_due and origin_rt is not None:
-                _post_alert(stack, spec, cell, trigger, origin_rt, origin_attempt, meta)
+                _post_alert(stack, spec, cell, watch, origin_rt, origin_attempt, meta)
             elif not alert_due:
                 # Uncontained baseline: the alert time is still the reference point.
                 meta["t_alert_ms"] = int(
@@ -448,22 +526,39 @@ def _post_alert(
     stack: RunStack,
     spec: Spec,
     cell: RunCell,
-    trigger: AlertTrigger,
+    watch: TriggerWatch,
     origin_rt: str,
     origin_attempt: str | None,
     meta: dict[str, Any],
 ) -> None:
-    """An operator alert naming the faulty invocation (its task if unresolved).
+    """The operator alert of the run's root mode.
 
-    The monitor's taint index starts from invocations and versions; a task
-    subject alone does not reach the invocation's outputs, so the attempt is
-    preferred and a fallback is recorded as an error of the run.
+    ``given``: the alert names the faulty invocation and designates it as the
+    root. ``ranked``: it names the symptom (the latest reader that consumed
+    the faulty item, else the faulty invocation) and no root, so the monitor's
+    root-cause ranking chooses. The monitor's taint index starts from
+    invocations, so attempts are preferred; a task subject is the fallback and
+    is recorded as an error of the run.
     """
-    subject = (
-        {"attempt_id": origin_attempt} if origin_attempt else {"task_id": origin_rt}
-    )
     if origin_attempt is None:
-        meta["errors"].append("faulty invocation not yet in Core; alert names its task")
+        origin_attempt = stack.attempt_of(origin_rt)
+    meta["origin_attempt"] = origin_attempt
+    subject_rt, subject_attempt = origin_rt, origin_attempt
+    if cell.root_mode == "ranked":
+        symptom = watch.symptom()
+        if symptom is not None and symptom != origin_rt:
+            subject_rt, subject_attempt = symptom, None
+            deadline = time.monotonic() + SYMPTOM_LOOKUP_S
+            while subject_attempt is None and time.monotonic() < deadline:
+                subject_attempt = stack.attempt_of(symptom)
+                if subject_attempt is None:
+                    time.sleep(0.25)
+        meta["symptom_rt"] = subject_rt
+    subject = (
+        {"attempt_id": subject_attempt} if subject_attempt else {"task_id": subject_rt}
+    )
+    if subject_attempt is None:
+        meta["errors"].append("alert subject not yet in Core; alert names its task")
     alert: dict[str, Any] = {
         "kind": "operator",
         **subject,
@@ -474,7 +569,7 @@ def _post_alert(
             "run": cell.run_id,
         },
     }
-    if trigger.designate_root:
+    if cell.root_mode == "given":
         alert["root"] = dict(subject)
     t_posted = int(
         stack.services("POST", "/mark", {"name": "alert", "posted": True})["t_ms"]

@@ -7,6 +7,7 @@ B.n are normal work, and the alert comes after B.t0 consumed X.
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -147,12 +148,9 @@ def test_contained_run_keeps_the_independent_work(run):
         and row["n_collateral"] == 0
         and row["n_interrupted"] == 0
     )
-    assert (
-        row["violations"] == 0
-        and row["contained"] == 1
-        and row["contained_after_confirm"] == 1
-    )
-    assert row["time_to_containment_s"] == pytest.approx(0.09)
+    assert row["violations"] == 0 and row["clean_after_alert"] == 1
+    assert row["established"] == 1 and row["tainted_after_established"] == 0
+    assert row["time_to_established_s"] == pytest.approx(0.09)
     assert row["decision_s"] == pytest.approx(0.08)
     assert row["consumed_at_alert"] == 1.0
     assert row["n_actions"] == 2 and row["gc_nodes"] == 51
@@ -183,7 +181,7 @@ def test_tainted_effect_after_the_alert_is_a_violation(run):
     run.effect("E_B", "B.t0", 9000, (FAULT,))
     row = evaluate(run)
     assert row["violations"] == 1 and row["viol_declared"] == 1
-    assert row["contained"] == 0 and row["contained_after_confirm"] == 0
+    assert row["clean_after_alert"] == 0 and row["tainted_after_established"] == 1
 
 
 def test_tainted_effect_before_the_alert_is_not_a_violation(run):
@@ -193,23 +191,22 @@ def test_tainted_effect_before_the_alert_is_not_a_violation(run):
     assert (
         row["violations_total"] == 1
         and row["violations"] == 0
-        and row["contained"] == 1
+        and row["clean_after_alert"] == 1
     )
 
 
 def test_a_timeout_stays_in_the_denominator_as_not_contained(run):
     finish_b_n(run)
     row = evaluate(run, status="timeout")
-    assert row["timeout"] == 1 and row["contained"] == 0
+    assert row["timeout"] == 1 and row["clean_after_alert"] == 0
 
 
 def test_a_failed_control_action_leaves_containment_time_undefined(run):
     finish_b_n(run)
     row = evaluate(run, decisions=[decision(failed=True)])
-    assert row["n_failed_actions"] == 1
-    assert math.isnan(row["time_to_containment_s"]) and math.isnan(
-        row["contained_after_confirm"]
-    )
+    assert row["n_failed_actions"] == 1 and row["control_failed"] == 1
+    assert row["established"] == 0 and math.isnan(row["time_to_established_s"])
+    assert math.isnan(row["tainted_after_established"])
 
 
 def test_an_unconfirmed_action_is_a_control_failure(run):
@@ -218,7 +215,8 @@ def test_an_unconfirmed_action_is_a_control_failure(run):
     unanswered["phase1"][1].update(state="unconfirmed", t_confirmed=None)
     row = evaluate(run, decisions=[unanswered])
     assert row["n_failed_actions"] == 1 and row["n_unconfirmed_actions"] == 1
-    assert math.isnan(row["time_to_containment_s"])
+    assert row["unconfirmed"] == 1 and row["control_failed"] == 0
+    assert row["established"] == 0 and math.isnan(row["time_to_established_s"])
     assert row["first_action_s"] == pytest.approx(0.09)  # the confirmed one
 
 
@@ -232,7 +230,7 @@ def test_a_detector_incident_is_not_the_strategys_response(run):
     }
     row = evaluate(run, decisions=[detector, decision()])
     assert row["n_detector_decisions"] == 1 and row["n_decisions"] == 1
-    assert row["time_to_containment_s"] == pytest.approx(0.09)
+    assert row["time_to_established_s"] == pytest.approx(0.09)
     alone = evaluate(run, decisions=[detector])
     assert alone["decision_status"] == "none" and alone["n_actions"] == 0
 
@@ -276,3 +274,82 @@ def test_reference_run_counts_every_task_as_at_risk(mini_spec):
         [],
     )
     assert (row["n_at_risk"], row["n_kept"], row["kept_cfrac"]) == (6, 6, 1.0)
+
+
+def test_control_accounting_counts_messages_per_node_and_confirmations(run):
+    finish_b_n(run)
+    d = decision()
+    # ab174ed-style records: one revocation sent to two nodes, one unanswered
+    d["phase2"] = [
+        {
+            **d["phase1"][0],
+            "phase": 2,
+            "action": {
+                "op": "revoke",
+                "kind": "grant",
+                "node_id": "edge-1",
+                "object_id": "b1>fx:act_b",
+            },
+            "sites": {
+                "edge-1": {
+                    "command_id": "c1",
+                    "t_sent": 6081,
+                    "t_confirmed": 6090,
+                    "state": "in_force",
+                },
+                "edge-2": {
+                    "command_id": "c2",
+                    "t_sent": 6081,
+                    "t_confirmed": None,
+                    "state": "unconfirmed",
+                },
+            },
+            "state": "unconfirmed",
+            "t_confirmed": None,
+        }
+    ]
+    d["phase1"][0].update(state="released", t_release_sent=6200)
+    row = evaluate(run, decisions=[d])
+    assert row["n_logical_actions"] == 3
+    # 2 holds + 1 release + the revocation's 2 node messages
+    assert row["n_control_messages"] == 5 and row["n_release_messages"] == 1
+    assert row["n_confirmations"] == 4  # all but the unanswered revocation copy
+    assert json.loads(row["control_messages_by_node"]) == {"edge-1": 3, "edge-2": 2}
+    assert row["unconfirmed"] == 1 and row["established"] == 0
+
+
+def test_infeasible_decisions_are_flagged_not_dropped(run):
+    finish_b_n(run)
+    row = evaluate(run, decisions=[{**decision(), "unavoidable": ["Fout:ctx:c>b1"]}])
+    assert row["infeasible"] == 0 and row["unavoidable"] == 1
+    no_cut = {**decision(), "solve": {"status": "infeasible", "ms": 1.0}}
+    row = evaluate(run, decisions=[no_cut])
+    assert row["infeasible"] == 1 and row["established"] == 1
+    unverified = {**decision(), "cut_valid": False, "status": "phase2_check_failed"}
+    assert evaluate(run, decisions=[unverified])["infeasible"] == 1
+
+
+def test_root_correct_compares_the_monitors_roots_with_the_faulty_attempt(run):
+    finish_b_n(run)
+    meta = {
+        "t0_ms": 0,
+        "t_alert_ms": ALERT,
+        "status": "quiescent",
+        "origin_attempt": "a-1",
+        "root_mode": "ranked",
+    }
+    picked = {
+        **decision(),
+        "roots": ["inv:a-2"],
+        "root_basis": "session",
+        "ranking": [{"node": "inv:a-2"}, {"node": "inv:a-1"}],
+    }
+    row = M.evaluate(run.spec, meta, run.events, run.ledger, [picked])
+    assert row["root_mode"] == "ranked" and row["root_correct"] == 0
+    assert row["root_rank"] == 2
+    assert row["root_basis"] == "session"
+    picked["roots"] = ["inv:a-1"]
+    assert (
+        M.evaluate(run.spec, meta, run.events, run.ledger, [picked])["root_correct"]
+        == 1
+    )

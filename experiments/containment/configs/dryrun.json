@@ -11,6 +11,11 @@
       "nats_server": "${HARNESS_NATS_SERVER}"
     }
   },
-  "node_hosts": {"core": "local", "edge-1": "local", "edge-2": "local"},
-  "tau_ms": 50
+  "node_hosts": {
+    "core": "local",
+    "edge-1": "local",
+    "edge-2": "local"
+  },
+  "tau_ms": 50,
+  "effect_path": "authorize_perform"
 }

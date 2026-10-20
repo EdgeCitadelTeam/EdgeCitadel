@@ -127,3 +127,11 @@ def test_nats_control_gives_the_monitor_and_every_node_one_private_key(
 def test_unknown_control_transports_are_rejected(tmp_path):
     with pytest.raises(stack.StackError, match="control_transport"):
         stack._transport("carrier-pigeon")
+
+
+def test_effect_paths_are_validated_when_the_stack_is_loaded():
+    assert stack._effect_path("authorize_perform") == "authorize_perform"
+    with pytest.raises(stack.StackError, match="not available"):
+        stack._effect_path("gateway_execute")
+    with pytest.raises(stack.StackError, match="unknown"):
+        stack._effect_path("telepathy")

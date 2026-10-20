@@ -105,7 +105,7 @@ def test_score_writes_one_row_per_run_with_identity_and_metrics(tmp_path):
     # a run the testbed failed is flagged, and still scored and counted
     assert by["firebreak"]["testbed_failure"] == ""
     assert "lost agentd" in by["stop_team"]["testbed_failure"]
-    assert by["stop_team"]["contained"] in (0, 1)
+    assert by["stop_team"]["clean_after_alert"] in (0, 1)
     assert by["firebreak"]["family"] == names.FAMILY_FUT
     assert by["firebreak"]["kept_cfrac"] == 1.0 and by["stop_team"]["kept_cfrac"] == 0.0
     with (tmp_path / "runs.csv").open() as handle:
@@ -126,7 +126,10 @@ def test_report_pairs_strategies_on_matched_runs(tmp_path):
     [row] = paired.to_dict("records")
     assert row["against"] == "Stop team" and row["pairs"] == 3
     assert row["d_kept"] == pytest.approx(100.0)
+    assert "mcnemar_p_clean_after_alert" in row and "mcnemar_p_established" in row
     summary = pd.read_csv(tmp_path / "summary.csv").set_index("strategy_code")
     assert summary.loc["firebreak", "kept"] == pytest.approx(100.0)
     assert summary.loc["stop_team", "runs"] == 3
-    assert not math.isnan(summary.loc["firebreak", "contained"])
+    assert not math.isnan(summary.loc["firebreak", "clean_after_alert"])
+    for column in ("established", "unconfirmed_runs", "infeasible_runs", "timeouts"):
+        assert column in summary.columns

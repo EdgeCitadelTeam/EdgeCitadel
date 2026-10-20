@@ -18,8 +18,17 @@ Layout (``experiments/containment``):
 - ``harness/runner.py``: the paired grid and one run's control loop
 - ``harness/simbackend.py``, ``report.py``, ``names.py``: simulator rows,
   CSVs, statistics and figures; ``netem.py``: lab latency profiles
-- ``workloads/``: exported instances; ``experiments/``: grids; ``configs/``:
-  stacks (``dryrun.json`` local, ``lab.json`` jim-eq + Endurance + Cluster)
+- ``workloads/``: exported instances; ``experiments/``: grids (``lab-pilot``
+  252 runs, ``lab-main`` 882 and ``lab-stress`` 504 with the root given, and
+  ``lab-rootcause`` 36 in the ranked-root mode); ``configs/``: stacks
+  (``dryrun.json`` local, ``lab.json`` jim-eq + Endurance + Cluster)
+- ``agent-packages/det-worker``: the deterministic worker; its effect path is
+  pluggable (``det_worker/effects.py``: authorize-then-perform today, the
+  gateway's ``effect.execute`` once m4/design lands; stack ``effect_path``)
+
+Latency settings and netem profiles above the measured LAN round trip
+(1.5-4 ms between sites) must be labelled ``stress``; the runner refuses
+unlabelled ones and records ``latency_regime`` per run.
 
 Dry run (everything on this machine; from ``experiments/containment``)::
 

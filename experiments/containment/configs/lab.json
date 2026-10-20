@@ -28,19 +28,56 @@
       "work_root": "/var/tmp/edgecitadel-containment"
     }
   },
-  "node_hosts": {"core": "jim-eq", "edge-1": "netsys-endurance", "edge-2": "netsys-cluster"},
-  "ports": {"nats": 14222, "nats_monitor": 18222, "services": 18900, "aggregator": 18800},
+  "node_hosts": {
+    "core": "jim-eq",
+    "edge-1": "netsys-endurance",
+    "edge-2": "netsys-cluster"
+  },
+  "ports": {
+    "nats": 14222,
+    "nats_monitor": 18222,
+    "services": 18900,
+    "aggregator": 18800
+  },
   "tau_ms": 50,
   "netem": {
     "apply": false,
-    "interface": {"jim-eq": "tailscale0", "netsys-endurance": "tailscale0", "netsys-cluster": "tailscale0"},
-    "ports": [14222, 18900],
+    "interface": {
+      "jim-eq": "tailscale0",
+      "netsys-endurance": "tailscale0",
+      "netsys-cluster": "tailscale0"
+    },
+    "ports": [
+      14222,
+      18900
+    ],
     "profiles": {
-      "lan": {"delay_ms": 0},
-      "wan-50": {"delay_ms": 50, "jitter_ms": 10, "distribution": "normal"},
-      "wan-200": {"delay_ms": 200, "jitter_ms": 40, "distribution": "normal"},
-      "measured-endurance": {"delay_ms": null, "jitter_ms": null, "distribution": "paretonormal", "note": "placeholder: fill from the measured jim-eq <-> NetSys-Endurance RTT distribution"},
-      "measured-cluster": {"delay_ms": null, "jitter_ms": null, "distribution": "paretonormal", "note": "placeholder: fill from the measured jim-eq <-> NetSys-Cluster RTT distribution"}
+      "lan": {
+        "delay_ms": 0
+      },
+      "stress-wan-50": {
+        "delay_ms": 50,
+        "jitter_ms": 10,
+        "distribution": "normal"
+      },
+      "stress-wan-200": {
+        "delay_ms": 200,
+        "jitter_ms": 40,
+        "distribution": "normal"
+      },
+      "measured-endurance": {
+        "delay_ms": null,
+        "jitter_ms": null,
+        "distribution": "paretonormal",
+        "note": "placeholder: fill from the measured jim-eq <-> NetSys-Endurance RTT distribution"
+      },
+      "measured-cluster": {
+        "delay_ms": null,
+        "jitter_ms": null,
+        "distribution": "paretonormal",
+        "note": "placeholder: fill from the measured jim-eq <-> NetSys-Cluster RTT distribution"
+      }
     }
-  }
+  },
+  "effect_path": "authorize_perform"
 }

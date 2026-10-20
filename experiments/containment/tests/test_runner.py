@@ -19,8 +19,8 @@ def experiment(tmp_path, **overrides) -> runner.Experiment:
         "strategies": ["firebreak", "trace_and_stop", "none"],
         "alerts": ["early", "late"],
         "latencies": [
-            {"name": "fast", "control_latency_ms": {"*": 50}},
-            {"name": "slow", "control_latency_ms": {"*": 2000}},
+            {"name": "fast", "control_latency_ms": {"*": 2}},
+            {"name": "stress-slow", "control_latency_ms": {"*": 2000}},
         ],
         "repetitions": 2,
         "rogue_rates": [0.0, 0.3],
@@ -140,3 +140,59 @@ def test_testbed_counts_separate_lost_calls_from_refusals(tmp_path):
     counts = runner.testbed_counts(tmp_path)
     # the retried call's event names its transport code but is not a failure
     assert counts == {"slot_restarts": 1, "rpc_retries": 1, "rpc_failures": 1}
+
+
+def test_latency_above_the_measured_round_trip_must_be_labelled_stress(tmp_path):
+    with pytest.raises(ValueError, match="stress"):
+        experiment(
+            tmp_path,
+            latencies=[{"name": "L1", "control_latency_ms": {"*": 1000}}],
+        )
+    loaded = experiment(tmp_path)
+    regimes = [lat.regime(loaded.measured_rtt_ms) for lat in loaded.latencies]
+    assert regimes == ["measured", "stress"]
+    # a netem profile counts with the round trip it adds (twice its delay)
+    assert runner.Latency("lan", {"*": 2}).regime(4.0, netem_rtt_ms=6.0) == "stress"
+
+
+def test_netem_profiles_above_the_measured_round_trip_must_be_labelled_stress():
+    netem.check_profiles(
+        {"profiles": {"lan": {"delay_ms": 1}, "stress-x": {"delay_ms": 50}}}
+    )
+    with pytest.raises(ValueError, match="stress"):
+        netem.check_profiles({"profiles": {"wan-50": {"delay_ms": 50}}})
+
+
+def test_ranked_root_mode_runs_alongside_with_its_own_run_ids(tmp_path):
+    cells = runner.grid(experiment(tmp_path, root_modes=["given", "ranked"]))
+    ranked = [c for c in cells if c.root_mode == "ranked"]
+    assert len(ranked) == len([c for c in cells if c.alert]) // 2
+    assert all(".ranked__" in c.run_id for c in ranked)
+    given = next(c for c in cells if c.root_mode == "given" and c.alert)
+    assert ".given" not in given.run_id  # main-run ids are unchanged
+    with pytest.raises(ValueError, match="root mode"):
+        experiment(tmp_path, root_modes=["guess"])
+
+
+def test_the_symptom_is_the_latest_reader_that_consumed_the_item(mini_spec):
+    trigger = S.AlertTrigger("consume", item="X@v1", count=1, delay_s=0.0)
+    watch = runner.TriggerWatch(mini_spec, trigger, t0_ms=0, time_scale=1.0)
+    assert watch.symptom() is None
+    watch.observe(
+        {
+            "kind": "consume",
+            "task": "B.t0",
+            "inv_kind": "task",
+            "t_ms": 5,
+            "item": "X@v1",
+            "rt": "rt-b",
+        }
+    )
+    assert watch.symptom() == "rt-b"
+
+
+def test_new_strategies_are_accepted_by_name(tmp_path):
+    loaded = experiment(
+        tmp_path, strategies=["trace_and_quarantine", "sink_guard", "none"]
+    )
+    assert loaded.strategies == ("trace_and_quarantine", "sink_guard", "none")

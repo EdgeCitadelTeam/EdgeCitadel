@@ -482,3 +482,18 @@ async def test_runaway_task_keeps_actuating_while_it_computes(tmp_path):
     assert 12 <= len(runaway) <= 17
     assert {r["class"] for r in runaway} == {"act_b"}
     assert all(r["labels"] == [fault_label("lease_runaway", "B.t0")] for r in runaway)
+
+
+def test_effects_go_through_the_configured_path(mini_spec, tmp_path):
+    services = LocalServices(tmp_path)
+    plan = S.compile_plan(mini_spec, run_id="run-1", time_scale=SCALE)
+    assert plan["effect_path"] == "authorize_perform"
+    worker = DetWorker(plan, "b1", services, node="edge-2")  # type: ignore[arg-type]
+    assert worker.effect_path.name == "authorize_perform"
+    gateway = S.compile_plan(
+        mini_spec, run_id="run-1", time_scale=SCALE, effect_path="gateway_execute"
+    )
+    # Until agentd's effect.execute lands (m4/design) the path is refused up
+    # front instead of failing every effect of a run.
+    with pytest.raises(ValueError, match="not available"):
+        DetWorker(gateway, "b1", services, node="edge-2")  # type: ignore[arg-type]

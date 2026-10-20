@@ -56,16 +56,13 @@ from .content import (
     labels_of,
     rogue_draw,
 )
+from .effects import make_effect_path
 from .services import ServicesClient, ServicesUnavailable
 
 log = logging.getLogger(__name__)
 PROTOCOL = "det-worker.v1"
 SKILL_ID = "det.task"
-RUNTIME_EFFECT_CLASS = "device.command"
 READY_POLL_SECONDS = 0.05
-HELD_RETRY_SECONDS = 0.1
-# A scheduled effect due sooner than this is authorized as an immediate one.
-IMMEDIATE_EFFECT_MS = 20
 # Transport failures of one RPC (agentd's client messages), retried in place.
 TRANSPORT_ERRORS = ("agentd is unavailable", "agentd closed the connection")
 RPC_ATTEMPTS = 4
@@ -156,6 +153,9 @@ class DetWorker:
         self.fault = plan["fault"]
         self.rogue = plan["rogue"]
         self.scope = plan["agents"][agent]
+        self.effect_path = make_effect_path(
+            str(plan.get("effect_path", "authorize_perform"))
+        )
 
     # -- entry point ----------------------------------------------------------
     async def handle(
@@ -701,8 +701,8 @@ class DetWorker:
             await asyncio.sleep(READY_POLL_SECONDS)
 
     async def _effect_op(self, inv: Invocation, op: Op, context: Any) -> None:
+        """One effect through the configured path (``det_worker.effects``)."""
         p = op.params
-        effect_request = stable_uuid(self.run_id, inv.rt_task, op.key, "effect")
         record = {
             "run": self.run_id,
             "effect_id": p["effect_id"],
@@ -717,56 +717,14 @@ class DetWorker:
             "labels": list(p["content"]["labels"]),
         }
         p.setdefault("due_ms", now_ms() + p["delay"] * self.scale * 1000)
-        if "requested" not in p:
-            await self._ledger({**record, "phase": "attempted"})
-            scheduled = p["due_ms"] - now_ms() > IMMEDIATE_EFFECT_MS
-            reply = await self._call(
-                context,
-                "effect.authorize",
-                schema_version=1,
-                request_id=effect_request,
-                binding_id=context.trace.binding_id,
-                effect_class=RUNTIME_EFFECT_CLASS,
-                target=p["target"],
-                tool_call_id=None,
-                scheduled_at_ms=int(p["due_ms"]) if scheduled else None,
-            )
-            if reply.get("status") != "ok":
-                op.state = "denied"
-                await self._ledger(
-                    {**record, "phase": "denied", "code": reply.get("code")}
-                )
-                return
-            p["requested"] = reply["result"]["state"]
-        if p["requested"] == "committed":
-            await self._ledger({**record, "phase": "committed"})
-            op.state = "done"
-            return
-        await self._sleep_until(p["due_ms"])
-        held = False
-        while True:
-            reply = await self._call(
-                context,
-                "effect.commit",
-                schema_version=1,
-                request_id=stable_uuid(self.run_id, inv.rt_task, op.key, "commit"),
-                binding_id=context.trace.binding_id,
-                effect_id=effect_request,
-            )
-            if reply.get("status") == "ok":
-                await self._ledger({**record, "phase": "committed"})
-                op.state = "done"
-                return
-            if reply.get("code") != "effect_held":
-                op.state = "denied"
-                await self._ledger(
-                    {**record, "phase": "denied", "code": reply.get("code")}
-                )
-                return
-            if not held:
-                held = True
-                await self._ledger({**record, "phase": "held", "code": "effect_held"})
-            await asyncio.sleep(HELD_RETRY_SECONDS)
+        await self.effect_path.run(
+            self,
+            context,
+            op,
+            record,
+            request_id=stable_uuid(self.run_id, inv.rt_task, op.key, "effect"),
+            commit_request_id=stable_uuid(self.run_id, inv.rt_task, op.key, "commit"),
+        )
 
     async def _runaway_op(self, inv: Invocation, op: Op, context: Any) -> None:
         """Lease runaway: undeclared in-scope effects at a fixed rate while computing."""
@@ -803,6 +761,19 @@ class DetWorker:
     # -- plumbing -------------------------------------------------------------------
     async def _ledger(self, record: Mapping[str, Any]) -> None:
         await asyncio.to_thread(self.services.ledger, record)
+
+    # The effect path's port (det_worker.effects.EffectPort).
+    async def call(self, context: Any, operation: str, **params: Any) -> dict[str, Any]:
+        return await self._call(context, operation, **params)
+
+    async def ledger(self, record: Mapping[str, Any]) -> None:
+        await self._ledger(record)
+
+    async def sleep_until(self, t_ms: float) -> None:
+        await self._sleep_until(t_ms)
+
+    def now_ms(self) -> int:
+        return now_ms()
 
     async def emit(self, kind: str, inv: Invocation, **data: Any) -> None:
         record = {

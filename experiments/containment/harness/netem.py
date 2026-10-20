@@ -6,7 +6,7 @@ Profiles live in the stack file under ``netem``::
     "apply": false,
     "interface": {"jim-eq": "tailscale0", ...},
     "ports": [14222, 18900],
-    "profiles": {"wan-50": {"delay_ms": 50, "jitter_ms": 10, "distribution": "normal"}}
+    "profiles": {"stress-wan-50": {"delay_ms": 50, "jitter_ms": 10, "distribution": "normal"}}
   }
 
 A profile delays only packets to or from the experiment's ports (a ``prio``
@@ -28,6 +28,30 @@ from typing import Any
 HANDLE = "1:"
 BAND = "1:3"
 PRIOMAP = " ".join(["1"] * 16)
+# Upper end of the measured LAN round trip between the testbed's sites
+# (1.5-4 ms, jim-eq / NetSys-Endurance / NetSys-Cluster). Every host delays
+# its own egress, so a profile adds twice its delay to a round trip; one that
+# adds more than this is a stress profile and must be named as one.
+MEASURED_RTT_MS = 4.0
+
+
+def added_rtt_ms(netem: Mapping[str, Any], profile: str | None) -> float:
+    """The round trip a profile adds (0 for none or a placeholder)."""
+    spec = netem.get("profiles", {}).get(profile) if profile else None
+    if not spec or spec.get("delay_ms") is None:
+        return 0.0
+    return 2 * float(spec["delay_ms"])
+
+
+def check_profiles(
+    netem: Mapping[str, Any], measured_rtt_ms: float = MEASURED_RTT_MS
+) -> None:
+    for name in netem.get("profiles", {}):
+        if added_rtt_ms(netem, name) > measured_rtt_ms and "stress" not in name.lower():
+            raise ValueError(
+                f"netem profile '{name}' adds more than the measured LAN round trip "
+                f"({measured_rtt_ms:g} ms): label it as a stress profile"
+            )
 
 
 def load_profiles(stack_file: str | Path) -> dict[str, Any]:
