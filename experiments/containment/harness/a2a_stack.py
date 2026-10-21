@@ -8,6 +8,9 @@ loop, alert trigger, collected files and scoring are the EdgeCitadel ones:
   each with the compiled plan and the addresses of all agents;
 - ``submit`` sends a root task to the root agent's server; the A2A task id is
   the invocation id the workers' events carry, so ``attempt_of`` is identity;
+  ``schedule`` submits a node's external requests at their times from the
+  controller (EdgeCitadel's ``nodectl schedule`` needs agentd) and marks each
+  ``submitted`` or ``refused`` with the services, as that scheduler does;
 - ``post_alert`` hands the operator alert to the native controller
   (``harness.a2a_control``), which writes the monitor-schema decision log
   where the runner collects it; ``monitor_status`` reports that controller.
@@ -21,6 +24,8 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -42,6 +47,8 @@ class A2ARunStack(RunStack):
         self.loop = LoopThread(f"a2a-{run_id[:24]}")
         self.peers: Peers | None = None
         self.controller: NativeController | None = None
+        self._stop_schedules = threading.Event()
+        self._schedules: list[threading.Thread] = []
 
     def up(
         self,
@@ -149,6 +156,29 @@ class A2ARunStack(RunStack):
         )
         return task.id
 
+    def schedule(self, node: str, entries: list[dict[str, Any]]) -> None:
+        """Submit the node's external requests at their times (wall clock, as
+        ``nodectl schedule``); each is marked ``submitted`` or ``refused``."""
+
+        def run() -> None:
+            for entry in sorted(entries, key=lambda e: (e["at_ms"], e["task"])):
+                if self._stop_schedules.wait(
+                    max(0.0, entry["at_ms"] / 1000 - time.time())
+                ):
+                    return
+                mark: dict[str, Any] = {"task": entry["task"], "at_ms": entry["at_ms"]}
+                try:
+                    rt = self.submit(node, entry["recipient"], entry["body"])
+                except Exception as error:  # noqa: BLE001 - recorded as refused
+                    mark.update(name="refused", code=f"a2a: {error}"[:200])
+                else:
+                    mark.update(name="submitted", rt=rt)
+                self.services("POST", "/mark", mark)
+
+        thread = threading.Thread(target=run, name=f"requests-{node}", daemon=True)
+        thread.start()
+        self._schedules.append(thread)
+
     def attempt_of(self, task_id: str) -> str | None:
         return task_id
 
@@ -160,8 +190,11 @@ class A2ARunStack(RunStack):
         return self.controller.status() if self.controller else {}
 
     def down(self) -> list[str]:
-        """Stop the operator first (its sweeps would otherwise see servers go
-        away), then every process."""
+        """Stop the request schedules and the operator first (its sweeps would
+        otherwise see servers go away), then every process."""
+        self._stop_schedules.set()
+        for thread in self._schedules:
+            thread.join(timeout=10)
         if self.controller is not None:
             self.controller.stop()
         if self.peers is not None:

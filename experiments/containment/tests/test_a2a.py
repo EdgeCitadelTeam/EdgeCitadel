@@ -147,3 +147,52 @@ def test_a_cancelled_invocation_can_neither_dispatch_nor_act():
     for operation in ("trace.dispatch", "effect.execute", "trace.use"):
         reply = invocation.client.call(operation)
         assert reply == {"status": "error", "code": a2a_agent.CANCELLED}
+
+
+def test_the_a2a_stack_submits_external_requests_at_their_times():
+    """The runner's per-node request schedule (EdgeCitadel's nodectl schedule
+    needs agentd): each request is submitted to its agent's server at its time
+    and marked submitted (the A2A task id is the invocation id) or refused."""
+    import threading
+    import time
+
+    from harness.a2a_stack import A2ARunStack
+
+    stack = object.__new__(A2ARunStack)
+    stack._stop_schedules, stack._schedules = threading.Event(), []
+    marks, sent = [], []
+
+    def submit(node, recipient, body):
+        sent.append((node, recipient, body["task"], time.time()))
+        if body["task"] == "Q2":
+            raise RuntimeError("server gone")
+        return f"rt-{body['task']}"
+
+    stack.submit = submit
+    stack.services = lambda method, path, data: marks.append((method, path, data))
+    now_ms = int(time.time() * 1000)
+    stack.schedule(
+        "core",
+        [
+            {
+                "at_ms": now_ms + 200,
+                "recipient": "assistant",
+                "task": "Q2",
+                "body": {"task": "Q2"},
+            },
+            {
+                "at_ms": now_ms + 100,
+                "recipient": "assistant",
+                "task": "Q1",
+                "body": {"task": "Q1"},
+            },
+        ],
+    )
+    stack._schedules[0].join(timeout=5)
+    assert [s[2] for s in sent] == ["Q1", "Q2"]
+    assert sent[0][3] >= (now_ms + 100) / 1000
+    assert [(m[1], m[2]["name"], m[2]["task"]) for m in marks] == [
+        ("/mark", "submitted", "Q1"),
+        ("/mark", "refused", "Q2"),
+    ]
+    assert marks[0][2]["rt"] == "rt-Q1" and "server gone" in marks[1][2]["code"]
