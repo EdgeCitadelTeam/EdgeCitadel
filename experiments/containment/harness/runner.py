@@ -767,6 +767,10 @@ def run_experiment(
     for i, cell in enumerate(grid(experiment)):
         if limit is not None and i >= limit:
             break
+        if (out / "runs" / cell.run_id / "run.json").exists():
+            # Finished by an earlier invocation, its retries included.
+            done.append(out / "runs" / cell.run_id)
+            continue
         started = time.monotonic()
         for attempt in range(experiment.infra_retries + 1):
             run_dir = run_cell(stack_config, experiment, cell, out)

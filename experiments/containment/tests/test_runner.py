@@ -258,3 +258,33 @@ def test_the_lab_grids_have_their_planned_sizes():
     # 2 alerts x 9 strategies under the shared profile.
     assert sizes["lab-smoke"] == 7 * (1 + 2 * 10) + 2 * 9
     assert sizes["lab-pilot"] == 3 * sizes["lab-smoke"]
+
+
+def test_a_resumed_experiment_skips_finished_runs_and_their_retries(
+    tmp_path, monkeypatch
+):
+    loaded = experiment(tmp_path, repetitions=1, rogue_rates=[0.0])
+    cells = runner.grid(loaded)[:3]
+    out = tmp_path / "out"
+    # The first cell finished earlier, after a testbed retry it could not fix.
+    finished = out / "runs" / cells[0].run_id
+    finished.mkdir(parents=True)
+    meta = {"status": "complete", "errors": [], "attempts": 2, "slot_restarts": 3}
+    (finished / "run.json").write_text(json.dumps(meta))
+    (out / "runs" / f"{cells[0].run_id}.infra0").mkdir()
+    ran = []
+
+    def run_cell(stack_config, experiment_, cell, out_):
+        ran.append(cell.run_id)
+        run_dir = out_ / "runs" / cell.run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "run.json").write_text(
+            json.dumps({"status": "complete", "errors": [], "t0_ms": 1})
+        )
+        return run_dir
+
+    monkeypatch.setattr(runner, "run_cell", run_cell)
+    done = runner.run_experiment(None, loaded, out, limit=3)  # type: ignore[arg-type]
+    assert ran == [c.run_id for c in cells[1:]]
+    assert len(done) == 3
+    assert json.loads((finished / "run.json").read_text())["attempts"] == 2
