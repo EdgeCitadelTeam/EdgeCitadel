@@ -218,7 +218,7 @@ def test_v7_journal_survives_binding_migration_and_injected_failure(configured):
         assert db.execute("SELECT * FROM trace_spool").fetchall() == spool
     migrated = AgentdStore(path)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 32
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 33
         assert (
             migrated._connection.execute(
                 "SELECT COUNT(*) FROM trace_bindings"

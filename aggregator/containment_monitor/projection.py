@@ -550,33 +550,40 @@ class _Builder:
             if ver(result.version_id) in graph.taint:
                 cg.sources.add(name)
         for effect in graph.effects.values():
-            # A scheduled effect commits at its time unless agentd refuses the
-            # commit: an effect hold keeps it requested; a hold on the issuing
-            # task denies it (and pauses the issuer). Either removes the flow, so
-            # the edge is a series of the two (immediate effects are decided at
-            # request time and are never pending). Once the issuing invocation
-            # ended, its binding is closed and agentd can no longer commit it.
+            # The effect gateway keeps a scheduled effect and performs it at its
+            # time unless its re-check then refuses it: an effect hold cancels
+            # it; while the issuing invocation is live, a hold on its task denies
+            # it too (and pauses the issuer). Either removes the flow, so the edge
+            # is a series of the two. The gateway performs it even after the
+            # issuer ended; then only the effect hold is modelled. Immediate
+            # effects are decided at request time and are never pending.
             issuer = units.get(effect.attempt_id)
-            if issuer is None:
-                continue
             pending = cg.node(f"pe:{effect.effect_id}", kind="pending_effect")
-            gated = cg.node(f"pg:{effect.effect_id}", kind="pending_effect")
             target = cg.node(f"fx:{effect.effect_id}", kind="effect")
-            cg.edge(
-                pending,
-                gated,
-                "effect",
-                fn=("fixed", effect.scheduled_ms),
-                action=self.allowed(hold_effect(effect.node_id, effect.effect_id)),
-            )
-            cg.edge(
-                gated,
-                target,
-                "effect",
-                action=self.allowed(hold_task(issuer.node, issuer.task_id))
-                if issuer.node and issuer.task_id
-                else None,
-            )
+            hold = self.allowed(hold_effect(effect.node_id, effect.effect_id))
+            if issuer is None or not (issuer.node and issuer.task_id):
+                cg.edge(
+                    pending,
+                    target,
+                    "effect",
+                    fn=("fixed", effect.scheduled_ms),
+                    action=hold,
+                )
+            else:
+                gated = cg.node(f"pg:{effect.effect_id}", kind="pending_effect")
+                cg.edge(
+                    pending,
+                    gated,
+                    "effect",
+                    fn=("fixed", effect.scheduled_ms),
+                    action=hold,
+                )
+                cg.edge(
+                    gated,
+                    target,
+                    "effect",
+                    action=self.allowed(hold_task(issuer.node, issuer.task_id)),
+                )
             if effect.protected:
                 cg.sinks.add(target)
             if fx(effect.effect_id) in graph.taint:

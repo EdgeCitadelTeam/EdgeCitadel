@@ -14,9 +14,10 @@ Topology (all on localhost, every component its own process):
 Workflow: kipp asks tars for an analysis and case for independent work. tars
 starts the healthy ``a3``, has ``a1`` produce a shared artifact, passes it to
 the sibling ``a2`` and returns a2's analysis; kipp fans it out to case, whose
-``b1`` schedules an actuator command (``effect.authorize`` with
-``scheduled_at_ms``, later ``effect.commit``). ``a3`` and ``b2`` never touch the
-artifact. A validator then reports the artifact's version as failed:
+``b1`` schedules an actuator command (``effect.execute`` with
+``scheduled_at_ms``): endurance's effect gateway keeps it and, when it is due,
+re-checks it and performs it by posting to the actuator ledger. ``a3`` and ``b2``
+never touch the artifact. A validator then reports the artifact's version as failed:
 
 - ``early``: while a2 holds the artifact and nothing has left team A;
 - ``late``: after b1 scheduled its actuator command.
@@ -24,7 +25,8 @@ artifact. A validator then reports the artifact's version as failed:
 The run writes a JSON summary: the monitor's decision (root cause, actions with
 t_alert, t_decision, t_sent, t_applied, t_confirmed and releases), what each
 node enforced (its own ``containment.list``), whether the actuator ran (its own
-ledger), which healthy tasks completed and the controller leases. The opt-in
+ledger, written by an HTTP endpoint the harness runs, never by an agent), which
+healthy tasks completed and the controller leases. The opt-in
 ``aggregator/tests/test_containment_e2e.py`` checks Firebreak's properties on it.
 Every agentd node enforces the fail-closed controller lease, renewed by the
 monitor. agentd runs with the ordinary-store test entrypoint, not the
@@ -134,11 +136,46 @@ class Node:
         return db
 
 
+class ActuatorLedger:
+    """The scenario's independent evidence of what the actuator received: an
+    HTTP endpoint (the gateway's ``http`` adapter target) appending each POST."""
+
+    def __init__(self, path: Path):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        lock = threading.Lock()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - http.server API
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                with lock, path.open("a") as ledger:
+                    ledger.write(
+                        json.dumps({**body, "received_at_ms": now_ms()}) + "\n"
+                    )
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args) -> None:
+                return None
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/actuator"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
 @dataclass
 class Deployment:
     run_dir: Path
     strategy: str
     processes: list[tuple[str, subprocess.Popen]] = field(default_factory=list)
+    ledger: ActuatorLedger | None = None
     nodes: dict[str, Node] = field(default_factory=dict)
     admin_token: str = field(default_factory=lambda: secrets.token_hex(24))
     nats_token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
@@ -167,6 +204,8 @@ class Deployment:
                 raise RuntimeError(f"{name} exited with {process.returncode}")
 
     def stop(self) -> None:
+        if self.ledger is not None:
+            self.ledger.close()
         for _, process in reversed(self.processes):
             if process.poll() is None:
                 process.terminate()
@@ -180,6 +219,9 @@ class Deployment:
 
     # -- bring-up ------------------------------------------------------------------
     def start(self) -> None:
+        self.ledger = ActuatorLedger(self.run_dir / "actuator-ledger.jsonl")
+        adapters = self.run_dir / "effect-adapters.json"
+        adapters.write_text(json.dumps({"http": {"ledger_url": self.ledger.url}}))
         self.start_nats()
         self.start_core()
         # One node at a time: each agentd adds its agents' subjects to the shared
@@ -379,6 +421,9 @@ class Deployment:
             {
                 "EDGECITADEL_TRACE_SYNC": "1",
                 "EDGECITADEL_CONTROLLER_LEASE_MS": str(CONTROLLER_LEASE_MS),
+                "EDGECITADEL_EFFECT_ADAPTERS": str(
+                    self.run_dir / "effect-adapters.json"
+                ),
             },
         )
         wait(lambda: node.socket.exists(), 30, f"agentd on {node_id}")

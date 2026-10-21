@@ -1437,53 +1437,87 @@ a schema 31 false `execution_context` conflict on duplicate delivery.
 
 ### Effect gateway
 
-A harness calls `effect.authorize` (`schemas/trace-effect-request.v1.json`) before
-each external effect and performs it only on an `ok` reply:
+The gateway decides every external effect of a bound invocation and, for
+registered effects, performs it itself. Requests are bound to the invocation by
+its execution binding (Managed Agents, and native connectors with
+`edgecitadel_trace`); only an `accepted` or `running` task may ask. The target is
+exact; the harness classifies it. agentd checks, and the first failure decides
+the error code: execution hold (`execution_held`), egress hold of the task or
+binding (`egress_held`), an `authority`, `egress` or `credential` revocation
+applying to the invocation (`authority_revoked`), the controller lease when
+configured (`controller_lease_expired`), the effect scope, which is the
+connector's effect grant narrowed by the inherited `effect_scope`
+(`outside_effect_scope`), effect-rule ingress filters on the invocation's
+authorities (`ingress_filtered`), and the lease's expiry and remaining effects
+(`lease_exceeded`). A committed effect is charged to the task's lease. A retry
+with the same `request_id` returns the stored decision and is charged and
+performed once.
+
+**`effect.execute` (fenced at commit).**
+`schemas/trace-effect-execute-request.v1.json`:
 
 ```json
-{"schema_version":1,"request_id":"<uuid4>","binding_id":"<uuid4>",
- "effect_class":"fs.write","target":"workspace/notes.md","tool_call_id":"<harness id>|null",
- "scheduled_at_ms":null}
+{"schema_version":1,"request_id":"<uuid4>","binding_id":"<uuid4>","adapter":"homeassistant",
+ "effect_class":"device.command","target":"light.turn_on/light.kitchen",
+ "data":{"brightness":80},"tool_call_id":null,"scheduled_at_ms":null}
 ```
 
-The request is bound to the invocation by its execution binding (Managed Agents,
-and native connectors with `edgecitadel_trace`), and only an `accepted` or
-`running` task may authorize. The target is exact; the harness classifies it.
-In one transaction agentd checks, and the first failure decides the error code:
-execution hold (`execution_held`), egress hold of the task or binding
-(`egress_held`), an `authority`, `egress` or `credential` revocation applying to
-the invocation (`authority_revoked`), the controller lease when configured
-(`controller_lease_expired`), the effect scope, which is the connector's effect
-grant narrowed by the inherited `effect_scope` (`outside_effect_scope`),
-effect-rule ingress filters on the invocation's authorities (`ingress_filtered`),
-and the lease's expiry and remaining effects (`lease_exceeded`). A committed
-effect is charged to the task's lease, and the reply returns
-`{event_id, state: "committed", effects_remaining, lease_expires_at_ms}`. A retry
-with the same `request_id` returns the stored decision and is charged once.
+The gateway re-checks admission and records `effect/committed` in one
+transaction under the node's control lock, the lock every containment command
+takes, immediately before it performs the effect through the adapter. A command
+confirmed before that transaction wins (the effect is denied); an effect
+committed before a command took effect is journaled at or below the position
+the command's confirmation reports, and while its adapter call is still running
+the confirmation lists it in `effects_in_flight`. The reply is
+`{event_id, state: "committed", effects_remaining, lease_expires_at_ms,
+adapter, outcome: {performed, code, http_status}}`; a retry returns the stored
+receipt with `outcome: null`. Adapters are configured per node with
+`EDGECITADEL_EFFECT_ADAPTERS`, a JSON file that holds no secret:
+
+| Adapter | Settings | Effect |
+|---|---|---|
+| `homeassistant` | `base_url` (default `http://127.0.0.1:8123`), `token_file` (long-lived access token; regular file), `timeout_ms` | `device.command` only; target `<domain>.<service>/<entity_id>`; POST `/api/services/<domain>/<service>` with `data` plus that `entity_id` (`data` cannot name another entity) |
+| `http` | `ledger_url`, `timeout_ms` | any class and target; POST of the committed effect's record (`effect_id`, node, agent, task, attempt, class, target, `scheduled_at_ms`, `committed_at_ms`, `data`) to the ledger |
+
+The gateway holds the credential: the worker never sees it, and no token, URL
+or response body is logged or returned; requests bypass environment proxies.
+Without the adapter the request fails `effect_adapter_unavailable`; a target
+the adapter cannot perform is `invalid_metadata`. Adapter failures after the
+commit are reported in `outcome` (`adapter_rejected` with the HTTP status,
+`adapter_timeout`, `adapter_unreachable`); the effect stays committed.
+
+**Scheduled effects.** With `scheduled_at_ms` in the future, `effect.execute`
+runs the checks and, if they pass, records only `effect/requested` and replies
+`state: "scheduled"`; nothing is charged. The gateway keeps the effect
+(`scheduled_effects`, its data encrypted with the task content key) and, when it
+is due, re-checks it under the control lock, commits and performs it, also after
+the requesting invocation ended. A controller holds it by its ID
+(`hold {kind: effect, object_id: effect_id}`): if the hold is in place when it is
+due, the effect is denied with reason `effect_held` and never performed later;
+released before, it runs on time. `scheduled_effects.outcome_json` keeps the
+adapter outcome.
+
+**`effect.authorize` (not fenced).** `schemas/trace-effect-request.v1.json`
+(`effect.execute` without `adapter`, `data` and `scheduled_at_ms`). For effects
+only the harness can perform (bash, a file in its sandbox): the decision is
+immediate and the harness acts after an `ok` reply with `state: "committed"`.
+Nothing at agentd stops a harness from acting after a later containment command
+or without asking; the paper treats this as a stated limitation and measures
+bypass at the destination (ledger). Pi authorizes its tools this way.
 
 Each effect records `effect/requested` and then `effect/committed` or
 `effect/denied` in the invocation's run, the decision citing the request in
-`causes`. Their attributes (`effect_version: 1`) are `effect_id` (the
-authorizing request ID), `effect_class`, `target`, `tool_call_id`,
-`scheduled_at_ms` (`null` for an immediate effect), and for the decision
-`policy`, `policy_version`, `reason` and `effects_remaining`. Lease and
-controller-lease denials also record `containment/alert`. `committed` means
-agentd released the effect to the harness, not that the harness performed it.
+`causes`. Their attributes (`effect_version: 2`) are `effect_id` (the request
+ID), `effect_class`, `target`, `tool_call_id`, `scheduled_at_ms` (`null` for an
+immediate effect), `adapter` (`null` for `effect.authorize`), `committed_at_ms`
+(the commit time, on `committed`), and for the decision `policy`,
+`policy_version`, `reason` and `effects_remaining`. Lease and controller-lease
+denials also record `containment/alert`. `committed` means agentd committed the
+effect: performed by its adapter for `effect.execute`, released to the harness
+for `effect.authorize`.
 
-**Scheduled effects and effect holds.** With `scheduled_at_ms` in the future,
-`effect.authorize` runs the same checks and, if they pass, records only
-`effect/requested` and replies `state: "scheduled"`; nothing is charged. When
-the effect is due, the harness sends `effect.commit`
-(`schemas/trace-effect-commit-request.v1.json`,
-`{schema_version, request_id, binding_id, effect_id}`). The checks run again then,
-and the effect is committed (charged) or denied. Between request and commit a
-controller can hold the effect by its ID (`hold {kind: effect, object_id:
-effect_id}`): a commit while held is refused with `effect_held`, records no event
-and stores no receipt, so the same commit request succeeds after release. An
-immediate effect is decided in one step and cannot be held individually; hold
-its task or egress instead. A committed or denied effect cannot be committed
-again (`invalid_metadata`). No harness schedules effects yet; Pi authorizes
-immediate effects only.
+Schema 33 adds the gateway columns to `scheduled_effects`; effects a harness had
+scheduled with the removed `effect.commit` are marked denied by the migration.
 
 **Fail-closed controller lease (off by default).** With
 `EDGECITADEL_CONTROLLER_LEASE_MS` set in the agentd environment, effects are
@@ -1494,8 +1528,10 @@ replayed renewal cannot keep the lease alive. Only effects are gated; dispatch
 and task execution continue. Whether losing the controller should fail closed is
 an open design decision, which is why the mechanism is opt-in.
 
-The gateway is cooperative: it constrains harnesses that call it. It is not an
-OS sandbox, and a harness with unrestricted tools can still act without asking.
+The gateway is cooperative for `effect.authorize`: it constrains harnesses that
+call it. It is not an OS sandbox, and a harness with unrestricted tools can
+still act without asking. `effect.execute` keeps the target's credential in
+agentd, so a worker without its own credential can only act through the gateway.
 
 ### Containment control protocol
 
@@ -1523,7 +1559,7 @@ command_id?}` and issues the same command with a five-minute expiry.
 | `hold` / `release` | `{kind: task, object_id}` | pause a task (reversible) |
 | | `{kind: egress, object_id}` | egress block of a task, or of a task-less native root by its binding ID |
 | | `{kind: transport, object_id}` | withhold one outbox message |
-| | `{kind: effect, object_id: effect_id}` | keep a scheduled effect uncommitted |
+| | `{kind: effect, object_id: effect_id}` | a scheduled effect held when due is cancelled |
 | `revoke` | `{kind: authority, object_id: task}` | a delegation and all its descendants |
 | | `{kind: egress, object_id: task or binding}` | one invocation's new dispatches and effects; it may still complete |
 | | `{kind: credential, object_id: agent}` | the agent's dispatches, effects, `task.create`, and publication of everything it emits |
@@ -1572,6 +1608,7 @@ fence without advancing state.
    "outbound":{"held":1,"pending":0,"in_flight":["<message uuid>"],"published":0}}}
 ```
 
+
 `status` is `applied` or `rejected` with a stable `code` (the containment error
 codes above, `task_not_found`, `restore_hold`, `task_terminal`, `invalid_authority`,
 `invalid_filter_target`). `applied_at_ms` is when the gates took effect at this
@@ -1594,13 +1631,18 @@ node. `enforcement` reports what was enforced at that instant:
 - `local_tasks` (revoke): local non-terminal tasks under the revoked authority.
 - `effect_state` (effect hold/release): `scheduled`, `committed`, `denied`, or
   `null` when the effect is not (yet) known here.
+- `effects_in_flight`: present when the gateway had committed effects whose
+  adapter call was still running; they cannot be recalled.
 - `released_holds` (cancel); `controller_lease_until_ms` and
   `controller_lease_enforced` (renew).
 
-The outbox and the command executor serialize on one publication lock: the
-outbox rechecks a message and registers it as in flight under the lock, and a
-command applies its decision and snapshots the in-flight set under it, so a
-message is either in `in_flight` or withheld. A paused handler is interrupted by
+The outbox, the effect gateway's commit step and the command executor
+serialize on one control lock: the outbox rechecks a message and registers it
+as in flight under the lock, the gateway re-checks and commits an effect under
+it, and a command applies its decision and snapshots both in-flight sets under
+it, so a message is either in `in_flight` or withheld and a gateway effect is
+either committed before the command (and reported in `effects_in_flight` while
+its adapter call runs) or denied. A paused handler is interrupted by
 its runtime within the runtime's watch interval (0.5 s) after `applied_at_ms`;
 its gates hold from `applied_at_ms`.
 

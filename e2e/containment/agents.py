@@ -9,10 +9,11 @@ wait for a gate file to exist. Every identifier a handler creates is derived
 from its task, so a handler resumed after a containment pause repeats the same
 dispatch, effect and commit requests and agentd answers them from its receipts.
 
-The simulated actuator is ``b1``'s scheduled ``device.command``: the worker
-performs it (appends to the actuator ledger) only after ``effect.commit``
-returned ``committed``. The ledger is the scenario's independent evidence of
-what happened, separate from agentd's own records.
+The simulated actuator is ``b1``'s scheduled ``device.command``, executed by the
+effect gateway: b1 asks ``effect.execute`` with ``scheduled_at_ms`` and returns;
+endurance's gateway performs it when due, through its ``http`` adapter, by
+posting to the harness's actuator ledger. The ledger is the scenario's
+independent evidence of what happened, separate from agentd's own records.
 
     EDGECITADEL_STATE_DIR=<node state> EDGECITADEL_CONNECTOR_ID=managed-<agent> \\
       python -m e2e.containment.agents --agent tars --run-dir <run>
@@ -49,7 +50,6 @@ class Scenario:
         self.agent = agent
         self.gates = run_dir / "gates"
         self.marks = run_dir / "marks"
-        self.ledger = run_dir / "actuator-ledger.jsonl"
         self.due: dict[str, int] = {}  # task -> scheduled effect time, across resumes
 
     async def gate(self, name: str) -> None:
@@ -166,45 +166,22 @@ class Scenario:
         )
         reply = await self.call(
             context,
-            "effect.authorize",
+            "effect.execute",
             schema_version=1,
             request_id=effect_id,
             binding_id=context.trace.binding_id,
+            adapter="http",
             effect_class="device.command",
             target="actuator/1",
+            data={"command": request["analysis"][:256]},
             tool_call_id=None,
             scheduled_at_ms=due,
         )
         if reply.get("status") != "ok":
             return {"outcome": f"effect refused at request: {reply.get('code')}"}
         self.mark("b1-scheduled", effect_id=effect_id, due=due)
-        await asyncio.sleep(max(0, due - time.time_ns() // 1_000_000) / 1000)
-        while True:
-            # A held commit stores no receipt: the same request may succeed later.
-            commit = await self.call(
-                context,
-                "effect.commit",
-                schema_version=1,
-                request_id=stable_id(task_id, "actuate", "commit"),
-                binding_id=context.trace.binding_id,
-                effect_id=effect_id,
-            )
-            if commit.get("status") == "ok":
-                with self.ledger.open("a") as ledger:
-                    ledger.write(
-                        json.dumps(
-                            {
-                                "effect_id": effect_id,
-                                "command": request["analysis"],
-                                "performed_at_ms": time.time_ns() // 1_000_000,
-                            }
-                        )
-                        + "\n"
-                    )
-                return {"outcome": "actuator commanded"}
-            if commit.get("code") != "effect_held":
-                return {"outcome": f"effect refused at commit: {commit.get('code')}"}
-            await asyncio.sleep(0.5)  # held: the same effect may commit on release
+        # The gateway owns the command now and performs it when it is due.
+        return {"outcome": "actuator command scheduled"}
 
     async def b2(self, envelope: dict, context) -> dict:
         await self.gate("healthy-finish")

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/trace-effect-execute-request.v1.json",
+  "title": "effect.execute request v1",
+  "description": "Asks the effect gateway to perform one registered effect itself, through a configured adapter, re-checking admission under the control lock immediately before it commits. With scheduled_at_ms in the future the gateway keeps the effect and performs it at that time; an effect hold then cancels it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "binding_id",
+    "adapter",
+    "effect_class",
+    "target",
+    "data",
+    "tool_call_id",
+    "scheduled_at_ms"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "binding_id": {
+      "type": "string",
+      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "adapter": {
+      "enum": [
+        "homeassistant",
+        "http"
+      ]
+    },
+    "effect_class": {
+      "enum": [
+        "fs.write",
+        "process.exec",
+        "network.http",
+        "device.command"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]*[^\\u0000-\\u001f\\u007f*]$"
+    },
+    "data": {
+      "anyOf": [
+        {
+          "type": "object",
+          "maxProperties": 16,
+          "propertyNames": {
+            "pattern": "^[a-z_][a-z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]*$"
+              },
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tool_call_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]+$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scheduled_at_ms": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

@@ -330,7 +330,7 @@ def test_schema_31_upgrade_keeps_holds_and_extends_saved_contexts(tmp_path):
     worker.close()
     upgraded = Node(tmp_path / "worker", "worker-node")
     try:
-        assert upgraded.store.health()["schema_version"] == 32
+        assert upgraded.store.health()["schema_version"] == 33
         [hold] = upgraded.store.list_containment()["holds"]
         assert (hold["object_id"], hold["policy_version"]) == (child_id, 4)
         migrated = saved_context(upgraded, child_id)

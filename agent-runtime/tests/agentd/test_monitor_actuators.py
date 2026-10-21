@@ -256,45 +256,47 @@ def test_grant_and_admission_revocations_narrow_one_target(nodes):
 
 
 def test_a_scheduled_effect_is_held_by_its_effect_id(nodes):
+    """The gateway keeps a scheduled effect; held when due, it is cancelled."""
+    from containment_test_support import Ledger
+    from edgecitadel_agentd.effect_adapters import LedgerAdapter
+
     root, _ = nodes
     monitor = Monitor()
-    root.submit("parent")
-    _, binding = root.start("parent")
-    effect_id = str(uuid4())
-    scheduled = root.rpc(
-        "parent",
-        "effect.authorize",
-        schema_version=1,
-        request_id=effect_id,
-        binding_id=binding["binding_id"],
-        effect_class="fs.write",
-        target="workspace/report",
-        tool_call_id=None,
-        scheduled_at_ms=time.time_ns() // 1_000_000 + 60_000,
-    )
-    assert scheduled["result"]["state"] == "scheduled"
-    target = {"kind": "effect", "object_id": effect_id}
-    confirmation = monitor.call(root, "hold", target)
-    assert confirmation["enforcement"] == {
-        "gates": ["effect"],
-        "effect_state": "scheduled",
-    }
-
-    def commit():
-        return root.rpc(
+    ledger = Ledger()
+    root.store.effects.adapters = {"http": LedgerAdapter(ledger.url)}
+    try:
+        root.submit("parent")
+        _, binding = root.start("parent")
+        effect_id = str(uuid4())
+        due = time.time_ns() // 1_000_000 + 60_000
+        scheduled = root.rpc(
             "parent",
-            "effect.commit",
+            "effect.execute",
             schema_version=1,
-            request_id=str(uuid4()),
+            request_id=effect_id,
             binding_id=binding["binding_id"],
-            effect_id=effect_id,
+            adapter="http",
+            effect_class="fs.write",
+            target="workspace/report",
+            data=None,
+            tool_call_id=None,
+            scheduled_at_ms=due,
         )
-
-    assert commit()["code"] == "effect_held"
-    monitor.call(root, "release", target)
-    assert commit()["result"]["state"] == "committed"
-    phases = [e["phase"] for e in root.events("effect")]
-    assert phases == ["requested", "committed"]
+        assert scheduled["result"]["state"] == "scheduled"
+        target = {"kind": "effect", "object_id": effect_id}
+        confirmation = monitor.call(root, "hold", target)
+        assert confirmation["enforcement"] == {
+            "gates": ["effect"],
+            "effect_state": "scheduled",
+        }
+        root.store.effects.run_due(root.node_id, now_ms=due)
+        released = monitor.call(root, "release", target)
+        assert released["enforcement"]["effect_state"] == "denied"
+        assert ledger.requests == []
+        phases = [e["phase"] for e in root.events("effect")]
+        assert phases == ["requested", "denied"]
+    finally:
+        ledger.close()
 
 
 def test_rejections_use_the_monitor_error_codes(nodes):

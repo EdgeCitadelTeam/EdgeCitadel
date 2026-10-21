@@ -160,3 +160,47 @@ def deliver(source: Node, target: Node) -> int:
 
 def ref(event: dict[str, Any]) -> dict[str, str]:
     return {key: event[key] for key in ("node_id", "source_epoch", "event_id")}
+
+
+class Ledger:
+    """A local HTTP endpoint that records every POST: an experiment sink, or a
+    stand-in for Home Assistant. ``hold`` blocks requests until set."""
+
+    def __init__(self) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.requests: list[dict[str, Any]] = []
+        self.entered = threading.Event()
+        self.hold = threading.Event()
+        self.hold.set()
+        ledger = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - http.server API
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                ledger.entered.set()
+                ledger.hold.wait(10)
+                ledger.requests.append(
+                    {
+                        "path": self.path,
+                        "authorization": self.headers.get("Authorization"),
+                        "body": json.loads(body),
+                    }
+                )
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args: Any) -> None:
+                return None
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self.hold.set()
+        self.server.shutdown()
+        self.server.server_close()

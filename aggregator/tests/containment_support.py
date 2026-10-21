@@ -2,8 +2,8 @@
 
 ``TraceBuilder`` emits the same event shapes agentd journals for task, run,
 dispatch and lineage boundaries (validated with the trace contract), with explicit
-times, so tests control the timeline exactly. Effect events (forthcoming, not yet
-in the schema) are built separately and applied to the graph directly.
+times, so tests control the timeline exactly, including the effect gateway's
+``effect`` events.
 """
 
 from __future__ import annotations
@@ -388,12 +388,14 @@ class TraceBuilder:
         task = self.tasks[run["task"]]
         decided = phase != "requested"
         attributes = {
-            "effect_version": 1,
+            "effect_version": 2,
             "effect_id": effect_id or str(uuid4()),
             "effect_class": effect_class,
             "target": "actuator/1",
             "tool_call_id": None,
             "scheduled_at_ms": None if scheduled is None else BASE_MS + scheduled,
+            "adapter": None if scheduled is None else "http",
+            "committed_at_ms": BASE_MS + at if phase == "committed" else None,
             "policy": "managed_package_grant" if decided else None,
             "policy_version": "1" if decided else None,
             "reason": reason if phase == "denied" else None,

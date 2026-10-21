@@ -54,9 +54,8 @@ class AgentdNatsTransport:
         self._validator = default_validator()
         self._trace: TransportTrace | None = None
         self._broker_tracing = False
-        # Containment commands and the outbox's last recheck of a message before
-        # publication serialize on this lock; see containment_control.
-        self.publication_lock = threading.Lock()
+        # Guarded by store.control_lock, which containment commands also take;
+        # see containment_control.
         self._in_flight: set[str] = set()
 
     def start(self) -> None:
@@ -310,7 +309,7 @@ class AgentdNatsTransport:
                         pending["envelope"], separators=(",", ":")
                     ).encode()
                     message_id = str(pending["message_id"])
-                    with self.publication_lock:
+                    with self.store.control_lock:
                         # A containment decision may have landed since the
                         # batch was selected; after this point it cannot
                         # recall the message, and confirmations say so.
@@ -320,7 +319,7 @@ class AgentdNatsTransport:
                     try:
                         await self._publish_one(nc, js, pending, envelope, message_id)
                     finally:
-                        with self.publication_lock:
+                        with self.store.control_lock:
                             self._in_flight.discard(message_id)
                 await asyncio.sleep(1)
         finally:

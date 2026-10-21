@@ -97,7 +97,7 @@ def migrate_storage(state_dir: Path) -> dict[str, str]:
 
     Run as the dedicated service UID with agentd stopped and the target trace
     filesystem already provisioned. Schema 6 uses the resumable shared-state
-    upgrade; the current schema (32) requires a clean DELETE pair.
+    upgrade; the current schema (33) requires a clean DELETE pair.
     The durable barrier fences old and new daemons before any copy. A retry with
     the same unchanged inputs replaces a partial copy or finishes an interrupted
     handoff. Malformed barriers/changed inputs require operator investigation.

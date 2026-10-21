@@ -422,17 +422,21 @@ def test_every_strategy_emits_the_same_vocabulary(tmp_path, seed):
 def test_a_tainted_scheduled_effect_is_stopped_before_its_commit(tmp_path):
     """agentd's effect evidence reaches G_P/G_C through Core: an immediate effect
     is committed history, a scheduled one is a pending flow into a protected
-    sink. Firebreak cuts it, and agentd then refuses the real commit."""
+    sink. Firebreak cuts it, and the gateway then refuses to perform it."""
     from aggregator.containment_monitor.config import MonitorConfig
     from aggregator.containment_monitor.model import fx
     from containment_support import ingest
+    from containment_test_support import Ledger
+    from edgecitadel_agentd.effect_adapters import LedgerAdapter
     from test_containment_provenance import journal
 
     actuator = {"effect_class": "device.command", "target": "actuator/*"}
     root = Node(tmp_path / "root", "root-node")
     worker = Node(tmp_path / "worker", "worker-node")
+    ledger = Ledger()
     root.managed("parent", outbound=["child"], effects=[actuator])
     worker.managed("child", effects=[actuator])
+    worker.store.effects.adapters = {"http": LedgerAdapter(ledger.url)}
     try:
         root.submit("parent")
         _, binding = root.start("parent")
@@ -440,28 +444,31 @@ def test_a_tainted_scheduled_effect_is_stopped_before_its_commit(tmp_path):
         deliver(root, worker)
         _, child = worker.start("child")
 
-        def authorize(**extra):
+        def execute(**extra):
             reply = worker.rpc(
                 "child",
-                "effect.authorize",
+                "effect.execute",
                 schema_version=1,
                 request_id=str(uuid4()),
                 binding_id=child["binding_id"],
+                adapter="http",
                 effect_class="device.command",
                 target="actuator/1",
+                data=None,
                 tool_call_id=None,
                 **extra,
             )
             assert reply["status"] == "ok", reply
             return reply
 
-        immediate = authorize()
+        immediate = execute(scheduled_at_ms=None)
         due = time.time_ns() // 1_000_000 + 60_000
-        scheduled = authorize(scheduled_at_ms=due)
+        scheduled = execute(scheduled_at_ms=due)
         assert (immediate["result"]["state"], scheduled["result"]["state"]) == (
             "committed",
             "scheduled",
         )
+        assert len(ledger.requests) == 1  # the immediate one, performed at once
         control = LocalAgentdControlClient(
             "core-monitor",
             {"root-node": transport(root), "worker-node": transport(worker)},
@@ -491,20 +498,16 @@ def test_a_tainted_scheduled_effect_is_stopped_before_its_commit(tmp_path):
         assert decision.status == "contained" and decision.cut_valid
         in_force = {r.action.capability for r in harness.monitor.in_force.values()}
         assert in_force & {"hold:effect", "hold:task"}
-        commit = worker.rpc(
-            "child",
-            "effect.commit",
-            schema_version=1,
-            request_id=str(uuid4()),
-            binding_id=child["binding_id"],
-            effect_id=effect_id,
-        )
-        assert (commit["status"], commit["code"]) in {
-            ("error", "effect_held"),
-            ("error", "execution_held"),
-        }
+        worker.store.effects.run_due("worker-node", now_ms=due)
+        (denied,) = [
+            e for e in journal(worker) if e["kind"] == "effect" and e["phase"] == "denied"
+        ]
+        assert denied["attributes"]["effect_id"] == effect_id
+        assert denied["attributes"]["reason"] in {"effect_held", "execution_held"}
+        assert len(ledger.requests) == 1
         harness.close()
     finally:
+        ledger.close()
         root.close()
         worker.close()
 
@@ -555,3 +558,4 @@ def test_the_monitor_keeps_the_fail_closed_controller_lease_alive(tmp_path):
         harness.close()
     finally:
         worker.close()
+

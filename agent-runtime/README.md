@@ -358,14 +358,19 @@ A hold on running Managed Agent work pauses it: the runtime cancels the handler
 (`context.interruption == "pause"`) and resumes it on release with
 `context.resumed` set. A cancel ends it (`context.interruption == "cancel"`).
 See [pause, resume and cancel](../docs/architecture/execution-trace-contract.md#pause-resume-and-cancel-of-running-managed-work).
-Before an external effect (a writing tool, an HTTP request, a device command), a
-harness asks `effect.authorize` with its execution binding. agentd decides from
-holds, revocations, ingress filters, the effect scope (package
-`permissions.effects` narrowed by what the task inherited) and the task's lease,
-and records `effect/requested` and `effect/committed|denied` in the run. A
-scheduled effect is requested now and committed later with `effect.commit`, and
-can be held in between. See the
-[effect gateway](../docs/architecture/execution-trace-contract.md#effect-gateway).
+A registered effect (a Home Assistant service call, a post to an experiment
+ledger) is performed by agentd itself: the harness asks `effect.execute` with
+its execution binding and an adapter configured in `EDGECITADEL_EFFECT_ADAPTERS`,
+and the effect gateway re-checks holds, revocations, ingress filters, the effect
+scope (package `permissions.effects` narrowed by what the task inherited), the
+task's lease and the controller lease under the containment control lock
+immediately before it commits and performs the effect. The adapter holds the
+target's credential; the worker never sees it. With `scheduled_at_ms` the
+gateway keeps the effect until it is due; an effect hold then cancels it. An
+effect only the harness can perform (bash, a file in its sandbox) is decided by
+`effect.authorize` and then performed by the harness, which the gateway cannot
+fence. Both record `effect/requested` and `effect/committed|denied` in the run.
+See the [effect gateway](../docs/architecture/execution-trace-contract.md#effect-gateway).
 Each `run/started` event exports the invocation's effective authority
 (recipients, effect rules, lease and authority chain) as `attributes.authority`.
 

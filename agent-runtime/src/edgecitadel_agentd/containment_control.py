@@ -21,8 +21,10 @@ A confirmation's ``outbound`` counts the object's unpublished outbound messages
 at enforcement time: ``held`` will not be published while the decision stands,
 ``in_flight`` lists messages the outbox had already handed to the broker (they
 cannot be recalled and will be recorded as published), and ``published`` were
-sent before. ``applied_at_ms`` is when the gates took effect; a paused handler is
-interrupted by its runtime within its watch interval after that.
+sent before. ``effects_in_flight`` lists effects the gateway had committed and
+was still performing. ``applied_at_ms`` is when the gates took effect; a paused
+handler is interrupted by its runtime within its watch interval after that.
+
 """
 
 from __future__ import annotations
@@ -30,10 +32,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import threading
 import time
 from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
@@ -72,8 +72,6 @@ _CONFIRMATION = Draft202012Validator(
 
 class PublicationGate(Protocol):
     """The outbox's publication boundary, owned by the NATS transport."""
-
-    publication_lock: threading.Lock
 
     def in_flight(self) -> frozenset[str]: ...
 
@@ -195,13 +193,10 @@ def execute(
     lifetime = command["expires_at_ms"] - command["issued_at_ms"]
     if not 0 < lifetime <= MAX_COMMAND_LIFETIME_MS:
         return _rejected(node_id, command, "invalid_command", received)
-    lock: AbstractContextManager[object] = (
-        gate.publication_lock if gate is not None else nullcontext()
-    )
-    # Commands serialize on the publication lock. The outbox registers a message
-    # as in flight under the same lock after rechecking it, so the snapshot is
-    # exact for that boundary.
-    with lock:
+    # Commands serialize on the control lock. The outbox registers a message as
+    # in flight, and the effect gateway an effect as committed, under the same
+    # lock after rechecking them, so the snapshot is exact for both boundaries.
+    with store.control_lock:
         with store._lock:
             stored = store._connection.execute(
                 "SELECT request_sha256,confirmation_json FROM control_commands "
@@ -220,6 +215,9 @@ def execute(
             enforcement = _snapshot(
                 store, command, enforcement, gate.in_flight() if gate else frozenset()
             )
+            effects = store.effects.in_flight()
+            if effects and command["action"] not in {"renew", "describe"}:
+                enforcement["effects_in_flight"] = sorted(effects)
             confirmation = {
                 "schema_version": 1,
                 "command_id": command["command_id"],

@@ -268,7 +268,8 @@
             "lease_exceeded",
             "outside_effect_scope",
             "controller_lease_expired",
-            "effect_held"
+            "effect_held",
+            "effect_adapter_unavailable"
           ]
         },
         "retryable": {
@@ -476,6 +477,63 @@
                 },
                 {
                   "type": "null"
+                }
+              ]
+            },
+            "adapter": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "homeassistant",
+                    "http"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "performed",
+                    "code",
+                    "http_status"
+                  ],
+                  "properties": {
+                    "performed": {
+                      "type": "boolean"
+                    },
+                    "code": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "http_status": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 100,
+                          "maximum": 599
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
                 }
               ]
             }

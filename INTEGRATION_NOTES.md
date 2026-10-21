@@ -228,3 +228,38 @@ instances and on 200 random nested-scope instances (all on the fast path); a
 Set-Cover-at-one-vertex instance that must leave the fast path
 (`non_laminar`); the source-headed dominating member; the ILP route above the
 limit; per-action masks and in-force masks on random workloads.
+
+### 2. Effects executed by the gateway, fenced at commit
+
+- `effect.execute` (`schemas/trace-effect-execute-request.v1.json`): the
+  gateway performs a registered effect through an adapter
+  (`agent-runtime/src/edgecitadel_agentd/effect_adapters.py`): `homeassistant`
+  (REST service call, `<domain>.<service>/<entity_id>` targets, long-lived token
+  from `token_file`, default `http://127.0.0.1:8123`) and `http` (POST of the
+  committed effect's record to a configured ledger URL). Configuration:
+  `EDGECITADEL_EFFECT_ADAPTERS` (JSON file, no secret in it). The worker never
+  sees a credential; no token is logged or returned.
+- Commit fence: a new store-owned `control_lock` replaces the transport's
+  publication lock. Containment commands, the outbox's last check before
+  publishing, and the gateway's re-check + commit transaction all take it, so a
+  command confirmed before an effect's commit wins and an effect committed
+  before a command is in the journal before the command's position (item 3).
+  Effects committed but still in their adapter call appear in confirmations as
+  `effects_in_flight`.
+- Scheduled effects: `effect.execute` with `scheduled_at_ms` keeps the effect
+  in `scheduled_effects` (data encrypted); the gateway's scheduler thread
+  re-checks, commits and performs it when due, also after the issuer ended. An
+  effect hold in place when it is due cancels it (`effect/denied`, reason
+  `effect_held`). The monitor now models pending effects whose issuer ended
+  (effect hold only).
+- `effect.authorize` stays for effects the harness performs (bash): immediate
+  only, not fenced at commit; documented as a limitation, with bypass measured
+  at the destination ledger. Its scheduled form and `effect.commit` are removed.
+- Events: `effect_version` 2 adds `adapter` and `committed_at_ms`; the denial
+  reasons gain `effect_held`. Reply results gain `adapter` and `outcome`.
+- agentd schema 33 (columns only); the migration denies effects a harness had
+  scheduled for the removed `effect.commit`.
+- e2e C2: b1 schedules its actuator command with `effect.execute`; endurance's
+  gateway posts it to the harness's actuator ledger, so the ledger is written
+  by the destination, never by an agent.
+

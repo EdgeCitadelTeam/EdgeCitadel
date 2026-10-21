@@ -61,7 +61,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -214,6 +214,10 @@ class AgentdStore:
             # effects until the controller renews again.
             self.controller_lease_ms: int | None = None
             self._controller_lease_until_ms = 0
+            # Containment commands, the outbox's last check before publishing and
+            # the effect gateway's commit step serialize on this lock; it is
+            # always taken before the store lock (see containment_control).
+            self.control_lock = threading.Lock()
             schema_version = int(
                 self._connection.execute("PRAGMA user_version").fetchone()[0]
             )
@@ -239,6 +243,10 @@ class AgentdStore:
             )
 
             install_completed_guards(self._connection)
+            from .effect_gateway import EffectExecutor
+
+            # Performs registered effects; the daemon configures its adapters.
+            self.effects = EffectExecutor(self)
             path.chmod(0o600)
             self.task_path.chmod(0o600)
         except BaseException:
@@ -703,6 +711,34 @@ class AgentdStore:
             self._connection.execute("PRAGMA main.user_version=32")
             self._connection.execute("PRAGMA task_state.user_version=32")
 
+        if version < 33:
+            # The gateway performs scheduled effects itself (effect.execute).
+            # Effects a harness scheduled through the removed effect.commit can
+            # never be committed now.
+            for column in (
+                "connector_id TEXT",
+                "adapter TEXT",
+                "data_text TEXT",
+                "due_at_ms INTEGER",
+                "outcome_json TEXT",
+            ):
+                existing = {
+                    row[1]
+                    for row in self._connection.execute(
+                        "PRAGMA task_state.table_info(scheduled_effects)"
+                    )
+                }
+                if column.split()[0] not in existing:
+                    self._connection.execute(
+                        f"ALTER TABLE task_state.scheduled_effects ADD COLUMN {column}"
+                    )
+            self._connection.execute(
+                "UPDATE task_state.scheduled_effects SET state='denied' "
+                "WHERE state='scheduled' AND adapter IS NULL"
+            )
+            self._connection.execute("PRAGMA main.user_version=33")
+            self._connection.execute("PRAGMA task_state.user_version=33")
+
     def _migrate_holds_v32_locked(self) -> None:
         """Allow egress and effect holds; holds before schema 32 cannot."""
         definition = self._connection.execute(
@@ -790,13 +826,11 @@ class AgentdStore:
             self, node_id=node_id, connector_id=connector_id, token=token, params=params
         )
 
-    def commit_effect(
+    def execute_effect(
         self, *, node_id: str, connector_id: str, token: str, params: dict[str, Any]
     ) -> dict[str, Any]:
-        from .effect_gateway import commit_effect
-
-        return commit_effect(
-            self, node_id=node_id, connector_id=connector_id, token=token, params=params
+        return self.effects.execute(
+            node_id=node_id, connector_id=connector_id, token=token, params=params
         )
 
     def controller_lease_valid(self, now_ms: int) -> bool:

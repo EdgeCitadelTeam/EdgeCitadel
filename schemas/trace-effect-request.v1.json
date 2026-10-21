@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://edgecitadel.dev/schemas/trace-effect-request.v1.json",
   "title": "effect.authorize request v1",
-  "description": "Asked by a harness before one external effect of a bound invocation. The target is exact: a path, command, URL or device as the harness classifies it.",
+  "description": "Asked by a harness before one external effect it performs itself. The decision is immediate and not fenced at commit: the harness acts after an ok reply. The target is exact: a path, command, URL or device as the harness classifies it.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -46,19 +46,6 @@
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]+$"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "scheduled_at_ms": {
-      "description": "When set in the future, the effect is checked and requested now and must be committed with effect.commit.",
-      "anyOf": [
-        {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
         },
         {
           "type": "null"

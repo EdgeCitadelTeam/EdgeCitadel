@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from .effect_adapters import EffectAdapter, load_adapters
 from .restore import RestorePendingError, require_startable
 from .store import AgentdStore, StoreError
 from .storage_layout import StorageLayout
@@ -122,6 +123,15 @@ def _controller_lease_ms() -> int | None:
     if not 0 <= lease_ms <= 3_600_000:
         raise StoreError("EDGECITADEL_CONTROLLER_LEASE_MS must be at most one hour")
     return lease_ms or None
+
+
+def _effect_adapters() -> dict[str, EffectAdapter]:
+    """EDGECITADEL_EFFECT_ADAPTERS: the JSON file configuring effect.execute."""
+    try:
+        return load_adapters(os.environ.get("EDGECITADEL_EFFECT_ADAPTERS"))
+    except ValueError as error:
+        # The code names the faulty setting, never a token or its contents.
+        raise StoreError(f"EDGECITADEL_EFFECT_ADAPTERS: {error}") from None
 
 
 def _load_or_create_admin_token(state_dir: Path) -> str:
@@ -265,7 +275,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.history",
         "trace.loss",
         "effect.authorize",
-        "effect.commit",
+        "effect.execute",
     }
     native_capabilities = {
         "agent.list": "edgecitadel_agents",
@@ -285,7 +295,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.finish": "edgecitadel_trace",
         "trace.dispatch": "edgecitadel_trace",
         "effect.authorize": "edgecitadel_trace",
-        "effect.commit": "edgecitadel_trace",
+        "effect.execute": "edgecitadel_trace",
     }
     if operation in common:
         return
@@ -348,7 +358,7 @@ def _trace_operation(
         "trace.dispatch": store.dispatch_trace,
         "trace.loss": partial(report_loss, store),
         "effect.authorize": store.authorize_effect,
-        "effect.commit": store.commit_effect,
+        "effect.execute": store.execute_effect,
     }
     method = methods[operation]
     code = "storage_unavailable"
@@ -365,6 +375,7 @@ def _trace_operation(
             "session_unavailable",
             "quota_exceeded",
             "storage_unavailable",
+            "effect_adapter_unavailable",
         }:
             code = error.code
         elif error.code in {
@@ -543,7 +554,7 @@ def dispatch(
         "trace.dispatch",
         "trace.loss",
         "effect.authorize",
-        "effect.commit",
+        "effect.execute",
     }:
         return _trace_operation(store, connector_id, token, operation, dict(params))
     if operation == "connector.update":
@@ -779,6 +790,7 @@ def _serve_locked(
             raise
     admin_token = _load_or_create_admin_token(state_dir)
     store.controller_lease_ms = _controller_lease_ms()
+    store.effects.adapters = _effect_adapters()
     transport = AgentdNatsTransport(state_dir.parent, store)
     supervisor = ManagedAgentSupervisor(state_dir.parent, store)
     telemetry = TraceSyncService(
@@ -810,6 +822,10 @@ def _serve_locked(
 
     reconciler = threading.Thread(target=reconcile, daemon=True)
     reconciler.start()
+    node_id = _node_id(store)
+    if node_id is not None:
+        # Scheduled gateway effects are journaled under the enrolled identity.
+        store.effects.start(node_id)
     transport.start()
     telemetry.start()
     supervisor.start()
@@ -817,6 +833,7 @@ def _serve_locked(
     thread.start()
     owned_stop.wait()
     supervisor.stop()
+    store.effects.stop()
     server.shutdown()
     server.server_close()
     thread.join(timeout=5)

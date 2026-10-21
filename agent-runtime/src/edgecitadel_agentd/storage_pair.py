@@ -24,7 +24,8 @@ HOLD_TABLES = (
     "containment_fences",
     "held_deliveries",
 )
-# Schema 32 adds delegated authority state and control-command receipts.
+# Schema 32 adds delegated authority state and control-command receipts; schema
+# 33 adds columns only (gateway-performed scheduled effects).
 TASK_TABLES = (
     *HOLD_TABLES,
     "revocations",
@@ -41,7 +42,7 @@ CROSS_REFERENCES = (
     ("trace_task_contexts", "task_id", "tasks", "task_id"),
 )
 PAIR_VERSION = 24
-CURRENT_VERSION = 32
+CURRENT_VERSION = 33
 
 
 def task_database_path(trace_path: Path) -> Path:

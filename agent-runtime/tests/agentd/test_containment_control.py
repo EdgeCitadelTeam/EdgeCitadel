@@ -308,3 +308,4 @@ def test_credential_filter_through_the_control_path(nodes):
     removed = send(worker, command(worker, "unfilter", target, version=3))
     assert removed["enforcement"]["applied_deliveries"] == 1
     assert worker.store.get_task(child_id)["state"] == "offered"
+
