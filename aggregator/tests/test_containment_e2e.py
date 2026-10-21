@@ -58,6 +58,8 @@ def test_firebreak_contains_the_shared_artifact_and_keeps_healthy_work(
     # never committed it.
     assert not result["effect_performed"]
     assert "committed" not in result["effect"]["agentd_state"].values()
+    # Phase 1 converged (tau_1 logged) and nothing tainted committed after it.
+    assert result["tau1"] is not None and result["tainted_after_tau1"] == 0
     assert result["healthy_completed"] == 2
     # What the monitor holds in force is exactly what the nodes enforce.
     held = {
@@ -94,6 +96,7 @@ def test_phase1_with_the_at_alert_cut_blocks_the_late_effect_from_the_first_roun
     assert all(a["state"] == "in_force" for a in effect_holds)
     assert not result["effect_performed"]
     assert "committed" not in result["effect"]["agentd_state"].values()
+    assert result["tau1"] is not None and result["tainted_after_tau1"] == 0
     assert result["releases_after_confirmations"] and not result["unconfirmed"]
 
 

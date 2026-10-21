@@ -363,10 +363,20 @@ def cut_holds(cg: ControlGraph, actions: Iterable[Action]) -> tuple[bool, list[s
     invocations emit after the actions land.
     """
     instance = cg.instance()
-    unavoidable = solver.unavoidable_sinks(instance)
-    targets = (instance.sinks - unavoidable) | protected_sinks(cg) | context_sinks(cg)
-    reached = solver.reached_sinks(instance, actions, targets)
+    reached = solver.reached_sinks(instance, actions, _targets(cg, instance))
     return not reached, sorted(reached)
+
+
+def convergence_sinks(cg: ControlGraph) -> frozenset[str]:
+    """The sinks ``cut_holds`` checks on cg."""
+    return _targets(cg, cg.instance())
+
+
+def _targets(cg: ControlGraph, instance: solver.CutInstance) -> frozenset[str]:
+    unavoidable = solver.unavoidable_sinks(instance)
+    return frozenset(
+        (instance.sinks - unavoidable) | protected_sinks(cg) | context_sinks(cg)
+    )
 
 
 def last_hops(cg: ControlGraph, sinks: Iterable[str]) -> set[Action]:
@@ -469,6 +479,7 @@ class TwoPhaseProtocol:
         cut_at_alert: Callable[[ControlGraph], StrategyResult] | None = None,
         trigger: Callable[[ControlGraph, StrategyResult], dict] | None = None,
         receding: Callable[[], set[Action]] | None = None,
+        on_converged: Callable[[dict], None] | None = None,
     ) -> Decision:
         if phase1_mode not in PHASE1_MODES:
             raise ValueError(f"unknown phase-1 mode {phase1_mode!r}")
@@ -552,6 +563,50 @@ class TwoPhaseProtocol:
             side = cg.closure() if phase1_labels == "forward_closure" else closure
             return block | admission_freeze(cg, side)
 
+        # The inputs of the last convergence check (the tau_1 record).
+        evidence: dict = {}
+
+        def report_converged(round_no: int, checks: dict) -> None:
+            """tau_1: the literal check passed. Logged with its inputs (the
+            fence positions per site, the label set's size, the sinks checked);
+            nothing here changes what the protocol does."""
+            if on_converged is None:
+                return
+            relied = [
+                r for r in [*decision.phase1, *decision.phase2] if r.state == "in_force"
+            ]
+            fence: dict[str, dict] = {}
+            for record in relied:
+                for site, outcome in record.sites.items():
+                    journal = outcome.get("journal")
+                    if not journal:
+                        continue
+                    position = {
+                        "source_epoch": str(journal["source_epoch"]),
+                        "source_seq": int(journal["source_seq"]),
+                    }
+                    known = fence.get(site)
+                    if (
+                        known is None
+                        or known["source_epoch"] != position["source_epoch"]
+                        or position["source_seq"] > known["source_seq"]
+                    ):
+                        fence[site] = position
+            on_converged(
+                {
+                    "phase": 1,
+                    "round": round_no,
+                    "tau1": clock(),
+                    "t_alert": t_alert,
+                    "phase1_mode": phase1_mode,
+                    "checks": checks,
+                    "fence": fence,
+                    "actions_in_force": len(relied),
+                    "labels": evidence.get("labels"),
+                    "sinks_checked": evidence.get("sinks_checked", []),
+                }
+            )
+
         def converged(fenced: bool) -> dict:
             """The convergence check at tau_1 for an adaptive phase 1, literally
             (theory 8.6): (C1) every relied-on action confirmed and its journals
@@ -563,10 +618,11 @@ class TwoPhaseProtocol:
             if not fenced:
                 return check
             for _ in range(self.max_rounds):
-                missing = labels(project(2, frozenset(in_force)), in_force)
-                missing -= in_force.keys()
+                label_set = labels(project(2, frozenset(in_force)), in_force)
+                missing = label_set - in_force.keys()
                 if not missing:
                     check["C2"] = True
+                    evidence["labels"] = len(label_set)
                     break
                 records = apply(missing)
                 if any(r.state != "in_force" for r in records) or not wait(records):
@@ -589,6 +645,7 @@ class TwoPhaseProtocol:
                         held, blocking = cut_holds(cg, in_force)
             check["C4"] = held
             check["blocking_sinks"] = blocking
+            evidence["sinks_checked"] = sorted(convergence_sinks(cg))
             return check
 
         if two_phase:
@@ -620,6 +677,16 @@ class TwoPhaseProtocol:
                             "blocking_sinks": check.get("blocking_sinks", []),
                         }
                     )
+                    if held:
+                        report_converged(
+                            round_ + 1,
+                            {
+                                "C1": True,
+                                "C2": True,
+                                "C3": "reconciled (J')",
+                                "C4": True,
+                            },
+                        )
                     if not held and not frozen:
                         # On failure, add the frontier freeze and repeat.
                         frozen = True
@@ -640,7 +707,8 @@ class TwoPhaseProtocol:
                         # hop and check again (next round: a recomputed freeze).
                         guard = last_hops(cg, blocking) - in_force.keys()
                         if guard:
-                            wait(apply(guard))
+                            guard_fenced = wait(apply(guard))
+                            fenced = fenced and guard_fenced
                             cg = project(1, frozenset(in_force))
                             held, blocking = cut_holds(cg, in_force)
                             decision.convergence.append(
@@ -652,6 +720,23 @@ class TwoPhaseProtocol:
                                     "guard": sorted(a.label() for a in guard),
                                 }
                             )
+                    if held and fenced:
+                        # The freeze holds or labels every source-side unit.
+                        evidence["labels"] = sum(
+                            1
+                            for a in in_force
+                            if a.op == "hold" and a.kind in {"task", "egress"}
+                        )
+                        evidence["sinks_checked"] = sorted(convergence_sinks(cg))
+                        report_converged(
+                            round_ + 1,
+                            {
+                                "C1": True,
+                                "C2": "frontier freeze",
+                                "C3": "frontier freeze (no reconciliation)",
+                                "C4": True,
+                            },
+                        )
                 if held:
                     break
         phase[0] = 2

@@ -184,6 +184,38 @@ def test_tainted_effect_after_the_alert_is_a_violation(run):
     assert row["clean_after_alert"] == 0 and row["tainted_after_established"] == 1
 
 
+def converged(tau1: int, incident: str = "i1") -> dict:
+    return {"type": "converged", "incident_id": incident, "tau1": tau1, "phase": 1}
+
+
+def test_tainted_after_tau1_orders_commits_at_their_site(run):
+    """tau_1 is the operator incident's first converged record; a violation
+    counts after it by the gateway's commit time at its site, which the sink
+    may record later. Without tau_1 the run is reported not converged, and
+    tainted_after_established stays as it was."""
+    finish_b_n(run)
+    run.effect("E_B", "B.t0", 9000, (FAULT,))
+    row = evaluate(run, decisions=[decision(), converged(8000), converged(7000, "i9")])
+    assert (row["converged"], row["tau1_s"], row["tainted_after_tau1"]) == (1, 2.0, 1)
+    assert row["tainted_after_established"] == 1
+    assert (
+        evaluate(run, decisions=[decision(), converged(9500)])["tainted_after_tau1"]
+        == 0
+    )
+    # The gateway committed at its site before tau_1; the sink heard of it later.
+    for entry in run.ledger:
+        if entry["effect_id"] == "E_B" and entry["phase"] == "committed":
+            entry["gateway"] = {"effect_id": "g-1", "committed_at_ms": 7900}
+    assert (
+        evaluate(run, decisions=[decision(), converged(8000)])["tainted_after_tau1"]
+        == 0
+    )
+    row = evaluate(run)
+    assert row["converged"] == 0
+    assert math.isnan(row["tau1_s"]) and math.isnan(row["tainted_after_tau1"])
+    assert row["tainted_after_established"] == 1
+
+
 def unattributed_commit(effect_id: str, t: int, **post) -> dict:
     """A sink commit as the services record it when the worker's attempted
     record is missing: no class, no fault labels, ``attributed: false``."""

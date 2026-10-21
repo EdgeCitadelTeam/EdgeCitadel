@@ -50,6 +50,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from datetime import datetime
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -886,6 +887,24 @@ def summarize(deployment: Deployment, outcome: dict) -> dict:
     ]
     producer = producer_attempt(deployment)
     roots = decision["roots"]
+    # tau_1: the monitor's converged record for this incident (phase 1's
+    # literal check passed); b1's actuator command is the tainted protected
+    # effect, ordered by its commit at its own site.
+    tau1 = min(
+        (
+            d["tau1"]
+            for d in deployment.decisions()
+            if d.get("type") == "converged"
+            and d.get("incident_id") == decision["incident_id"]
+        ),
+        default=None,
+    )
+    commits = [
+        datetime.fromisoformat(e["occurred_at"].replace("Z", "+00:00")).timestamp()
+        * 1000
+        for e in effect["events"]
+        if e["phase"] == "committed" and e["effect_id"] in effect["agentd_state"]
+    ]
     healthy = {agent: [t["state"] for t in tasks.get(agent, [])] for agent in HEALTHY}
     return {
         "strategy": deployment.strategy,
@@ -921,6 +940,10 @@ def summarize(deployment: Deployment, outcome: dict) -> dict:
         "enforced_at_nodes": enforced(deployment),
         "effect": effect,
         "effect_performed": bool(effect["actuator_ledger"]),
+        "tau1": tau1,
+        "tainted_after_tau1": None
+        if tau1 is None
+        else sum(1 for t in commits if t > tau1),
         "healthy_tasks": healthy,
         "healthy_completed": sum(
             1 for states in healthy.values() if states and set(states) == {"completed"}

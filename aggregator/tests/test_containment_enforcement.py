@@ -1,5 +1,6 @@
 """Two-phase enforcement, fencing and the control clients."""
 
+import json
 import math
 import random
 from collections import Counter
@@ -1060,6 +1061,13 @@ def test_a_labelled_dispatch_is_admitted_once_its_new_task_is_labelled(tmp_path)
         unit.close()
 
 
+class ListLog(list):
+    """The monitor's decision log, in memory."""
+
+    def append(self, record: dict) -> None:
+        super().append(json.loads(json.dumps(record)))
+
+
 class Arriving:
     """A control client through which a new request reaches the assistant
     while the alert's first actions are in flight (before their confirmation)."""
@@ -1150,6 +1158,7 @@ def test_an_idle_tainted_context_is_covered_before_phase_1_converges(
         )
         return result["result"]["state"] if result["status"] == "ok" else result["code"]
 
+    log = harness.monitor.log = ListLog()
     try:
         sync()
         root = inv(binding["execution_attempt_id"])
@@ -1164,6 +1173,20 @@ def test_an_idle_tainted_context_is_covered_before_phase_1_converges(
         assert phase1[cover].t_fenced is not None
         assert decision.convergence[0]["phase"] == 1
         assert decision.convergence[0]["converged"]
+        # tau_1 is logged with the check's inputs, after the cover was fenced.
+        (record,) = [r for r in log if r["type"] == "converged"]
+        assert record["incident_id"] == decision.incident_id
+        assert record["tau1"] >= phase1[cover].t_fenced
+        assert record["checks"] == {
+            "C1": True,
+            "C2": True,
+            "C3": "reconciled (J')",
+            "C4": True,
+        }
+        assert record["fence"]["site-k"]["source_seq"] > 0
+        assert record["labels"] == 1  # the arrived request's label
+        assert record["actions_in_force"] >= 2  # with the cover
+        assert "K:assistant:device.command@new" in record["sinks_checked"]
         node.submit("assistant", "a request after convergence")
         later = node.start("assistant")[1]
         # The request seen before convergence was labelled too: its command is
@@ -1271,10 +1294,13 @@ def test_gsafeguard_flags_the_root_agent_and_drops_only_its_outputs(tmp_path):
     the consumers (r, b, c), no other agent's grant, no pause and nothing
     already sent (c's result back at r, a's scheduled effect) is touched."""
     harness, root, ids = two_teams(tmp_path)
+    log = harness.monitor.log = ListLog()
     decision = harness.monitor.respond(
         operator_alert(root, harness.now), strategy="gsafeguard", roots=[root]
     )
     assert decision.status == "applied" and decision.phase1 == []
+    # A rule applied directly has no phase 1, so no tau_1.
+    assert [r["type"] for r in log] == ["decision"]
     assert phase_two(decision) == {
         f"revoke:egress:{ids['a']}@n1",
         f"hold:task:{ids['a']}@n0",  # a's result, parked at r's node
@@ -1843,9 +1869,18 @@ def test_a_doomed_sink_reachable_through_an_unheld_edge_blocks_convergence(
     harness.monitor.graph.mark_roots([ids["a"]])
     at_alert = harness.monitor._project(2, frozenset()).instance()
     assert effect in solver.unavoidable_sinks(at_alert)  # doomed at the alert
+    log = harness.monitor.log = ListLog()
     decision = harness.monitor.respond(
         operator_alert(ids["a"], harness.now), strategy="firebreak", roots=[ids["a"]]
     )
+    # tau_1's check covered the sink that was doomed at the alert.
+    (record,) = [r for r in log if r["type"] == "converged"]
+    assert record["checks"]["C2"] == "frontier freeze"
+    assert effect in record["sinks_checked"]
+    guard = next(
+        r for r in decision.phase1 if r.action == hold_effect("n2", ids["effect"])
+    )
+    assert record["tau1"] >= guard.t_confirmed
     first, guarded, *_ = decision.convergence
     assert (first["phase"], first["converged"]) == (1, False)
     assert first["blocking_sinks"] == [effect]
@@ -1874,6 +1909,7 @@ def test_a_sink_no_action_can_reach_keeps_every_hold(tmp_path):
     )
     harness, _, decision, effect_id = late_effect(tmp_path, "freeze", control=control)
     assert decision.status == "phase2_check_failed"
+    assert not any(c["phase"] == 1 and c["converged"] for c in decision.convergence)
     assert decision.released == []
     assert all(not c["converged"] for c in decision.convergence)
     assert decision.convergence[-1]["phase"] == 2

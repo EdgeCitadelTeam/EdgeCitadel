@@ -547,11 +547,28 @@ class ContainmentMonitor:
                 cut_at_alert=rule,
                 trigger=trigger,
                 receding=receding if self.config.receding_during_waits else None,
+                on_converged=lambda record: self._log_converged(
+                    incident_id, name, record
+                ),
             )
         finally:
             self._phase1_mode = None
         self._persist(decision)
         return decision
+
+    def _log_converged(self, incident_id: str, name: str, record: dict) -> None:
+        """A ``converged`` record in the decision log when phase 1's literal
+        convergence check passes: tau_1 and the check's inputs."""
+        if self.log is not None:
+            self.log.append(
+                {
+                    "type": "converged",
+                    "incident_id": incident_id,
+                    "strategy": name,
+                    "t_decided": record["tau1"],
+                    **record,
+                }
+            )
 
     def _persist(self, decision: Decision) -> None:
         self._persist_records([*decision.phase1, *decision.phase2, *decision.released])

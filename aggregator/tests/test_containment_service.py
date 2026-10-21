@@ -139,8 +139,10 @@ def test_service_follows_core_and_answers_alerts_over_http(
         assert {"t_alert", "t_decision", "t_sent", "t_applied", "t_confirmed"} <= set(
             record
         )
-    (line,) = ledger.read_text().splitlines()
-    logged = json.loads(line)
+    # tau_1 is logged when phase 1 converges, before the decision record.
+    converged, logged = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert converged["type"] == "converged"
+    assert converged["incident_id"] == logged["incident_id"]
     assert logged["type"] == "decision" and logged["alert"]["alert_id"] == alert_id
     assert logged["phase1"] and logged["status"] == decision["status"]
     assert {"solver", "fast_path", "fast_path_reason", "exceptions"} <= set(

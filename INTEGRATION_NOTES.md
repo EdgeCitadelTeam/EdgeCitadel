@@ -1399,3 +1399,114 @@ With lab hops at or below 100 ms, `A.sched` would read the schedule about
 0.2 s after that dispatch, which is before the alert, and the distinction
 would collapse. The workload is unchanged. The proposed fix goes to the
 coordinator, because it touches the H8/H9 pre-registration.
+
+### tau_1 in the decision log and `tainted_after_tau1` (spec review A)
+
+Before this change the scorer's "containment established" was the last
+confirmation of the first decision's actions. It checks neither fencing nor
+the convergence conditions, and tau_1 was logged nowhere.
+
+**The record.** When phase 1's literal convergence check passes, the monitor
+now writes a `converged` record to the decision log.
+- **Adaptive phase 1:**
+  - (C1): every relied-on action confirmed and fenced, its journal ingested
+    through the confirmed positions;
+  - (C2): the label set over the whole source side, idle whole-context
+    tainted contexts included, confirmed;
+  - (C3): taint reconciled under (J') in every projection;
+  - (C4): the actions in force a cut against every checked sink on the
+    reconciled graph.
+- **Freeze modes:** every phase-1 action fenced (C1); the frontier freeze
+  stands for C2 and C3; their C4.
+
+The record holds:
+- `tau1` (monitor clock) and `t_alert`;
+- the checks;
+- the fence position per site (epoch and sequence);
+- the size of the label set and the number of actions in force;
+- every sink the C4 check covered (`sinks_checked`).
+
+The protocol only reports through a callback, so no decision changes. A rule
+applied directly (the baselines under the deployed profile) has no phase 1
+and no tau_1.
+
+**The metric.** The scorer adds:
+- `converged` (0 or 1);
+- `tau1_s` (from the alert);
+- `tainted_after_tau1`: violations committed after the operator incident's
+  first tau_1, each ordered by its commit time at its own site. That time
+  comes from the gateway, through its post to the sink or Core's record of
+  the commit, and falls back to the ledger time. This assumes the hosts'
+  clocks are synchronized, as on the tailnet. NaN when the run never
+  converged.
+
+`tainted_after_established` is unchanged.
+
+**Results.**
+- Opt-in C2 end to end: Firebreak early, late, freeze_plus_cut and adaptive
+  log tau_1 121–159 ms after the alert, with `tainted_after_tau1` 0.
+- Local harness C2 runs:
+  - Firebreak converges 3.3–3.8 s after the alert, with 0 after tau_1 and
+    clean runs;
+  - G-Safeguard reports not converged, with 1 and 2 violations.
+
+**Tests.**
+- The idle-context test checks the record's checks, fence position, label
+  set and the context's sink, and that tau_1 is not before the cover was
+  fenced.
+- The doomed-sink test checks that tau_1's check covered the sink judged
+  unavoidable at the alert.
+- G-Safeguard logs no tau_1.
+- The scorer test orders commits at their site, ignores another incident's
+  record, and reports a run without tau_1 as not converged.
+
+### Theorem 5 coverage (spec review B), checked on this branch
+
+**(i) Sinks doomed at the alert are outside Theorem 5 after tau_1: false here.**
+- **The C4 check at tau_1.** It runs on the graph projected at tau_1, where
+  every action in force counts as feasible. A sink judged unavoidable at the
+  alert but blockable by an action now in force is therefore checked. On top
+  of that:
+  - every pending protected effect is checked, doomed or not (the M5 fix);
+  - every protected class of a whole-context tainted context is checked
+    (M7).
+- **Sinks left out.** Only those that no action can separate at tau_1
+  itself: horizon-boundary new invocations, by design, and a unit on a node
+  without the label capability.
+- **Phase 2 and the release.** Phase 2 releases a phase-1 hold only after
+  `cut_holds(B_2)` passes on the same set of sinks, where an admission label
+  in force counts as held in the phase-2 graph. A sink no action can reach
+  keeps every hold (`phase2_check_failed`).
+
+  Evidence:
+  - `test_a_doomed_sink_reachable_through_an_unheld_edge_blocks_convergence`
+    (the sink, doomed at the alert, is in tau_1's `sinks_checked`, and
+    tau_1 follows its guard's confirmation);
+  - `test_a_sink_no_action_can_reach_keeps_every_hold` (no tau_1 at all);
+  - `test_phase_two_sees_an_admission_label_in_force_as_held`.
+
+**(ii) svc with `boundary: defer`, later new tasks of a tainted session:
+covered for svc.**
+- **Literally true:** such a task is neither labelled nor a sink until the
+  receding re-solve sees it, so the admission invariant does not hold for it.
+- **Theorem 5's conclusion still holds in svc.** The assistant is a
+  shared-memory agent, so its tainted context is whole-context. The M7 fix:
+  - revokes its protected classes (`dev_lamp`) at its node at the alert;
+  - counts that in (C2), confirmed and fenced before tau_1;
+  - checks those classes in every (C4) and release.
+
+  A task created after tau_1 is refused at the gateway for any protected
+  effect (`ingress_filtered` in
+  `test_an_idle_tainted_context_is_covered_before_phase_1_converges[defer]`
+  and `[sink]`), and its replies are unprotected.
+- **Its other outputs.** Its only recipient is itself (a pending creation),
+  so they stay within the revoked agent. The planner's sessions are per task,
+  and no later planner task joins the tainted `sP.sched`.
+- **A residual outside svc, reported rather than fixed (the fix changes the
+  design).**
+  - With per-conversation sessions (every grid instance), a new task
+    created after tau_1 in a tainted conversation is covered only once the
+    receding re-solve labels it.
+  - Revoking the agent's classes would stop its clean conversations, and a
+    per-conversation label would be a new agentd actuator.
+  - `tainted_after_tau1` now measures whether this happens in the lab.

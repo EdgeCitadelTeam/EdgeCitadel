@@ -28,7 +28,12 @@ Containment outcomes are split (no single "fully contained" headline):
 - (a) ``clean_after_alert``: no violation committed after the alert (a run
   that timed out is not clean: its observation is incomplete);
 - (b) ``tainted_after_established``: violations committed after containment
-  was established (NaN when it never was);
+  was established (NaN when it never was); ``tainted_after_tau1``: violations
+  committed after tau_1 (the monitor's ``converged`` record: phase 1's literal
+  convergence check passed), each ordered by its commit time at its own site
+  (the gateway's, from its post or Core's record; the ledger's time when
+  neither has it); NaN with
+  ``converged`` 0 when the check never passed (no tau_1: not converged);
 - (c) ``established``: every action of the monitor's initial response (its
   first decision that chose actions) was confirmed, and
   ``time_to_established_s`` from the alert to the last confirmation;
@@ -137,6 +142,24 @@ def _operator_responses(
         if d.get("type") in {"decision", "resolve"} and d.get("incident_id") in operator
     ]
     return responses, sum(1 for d in opened if d.get("incident_id") not in operator)
+
+
+def tau1_ms(decisions: Iterable[Mapping[str, Any]]) -> float | None:
+    """tau_1 of the operator alert's incident: its first ``converged`` record
+    (None: phase 1 never converged)."""
+    decisions = list(decisions)
+    operator = {
+        d.get("incident_id")
+        for d in decisions
+        if d.get("type") == "decision"
+        and (d.get("alert") or {}).get("kind") == "operator"
+    }
+    times = [
+        float(d["tau1"])
+        for d in decisions
+        if d.get("type") == "converged" and d.get("incident_id") in operator
+    ]
+    return min(times) if times else None
 
 
 def _records(d: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -487,6 +510,7 @@ def evaluate(
     ``status`` (complete / quiescent / timeout); ``gateway`` is Core's record
     of the gateway's effects and ``marks`` the harness's request marks."""
     records = read_records(spec, events, ledger)
+    gateway = list(gateway or ())
     derived = derive(spec)
     t0 = float(meta["t0_ms"])
     t_alert = meta.get("t_alert_ms")
@@ -538,6 +562,29 @@ def evaluate(
         if e["tainted"] is not False
         and (e["class"] in protected or e["class"] not in classes)
     ]
+    # Each commit's time at its own site: the gateway's commit time, carried
+    # by its post to the sink or by Core's record of the same commit.
+    core_commits = {
+        str(g["effect_id"]): g
+        for g in gateway
+        if g.get("phase") == "committed" and g.get("committed_at_ms") is not None
+    }
+    at_site: dict[str, float] = {}
+    for r in records.ledger:
+        if r.get("phase") != "committed":
+            continue
+        post = r.get("gateway") or {}
+        site_time = post.get("committed_at_ms")
+        if site_time is None:
+            site_time = core_commits.get(str(post.get("effect_id")), {}).get(
+                "committed_at_ms"
+            )
+        if site_time is not None:
+            at_site.setdefault(str(r["effect_id"]), float(site_time))
+    violation_ids = {
+        effect_id for effect_id, e in effects.items() if any(e is v for v in violations)
+    }
+    tau1 = tau1_ms(decisions or []) if t_alert is not None else None
     decision = decision_metrics(decisions or [], horizon) if t_alert is not None else {}
     t_established = decision.get("t_established_ms")
     after_alert = [e for e in violations if e["t_committed"] > horizon]
@@ -596,6 +643,18 @@ def evaluate(
         "tainted_after_established": (
             sum(1 for e in violations if e["t_committed"] > t_established)
             if t_established is not None
+            else NAN
+        ),
+        # ... and after tau_1 (phase 1 converged), at the commit's site
+        "converged": int(tau1 is not None),
+        "tau1_s": (tau1 - float(t_alert)) / 1000 if tau1 is not None else NAN,
+        "tainted_after_tau1": (
+            sum(
+                1
+                for effect_id in violation_ids
+                if at_site.get(effect_id, effects[effect_id]["t_committed"]) > tau1
+            )
+            if tau1 is not None
             else NAN
         ),
         "n_spawned": len(records.spawned),
