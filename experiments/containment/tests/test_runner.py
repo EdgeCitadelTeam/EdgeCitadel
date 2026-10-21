@@ -275,7 +275,7 @@ def test_a_resumed_experiment_skips_finished_runs_and_their_retries(
     (out / "runs" / f"{cells[0].run_id}.infra0").mkdir()
     ran = []
 
-    def run_cell(stack_config, experiment_, cell, out_):
+    def run_cell(stack_config, experiment_, cell, out_, **_options):
         ran.append(cell.run_id)
         run_dir = out_ / "runs" / cell.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -286,6 +286,7 @@ def test_a_resumed_experiment_skips_finished_runs_and_their_retries(
 
     monkeypatch.setattr(runner, "run_cell", run_cell)
     stack = SimpleNamespace(system="edgecitadel")
+    monkeypatch.setattr(runner, "checkouts", lambda _config: {})
     done = runner.run_experiment(stack, loaded, out, limit=3)  # type: ignore[arg-type]
     assert ran == [c.run_id for c in cells[1:]]
     assert len(done) == 3
