@@ -218,7 +218,8 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
                 "monitor": {
                     "grants": {"p": ["c"]},
                     "horizon": 2,
-                    "best_effort_guard": False,
+                    "profile": "shared",
+                    "mechanisms": {"firebreak": {"best_effort_guard": False}},
                     "control_latency_ms": {"n0": 120},
                 },
                 "control": {
@@ -237,10 +238,14 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
     assert (
         service.config.grants == {"p": frozenset({"c"})} and service.config.horizon == 2
     )
-    assert (
-        service.config.control_latency("n0") == 120
-        and not service.config.best_effort_guard
-    )
+    assert service.config.control_latency("n0") == 120
+    # The shared profile turns every mechanism on; the override turns one off.
+    assert service.config.mechanisms_for("firebreak").to_json() == {
+        "phase1_freeze": True,
+        "best_effort_guard": False,
+        "taint_aware_admission": True,
+    }
+    assert service.config.mechanisms_for("reject_source").best_effort_guard
     assert isinstance(service.control, LocalAgentdControlClient)
     assert service.control.owner == service.config.owner == "core-monitor"
     key = startup / "core-monitor.key"
@@ -270,6 +275,11 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
         {"monitor": {"grants": {"P": ["c"]}}},
         {"monitor": {"boundary": "maybe"}},
         {"monitor": {"unknown": 1}},
+        {"monitor": {"profile": "everything"}},
+        {"monitor": {"mechanisms": {"firebreak": {"best_effort_guard": 1}}}},
+        {"monitor": {"mechanisms": {"firebreak": {"freeze": True}}}},
+        {"monitor": {"mechanisms": {"telepathy": {"phase1_freeze": True}}}},
+        {"monitor": {"phase1_include_cut": "yes"}},
         {"control": {"agentd": {"n0": {"socket": "x"}}}},
         {"control": {"nats": {"key_file": str(short)}}},
         {"control": {"nats": {"key_file": str(key), "command_lifetime_ms": 1000}}},

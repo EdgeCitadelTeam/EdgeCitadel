@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from aggregator.containment_monitor import solver
-from aggregator.containment_monitor.config import MonitorConfig
+from aggregator.containment_monitor.config import Mechanisms, MonitorConfig
 from aggregator.containment_monitor.control import FakeControlClient, execute
 from aggregator.containment_monitor.model import (
     Action,
@@ -22,7 +22,7 @@ from aggregator.containment_monitor.projection import live_units, project, Scope
 from aggregator.containment_monitor.strategies import (
     Context,
     firebreak,
-    shared_mechanisms,
+    with_mechanisms,
 )
 from containment_support import BASE_MS, Harness, TraceBuilder, ingest
 
@@ -485,21 +485,18 @@ def test_best_effort_guard_and_taint_aware_admission(tmp_path):
     c0-cost admission block on that boundary's last hop; with a deferred boundary
     there is nothing to cut, and taint-aware admission blocks r's egress instead."""
     results = {}
-    for name, flags in {
-        "plain": {"best_effort_guard": False},
-        "guard": {},  # the guard is on by default
-        "admission": {
-            "best_effort_guard": False,
-            "taint_aware_admission": True,
-            "boundary": "defer",
-        },
+    for name, (guard, admission, boundary) in {
+        "plain": (False, False, "sink"),
+        "guard": (True, False, "sink"),
+        "admission": (False, True, "defer"),
     }.items():
+        mechanisms = Mechanisms(True, guard, admission)
         config = MonitorConfig(
             grants={"r": frozenset({"w"})},
             agent_nodes={"r": "n0", "w": "n1"},
             default_control_latency_ms=1000,
             session_isolated_agents=frozenset({"r"}),
-            **flags,
+            boundary=boundary,
         )
         harness = Harness(tmp_path / name, config)
         trace = TraceBuilder()
@@ -516,7 +513,7 @@ def test_best_effort_guard_and_taint_aware_admission(tmp_path):
             [inv(attempt)],
             supported_everywhere,
         )
-        result = shared_mechanisms(context, firebreak(context))
+        result = with_mechanisms(context, firebreak(context), mechanisms)
         results[name] = (set(result.actions), result.unavoidable, task_id, attempt)
         harness.close()
     # Pausing the tainted r and blocking its egress both cost c0 after the window.

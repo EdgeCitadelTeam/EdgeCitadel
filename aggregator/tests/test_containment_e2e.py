@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def run_c2(tmp_path: Path, strategy: str, variant: str) -> dict:
+def run_c2(tmp_path: Path, strategy: str, variant: str, *options: str) -> dict:
     out = tmp_path / f"{strategy}-{variant}.json"
     subprocess.run(
         [
@@ -36,6 +36,7 @@ def run_c2(tmp_path: Path, strategy: str, variant: str) -> dict:
             str(tmp_path),
             "--out",
             str(out),
+            *options,
         ],
         cwd=REPO,
         env={**os.environ, "PYTHONPATH": f"{REPO}:{REPO / 'agent-runtime/src'}"},
@@ -74,3 +75,22 @@ def test_firebreak_contains_the_shared_artifact_and_keeps_healthy_work(
         if action["state"] in {"in_force", "released"}:
             times = action["ms_after_alert"]
             assert 0 <= times["t_decision"] <= times["t_sent"] <= times["t_confirmed"]
+
+
+def test_phase1_with_the_at_alert_cut_blocks_the_late_effect_from_the_first_round(
+    tmp_path,
+):
+    """phase1_include_cut: the first round issues Firebreak's at-alert cut with
+    the freeze; the actuator command is held from that round on, and every
+    release still follows the confirmed phase-2 cut."""
+    result = run_c2(tmp_path, "firebreak", "late", "--phase1-include-cut")
+    assert result["phase1_include_cut"] and result["profile"] == "deployed"
+    assert (result["status"], result["cut_valid"]) == ("contained", True)
+    effect_holds = [
+        a for a in result["actions"] if a["action"].startswith("hold:effect")
+    ]
+    assert effect_holds and {a["phase"] for a in effect_holds} == {1}
+    assert all(a["state"] == "in_force" for a in effect_holds)
+    assert not result["effect_performed"]
+    assert "committed" not in result["effect"]["agentd_state"].values()
+    assert result["releases_after_confirmations"] and not result["unconfirmed"]

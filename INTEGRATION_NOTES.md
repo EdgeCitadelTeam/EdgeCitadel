@@ -358,6 +358,9 @@ and agentd:
 
 ### 5. Shared mechanisms and two new baselines
 
+(Superseded in M5 by per-strategy mechanism profiles; the `shared` profile
+keeps the behaviour described here, with taint-aware admission on.)
+
 A strategy now chooses only its phase-2 actions. Everything around that choice
 is applied identically to every strategy: the engine wraps each strategy's
 result in `strategies.shared_mechanisms` (best-effort guard on the sinks
@@ -440,3 +443,63 @@ workload), plus one test per new baseline.
   `EDGECITADEL_CONTROLLER_LEASE_MS` on and configure control with
   `enforce: false` for non-enforcing runs. Tests in
   `test_containment_service.py`.
+
+## M5 (`m5/integration`, from `m4/design` at `77f479f`)
+
+### Per-strategy mechanism profiles (supersedes item 5's sharing)
+
+Sharing the phase-1 freeze, the guard and taint-aware admission with every
+strategy conflicts with the evaluation plan, in which each strategy family adds
+one ingredient and the no-lineage baselines get nothing lineage-based. The three
+mechanisms are now set per strategy (`config.Mechanisms`). `profile` sets them
+for every strategy; `mechanisms` overrides them per strategy (or `"*"`):
+
+- `deployed` (default, main runs): every rule-based baseline applies its own
+  rule directly; the three cut strategies run the two-phase protocol with the
+  guard and taint-aware admission (needed for Theorem 5, theory A.6 (c)).
+- `shared`: all three on for every strategy (taint-aware admission included,
+  unlike the M4 default), an ablation in which strategies differ only in the
+  phase-2 rule.
+
+Theory A.6 obligation (c) therefore holds by default for the three cut
+strategies (the only ones Theorem 5 is claimed for). Confirmation, fencing
+(ingest-then-release) and agentd's gates stay on for every strategy in both. Each decision records `profile`, `mechanisms` and
+`phase1_include_cut` (decision log, status `last_decision`; status also lists
+every strategy's mechanisms), and the C2 run output and the harness's
+`run.json` carry them.
+
+| Strategy | Family | Phase-2 rule | `deployed`: freeze / guard / taint-aware admission | `shared` |
+|---|---|---|---|---|
+| Reject source | no lineage | park the roots' outputs and effects | off / off / off | on / on / on |
+| Stop team | no lineage | hold the root agent's team | off / off / off | on / on / on |
+| Stop everything downstream | no lineage | every action in the full G_C closure | off / off / off | on / on / on |
+| Sink guard | no lineage | hold pending effects, revoke protected classes, park root inputs | off / off / off | on / on / on |
+| Trace & stop | past lineage | every action in the declared closure | off / off / off | on / on / on |
+| Trace & quarantine | past lineage | Trace & stop + pause and egress-revoke the tainted units | off / off / off | on / on / on |
+| Greedy cut | past lineage + future authority | greedy cover, deadline-aware | on / on / on | on / on / on |
+| Cut without deadlines | past lineage + future authority | exact cut, every element feasible | on / on / on | on / on / on |
+| Firebreak | past lineage + future authority | exact deadline-aware cut | on / on / on | on / on / on |
+
+For every strategy, in both profiles: the same G_P, X_t, roots, G_C and action
+vocabulary; actions confirmed, fenced and enforced by agentd's gates (holds,
+revocations, filters, leases, commit-time effect fence). A rule applied directly
+ends `applied` (with `cut_valid` reported); a two-phase decision ends
+`contained`, `phase2_check_failed`, `phase2_unconfirmed` or `ingest_timeout`.
+Tests: `test_the_deployed_profile_adds_mechanisms_only_to_the_cut_strategies`
+and `test_the_shared_profile_isolates_the_phase_two_rule`.
+
+### `phase1_include_cut` (default false)
+
+Phase 1 issues the frontier freeze B_1 together with the at-alert cut B_a: the
+strategy's own solve on the phase-2 G_C at the alert (for Firebreak, its
+deadline-aware cut), applied at once in the first round and recorded as the
+`phase: 1` entry of `solves`. Phase 2 is unchanged: it solves with B_1 and B_a
+in force and, once its cut is confirmed, fenced and checked, releases the holds
+of B_1 ∪ B_a it does not keep (a revocation in B_a cannot be released and stays
+in force). More phase-1 actions only shrink the source side, so Theorem 5 is
+unaffected. Only strategies that run the two-phase protocol use it. Tests:
+`test_phase_one_with_the_at_alert_cut_blocks_the_late_effect_at_once`
+(in-process, late alert: the effect hold is in the first round, the effect's
+sink is separated at every instant the nodes applied from then on, releases
+follow the last phase-2 confirmation) and, opt-in on the multi-process C2,
+`test_phase1_with_the_at_alert_cut_blocks_the_late_effect_from_the_first_round`.

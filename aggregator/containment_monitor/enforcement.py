@@ -235,6 +235,10 @@ class EnforcementDriver:
 class Decision:
     incident_id: str
     strategy: str
+    # The mechanisms the strategy ran with (config.Mechanisms) and their profile.
+    profile: str = "deployed"
+    mechanisms: dict = field(default_factory=dict)
+    phase1_include_cut: bool = False
     status: str = "pending"
     rounds: int = 0
     phase1: list[ActionRecord] = field(default_factory=list)
@@ -243,13 +247,18 @@ class Decision:
     unavoidable: list[str] = field(default_factory=list)
     cut_valid: bool | None = None
     solve: dict = field(default_factory=dict)  # the last phase-2 solve
-    solves: list[dict] = field(default_factory=list)  # every phase-2 solve
+    # Every solve, in order: the at-alert cut of phase 1 (phase1_include_cut)
+    # and each phase-2 solve; "phase" says which.
+    solves: list[dict] = field(default_factory=list)
     graph: dict = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return {
             "incident_id": self.incident_id,
             "strategy": self.strategy,
+            "profile": self.profile,
+            "mechanisms": self.mechanisms,
+            "phase1_include_cut": self.phase1_include_cut,
             "status": self.status,
             "rounds": self.rounds,
             "phase1": [r.to_json() for r in self.phase1],
@@ -280,7 +289,11 @@ class TwoPhaseProtocol:
     ingested up to their journal positions (reconciling taint from them) and
     returns whether that happened in time; ``choose(cg)`` returns the phase-2
     strategy result. ``in_force`` maps actions to their records and is updated
-    in place.
+    in place. With ``cut_at_alert`` (phase1_include_cut), the first phase-1
+    round also issues that cut, solved on the phase-2 G_C at the alert (B_a),
+    with the freeze; phase 2 is unchanged, and what it does not keep of B_1 and
+    B_a is released under the same guarded release (holds only: a revocation
+    cannot be released and stays).
     """
 
     def __init__(self, driver: EnforcementDriver, *, max_rounds: int = 3):
@@ -297,14 +310,23 @@ class TwoPhaseProtocol:
         choose: Callable[[ControlGraph], StrategyResult],
         in_force: dict[Action, ActionRecord],
         two_phase: bool = True,
+        cut_at_alert: Callable[[ControlGraph], StrategyResult] | None = None,
     ) -> Decision:
         clock = self.driver.clock
         if two_phase:
-            for _ in range(self.max_rounds):
+            for round_ in range(self.max_rounds):
                 decision.rounds += 1
                 cg = project(1, frozenset(in_force))
                 block, _, closure = frontier_block(cg)
                 block |= admission_freeze(cg, closure)
+                if cut_at_alert is not None and round_ == 0:
+                    at_alert = project(2, frozenset(in_force))
+                    started = time.perf_counter()
+                    result = cut_at_alert(at_alert)
+                    decision.solves.append(
+                        self._solve(decision, result, started, at_alert, phase=1)
+                    )
+                    block |= set(result.actions)
                 records = self.driver.apply(
                     block - in_force.keys(),
                     incident_id=decision.incident_id,
@@ -324,17 +346,7 @@ class TwoPhaseProtocol:
             cg = project(2, frozenset(in_force))
             started = time.perf_counter()
             result = choose(cg)
-            decision.solve = {
-                # solver, fast_path, fast_path_reason, exceptions, ...
-                **result.report,
-                "strategy": decision.strategy,
-                "ms": round((time.perf_counter() - started) * 1000, 3),
-                "solver_ms": round(result.solve_ms, 3),
-                "status": result.status,
-                "method": result.method,
-                "predicted_cost": result.predicted_cost,
-                "actions": [a.to_json() for a in result.actions],
-            }
+            decision.solve = self._solve(decision, result, started, cg, phase=2)
             decision.solves.append(decision.solve)
             decision.graph = dict(cg.stats)
             decision.unavoidable = sorted(getattr(result, "unavoidable", ()))
@@ -366,7 +378,9 @@ class TwoPhaseProtocol:
                 decision.status = "applied"
                 return decision
             if held:
-                releasable = [r for a, r in phase1.items() if a not in chosen]
+                releasable = [
+                    r for a, r in phase1.items() if a not in chosen and a.op == "hold"
+                ]
                 decision.released = self.driver.release(releasable)
                 for record in decision.released:
                     if record.state == "released":
@@ -375,3 +389,26 @@ class TwoPhaseProtocol:
                 return decision
         decision.status = "phase2_check_failed"  # phase-1 holds stay in force
         return decision
+
+    @staticmethod
+    def _solve(
+        decision: Decision,
+        result: StrategyResult,
+        started: float,
+        cg: ControlGraph,
+        *,
+        phase: int,
+    ) -> dict:
+        return {
+            # solver, fast_path, fast_path_reason, exceptions, ...
+            **result.report,
+            "phase": phase,
+            "strategy": decision.strategy,
+            "ms": round((time.perf_counter() - started) * 1000, 3),
+            "solver_ms": round(result.solve_ms, 3),
+            "status": result.status,
+            "method": result.method,
+            "predicted_cost": result.predicted_cost,
+            "actions": [a.to_json() for a in result.actions],
+            "graph": dict(cg.stats),
+        }

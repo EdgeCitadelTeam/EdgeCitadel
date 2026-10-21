@@ -303,22 +303,24 @@ referenced by path):
   `EDGECITADEL_TRACE_COLLECTOR=1`, `EDGECITADEL_CONTAINMENT_MONITOR=1`,
   `EDGECITADEL_CONTAINMENT_CONFIG=/data/containment.json`. The monitor uses
   Core's own `NATS_URL`/`NATS_TOKEN`.
-- Defaults that encode team decisions (2026-10-20), so the file above does not
-  repeat them: `best_effort_guard: true` (also issue the cheapest action on the
-  last hop into sinks judged unavoidable, since deadlines are lower bounds),
-  `horizon: 1` with `boundary: "sink"`, and `controller_lease_renew_ms: 10000`.
-  Set them explicitly only to deviate (`controller_lease_renew_ms: 0` stops
-  renewing, which makes lease-enforcing nodes deny all effects).
-- **M4** settings (defaults shown; set only to deviate):
-  `phase1_freeze: true` (the two-phase protocol for every strategy; `false`
-  measures each strategy's rule alone), `ingest_timeout_ms: 5000` (how long a
+- Defaults that encode team decisions, so the file above does not repeat
+  them: `horizon: 1` with `boundary: "sink"`, `controller_lease_renew_ms:
+  10000`, and **M5** `profile: "deployed"`: the rule-based baselines apply their
+  rule directly, the three cut strategies run the two-phase protocol with the
+  best-effort guard and taint-aware admission (which Theorem 5 needs). Set them
+  explicitly only to deviate (`controller_lease_renew_ms: 0` stops renewing,
+  which makes lease-enforcing nodes deny all effects; `profile: "shared"` gives
+  every strategy every mechanism, an ablation; `mechanisms: {"<strategy>" |
+  "*": {"phase1_freeze" | "best_effort_guard" | "taint_aware_admission":
+  bool}}` overrides one strategy's mechanisms).
+- Other settings (defaults shown; set only to deviate): **M5**
+  `phase1_include_cut: false` (phase 1 also issues the strategy's at-alert cut),
+  **M4** `ingest_timeout_ms: 5000` (how long a
   release waits for the confirmed journal positions to be ingested; on timeout
   the decision ends `ingest_timeout` and keeps its phase-1 holds),
   `enforce: true` (`false`: compute and log decisions, send no command, but
   still describe nodes and renew leases, for runs that must not contain),
-  `taint_aware_admission: false` (set **true** for runs that rely on Theorem 5:
-  it labels the source side left by phase 2 before any release; see
-  `INTEGRATION_NOTES.md`, item 4), and `shared_memory_agents: []` (agents whose
+  and `shared_memory_agents: []` (agents whose
   memory persists across contexts, so their invocations share one session).
 - With leases on, the monitor renews them from the moment it starts, before
   Core's collector is ready and whether or not an alert ever arrives; a

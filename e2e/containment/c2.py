@@ -174,6 +174,8 @@ class ActuatorLedger:
 class Deployment:
     run_dir: Path
     strategy: str
+    profile: str = "deployed"
+    phase1_include_cut: bool = False
     processes: list[tuple[str, subprocess.Popen]] = field(default_factory=list)
     ledger: ActuatorLedger | None = None
     nodes: dict[str, Node] = field(default_factory=dict)
@@ -330,6 +332,8 @@ class Deployment:
                             "endurance": 2 * REMOTE_DELAY_MS,
                         },
                         "strategy": self.strategy,
+                        "profile": self.profile,
+                        "phase1_include_cut": self.phase1_include_cut,
                     },
                     "control": {
                         "nats": {
@@ -879,6 +883,9 @@ def summarize(deployment: Deployment, outcome: dict) -> dict:
     healthy = {agent: [t["state"] for t in tasks.get(agent, [])] for agent in HEALTHY}
     return {
         "strategy": deployment.strategy,
+        "profile": decision["profile"],
+        "mechanisms": decision["mechanisms"],
+        "phase1_include_cut": decision["phase1_include_cut"],
         "status": decision["status"],
         "cut_valid": decision["cut_valid"],
         "follow_up_statuses": [d["status"] for d in outcome["follow_ups"]],
@@ -933,6 +940,8 @@ def main() -> int:
         ],
     )
     parser.add_argument("--variant", choices=["early", "late"], default="late")
+    parser.add_argument("--profile", choices=["deployed", "shared"], default="deployed")
+    parser.add_argument("--phase1-include-cut", action="store_true")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--root", type=Path, default=None, help="directory for run directories"
@@ -945,7 +954,12 @@ def main() -> int:
     run_dir = Path(
         tempfile.mkdtemp(prefix=f"c2-{args.strategy}-{args.variant}-", dir=args.root)
     )
-    deployment = Deployment(run_dir, args.strategy)
+    deployment = Deployment(
+        run_dir,
+        args.strategy,
+        profile=args.profile,
+        phase1_include_cut=args.phase1_include_cut,
+    )
     try:
         deployment.start()
         outcome = run_scenario(deployment, args.variant, args.effect_margin_s)
@@ -960,6 +974,8 @@ def main() -> int:
                     for k in (
                         "variant",
                         "strategy",
+                        "profile",
+                        "phase1_include_cut",
                         "status",
                         "cut_valid",
                         "effect_performed",

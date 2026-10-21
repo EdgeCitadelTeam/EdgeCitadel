@@ -12,13 +12,28 @@ the effect classes whose commits are sinks.
 
 The timing model gives lower bounds only. Deadlines are earliest possible times,
 so over-estimating a latency or a minimum delay would make G_C unsound.
+
+Mechanisms around a strategy's own rule are set per strategy (``Mechanisms``):
+the two-phase protocol (``phase1_freeze``), the best-effort guard and
+taint-aware admission. ``profile`` gives every strategy its defaults and
+``mechanisms`` overrides them per strategy (``"*"`` for all):
+
+- ``deployed`` (default): each strategy as it would be deployed. The rule-based
+  baselines apply their rule directly (no freeze, no guard, no taint-aware
+  admission; nothing lineage-based is added to the no-lineage ones); the three
+  cut strategies run the two-phase protocol with the guard and taint-aware
+  admission, which Theorem 5 needs.
+- ``shared``: every mechanism on for every strategy, an ablation in which
+  strategies differ only in their phase-2 rule.
+
+Confirmation, fencing and agentd's gates apply to every strategy either way.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -31,6 +46,54 @@ LINK_PATTERN = re.compile(
 
 class ConfigError(ValueError):
     pass
+
+
+PROFILES = ("deployed", "shared")
+# The strategies that solve a cut on G_C (the others apply a rule).
+CUT_STRATEGIES = frozenset({"greedy_cut", "cut_without_deadlines", "firebreak"})
+
+
+@dataclass(frozen=True)
+class Mechanisms:
+    """What runs around one strategy's own rule."""
+
+    # The two-phase protocol: phase-1 freeze (frontier holds and admission
+    # freeze) first, released only after the strategy's actions are confirmed,
+    # fenced and still a cut. False applies the strategy's actions directly.
+    phase1_freeze: bool
+    # Also issue c0-cost actions on the last hop into sinks judged unavoidable
+    # (deadlines are lower bounds, so some may still land in time).
+    best_effort_guard: bool
+    # After each cut, block new dispatches and effects (egress) of every
+    # invocation still on the source side: the label set of theory A.6.
+    taint_aware_admission: bool
+
+    def to_json(self) -> dict[str, bool]:
+        return asdict(self)
+
+
+def profile_mechanisms(profile: str, strategy: str) -> Mechanisms:
+    if profile == "shared":
+        return Mechanisms(True, True, True)
+    cut = strategy in CUT_STRATEGIES
+    return Mechanisms(cut, cut, cut)
+
+
+def _mechanism_overrides(value: object) -> dict[str, dict[str, bool]]:
+    fields = set(Mechanisms.__dataclass_fields__)
+    if not isinstance(value, dict):
+        raise ConfigError("invalid_mechanisms")
+    out = {}
+    for strategy, flags in value.items():
+        if (
+            strategy not in {*STRATEGY_NAMES, "*"}
+            or not isinstance(flags, dict)
+            or set(flags) - fields
+            or not all(isinstance(flag, bool) for flag in flags.values())
+        ):
+            raise ConfigError("invalid_mechanisms")
+        out[strategy] = dict(flags)
+    return out
 
 
 def _agents(value: object, what: str) -> frozenset[str]:
@@ -108,17 +171,15 @@ class MonitorConfig:
     # "sink": a new invocation at the horizon is a sink; "defer": a dead end that
     # the receding re-solve handles once it materializes.
     boundary: str = "sink"
-    # After each cut, block new dispatches (egress) of every source-side invocation.
-    taint_aware_admission: bool = False
-    # Run every strategy through the two-phase protocol: phase-1 freeze first,
-    # its holds released only after the strategy's actions are confirmed,
-    # fenced and still a cut. False applies each strategy's actions directly.
-    # Either way it is the same for all strategies.
-    phase1_freeze: bool = True
-    # Also issue c0-cost actions on the last hop into sinks judged unavoidable
-    # (deadlines are lower bounds, so some may still land in time). On by team
-    # decision (2026-10-20).
-    best_effort_guard: bool = True
+    # Mechanisms per strategy (see the module docstring): a profile, then
+    # overrides {"<strategy>" | "*": {"<mechanism>": bool}}.
+    profile: str = "deployed"
+    mechanisms: Mapping[str, Mapping[str, bool]] = field(default_factory=dict)
+    # Phase 1 also issues the strategy's own cut solved at the alert on G_C
+    # (B_a) together with the freeze; phase 2 is unchanged, and whatever of
+    # B_1 and B_a the refined cut does not keep is released under the guarded
+    # release (holds only: revocations stay).
+    phase1_include_cut: bool = False
     # Renew agentd's fail-closed controller lease (EDGECITADEL_CONTROLLER_LEASE_MS
     # on the nodes) this often, on every known node that describes
     # renew:controller; 0 disables. Keep it well under the lease and the command
@@ -132,6 +193,14 @@ class MonitorConfig:
     ingest_timeout_ms: int = 5_000
 
     # -- lookups ------------------------------------------------------------
+    def mechanisms_for(self, strategy: str) -> Mechanisms:
+        defaults = profile_mechanisms(self.profile, strategy)
+        overrides = {
+            **self.mechanisms.get("*", {}),
+            **self.mechanisms.get(strategy, {}),
+        }
+        return replace(defaults, **overrides)
+
     def session_of(self, agent_id: str, context_id: str | None) -> str | None:
         """The memory an invocation continues: its conversation, ``*`` (all of
         a shared-memory agent's invocations), or None (no carried state)."""
@@ -210,11 +279,15 @@ class MonitorConfig:
                 if item not in STRATEGY_NAMES:
                     raise ConfigError("invalid_strategy")
                 kwargs[key] = item
+            elif key == "profile":
+                if item not in PROFILES:
+                    raise ConfigError("invalid_profile")
+                kwargs[key] = item
+            elif key == "mechanisms":
+                kwargs[key] = _mechanism_overrides(item)
             elif key in {
                 "external_requests_untrusted",
-                "taint_aware_admission",
-                "best_effort_guard",
-                "phase1_freeze",
+                "phase1_include_cut",
                 "enforce",
             }:
                 if not isinstance(item, bool):

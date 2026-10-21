@@ -56,7 +56,7 @@ from .graph import ControlGraph
 from .model import FAILURE_KINDS, Action, Alert, AlertError, parse_external_alert, ver
 from .projection import ScopeMirror, project
 from .provenance import ProvenanceGraph
-from .strategies import DISPLAY, STRATEGIES, Context, shared_mechanisms
+from .strategies import DISPLAY, STRATEGIES, Context, with_mechanisms
 
 BATCH = 256
 MAX_CATCH_UP_BATCHES = 64
@@ -440,10 +440,18 @@ class ContainmentMonitor:
     def _enforce(
         self, incident_id: str, name: str, t_alert: int, roots: list[str]
     ) -> Decision:
-        decision = Decision(incident_id, name)
+        mechanisms = self.config.mechanisms_for(name)
+        include_cut = self.config.phase1_include_cut and mechanisms.phase1_freeze
+        decision = Decision(
+            incident_id,
+            name,
+            profile=self.config.profile,
+            mechanisms=mechanisms.to_json(),
+            phase1_include_cut=include_cut,
+        )
 
-        def choose(cg: ControlGraph):
-            context = Context(
+        def context(cg: ControlGraph) -> Context:
+            return Context(
                 self.graph,
                 self.config,
                 cg,
@@ -451,7 +459,13 @@ class ContainmentMonitor:
                 roots,
                 self._supported,
             )
-            return shared_mechanisms(context, STRATEGIES[name](context))
+
+        def rule(cg: ControlGraph):
+            return STRATEGIES[name](context(cg))
+
+        def choose(cg: ControlGraph):
+            ctx = context(cg)
+            return with_mechanisms(ctx, STRATEGIES[name](ctx), mechanisms)
 
         self.protocol.run(
             decision,
@@ -460,7 +474,8 @@ class ContainmentMonitor:
             fence=self.fence,
             choose=choose,
             in_force=self.in_force,
-            two_phase=self.config.phase1_freeze,
+            two_phase=mechanisms.phase1_freeze,
+            cut_at_alert=rule if include_cut else None,
         )
         self._persist(decision)
         return decision
@@ -548,6 +563,11 @@ class ContainmentMonitor:
         last = self.decisions[-1] if self.decisions else None
         return {
             "fault": self.fault,
+            "profile": self.config.profile,
+            "phase1_include_cut": self.config.phase1_include_cut,
+            "mechanisms": {
+                name: self.config.mechanisms_for(name).to_json() for name in STRATEGIES
+            },
             "cursor": {
                 "ingest_cursor": cursor,
                 "core_ingest_seq": high,

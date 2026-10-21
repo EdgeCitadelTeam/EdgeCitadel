@@ -15,20 +15,20 @@
 | cut_without_deadlines | Cut without deadlines       | exact cut on G_C with every element feasible            |
 | firebreak             | Firebreak                   | exact deadline-aware cut (gadget/enumeration/ILP)       |
 
-A strategy only chooses its phase-2 actions. Every mechanism around that
-choice is shared and identical for all strategies (``shared_mechanisms`` and
-the two-phase protocol): the same G_P, X_t, roots and G_C; the same action
-vocabulary and per-site landing; the phase-1 freeze (frontier holds and
-admission freeze, ``phase1_freeze``); confirm-, fence- and check-then-release;
-and two optional additions (configuration flags):
+A strategy chooses its own actions; every strategy shares the same G_P, X_t,
+roots and G_C, the same action vocabulary and per-site landing, and the
+confirmation, fencing and agentd gates of its actions. The mechanisms around
+the choice are set per strategy (``config.Mechanisms``, by profile; see
+``config``): the two-phase protocol (``phase1_freeze``) and two additions that
+``with_mechanisms`` makes to the strategy's result:
 
 - ``best_effort_guard``: also issue every c0-cost action on the last hop into a
   sink that is unavoidable on the deadline-aware G_C (deadlines are lower
-  bounds, so some of those may still land in time). On by default.
+  bounds, so some of those may still land in time).
 - ``taint_aware_admission``: revoke the egress of every invocation still on the
-  source side of the chosen actions (new dispatches and effects denied).
-  Needed with ``boundary="defer"``, where nothing else constrains new
-  invocations until they materialize.
+  source side of the chosen actions (new dispatches and effects denied): the
+  label set of theory A.6, and needed with ``boundary="defer"``, where nothing
+  else constrains new invocations until they materialize.
 
 Rules ignore feasibility (their actions are issued anyway).
 """
@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import solver
-from .config import MonitorConfig
+from .config import Mechanisms, MonitorConfig
 from .graph import ControlGraph
 from .model import (
     Action,
@@ -298,19 +298,21 @@ def taint_admission(cg: ControlGraph, actions: list[Action]) -> list[Action]:
     return out
 
 
-def shared_mechanisms(ctx: Context, result: StrategyResult) -> StrategyResult:
-    """Add the optional mechanisms every strategy shares, identically.
+def with_mechanisms(
+    ctx: Context, result: StrategyResult, mechanisms: Mechanisms
+) -> StrategyResult:
+    """Add the guard and taint-aware admission where the strategy has them.
 
-    Both are computed on the deadline-aware G_C from the strategy's own
-    actions: the guard on the sinks unavoidable there, the admission on the
-    units those actions leave on the source side.
+    Both are computed the same way for every strategy, on the deadline-aware
+    G_C from the strategy's own actions: the guard on the sinks unavoidable
+    there, the admission on the units those actions leave on the source side.
     """
     started = time.perf_counter()
     actions = list(result.actions)
     unavoidable = solver.unavoidable_sinks(ctx.cg.instance())
-    if ctx.config.best_effort_guard:
+    if mechanisms.best_effort_guard:
         actions += best_effort(ctx.cg, unavoidable)
-    if ctx.config.taint_aware_admission:
+    if mechanisms.taint_aware_admission:
         actions += taint_admission(ctx.cg, actions)
     shared = _finish(
         ctx, result.name, actions, started, result.status, result.method, unavoidable

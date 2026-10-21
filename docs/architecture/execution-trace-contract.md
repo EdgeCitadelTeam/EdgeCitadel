@@ -3595,11 +3595,24 @@ score over failing and `validator_pass` subjects, an untrusted-origin prior and 
 type prior; the top candidate's prune level (version, invocation, session, agent,
 subtree) defines the roots. The chosen strategy (default Firebreak: exact grouped
 min-cut; experiment baselines, including Trace & quarantine and Sink guard, are
-selectable per alert) chooses the phase-2 actions only; the best-effort guard,
-taint-aware admission and the protocol are shared by every strategy
-(`phase1_freeze`, default on, runs the two-phase protocol for all). The
+selectable per alert) chooses its actions. The mechanisms around that choice
+are set per strategy (`config.Mechanisms`): the two-phase protocol
+(`phase1_freeze`), the best-effort guard and taint-aware admission. A
+`profile` sets them for every strategy and `mechanisms`
+(`{"<strategy>" | "*": {"<mechanism>": bool}}`) overrides them. `deployed`
+(default): the rule-based baselines apply their rule directly, with neither
+mechanism added; Greedy cut, Cut without deadlines and Firebreak run the
+two-phase protocol with the guard and taint-aware admission (Theorem 5).
+`shared`: everything on for every strategy, an ablation that isolates the
+phase-2 rule. Confirmation, fencing and agentd's gates apply either way. Each
+decision records `profile`, `mechanisms` and `phase1_include_cut`; status
+lists every strategy's mechanisms. The
 two-phase protocol places frontier holds first, then the chosen set; phase-1 holds
-are released only after every phase-2 action is confirmed and fenced. Phase 1
+are released only after every phase-2 action is confirmed and fenced. With
+`phase1_include_cut` (default false) the first phase-1 round also issues the
+strategy's own cut solved on G_C at the alert (B_a, recorded as the `phase: 1`
+entry of `solves`); phase 2 is unchanged, and the holds of B_1 and B_a it does
+not keep are released under the same guarded release (revocations stay). Phase 1
 also freezes admission: every unit on the source side that may still emit is
 held (its task, or its egress where the node offers no task hold; a pending
 task before it starts), so agentd denies every new dispatch, effect and result
@@ -3704,7 +3717,6 @@ error under `control.controller_leases`. With `EDGECITADEL_CONTROLLER_LEASE_MS`
 on a node, a stopped or partitioned monitor therefore stops that node's effects
 within the lease.
 
-The best-effort guard (`best_effort_guard`) is on by default; `horizon` 1 with
-`boundary: "sink"` is the default projection. `stop_team_level` (default 0)
+`horizon` 1 with `boundary: "sink"` is the default projection. `stop_team_level` (default 0)
 makes the "Stop team" baseline hold the org subtree that many levels above the
 root's agent (`org_parent`, else the observed dispatch tree).
