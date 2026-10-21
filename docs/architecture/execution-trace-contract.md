@@ -1378,24 +1378,43 @@ attenuated but nothing meters tokens yet. A lease denial records a
 `containment/alert` event (`alert: lease_exceeded`, `lease_dimension`) in the
 dispatching run, beside the `permission` and `dispatch` denials.
 
-Admission now checks, in order: execution hold (`execution_held`), egress hold
-(`egress_held`), revocation of the invocation's task or any task in its chain
-(`authority_revoked`), the grant (`not_authorized`), the inherited recipients
-(`outside_authority_scope`), ingress filters (`ingress_filtered`) and the lease
-(`lease_exceeded`). Containment denials name the deciding policy
-(`containment_hold`, `containment_egress_hold`, `revocation`,
-`ingress_filter`) and its owner's fencing token as `policy_version`.
+Admission now checks, in order: execution hold (`execution_held`), revocation
+of the invocation's task or any task in its chain (`authority_revoked`), the
+grant (`not_authorized`), the inherited recipients
+(`outside_authority_scope`), ingress filters (`ingress_filtered`), the lease
+(`lease_exceeded`) and last the egress label: a dispatch that passed every
+other check from a labelled invocation is held as an event (below), one under
+a restore egress hold is denied (`egress_held`). Containment denials name the
+deciding policy (`containment_hold`, `revocation`, `ingress_filter`) and its
+owner's fencing token as `policy_version`.
 
 Containment state managed by the same fenced owners as holds:
 
-- **Egress hold** (`holds.kind = egress`): the invocation keeps running and
-  receiving, but nothing leaves it. Its dispatches and effects are denied, its
-  recipient terminal transitions (`completed`, `failed`, `rejected`) are refused
-  until release, and none of its outbound messages is published. This includes
-  requests and cancels it had already queued for its children. Task reads show
-  `containment_egress_hold`. The managed runtime does not pause on it; a result
-  waits for release. A task-less native root is egress-held by its binding ID,
-  which withholds the requests of the children it dispatched.
+- **Egress hold** (`holds.kind = egress`, the admission label of the theory's
+  (AI)): the invocation keeps running and receiving, but nothing leaves it
+  unadmitted. Each new event it produces is *held* one by one, in
+  `held_events` (schema 34), under an **event hold** of its own
+  (`holds.kind = event`, object: the held-event ID) that agentd places itself,
+  owned by the label's owner at the label's policy version, in the transaction
+  that holds the event and journals `containment/held` (attributes `event`
+  `effect`|`dispatch`|`result`, `held_event_id`, `subject_id` (the effect, the
+  child task or the task), the label's `policy_version`, `effect_class`,
+  `target`, `recipient_id`). Held are: a dispatch that passed every other check
+  (the child task is created; its request is not published and a local
+  recipient cannot claim it); a registered effect (`effect.execute` replies
+  `state: held`; the gateway keeps it); and its result (the terminal transition
+  is refused, recorded once as a held event; the managed runtime offers it
+  again every watch interval). Effects only a harness performs
+  (`effect.authorize`) cannot be held and are denied (`egress_held`). Outbound
+  messages queued before the label (requests and cancels for its children, its
+  own) are not published while it stands. The label's owner admits one event
+  by releasing its event hold (`release {kind: event}`; a controller cannot
+  place one): the gates are checked again without the label for that event, and
+  the effect is performed at its time, the request published or the result
+  accepted, unless another gate refuses it. A held event stays held when its
+  label is released. Task reads show `containment_egress_hold`. A task-less
+  native root is egress-held by its binding ID, which withholds the requests of
+  the children it dispatched.
 - **Revocation** (`revocations`, kind `authority`, `egress` or `credential`):
   irreversible. `authority` denies every later dispatch and effect of the named
   task and of any task whose `authority_chain` contains it; the task may be
@@ -1415,10 +1434,12 @@ Containment state managed by the same fenced owners as holds:
 
 The outbox gate (`PUBLICATION_BLOCKED_SQL`) is one predicate used both to select
 messages and to recheck each message just before publication: transport and
-task holds, the requester's execution or egress hold (or a native root's
-binding egress hold) for a child's request or cancel, a credential revocation
-of the emitting agent, and agent filters on the child's chain, its sender's
-credential, or any authority.
+task holds, a task's label for its own messages unless its result was
+admitted, a held dispatch or result event, the requester's execution hold or
+label (or a native root's binding label) for a child's request or cancel
+unless that dispatch was admitted, a credential revocation of the emitting
+agent, and agent filters on the child's chain, its sender's credential, or any
+authority.
 
 **Exported authority.** Each `run/started` carries the invocation's effective
 authority when it started, so a controller need not mirror grants from
@@ -1452,8 +1473,10 @@ registered effects, performs it itself. Requests are bound to the invocation by
 its execution binding (Managed Agents, and native connectors with
 `edgecitadel_trace`); only an `accepted` or `running` task may ask. The target is
 exact; the harness classifies it. agentd checks, and the first failure decides
-the error code: execution hold (`execution_held`), egress hold of the task or
-binding (`egress_held`), an `authority`, `egress` or `credential` revocation
+the error code: execution hold (`execution_held`), the egress label of the task
+or binding (`effect.execute` holds the effect as an event, to be checked from
+the next step on once admitted; `effect.authorize` and a restore egress hold
+deny it, `egress_held`), an `authority`, `egress` or `credential` revocation
 applying to the invocation (`authority_revoked`), the controller lease when
 configured (`controller_lease_expired`), the effect scope, which is the
 connector's effect grant narrowed by the inherited `effect_scope`
@@ -1570,6 +1593,7 @@ command_id?}` and issues the same command with a five-minute expiry.
 | | `{kind: egress, object_id}` | egress block of a task, or of a task-less native root by its binding ID |
 | | `{kind: transport, object_id}` | withhold one outbox message |
 | | `{kind: effect, object_id: effect_id}` | a scheduled effect held when due is cancelled |
+| `release` | `{kind: event, object_id: held_event_id}` | admit one event a label holds (agentd places event holds; a `hold` of kind `event` is rejected) |
 | `revoke` | `{kind: authority, object_id: task}` | a delegation and all its descendants |
 | | `{kind: egress, object_id: task or binding}` | one invocation's new dispatches and effects; it may still complete |
 | | `{kind: credential, object_id: agent}` | the agent's dispatches, effects, `task.create`, and publication of everything it emits |
@@ -1582,7 +1606,8 @@ command_id?}` and issues the same command with a five-minute expiry.
 
 `hold`, `release` and `revoke` with `{kind, object_id}` are the monitor's
 ControlClient operations; `describe` lists what a node enforces (`hold:task`,
-`hold:egress`, `hold:transport`, `hold:effect`, `revoke:authority`, `revoke:egress`,
+`hold:egress`, `hold:transport`, `hold:effect`, `hold:event` (released only),
+`revoke:authority`, `revoke:egress`,
 `revoke:credential`, `revoke:grant`, `revoke:admission`, `filter:agent`,
 `filter:effect`, `cancel:task`, `renew:controller`). Revocations are
 irreversible; `grant` and `admission` revocations are stored as ingress filters
@@ -3601,18 +3626,22 @@ are set per strategy (`config.Mechanisms`): the two-phase protocol
 `profile` sets them for every strategy and `mechanisms`
 (`{"<strategy>" | "*": {"<mechanism>": bool}}`) overrides them. `deployed`
 (default): the rule-based baselines apply their rule directly, with neither
-mechanism added; Greedy cut, Cut without deadlines and Firebreak run the
-two-phase protocol with the guard and taint-aware admission (Theorem 5).
-`shared`: everything on for every strategy, an ablation that isolates the
-phase-2 rule. Confirmation, fencing and agentd's gates apply either way. Each
+mechanism added and no phase 1; Greedy cut, Cut without deadlines and
+Firebreak run the two-phase protocol with the adaptive phase 1, the guard and
+taint-aware admission (Theorem 5). `shared`: everything on for every strategy
+with the frontier-freeze phase 1, an ablation that isolates the phase-2 rule.
+Taint-aware admission labels (`hold:egress`) every unit the chosen actions
+leave on the source side. Confirmation, fencing and agentd's gates apply either way. Each
 decision records `profile`, `mechanisms`, `phase1_mode`, `phase1_labels` and
 `receding_during_waits`; status lists every strategy's mechanisms. The
 two-phase protocol places frontier holds first, then the chosen set; phase-1 holds
 are released only after every phase-2 action is confirmed and fenced.
-`phase1_mode` (options; the default is `freeze`) chooses what phase 1 issues:
-`freeze` (the frontier freeze B_1), `freeze_plus_cut` (B_1 and the strategy's
-own cut solved on G_C at the alert, B_a, at once) or `adaptive` (B_a and
-admission-hold labels on its whole source side S(B_a); the freeze is added
+`phase1_mode` (default: the profile's, `adaptive` for the deployed cut
+strategies and `freeze` in the shared ablation; recorded as `null` for a rule
+applied directly) chooses what phase 1 issues: `freeze` (the frontier freeze
+B_1), `freeze_plus_cut` (B_1 and the strategy's own cut solved on G_C at the
+alert, B_a, at once) or `adaptive` (B_a and labels on its whole source side
+S(B_a), pending tasks included; the freeze is added
 only when B_a leaves a pending effect untimely, when the earliest
 tainted-effect deadline is within `phase1_margin_rounds` (2) control rounds of
 B_a's landing, or when the literal convergence check fails at tau_1: relied-on
@@ -3633,11 +3662,33 @@ doomed or not: a sink still reached blocks convergence or the release (the
 holds stay, its last hop is guarded and the check repeated), every check is
 recorded under `convergence` with its blocking sinks, an admission label in
 force counts as held in the phase-2 graph, and every action added during the
-waits must be in force before anything is released. Phase 1
+waits must be in force before anything is released; a phase-1 hold sent
+without a confirmation is released with the others. Phase 1
 also freezes admission: every unit on the source side that may still emit is
 held (its task, or its egress where the node offers no task hold; a pending
-task before it starts), so agentd denies every new dispatch, effect and result
-it requests until phase 2 confirms a cut covering it.
+task before it starts), so nothing it requests leaves until phase 2 confirms a
+cut covering it.
+
+**Per-event admission.** Every event agentd holds for a label
+(`containment/held`) is decided by the monitor with the guarded release (R):
+its event hold is released only if the actions in force without it still
+separate every protected sink, the event's head included. An effect of an
+unprotected class is admitted; a protected one is kept held while its
+invocation is on the source side (tainted, or reachable from the taint past the
+actions in force), whatever else blocks its class; a dispatch's head (the new
+task) or a result's head (the live parent that consumes it; none: admitted) has
+every unit it reaches labelled first, confirmed and fenced, and must then reach
+no avoidable or protected sink. A unit that cannot be labelled keeps the event
+held. Each decision is an `admission` record of the decision log (`decision`
+`admit`|`keep`, `reason`, `blocking`, `labels`, `t_held` and
+`t_release_applied` on the node's clock, `latency_ms`); kept events are
+decided again once the in-force set changed; status counts `held_events` by
+state. A pending scheduled effect that a decision in force refuses at its
+commit (its class revoked for its agent, the agent's credential revoked, or
+its issuer labelled) no longer reaches its sink in G_C. Service agents
+(`future_requests`, `future_request_value`): revoking an agent's credential or
+admission costs its expected future requests, pausing one of its invocations
+or revoking its egress costs that request; a label costs none.
 
 **Ingest-then-release.** An action is *fenced* once the monitor has applied its
 nodes' events up to the journal position each confirmation reports. The
@@ -3683,6 +3734,7 @@ monitor owner's monotone policy version:
 | Monitor action | agentd command |
 |---|---|
 | `hold:task`, `hold:egress`, `hold:transport`, `hold:effect` | `hold` (released with `release`) `{kind, object_id}` |
+| `hold:event` (admission) | `release {kind: event, object_id: <held event>}` |
 | `revoke:egress`, `revoke:authority` | `revoke {kind, object_id: <task>}` |
 | `revoke:credential`, `revoke:admission` | `revoke {kind, object_id: <agent>}` |
 | `revoke:grant` | `revoke {kind: grant, object_id: "<agent>><agent>" \| "<agent>>fx:<class>"}` |

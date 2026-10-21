@@ -1745,7 +1745,8 @@
           "phase": {
             "type": "string",
             "enum": [
-              "alert"
+              "alert",
+              "held"
             ]
           },
           "trace_id": {
@@ -1766,47 +1767,158 @@
             "type": "null"
           },
           "attributes": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "containment_version",
-              "alert",
-              "request_id",
-              "lease_dimension"
-            ],
-            "properties": {
-              "containment_version": {
-                "const": 1
-              },
-              "alert": {
-                "type": "string",
-                "enum": [
-                  "lease_exceeded",
-                  "controller_lease_expired"
-                ]
-              },
-              "request_id": {
-                "type": "string",
-                "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-              },
-              "lease_dimension": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "enum": [
-                      "wall_time",
-                      "effects",
-                      "tokens"
-                    ]
-                  },
-                  {
-                    "type": "null"
+            "type": "object"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "alert"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "attributes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "containment_version",
+                    "alert",
+                    "request_id",
+                    "lease_dimension"
+                  ],
+                  "properties": {
+                    "containment_version": {
+                      "const": 1
+                    },
+                    "alert": {
+                      "type": "string",
+                      "enum": [
+                        "lease_exceeded",
+                        "controller_lease_expired"
+                      ]
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "lease_dimension": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "wall_time",
+                            "effects",
+                            "tokens"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
                   }
-                ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "held"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "attributes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "containment_version",
+                    "event",
+                    "held_event_id",
+                    "subject_id",
+                    "policy_version",
+                    "effect_class",
+                    "target",
+                    "recipient_id"
+                  ],
+                  "properties": {
+                    "containment_version": {
+                      "const": 1
+                    },
+                    "event": {
+                      "type": "string",
+                      "enum": [
+                        "effect",
+                        "dispatch",
+                        "result"
+                      ]
+                    },
+                    "held_event_id": {
+                      "type": "string",
+                      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "subject_id": {
+                      "type": "string",
+                      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "policy_version": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "effect_class": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "fs.write",
+                            "process.exec",
+                            "network.http",
+                            "device.command"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "target": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 512,
+                          "pattern": "^(?!.*[\\r\\n])[^\\u0000-\\u001f\\u007f]+$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "recipient_id": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^(?!.*[\\r\\n])[a-z0-9][a-z0-9_-]{0,63}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
               }
             }
           }
-        }
+        ]
       }
     },
     {

@@ -158,29 +158,129 @@ def test_an_expired_parent_lease_admits_no_delegation(nodes):
     )
 
 
-def test_egress_hold_blocks_what_leaves_an_invocation_but_not_its_execution(nodes):
+def held_events(node):
+    return {
+        row["kind"]: dict(row)
+        for row in node.store._connection.execute("SELECT * FROM held_events")
+    }
+
+
+def test_an_egress_label_holds_each_new_event_until_it_is_admitted(nodes):
+    """A label does not pause the invocation: each dispatch or result it
+    produces is held as an event of its own (journaled with its hold), and the
+    label's owner admits it alone; what it queued before the label waits for
+    the label's release."""
     root, worker = nodes
     parent_id, binding, child_id = delegate(root)
-    # The request was queued before the block; publication is the gate.
+    # The request was queued before the label; publication is the gate.
     containment.place_hold(
         root.store, kind="egress", object_id=parent_id, owner=MONITOR, policy_version=1
     )
     assert deliver(root, worker) == 0
-    assert root.dispatch("parent", binding, "other")["code"] == "egress_held"
     seen = root.store.get_task(parent_id)
     assert seen["containment_egress_hold"] == {"owner": MONITOR, "policy_version": 1}
     assert "containment_hold" not in seen
+    # A new dispatch passes every other gate and is held, not denied.
+    reply = root.dispatch("parent", binding, "other")
+    assert reply["status"] == "ok"
+    other_id = reply["result"]["task_id"]
+    dispatch = held_events(root)["dispatch"]
+    assert (dispatch["subject_id"], dispatch["state"]) == (other_id, "held")
+    [held] = root.events("containment", "held")
+    validate_event(held)
+    assert held["attributes"]["event"] == "dispatch"
+    assert held["attributes"]["held_event_id"] == dispatch["event_id"]
+    assert held["attributes"]["recipient_id"] == "other"
+    assert held["attributes"]["policy_version"] == 1
+    hold = {
+        h["object_id"]: h
+        for h in root.store.list_containment()["holds"]
+        if h["kind"] == "event"
+    }[dispatch["event_id"]]
+    assert (hold["owner"], hold["policy_version"]) == (MONITOR, 1)
+    assert deliver(root, worker) == 0
+    # Its result is held the same way; the invocation keeps running.
     with pytest.raises(StoreError, match="egress is held"):
         root.complete("parent", parent_id, {"body": "derived output"})
-    # Not a pause: the invocation still runs and its task is not frozen.
+    result = held_events(root)["result"]
+    assert (result["subject_id"], result["state"]) == (parent_id, "held")
     assert root.store.get_task(parent_id)["state"] == "running"
+    with pytest.raises(ContainmentError, match="invalid_hold_kind"):
+        containment.place_hold(
+            root.store,
+            kind="event",
+            object_id=str(uuid4()),
+            owner=MONITOR,
+            policy_version=2,
+        )
 
+    # Admitting the dispatch publishes its request alone.
     containment.release_hold(
-        root.store, kind="egress", object_id=parent_id, owner=MONITOR, policy_version=1
+        root.store,
+        kind="event",
+        object_id=dispatch["event_id"],
+        owner=MONITOR,
+        policy_version=2,
     )
+    assert held_events(root)["dispatch"]["state"] == "admitted"
+    [message] = root.store.pending_transport()
+    assert message["envelope"]["task_id"] == other_id
     assert deliver(root, worker) == 1
-    assert worker.store.get_task(child_id)["state"] == "offered"
+    # Admitting the result lets the transition through, under the label.
+    containment.release_hold(
+        root.store,
+        kind="event",
+        object_id=result["event_id"],
+        owner=MONITOR,
+        policy_version=3,
+    )
     root.complete("parent", parent_id, {"body": "derived output"})
+    assert root.store.get_task(parent_id)["state"] == "completed"
+    # Its result message (to the operator) is publishable under the label;
+    # the request queued before the label is not.
+    pending = {m["envelope"]["task_id"] for m in root.store.pending_transport()}
+    assert pending == {parent_id}
+    # Releasing the label publishes what was queued before it.
+    containment.release_hold(
+        root.store, kind="egress", object_id=parent_id, owner=MONITOR, policy_version=4
+    )
+    [request] = [
+        m
+        for m in root.store.pending_transport()
+        if m["envelope"]["task_id"] == child_id
+    ]
+    worker.store.ingest_transport_envelope(request["envelope"])
+    assert worker.store.get_task(child_id)["state"] == "offered"
+
+
+def test_a_held_local_dispatch_cannot_be_claimed_until_admitted(tmp_path):
+    node = Node(tmp_path / "node", "node-a")
+    try:
+        node.managed("parent", outbound=["helper"])
+        node.managed("helper")
+        parent_id = node.submit("parent")
+        _, binding = node.start("parent")
+        containment.place_hold(
+            node.store,
+            kind="egress",
+            object_id=parent_id,
+            owner=MONITOR,
+            policy_version=1,
+        )
+        helper_id = node.dispatch("parent", binding, "helper")["result"]["task_id"]
+        session = node.agents["helper"].session_id
+        assert node.rpc("helper", "task.claim", session_id=session) is None
+        containment.release_hold(
+            node.store,
+            kind="event",
+            object_id=held_events(node)["dispatch"]["event_id"],
+            owner=MONITOR,
+            policy_version=2,
+        )
+        claimed = node.rpc("helper", "task.claim", session_id=session)
+        assert claimed["task_id"] == helper_id
+    finally:
+        node.close()
 
 
 def test_ingress_filter_withholds_one_authority_into_one_target(nodes):
@@ -316,6 +416,7 @@ def test_schema_31_upgrade_keeps_holds_and_extends_saved_contexts(tmp_path):
             "authority_ledger",
             "scheduled_effects",
             "control_commands",
+            "held_events",
         ):
             db.execute(f"DROP TABLE task_state.{table}")
         context = saved_context(worker, child_id)
@@ -330,7 +431,7 @@ def test_schema_31_upgrade_keeps_holds_and_extends_saved_contexts(tmp_path):
     worker.close()
     upgraded = Node(tmp_path / "worker", "worker-node")
     try:
-        assert upgraded.store.health()["schema_version"] == 33
+        assert upgraded.store.health()["schema_version"] == 34
         [hold] = upgraded.store.list_containment()["holds"]
         assert (hold["object_id"], hold["policy_version"]) == (child_id, 4)
         migrated = saved_context(upgraded, child_id)

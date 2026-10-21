@@ -128,7 +128,8 @@
                       "task",
                       "egress",
                       "transport",
-                      "effect"
+                      "effect",
+                      "event"
                     ]
                   },
                   "object_id": {
@@ -729,6 +730,29 @@
                   "items": {
                     "type": "string",
                     "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  }
+                },
+                "held_event": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "event",
+                    "state"
+                  ],
+                  "properties": {
+                    "event": {
+                      "enum": [
+                        "effect",
+                        "dispatch",
+                        "result"
+                      ]
+                    },
+                    "state": {
+                      "enum": [
+                        "held",
+                        "admitted"
+                      ]
+                    }
                   }
                 }
               }

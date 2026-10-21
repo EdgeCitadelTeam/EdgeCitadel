@@ -16,6 +16,7 @@ import pytest
 
 from containment_test_support import Ledger, Node, deliver, ref
 from edgecitadel_agentd import containment
+from edgecitadel_agentd.trace_contract import validate_event
 from edgecitadel_agentd.effect_adapters import (
     HomeAssistantAdapter,
     LedgerAdapter,
@@ -375,15 +376,109 @@ def test_denied_and_unconfigured_effects_are_never_performed(nodes, ledger):
         execute(worker, "worker", binding, target="door.unlock/door.front")["code"]
         == "outside_effect_scope"
     )
-    containment.place_hold(
-        worker.store, kind="egress", object_id=task_id, owner=MONITOR, policy_version=1
-    )
-    assert execute(worker, "worker", binding)["code"] == "egress_held"
     worker.store.effects.adapters = {}
     assert execute(worker, "worker", binding)["code"] == "effect_adapter_unavailable"
     assert ledger.requests == []
     phases = [e["phase"] for e in worker.events("effect")]
-    assert phases == ["requested", "denied", "requested", "denied"]
+    assert phases == ["requested", "denied"]
+
+
+def held_effect(worker):
+    [row] = worker.store._connection.execute(
+        "SELECT event_id,subject_id,state FROM held_events WHERE kind='effect'"
+    ).fetchall()
+    return dict(row)
+
+
+def admit(worker, event_id, version):
+    containment.release_hold(
+        worker.store,
+        kind="event",
+        object_id=event_id,
+        owner=MONITOR,
+        policy_version=version,
+    )
+
+
+def test_a_labelled_effect_is_held_then_performed_once_admitted(nodes, ledger):
+    """Under an egress label the gateway keeps an effect that passed every
+    other check, journals it held, and performs it only once its event is
+    admitted; the label itself stays."""
+    worker, task_id, binding = actuating_worker(nodes, ledger)
+    containment.place_hold(
+        worker.store, kind="egress", object_id=task_id, owner=MONITOR, policy_version=1
+    )
+    request_id = str(uuid4())
+    reply = execute(worker, "worker", binding, request_id=request_id)
+    assert (reply["status"], reply["result"]["state"]) == ("ok", "held")
+    assert reply["result"]["outcome"] is None
+    held = held_effect(worker)
+    assert (held["subject_id"], held["state"]) == (request_id, "held")
+    [event] = worker.events("containment", "held")
+    validate_event(event)
+    assert event["attributes"]["effect_class"] == "device.command"
+    assert event["attributes"]["target"] == "light.turn_on/light.hall"
+    # The scheduler never runs a held effect.
+    assert worker.store.effects.run_due("worker-node", now_ms=2**62) == 0
+    assert ledger.requests == []
+    # A retry returns the held receipt; nothing is held twice.
+    again = execute(worker, "worker", binding, request_id=request_id)
+    assert again["result"]["state"] == "held"
+    admit(worker, held["event_id"], 2)
+    assert held_effect(worker)["state"] == "admitted"
+    assert worker.store.effects.run_due("worker-node") == 1
+    assert [r["body"]["effect_id"] for r in ledger.requests] == [request_id]
+    assert [e["phase"] for e in worker.events("effect")] == ["requested", "committed"]
+    # Other events of the labelled invocation are still held.
+    assert execute(worker, "worker", binding)["result"]["state"] == "held"
+
+
+def test_an_admitted_effect_is_checked_again_without_its_label(nodes, ledger):
+    """Admission removes only the label for that event: a revocation placed
+    meanwhile still denies it, and a label that appears before a scheduled
+    effect is due holds it then."""
+    worker, task_id, binding = actuating_worker(nodes, ledger)
+    containment.place_hold(
+        worker.store, kind="egress", object_id=task_id, owner=MONITOR, policy_version=1
+    )
+    execute(worker, "worker", binding)
+    containment.place_filter(
+        worker.store,
+        authority={"agent_id": "worker"},
+        target={"effect_class": "device.command", "target": "*"},
+        owner=MONITOR,
+        policy_version=2,
+    )
+    admit(worker, held_effect(worker)["event_id"], 3)
+    assert worker.store.effects.run_due("worker-node") == 1
+    assert ledger.requests == []
+    denied = worker.events("effect", "denied")[0]["attributes"]
+    assert denied["reason"] == "ingress_filtered"
+    # Under the label the next one is held whatever else would deny it: the
+    # label's owner decides whether it is ever checked again.
+    assert execute(worker, "worker", binding)["result"]["state"] == "held"
+
+
+def test_a_label_placed_before_a_scheduled_effect_is_due_holds_it(nodes, ledger):
+    worker, task_id, binding = actuating_worker(nodes, ledger)
+    due = time.time_ns() // 1_000_000 + 60_000
+    request_id = str(uuid4())
+    assert (
+        execute(worker, "worker", binding, scheduled=due, request_id=request_id)[
+            "result"
+        ]["state"]
+        == "scheduled"
+    )
+    containment.place_hold(
+        worker.store, kind="egress", object_id=task_id, owner=MONITOR, policy_version=1
+    )
+    worker.store.effects.run_due("worker-node", now_ms=due)
+    assert held_effect(worker)["subject_id"] == request_id
+    assert [e["phase"] for e in worker.events("effect")] == ["requested"]
+    assert ledger.requests == []
+    admit(worker, held_effect(worker)["event_id"], 2)
+    assert worker.store.effects.run_due("worker-node", now_ms=due) == 1
+    assert [r["body"]["effect_id"] for r in ledger.requests] == [request_id]
 
 
 def test_home_assistant_token_stays_in_the_gateway(nodes, ledger, tmp_path):
@@ -631,6 +726,7 @@ def test_schema_33_retires_effects_a_harness_scheduled(tmp_path):
             "outcome_json",
         ):
             db.execute(f"ALTER TABLE task_state.scheduled_effects DROP COLUMN {column}")
+        db.execute("DROP TABLE task_state.held_events")
         db.execute(
             "INSERT INTO task_state.scheduled_effects VALUES "
             "(?,?,'fs.write','workspace/x','{}','{}','scheduled')",
@@ -641,7 +737,7 @@ def test_schema_33_retires_effects_a_harness_scheduled(tmp_path):
     node.close()
     upgraded = Node(tmp_path / "node", "node-a")
     try:
-        assert upgraded.store.health()["schema_version"] == 33
+        assert upgraded.store.health()["schema_version"] == 34
         row = upgraded.store._connection.execute(
             "SELECT state,adapter,due_at_ms FROM scheduled_effects"
         ).fetchone()

@@ -35,6 +35,7 @@ def legacy_holds(db):
         "SELECT kind,object_id,owner,held_at_ms FROM task_state.holds WHERE reason='restore'"
     )
     for table in (
+        "held_events",
         "control_commands",
         "scheduled_effects",
         "authority_ledger",

@@ -26,7 +26,7 @@ HOLD_TABLES = (
 )
 # Schema 32 adds delegated authority state and control-command receipts; schema
 # 33 adds columns only (gateway-performed scheduled effects).
-TASK_TABLES = (
+AUTHORITY_TABLES = (
     *HOLD_TABLES,
     "revocations",
     "ingress_filters",
@@ -34,6 +34,8 @@ TASK_TABLES = (
     "scheduled_effects",
     "control_commands",
 )
+# Schema 34 adds the events that egress labels hold one by one.
+TASK_TABLES = (*AUTHORITY_TABLES, "held_events")
 CROSS_REFERENCES = (
     ("trace_bindings", "connector_id", "connectors", "connector_id"),
     ("trace_bindings", "session_id", "sessions", "session_id"),
@@ -42,7 +44,7 @@ CROSS_REFERENCES = (
     ("trace_task_contexts", "task_id", "tasks", "task_id"),
 )
 PAIR_VERSION = 24
-CURRENT_VERSION = 33
+CURRENT_VERSION = 34
 
 
 def task_database_path(trace_path: Path) -> Path:
@@ -86,7 +88,13 @@ def verify_pair(db: sqlite3.Connection, *, version: int = CURRENT_VERSION) -> No
         )
     }
     expected = (
-        TASK_TABLES if version >= 32 else HOLD_TABLES if version >= 30 else PAIR_TABLES
+        TASK_TABLES
+        if version >= 34
+        else AUTHORITY_TABLES
+        if version >= 32
+        else HOLD_TABLES
+        if version >= 30
+        else PAIR_TABLES
     )
     if tables != set(expected) | {"storage_pair"}:
         raise sqlite3.DatabaseError("task storage has an unexpected table inventory")

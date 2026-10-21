@@ -61,7 +61,7 @@ READ_MAX_SECONDS = 0.05
 READ_PROGRESS_STEPS = 1000
 READ_BUSY_MS = 50
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
 MAX_EVENT_RECORDS = 50_000
@@ -671,7 +671,7 @@ class AgentdStore:
         if version < 32:
             from .containment import AUTHORITY_SCHEMA_SQL
 
-            self._migrate_holds_v32_locked()
+            self._migrate_holds_locked("effect")
             self._execute_migration_sql(AUTHORITY_SCHEMA_SQL)
             for table, column in (
                 ("held_deliveries", "recipient_id TEXT NOT NULL DEFAULT ''"),
@@ -739,21 +739,31 @@ class AgentdStore:
             self._connection.execute("PRAGMA main.user_version=33")
             self._connection.execute("PRAGMA task_state.user_version=33")
 
-    def _migrate_holds_v32_locked(self) -> None:
-        """Allow egress and effect holds; holds before schema 32 cannot."""
+        if version < 34:
+            from .containment import HELD_EVENTS_SCHEMA_SQL
+
+            # Labels hold new events one by one under event holds.
+            self._migrate_holds_locked("event")
+            self._execute_migration_sql(HELD_EVENTS_SCHEMA_SQL)
+            self._connection.execute("PRAGMA main.user_version=34")
+            self._connection.execute("PRAGMA task_state.user_version=34")
+
+    def _migrate_holds_locked(self, kind: str) -> None:
+        """Rebuild ``holds`` with the current kinds unless it allows ``kind``
+        (egress and effect holds from schema 32, event holds from 34)."""
         definition = self._connection.execute(
             "SELECT sql FROM task_state.sqlite_schema WHERE name='holds'"
         ).fetchone()[0]
-        if "'effect'" in definition:
+        if f"'{kind}'" in definition:
             return
-        self._connection.execute("ALTER TABLE task_state.holds RENAME TO holds_v31")
+        self._connection.execute("ALTER TABLE task_state.holds RENAME TO holds_old")
         from .containment import HOLDS_SCHEMA_SQL
 
         self._connection.execute(HOLDS_SCHEMA_SQL.split(";")[0])
         self._connection.execute(
-            "INSERT INTO task_state.holds SELECT * FROM task_state.holds_v31"
+            "INSERT INTO task_state.holds SELECT * FROM task_state.holds_old"
         )
-        self._connection.execute("DROP TABLE task_state.holds_v31")
+        self._connection.execute("DROP TABLE task_state.holds_old")
 
     def configure_test_source(self, *, node_id: str, test_run_id: str) -> None:
         """Trusted harness/startup API; never exposed to connector RPC callers.
@@ -1903,6 +1913,14 @@ class AgentdStore:
                         )
             if conflict is not None:
                 raise StoreError("conflicting terminal task result was rejected")
+        if state in {"completed", "failed", "rejected"}:
+            from .containment import hold_result
+
+            # A result is the executing invocation's egress: under a label it
+            # is held as an event (recorded once) until the label's owner
+            # admits it; the runtime retries the transition meanwhile.
+            if hold_result(self, task_id):
+                raise StoreError("task egress is held by containment")
         with self._task_transaction():
             hold = self._task_hold_locked(task_id)
             if hold is not None:
@@ -1921,10 +1939,13 @@ class AgentdStore:
                 if actor_id != row["recipient_id"]:
                     raise StoreError("only the recipient may execute this transition")
             if state in {"completed", "failed", "rejected"} and current != state:
-                from .containment import egress_hold_locked
+                from .containment import egress_hold_locked, held_event_state_locked
 
-                # A result is the executing invocation's egress.
-                if egress_hold_locked(self._connection, task_id) is not None:
+                # Labelled since the check above, or a restore egress hold.
+                if egress_hold_locked(self._connection, task_id) is not None and (
+                    held_event_state_locked(self._connection, "result", task_id)
+                    != "admitted"
+                ):
                     raise StoreError("task egress is held by containment")
             if state == "cancelled" and actor_id not in {
                 row["sender_id"],
@@ -2100,6 +2121,9 @@ class AgentdStore:
                 WHERE recipient_id = ? AND state IN ('queued', 'offered')
                   AND claimed_session_id IS NULL
                   AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task')
+                  -- A held dispatch to a local recipient waits for admission.
+                  AND task_id NOT IN (SELECT subject_id FROM held_events
+                                      WHERE kind='dispatch' AND state='held')
                 ORDER BY created_at_ms LIMIT 1
                 """,
                 (connector["agent_id"],),

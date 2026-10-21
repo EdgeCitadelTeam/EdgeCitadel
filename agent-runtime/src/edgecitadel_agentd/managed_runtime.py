@@ -19,8 +19,10 @@ a watcher reads the task every ``WATCH_INTERVAL_SECONDS``:
 A handler that returns while its task is held keeps its result in memory until
 the hold is released (then the result is committed) or the task ends
 otherwise. If this process exits meanwhile, agentd's session recovery decides
-the task once the hold is released. An egress hold does not pause the handler,
-but its result likewise waits for release.
+the task once the hold is released. An egress hold (a label) does not pause the
+handler; agentd holds its result as an event, and the runtime offers the
+result again every watch interval until the label's owner admits it (or
+releases the label).
 """
 
 from __future__ import annotations
@@ -192,6 +194,13 @@ class _TaskSupervisor:
                     return current
                 if signal not in {"held", "egress"}:
                     raise
+            if signal == "egress":
+                # A labelled result is admitted per event: offer it again.
+                try:
+                    await asyncio.wait_for(self.stop.wait(), WATCH_INTERVAL_SECONDS)
+                except TimeoutError:
+                    continue
+                return None
             signal, current = await self.wait_while_held(egress=True)
             if signal == "terminal":
                 return current

@@ -61,7 +61,7 @@ def verify(layout, before):
         task_id = store._connection.execute("SELECT task_id FROM tasks").fetchone()[0]
         task = store.get_task(task_id)
         assert task["payload"] == task["result"] == {"body": "owned restore content"}
-        assert store.health()["schema_version"] == 33
+        assert store.health()["schema_version"] == 34
     finally:
         store.close()
     require_startable(layout.state_directory)

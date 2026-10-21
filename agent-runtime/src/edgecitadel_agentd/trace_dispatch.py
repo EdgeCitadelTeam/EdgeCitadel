@@ -40,7 +40,11 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Admission:
-    """One dispatch decision; ``code`` is None when the dispatch is allowed."""
+    """One dispatch decision; ``code`` is None when the dispatch is allowed.
+
+    ``label``: allowed, but the sender carries an egress label, so the
+    dispatch is held as an event (the child is created, its request waits).
+    """
 
     policy: str
     policy_version: str
@@ -51,6 +55,7 @@ class Admission:
     effects: frozenset[EffectRule] = frozenset()
     lease: Lease | None = None
     lease_dimension: str | None = None
+    label: Any = None
 
 
 def _denied(row: sqlite3.Row, policy: str, code: str) -> Admission:
@@ -70,10 +75,12 @@ def _admit(
 ) -> Admission:
     """Admission after binding authority; the first failing check decides.
 
-    Containment comes first (a paused or egress-blocked invocation, or a
-    revoked authority, cannot delegate whatever its grant says), then the
-    grant, the inherited scope, ingress filters and the lease. The policy
-    version of a containment denial is the deciding owner's fencing token.
+    Containment comes first (a paused invocation, or a revoked authority,
+    cannot delegate whatever its grant says), then the grant, the inherited
+    scope, ingress filters and the lease. The policy version of a containment
+    denial is the deciding owner's fencing token. A dispatch that passes every
+    check from an invocation under an egress label is held as an event; a
+    restore egress hold denies it (``egress_held``).
     """
     # containment imports the store, which imports this module.
     from .containment import (
@@ -89,9 +96,6 @@ def _admit(
         hold = store._task_hold_locked(task_id)
         if hold is not None:
             return _denied(hold, f"{hold['reason']}_hold", "execution_held")
-    egress = egress_hold_locked(db, task_id, binding_id)
-    if egress is not None:
-        return _denied(egress, "containment_egress_hold", "egress_held")
     revoked = revocation_locked(
         db,
         authorities=authorities,
@@ -142,6 +146,9 @@ def _admit(
             "lease_exceeded",
             lease_dimension=exceeded.dimension,
         )
+    label = egress_hold_locked(db, task_id, binding_id)
+    if label is not None and label["reason"] != "containment":
+        return _denied(label, f"{label['reason']}_egress_hold", "egress_held")
     return Admission(
         grant.policy,
         GRANT_POLICY_VERSION,
@@ -151,6 +158,7 @@ def _admit(
         grant.scope(inherited),
         grant.effect_scope(parent.effect_scope if parent is not None else None),
         child,
+        label=label,
     )
 
 
@@ -353,6 +361,21 @@ def dispatch_trace(
                 causes=[lineage.reference(dispatched)],
                 occurred_at=base["occurred_at"],
             )
+            if admission.label is not None:
+                from .containment import hold_event_locked
+
+                hold_event_locked(
+                    store,
+                    node_id,
+                    json.loads(root[0]),
+                    kind="dispatch",
+                    subject_id=child_id,
+                    task_id=task.task_id if task is not None else None,
+                    binding_id=binding["binding_id"],
+                    label=admission.label,
+                    causes=[lineage.reference(dispatched)],
+                    recipient_id=params["recipient_id"],
+                )
             reply = {
                 "schema_version": 1,
                 "operation": "dispatch",

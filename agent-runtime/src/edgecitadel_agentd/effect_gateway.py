@@ -18,6 +18,13 @@ committed and performed by the gateway's scheduler. An effect hold placed on it
 denied ``effect_held`` and never performed later. A hold released before the
 due time lets it run on time.
 
+An effect of an invocation under an egress label is *held* (reply state
+``held``): the gateway keeps it as a held event
+(``containment.hold_event_locked``) instead of deciding it, also when the label
+appears before a scheduled effect is due. Once the label's owner releases its
+event hold, the scheduler checks it again without the label (every other check
+applies) at its due time, or at once, and commits and performs it or denies it.
+
 ``effect.authorize`` (not fenced). For effects only the harness can perform
 (bash, file writes in its sandbox) the gateway decides immediately and the
 harness performs the effect after an ``ok`` reply. Nothing stops a harness that
@@ -28,18 +35,22 @@ bypass is a stated limitation, measured at the destination (ledger), not here.
 Events: ``effect/requested`` (effect class, target, ``scheduled_at_ms``, the
 ``adapter`` or null), then ``effect/committed`` (with ``committed_at_ms``) or
 ``effect/denied``, citing the request, with the deciding policy, its version and
-the reason. Checks, in order; the first failing one decides:
+the reason (a held effect journals ``containment/held`` in between). Checks, in
+order; the first failing one decides:
 
-1. the invocation's task is not held (``execution_held``) or egress-held
-   (``egress_held``);
-2. no authority, egress or credential revocation applies (``authority_revoked``);
-3. when the controller lease is configured, it has been renewed recently
+1. the invocation's task is not held (``execution_held``);
+2. the invocation carries no egress label, unless this effect was admitted:
+   ``effect.execute`` holds the effect, to be checked again from 3 on when it
+   is admitted; ``effect.authorize`` (an effect the harness performs, which
+   cannot be held) denies it (``egress_held``);
+3. no authority, egress or credential revocation applies (``authority_revoked``);
+4. when the controller lease is configured, it has been renewed recently
    (``controller_lease_expired``, fail closed);
-4. the effect is within the invocation's effect scope: its connector's effect
+5. the effect is within the invocation's effect scope: its connector's effect
    grant intersected with the scope its task inherited (``outside_effect_scope``);
-5. no ingress filter denies the effect under the invocation's authorities
+6. no ingress filter denies the effect under the invocation's authorities
    (``ingress_filtered``);
-6. the task's lease has not expired and has an effect left (``lease_exceeded``).
+7. the task's lease has not expired and has an effect left (``lease_exceeded``).
 
 A committed effect is charged to the task's lease. A lease or controller-lease
 denial also records a ``containment/alert`` event. Retries with the same request
@@ -88,6 +99,12 @@ if TYPE_CHECKING:
 EFFECT_VERSION = 2
 SCHEDULER_BATCH = 64
 IDLE_POLL_SECONDS = 1.0
+# Kept effects (alias ``s``) the scheduler may run: not held as an event.
+_RUNNABLE = (
+    "s.state='scheduled' AND s.adapter IS NOT NULL AND NOT EXISTS ("
+    "SELECT 1 FROM held_events e WHERE e.kind='effect' "
+    "AND e.subject_id=s.effect_id AND e.state='held')"
+)
 
 
 def _now_ms() -> int:
@@ -109,10 +126,16 @@ class EffectDecision:
     reason: str | None = None
     alert: str | None = None
     lease_dimension: str | None = None
+    # Every check passed but the invocation's egress label: ``label`` is it.
+    label: Any = None
 
     @property
     def allowed(self) -> bool:
-        return self.reason is None
+        return self.reason is None and self.label is None
+
+    @property
+    def held(self) -> bool:
+        return self.label is not None
 
 
 def _decide(
@@ -124,7 +147,12 @@ def _decide(
     context: TaskTraceContext | None,
     effect: EffectRule,
     now_ms: int,
+    holdable: bool = True,
+    admitted: bool = False,
 ) -> EffectDecision:
+    """Checks 1-7 of the module docstring. ``holdable``: a label holds the
+    effect (``effect.execute``) instead of denying it; ``admitted``: this
+    effect's held event was admitted, so its label no longer applies to it."""
     from .containment import (
         authority_keys,
         egress_hold_locked,
@@ -140,10 +168,17 @@ def _decide(
             return EffectDecision(
                 f"{hold['reason']}_hold", str(hold["policy_version"]), "execution_held"
             )
-    egress = egress_hold_locked(db, task_id, binding_id)
-    if egress is not None:
+    label = None if admitted else egress_hold_locked(db, task_id, binding_id)
+    if label is not None:
+        if not holdable or label["reason"] != "containment":
+            return EffectDecision(
+                f"{label['reason']}_egress_hold",
+                str(label["policy_version"]),
+                "egress_held",
+            )
+        # Held as an event; every other check runs when it is admitted.
         return EffectDecision(
-            "containment_egress_hold", str(egress["policy_version"]), "egress_held"
+            "containment_egress_hold", str(label["policy_version"]), label=label
         )
     revoked = revocation_locked(
         db,
@@ -335,8 +370,12 @@ def _settle_locked(
     requested: dict[str, Any],
     now: int,
     final: bool,
+    holdable: bool = True,
+    admitted: bool = False,
 ) -> tuple[EffectDecision, dict[str, Any] | None, int | None]:
-    """Decide; record committed or denied (if final, or denied) and alerts."""
+    """Decide; record committed or denied (if final, or denied) and alerts.
+
+    A held effect records neither: its caller holds it as an event."""
     db = store._connection
     context = invocation.context
     decision = _decide(
@@ -347,6 +386,8 @@ def _settle_locked(
         context=context,
         effect=effect,
         now_ms=now,
+        holdable=holdable,
+        admitted=admitted,
     )
     if decision.allowed and final and invocation.task_id is not None:
         charge(db, invocation.task_id, used=1)
@@ -354,6 +395,8 @@ def _settle_locked(
         remaining_effects(db, invocation.task_id, context.lease) if context else None
     )
     decided = None
+    if decision.held:
+        return decision, None, remaining
     if final or not decision.allowed:
         decided = _record(
             db,
@@ -392,7 +435,7 @@ def _reply(
     context: TaskTraceContext | None,
     adapter: str | None = None,
 ) -> dict[str, Any]:
-    if not decision.allowed:
+    if not decision.allowed and not decision.held:
         return {
             "schema_version": 1,
             "operation": "effect",
@@ -510,6 +553,7 @@ def authorize_effect(
             requested=requested,
             now=now,
             final=True,
+            holdable=False,
         )
         reply = _reply(
             params["request_id"],
@@ -613,7 +657,8 @@ class EffectExecutor:
                 now=now,
                 final=not deferred,
             )
-            if decision.allowed and deferred:
+            if decision.held or (decision.allowed and deferred):
+                # Kept by the gateway: due later, or held until admitted.
                 db.execute(
                     "INSERT INTO scheduled_effects(effect_id,binding_id,effect_class,"
                     "target,identity_json,requested_json,state,connector_id,adapter,"
@@ -628,15 +673,28 @@ class EffectExecutor:
                         connector_id,
                         adapter.name,
                         store._encode_content({"data": data}),
-                        scheduled_at,
+                        scheduled_at if deferred else now,
                     ),
                 )
-            elif decision.allowed:
+            if decision.held:
+                self._hold_locked(
+                    node_id,
+                    invocation,
+                    params["request_id"],
+                    effect,
+                    decision,
+                    requested,
+                )
+            elif decision.allowed and not deferred:
                 self._in_flight.add(params["request_id"])
             reply = _reply(
                 params["request_id"],
                 decision,
-                state="scheduled" if deferred else "committed",
+                state="held"
+                if decision.held
+                else "scheduled"
+                if deferred
+                else "committed",
                 event=decided or requested,
                 remaining=remaining,
                 context=invocation.context,
@@ -651,7 +709,7 @@ class EffectExecutor:
                 digest,
                 reply,
             )
-        if deferred:
+        if deferred or decision.held:
             self._wake.set()
             return reply
         if not decision.allowed:
@@ -664,17 +722,47 @@ class EffectExecutor:
         )
         return performed
 
+    def _hold_locked(
+        self,
+        node_id: str,
+        invocation: _Invocation,
+        effect_id: str,
+        effect: EffectRule,
+        decision: EffectDecision,
+        requested: Mapping[str, Any],
+    ) -> None:
+        """Hold the effect as an event of its labelled invocation."""
+        from .containment import hold_event_locked
+
+        hold_event_locked(
+            self.store,
+            node_id,
+            invocation.run_started,
+            kind="effect",
+            subject_id=effect_id,
+            task_id=invocation.task_id,
+            binding_id=invocation.binding["binding_id"],
+            label=decision.label,
+            causes=[lineage.reference(dict(requested))],
+            effect_class=effect.effect_class,
+            target=effect.target,
+        )
+
     # -- scheduled effects ---------------------------------------------------------
+    def wake(self) -> None:
+        """Look for due effects now (an admitted held effect may be due)."""
+        self._wake.set()
+
     def run_due(self, node_id: str, now_ms: int | None = None) -> int:
-        """Check, commit and perform every scheduled effect due by ``now_ms``."""
+        """Check, commit and perform every scheduled effect due by ``now_ms``;
+        a held effect waits for its admission."""
         now = _now_ms() if now_ms is None else now_ms
         with self.store._lock:
             due = [
                 row[0]
                 for row in self.store._connection.execute(
-                    "SELECT effect_id FROM scheduled_effects WHERE state='scheduled' "
-                    "AND adapter IS NOT NULL AND due_at_ms<=? "
-                    "ORDER BY due_at_ms,effect_id LIMIT ?",
+                    f"SELECT effect_id FROM scheduled_effects s WHERE {_RUNNABLE} "
+                    "AND due_at_ms<=? ORDER BY due_at_ms,effect_id LIMIT ?",
                     (now, SCHEDULER_BATCH),
                 )
             ]
@@ -683,7 +771,7 @@ class EffectExecutor:
         return len(due)
 
     def _run_scheduled(self, node_id: str, effect_id: str) -> None:
-        from .containment import effect_hold_locked
+        from .containment import effect_hold_locked, held_event_state_locked
 
         store, db = self.store, self.store._connection
         with store.control_lock, store._lock, db:
@@ -726,6 +814,9 @@ class EffectExecutor:
             identity = json.loads(row["identity_json"])
             requested = {**json.loads(row["requested_json"]), "occurred_at": _iso(now)}
             effect = EffectRule(row["effect_class"], row["target"])
+            held = held_event_state_locked(db, "effect", effect_id)
+            if held == "held":
+                return  # waiting for its admission
             hold = effect_hold_locked(db, effect_id)
             if hold is not None:
                 # Held when due: cancelled, never performed later.
@@ -756,7 +847,14 @@ class EffectExecutor:
                     requested=requested,
                     now=now,
                     final=True,
+                    admitted=held == "admitted",
                 )
+                if decision.held:
+                    # Labelled since it was requested: held when due.
+                    self._hold_locked(
+                        node_id, invocation, effect_id, effect, decision, requested
+                    )
+                    return
             db.execute(
                 "UPDATE scheduled_effects SET state=? WHERE effect_id=?",
                 ("committed" if decision.allowed else "denied", effect_id),
@@ -831,8 +929,7 @@ class EffectExecutor:
     def _next_due(self) -> int | None:
         with self.store._lock:
             row = self.store._connection.execute(
-                "SELECT MIN(due_at_ms) FROM scheduled_effects "
-                "WHERE state='scheduled' AND adapter IS NOT NULL"
+                f"SELECT MIN(due_at_ms) FROM scheduled_effects s WHERE {_RUNNABLE}"
             ).fetchone()
         return None if row is None or row[0] is None else int(row[0])
 

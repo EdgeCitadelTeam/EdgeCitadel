@@ -172,14 +172,17 @@ def test_task_less_native_root_is_held_and_revoked_by_its_binding(nodes):
     held = monitor.call(
         root, "hold", {"kind": "egress", "object_id": binding["binding_id"]}
     )
-    # Its queued request is withheld and it cannot dispatch again.
+    # Its queued request is withheld; a new dispatch is held as an event.
     assert held["enforcement"]["outbound"]["held"] == 1
     assert held["enforcement"]["task"] is None
     assert root.store.pending_transport() == []
-    assert dispatch()["code"] == "egress_held"
+    assert dispatch()["status"] == "ok"
+    [event] = root.events("containment", "held")
+    assert event["attributes"]["event"] == "dispatch"
     monitor.call(
         root, "release", {"kind": "egress", "object_id": binding["binding_id"]}
     )
+    # The label's release publishes what it queued; the held one stays held.
     assert len(root.store.pending_transport()) == 1
     monitor.revoke(root, "egress", binding["binding_id"])
     assert dispatch()["code"] == "authority_revoked"

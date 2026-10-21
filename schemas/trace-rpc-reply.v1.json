@@ -454,7 +454,8 @@
             "state": {
               "enum": [
                 "scheduled",
-                "committed"
+                "committed",
+                "held"
               ]
             },
             "effects_remaining": {

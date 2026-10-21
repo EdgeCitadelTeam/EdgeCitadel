@@ -285,6 +285,8 @@ CAPABILITIES = (
     "hold:egress",
     "hold:transport",
     "hold:effect",
+    # Held events of labels (released only; agentd places them).
+    "hold:event",
     "revoke:authority",
     "revoke:egress",
     "revoke:credential",
@@ -441,6 +443,17 @@ def _snapshot(
             kind, object_id = target["kind"], target["object_id"]
             if action == "hold":
                 enforcement["gates"] = _GATES[f"hold:{kind}"]
+            if kind == "event":
+                row = db.execute(
+                    "SELECT kind,state FROM held_events WHERE event_id=?",
+                    (object_id,),
+                ).fetchone()
+                if row is not None:
+                    enforcement["held_event"] = {
+                        "event": row["kind"],
+                        "state": row["state"],
+                    }
+                return enforcement
             if kind == "effect":
                 row = db.execute(
                     "SELECT state FROM scheduled_effects WHERE effect_id=?",

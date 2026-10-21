@@ -98,7 +98,8 @@ def populated_v5(tmp_path):
 
 def upgraded(before):
     """Schema 30 replaces restore_holds by owned holds and adds containment state;
-    schema 32 adds delegated authority state and control-command receipts."""
+    schema 32 adds delegated authority state and control-command receipts;
+    schema 34 the events labels hold."""
     rows = {name: value for name, value in before.items() if name != "restore_holds"}
     assert before["restore_holds"] == []  # This fixture predates restore.
     empty = (
@@ -110,6 +111,7 @@ def upgraded(before):
         "authority_ledger",
         "scheduled_effects",
         "control_commands",
+        "held_events",
     )
     return {**rows, **{name: [] for name in empty}}
 

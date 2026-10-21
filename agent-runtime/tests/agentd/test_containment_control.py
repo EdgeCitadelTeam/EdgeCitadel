@@ -327,9 +327,9 @@ def test_a_confirmation_carries_the_journal_position_it_fences(nodes):
         root, command(root, "hold", {"kind": "egress", "object_id": parent_id})
     )
     assert confirmation["journal"] == {"source_epoch": epoch, "source_seq": before}
-    denied = root.dispatch("parent", binding, "child")
-    assert denied["code"] == "egress_held"
-    assert latest()[1] > before  # the denial is journaled after the position
+    held = root.dispatch("parent", binding, "child")
+    assert held["status"] == "ok" and root.events("containment", "held")
+    assert latest()[1] > before  # the held event is journaled after the position
     rejected = send(
         root, command(root, "release", {"kind": "task", "object_id": str(uuid4())})
     )

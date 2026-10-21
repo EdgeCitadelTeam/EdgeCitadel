@@ -11,11 +11,26 @@ is held while any row names it, whatever the reason:
   invocations cannot dispatch or authorize effects, its outbound messages stay
   in the outbox, and inbound deliveries for it are acknowledged to the broker but
   parked in ``held_deliveries`` instead of applied.
-- ``egress`` (egress block): the task keeps running and receiving, but nothing
-  leaves it: no dispatch, no effect, no result (its recipient's terminal
-  transitions wait), and none of its outbound messages is published. These
-  include requests and cancels it already queued for its children. The object
-  may also be the binding ID of a task-less native root.
+- ``egress`` (egress block, the admission label of theory (AI)): the task keeps
+  running and receiving, but nothing leaves it unadmitted. Each new event it
+  produces is *held* one by one (``held_events``) under an ``event`` hold of
+  its own: a dispatch that passes every other gate (the child task is created,
+  its request is not published and a local recipient cannot claim it), a
+  registered effect (``effect.execute``; the gateway keeps it and checks it in
+  full once admitted) or its result (its terminal transition is refused until
+  admitted). Outbound messages it
+  queued before the label (requests and cancels for its children, its own) are
+  not published while the label stands. Effects only a harness performs
+  (``effect.authorize``) cannot be held and are denied. The object may also be
+  the binding ID of a task-less native root.
+- ``event`` (one held event, by its held-event ID): agentd places it itself,
+  under the label's owner and policy version, in the transaction that holds
+  the event and journals ``containment/held``, so a controller never sees a
+  held event without its hold. Releasing it admits that event alone: the
+  gates are checked again without the label for it, then the effect is
+  performed, the request published or the result accepted, unless another
+  gate denies it. A held event stays held when its label is released. A
+  controller cannot place one.
 - ``transport``: that outbox message is not published.
 - ``effect``: a scheduled effect (by its effect ID) is not committed.
 
@@ -58,6 +73,7 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from .delegation_authority import EffectRule
@@ -69,7 +85,7 @@ if TYPE_CHECKING:
 
 HOLDS_SCHEMA_SQL = """
 CREATE TABLE task_state.holds (
-    kind TEXT NOT NULL CHECK(kind IN ('task', 'transport', 'egress', 'effect')),
+    kind TEXT NOT NULL CHECK(kind IN ('task', 'transport', 'egress', 'effect', 'event')),
     object_id TEXT NOT NULL,
     reason TEXT NOT NULL CHECK(reason IN ('restore', 'containment')),
     owner TEXT NOT NULL,
@@ -131,7 +147,25 @@ CREATE TABLE task_state.control_commands (
 );
 CREATE INDEX task_state.control_commands_expiry ON control_commands(expires_at_ms)
 """
-HOLD_KINDS = frozenset({"task", "transport", "egress", "effect"})
+HELD_EVENTS_SCHEMA_SQL = """
+CREATE TABLE task_state.held_events (
+    event_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('effect', 'dispatch', 'result')),
+    subject_id TEXT NOT NULL,
+    task_id TEXT,
+    binding_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('held', 'admitted')),
+    held_at_ms INTEGER NOT NULL,
+    admitted_at_ms INTEGER,
+    UNIQUE(kind, subject_id)
+)
+"""
+HOLD_KINDS = frozenset({"task", "transport", "egress", "effect", "event"})
+TERMINAL_TASK_STATES = frozenset(
+    {"completed", "failed", "rejected", "cancelled", "expired", "undeliverable"}
+)
+# Held-event kinds; the subject is the effect, the child task or the task.
+EVENT_KINDS = frozenset({"effect", "dispatch", "result"})
 OWNER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
 AGENT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MAX_POLICY_VERSION = 9_007_199_254_740_991
@@ -140,9 +174,16 @@ APPLY_BATCH = 64
 # Outbox messages (alias ``o``) that must not be published now. A message to a
 # task's recipient is the task's request or cancel, which the sender emitted:
 # it is the egress of the parent invocation and subject to its ingress filters.
+# An admitted held event (a child's request, a task's result) passes its
+# sender's label; a held one waits for its own release.
 PUBLICATION_BLOCKED_SQL = """(
     o.message_id IN (SELECT object_id FROM holds WHERE kind='transport')
-    OR o.task_id IN (SELECT object_id FROM holds WHERE kind IN ('task','egress'))
+    OR o.task_id IN (SELECT object_id FROM holds WHERE kind='task')
+    OR (o.task_id IN (SELECT object_id FROM holds WHERE kind='egress')
+        AND o.task_id NOT IN (SELECT subject_id FROM held_events
+                              WHERE kind='result' AND state='admitted'))
+    OR o.task_id IN (SELECT subject_id FROM held_events
+                     WHERE kind IN ('dispatch','result') AND state='held')
     OR EXISTS (
         SELECT 1 FROM tasks t WHERE t.task_id=o.task_id AND EXISTS (
             SELECT 1 FROM revocations r WHERE r.kind='credential'
@@ -152,12 +193,16 @@ PUBLICATION_BLOCKED_SQL = """(
         SELECT 1 FROM tasks t LEFT JOIN trace_task_contexts c ON c.task_id=t.task_id
         WHERE t.task_id=o.task_id AND o.subject='agents.'||t.recipient_id||'.inbox'
           AND (
-            EXISTS (SELECT 1 FROM holds h WHERE h.kind IN ('task','egress')
+            EXISTS (SELECT 1 FROM holds h WHERE h.kind='task'
                     AND h.object_id=json_extract(c.context_json,'$.parent_task_id'))
-            OR EXISTS (SELECT 1 FROM holds h JOIN trace_bindings_all b
-                       ON b.binding_id=h.object_id
-                       WHERE h.kind='egress' AND b.task_id IS NULL
-                         AND b.trace_id=json_extract(c.context_json,'$.parent_run_id'))
+            OR (t.task_id NOT IN (SELECT subject_id FROM held_events
+                                  WHERE kind='dispatch' AND state='admitted')
+                AND (EXISTS (SELECT 1 FROM holds h WHERE h.kind='egress'
+                             AND h.object_id=json_extract(c.context_json,'$.parent_task_id'))
+                     OR EXISTS (SELECT 1 FROM holds h JOIN trace_bindings_all b
+                                ON b.binding_id=h.object_id
+                                WHERE h.kind='egress' AND b.task_id IS NULL
+                                  AND b.trace_id=json_extract(c.context_json,'$.parent_run_id'))))
             OR EXISTS (SELECT 1 FROM ingress_filters f
                        WHERE f.target_kind='agent' AND f.target=t.recipient_id
                          AND (f.authority IN ('any:*', 'agent:'||t.sender_id)
@@ -239,8 +284,12 @@ def place_hold(
     owner: str,
     policy_version: int,
 ) -> dict[str, object]:
-    """Hold an object for this owner; re-placing restamps its policy version."""
+    """Hold an object for this owner; re-placing restamps its policy version.
+
+    Event holds are agentd's own (``hold_event_locked``), never a command."""
     _validate(kind, object_id, owner, policy_version)
+    if kind == "event":
+        raise ContainmentError("invalid_hold_kind")
     with store._task_transaction():
         db = store._connection
         _fence(db, owner, policy_version)
@@ -276,6 +325,7 @@ def release_hold(
 
     The owner's fence is at least the hold's own version, so a release stamped
     before the latest hold (or any later decision) is rejected as stale.
+    Releasing an ``event`` hold admits that held event (``held_events``).
     """
     _validate(kind, object_id, owner, policy_version)
     with store._task_transaction():
@@ -295,6 +345,14 @@ def release_hold(
         )
         if kind == "task":
             _recover_if_orphaned_locked(store, object_id)
+        if kind == "event":
+            db.execute(
+                "UPDATE held_events SET state='admitted',admitted_at_ms=? "
+                "WHERE event_id=? AND state='held'",
+                (_now_ms(), object_id),
+            )
+    if kind == "event":
+        store.effects.wake()  # an admitted effect is performed when due
     applied = (
         apply_released_deliveries(store, task_id=object_id) if kind == "task" else 0
     )
@@ -613,6 +671,146 @@ def list_containment(store: AgentdStore) -> dict[str, list[dict[str, object]]]:
 # Gates. Callers hold the store lock, normally inside the deciding transaction.
 
 
+def held_event_state_locked(
+    db: sqlite3.Connection, kind: str, subject_id: str
+) -> str | None:
+    """``held`` or ``admitted`` for a held event of that kind and subject."""
+    row = db.execute(
+        "SELECT state FROM held_events WHERE kind=? AND subject_id=?",
+        (kind, subject_id),
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def hold_event_locked(
+    store: AgentdStore,
+    node_id: str,
+    invocation: Mapping[str, object],
+    *,
+    kind: str,
+    subject_id: str,
+    task_id: str | None,
+    binding_id: str,
+    label: sqlite3.Row,
+    causes: list[dict[str, str]],
+    effect_class: str | None = None,
+    target: str | None = None,
+    recipient_id: str | None = None,
+) -> str:
+    """Hold one new event of a labelled invocation; returns its held-event ID.
+
+    The caller holds the deciding transaction. The event's hold (owned like
+    its label), its ``held_events`` row and the ``containment/held`` journal
+    event are written together; holding the same event again changes nothing.
+    """
+    from .trace_journal import TraceJournal
+
+    if kind not in EVENT_KINDS:
+        raise ValueError(kind)
+    db = store._connection
+    existing = db.execute(
+        "SELECT event_id FROM held_events WHERE kind=? AND subject_id=?",
+        (kind, subject_id),
+    ).fetchone()
+    if existing is not None:
+        return str(existing[0])
+    event_id, now = str(uuid.uuid4()), _now_ms()
+    db.execute(
+        "INSERT INTO held_events(event_id,kind,subject_id,task_id,binding_id,state,"
+        "held_at_ms) VALUES (?,?,?,?,?,'held',?)",
+        (event_id, kind, subject_id, task_id, binding_id, now),
+    )
+    db.execute(
+        "INSERT INTO holds(kind,object_id,reason,owner,policy_version,held_at_ms) "
+        "VALUES ('event',?,'containment',?,?,?)",
+        (event_id, label["owner"], label["policy_version"], now),
+    )
+    TraceJournal(db).record(
+        node_id,
+        {
+            **invocation,
+            "event_id": str(uuid.uuid4()),
+            "span_id": None,
+            "parent_span_id": None,
+            "kind": "containment",
+            "phase": "held",
+            "occurred_at": _iso(now),
+            "duration_ms": None,
+            "causes": causes,
+            "attributes": {
+                "containment_version": 1,
+                "event": kind,
+                "held_event_id": event_id,
+                "subject_id": subject_id,
+                "policy_version": int(label["policy_version"]),
+                "effect_class": effect_class,
+                "target": target,
+                "recipient_id": recipient_id,
+            },
+            "supersedes_event_id": None,
+        },
+        selected=True,
+    )
+    return event_id
+
+
+def hold_result(store: AgentdStore, task_id: str) -> bool:
+    """Whether the task's result is held: the task carries a containment
+    label and its result was not admitted. The first time, it is held as an
+    event of the task's latest invocation (journaled there); a task with no
+    traced invocation stays refused until the label is released."""
+    from .effect_gateway import _invocation_of_binding_locked
+    from .trace_lineage import reference
+
+    with store._task_transaction():
+        db = store._connection
+        row = db.execute(
+            "SELECT state FROM tasks WHERE task_id=?", (task_id,)
+        ).fetchone()
+        if row is None or row["state"] in TERMINAL_TASK_STATES:
+            return False
+        if store._task_hold_locked(task_id) is not None:
+            return False  # paused: refused by the transition itself
+        label = egress_hold_locked(db, task_id)
+        if label is None or label["reason"] != "containment":
+            return False
+        state = held_event_state_locked(db, "result", task_id)
+        if state == "admitted":
+            return False
+        if state is None:
+            binding = db.execute(
+                "SELECT * FROM trace_bindings_all WHERE task_id=? "
+                "ORDER BY opened_at_ms DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if binding is None:
+                return True
+            try:
+                started = _invocation_of_binding_locked(store, binding).run_started
+            except TraceContractError:
+                return True
+            hold_event_locked(
+                store,
+                str(started["node_id"]),
+                started,
+                kind="result",
+                subject_id=task_id,
+                task_id=task_id,
+                binding_id=str(binding["binding_id"]),
+                label=label,
+                causes=[reference(started)],
+            )
+        return True
+
+
+def _iso(ms: int) -> str:
+    return (
+        datetime.fromtimestamp(ms / 1000, UTC)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
 def effect_hold_locked(db: sqlite3.Connection, effect_id: str) -> sqlite3.Row | None:
     return db.execute(
         "SELECT reason,owner,policy_version FROM holds WHERE kind='effect' AND object_id=?",
@@ -623,10 +821,12 @@ def effect_hold_locked(db: sqlite3.Connection, effect_id: str) -> sqlite3.Row | 
 def egress_hold_locked(
     db: sqlite3.Connection, task_id: str | None, binding_id: str | None = None
 ) -> sqlite3.Row | None:
-    """An egress hold on the invocation's task or on its task-less binding."""
+    """An egress hold on the invocation's task or task-less binding: a
+    containment label holds new events one by one; a restore hold outranks it
+    and denies them."""
     return db.execute(
         "SELECT reason,owner,policy_version FROM holds WHERE kind='egress' "
-        "AND object_id IN (?,?) LIMIT 1",
+        "AND object_id IN (?,?) ORDER BY reason='restore' DESC LIMIT 1",
         (task_id, binding_id),
     ).fetchone()
 
