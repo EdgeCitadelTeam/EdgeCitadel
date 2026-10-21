@@ -1475,6 +1475,9 @@ With lab hops at or below 100 ms, `A.sched` would read the schedule about
 would collapse. The workload is unchanged. The proposed fix goes to the
 coordinator, because it touches the H8/H9 pre-registration.
 
+Superseded: the early alert now fires on the produce event itself (see
+"svc early alert on the produce event" below).
+
 ### tau_1 in the decision log and `tainted_after_tau1` (spec review A)
 
 Before this change the scorer's "containment established" was the last
@@ -1562,6 +1565,11 @@ and no tau_1.
 
 **(ii) svc with `boundary: defer`, later new tasks of a tainted session:
 covered for svc.**
+
+Corrected by review (H) below: what follows holds for the late alert, and
+for the early alert only when A.sched's start is ingested before tau_1. Since
+(H), a source-side invocation's write to shared memory is modelled before it
+happens, which covers the early alert too.
 - **Literally true:** such a task is neither labelled nor a sink until the
   receding re-solve sees it, so the admission invariant does not hold for it.
 - **Theorem 5's conclusion still holds in svc.** The assistant is a
@@ -1650,3 +1658,263 @@ not trivial to add:
   both.
 
 It stays a stated limitation of the prototype.
+
+### svc early alert on the produce event (pre-registration amendment, H8/H9)
+
+**Decided** by the user, 2026-10-21 about 23:00 London, before any lab run
+of svc.
+
+**Change.** The early alert fires on the schedule-produced event itself,
+offset 0, and the run's services post it when they receive that event.
+- Before: the controller saw the event on its next poll of the services'
+  feed, waited 0.3 s, then resolved the faulty invocation through Core.
+  The alert lagged the produce event by 0.4–0.7 s.
+- The late alert is unchanged.
+
+**Meaning.** The registered meaning ("the alert comes before the automation
+consumes the schedule") is unchanged; only the trigger changes, so the
+meaning no longer depends on hand-off speed. `consumed_at_alert` stays as
+the manipulation check (reported in gate.json).
+
+**Mechanism.**
+- `AlertTrigger.posted_on_receipt`, allowed only on a produce event with no
+  delay.
+- The svc workload's early alert sets it, and `alert_early_delay_s` becomes
+  0.0. The regenerated workloads/svc.json differs only there.
+- `future_requests` follows the earlier nominal alert time: 0.5 × (85 − 20.5)
+  instead of 0.5 × (85 − 20.8), i.e. 0.15 more expected requests.
+- Before the run starts, the runner tells the services which item to watch
+  (`POST /alert/arm`). It looks up the faulty invocation's attempt at once and
+  then every 0.2 s (`ATTEMPT_LOOKUP_FAST_S`), and arms the services with the
+  alert, the intake URL and the admin header once it has it.
+- The services mark `alert` and post it from a thread as soon as they have
+  both the event and the alert.
+- `GET /alert` reports the trigger, arming and mark times and the reply.
+  Neither the headers nor the token are ever written or returned.
+- An uncontained run (`none`) is armed with `post: false`: only its alert
+  time is marked, at receipt, as before.
+- A stack without an HTTP alert intake (A2A, which never runs svc) keeps
+  the controller's path, with no delay.
+- If the attempt is still unknown 5 s after the trigger, the alert names the
+  task, as before, and that is recorded as an error.
+- run.json records `alert_posted_by` and `alert_armed_ms`.
+
+**Local check** (`dryrun-nats`, svc early, L = 150 ms):
+
+| strategy | `consumed_at_alert` | armed | alert marked | dispatch carrying the schedule | `A.sched` reads it |
+|---|---|---|---|---|---|
+| Firebreak | 0.0 | 2 ms before the produce event | 6 ms after it | +0.29 s | +4.87 s |
+| No containment | 0.0 | – (`post: false`) | at receipt | after the alert | after the alert |
+
+Times in the last two columns are from the alert.
+
+Firebreak: 0 tainted device commands, τ₁ at +1.53 s, `tainted_after_tau1`
+0. No containment: 20 tainted device commands. Both runs complete.
+
+**Tests:**
+- `test_an_alert_is_posted_once_on_receipt_of_its_produce_event[armed
+  first/event first]`: the post happens once; the trigger is timed from the
+  event; another item, a non-task invocation and a second produce do not
+  trigger; the token is not in the marks.
+- `test_an_uncontained_run_only_marks_its_alert_time`.
+- The spec rule and its round trip.
+- `test_the_early_alert_is_the_produce_event_posted_on_receipt` (the late
+  alert unchanged) and the updated cost test.
+
+### Hand-offs recorded, not gated (decided 2026-10-21)
+
+Tonight's pipeline does not stop on hand-off speed.
+- **Still measured and recorded in gate.json:** the per-hop median, the
+  A2A-SQLite fallback (run when the absolute check fails and the gate
+  otherwise passed), `commit_cost_ms` and `handoff_criterion`.
+- **New fields:** `handoff: "recorded_not_blocking"`, and `handoff_verdict`
+  (`passed` and `reasons`), the verdict the approved criterion would have
+  given. An A2A measurement that cannot run is recorded there with its
+  reason.
+- **Still blocking:**
+  - the control-latency check (every site's p99 ≤ 150 ms);
+  - run status;
+  - scorer integrity;
+  - Firebreak clean after the alert;
+  - at most 3 lost worker slots;
+  - testbed failures. This check is new and explicit: a run whose
+    `testbed_failure` is anything but lost worker slots (which keep their
+    budget of 3) blocks. Before, such runs were caught only through their
+    status.
+- The pass message prints whether the hand-off check would have passed.
+
+**Tests:**
+- `test_hand_offs_are_recorded_with_their_verdict_but_do_not_block`;
+- `test_a_failed_fallback_is_recorded_and_the_pilots_still_run`;
+- a testbed-failure case in `test_each_gate_condition_fails_on_its_own`;
+- `test_a_control_latency_failure_skips_the_handoff_fallback` (still
+  blocking, with the hand-off verdict recorded).
+
+### Why an EdgeCitadel hop costs about 18 durable commits (analysis, no change)
+
+The local six-hop chain measured 644.5 ms per hop, about 18 times this VM's
+36 ms durable commit to one database.
+
+**Storage.** Each agentd keeps two SQLite files: the trace database (main:
+journal, bindings, lineage) and `-tasks.sqlite3`, attached as `task_state`
+(tasks, outbox, holds, held events). Both use a rollback journal
+(`journal_mode=DELETE`) with `synchronous=EXTRA`.
+- **One file:** a commit fsyncs the journal and the database, deletes the
+  journal, and (EXTRA) fsyncs the directory. Here that is 32–36 ms.
+- **Both files ("pair"):** SQLite adds a super-journal (more file writes,
+  fsyncs and directory syncs), so the change is atomic across both files.
+  Here that is 52–60 ms.
+
+**Commits from a sender's dispatch to the recipient's start**, sender agentd
+S and recipient agentd R, by code reading:
+
+| # | where | what | files |
+|---|---|---|---|
+| 1 | S `trace.dispatch` | permission, dispatch and lineage events; child task; outbox message; idempotency row | pair |
+| 2 | S outbound loop | `publish_started` observation | main |
+| – | NATS JetStream | publish; file store, no per-message fsync by default | broker |
+| 3 | S | `publish_accepted` observation | main |
+| 4 | S | `mark_transport_published` | task_state |
+| 5 | R consumer | `received` observation | main |
+| 6 | R `ingest_transport_envelope` | task created, lifecycle events | pair |
+| 7 | R | `durably_accepted` observation | main |
+| 8 | R, after the JetStream ack | `ack_sent` observation | main |
+| 9 | R `task.claim` | claim, attempt, lifecycle event | pair |
+| 10 | R `trace.bind` | binding, run started, lineage used | main |
+| 11 | R `task.transition running` | task state and lifecycle event | pair |
+
+That is 4 pairs plus 7 single-file commits, about 13 single-commit
+equivalents (4 × 1.6 + 7). The remainder of the 18 is CPU contention (three
+agentd and their workers on 2 vCPUs) and concurrent writers taking agentd's
+writer lock:
+- the trace-sync exporter's cursor commits (`EDGECITADEL_TRACE_SYNC=1`);
+- the worker's `trace.use`/`trace.append` commits.
+
+An instrumented count would pin this down.
+
+**The result path back** repeats the pattern:
+- R completes: task state, result in the outbox, lifecycle and lineage
+  events (pair), then the binding finish (main);
+- R publishes (commits 2–4 again);
+- S ingests the result (pair) with its three observations.
+
+**What could be merged without weakening the journal or fencing (F).**
+- **The five transport observations** are "optional communication evidence,
+  isolated from task and broker transactions": each is its own commit so
+  that a failure cannot affect delivery. Fencing relies on the journal
+  positions of control actions and on lineage, not on these. They could be
+  written in a savepoint inside the neighbouring task transaction (commits
+  5–7 into 6; 3 with 4), or buffered and group-committed. That saves up to
+  5 single commits per hop.
+- **Claim, bind and transition to running** (9–11) are three RPCs for one
+  step. A combined "claim and start" could commit them as one pair, saving
+  one pair and one single commit.
+- **WAL.** Only after the pair becomes one file (task_state merged into
+  main). In WAL mode, a transaction over attached databases is atomic per
+  file but not across the set. agentd relies on cross-file atomicity:
+  - a task state change and its journal event;
+  - an outbox message and its dispatch event;
+  - a held event and its hold.
+
+  That is why `attach_tasks` refuses anything but rollback journaling.
+  - With one file in WAL and `synchronous=FULL`, a commit is one WAL append
+    and one fsync, with no directory sync.
+  - Readers then no longer block the writer.
+  - Journal positions (`source_seq`) are row values and are unaffected.
+- **A cheaper middle step.** `journal_mode=PERSIST` (or TRUNCATE) with
+  `synchronous=FULL` keeps rollback-journal atomicity across both files.
+  EXTRA's directory sync exists only because DELETE unlinks the journal, so
+  this drops it per single-file commit. Pairs keep their super-journal cost.
+- **Not to weaken:**
+  - durability before acknowledging (the JetStream ack after commit 6, and
+    the outbox marked published after the broker's ack);
+  - the journal and the action committed together (the effect gateway and
+    control commands);
+  - a confirmation's journal position covering what it confirms.
+
+  None of the merges above touches these.
+- **Broker durability.** JetStream's file store does not fsync each message
+  by default (`sync_interval`). A broker crash could lose a message whose
+  outbox entry is already marked published. This is not on the latency
+  path, but it bears on the at-least-once claim.
+
+### Shared memory written after tau_1 (theory review H, safety fix)
+
+**Finding** (the theory agent, read-only, on 4aed792). G_C modelled a
+shared-memory agent's continuation (the `ctx:` source and its context sinks)
+only once `graph.tainted_sessions` already held that memory.
+- The adaptive phase 1 labels a pending source-side invocation without
+  pausing it.
+- In svc with the early alert, `A.sched` has not started at the alert, so
+  Firebreak labelled it and let it run.
+- Once it ran, the memory was tainted. A user request starting after it
+  could command the lamp before the class revocation, which waited for the
+  next projection.
+
+**Test:**
+`test_a_source_side_invocation_that_taints_shared_memory_after_tau_1_is_covered`.
+- Real agentd; the planner (root) has handed the shared-memory assistant
+  its schedule task, still queued at the alert.
+- After tau_1, with no further monitor step, the schedule task runs, and a
+  user request starts after it.
+- Before the fix the request's device command was **committed**, and
+  tau_1's C4 had checked no sink at all: the context's lamp class was doomed,
+  and was not yet a context sink.
+- With the fix the command is refused, the reply commits, and tau_1's
+  `sinks_checked` includes `K:assistant:device.command@new`.
+
+**Fix** (as the theory models it). Each unit of a shared-memory agent has an
+undeclared `memory` edge from its output into the agent's context
+continuation `ctx:<agent>:*`, a pending edge of G(tau).
+- Holding the invocation (its split edge) stops the write; an egress label
+  does not.
+- The context node and its arrival into the agent's new invocations exist
+  whenever the agent has units. The node is a source only once the memory is
+  tainted.
+- `context_sinks` takes every whole context, so the context's protected
+  classes count, doomed or not, wherever a source-side invocation's write
+  reaches them: in the at-alert solve, in (C2) through `context_covers`, in
+  C4 at tau_1 and in every release check.
+- **Conservative only:**
+  - agents without shared memory get no edge;
+  - in the grids only svc has one;
+  - the rule baselines are unchanged: `stop_downstream`'s closure skips
+    `MODEL_ONLY_KINDS`, and the other rules do not walk undeclared edges;
+  - the convergence and release checks of the shared-profile ablation see
+    the context sinks too, which is more conservative.
+
+**svc early alert, behaviour change.** The revocation of the assistant's
+`dev_lamp` class moves from phase 2 (after tau_1) into phase 1: (C2) covers
+the context that `A.sched`'s memory write reaches, and confirms it before
+tau_1, whose (C4) now checks the class.
+- **Before:** Firebreak also revoked the class at the alert, but in its
+  phase-2 cut, after tau_1. The leak window was any `A.sched` start before
+  that revocation landed: wide with lab-speed hops, and also open whenever
+  phase 2 chose another cut.
+
+Local svc early runs on `dryrun-nats` (times from the alert):
+
+| code | class revocation confirmed | tau_1 | `A.sched` starts | tainted device commands | clean lamp commands after the alert |
+|---|---|---|---|---|---|
+| before (H) | +1.51 s (phase 2) | +1.53 s | +4.58 s | 0 | 1, held (Q011) |
+| with (H) | +1.06 s (phase 1, C2) | +1.07 s | +3.20 s | 0 | 1, held (Q011) |
+
+- **Collateral:** unchanged here. It is the lamp commands of clean requests
+  between the revocation and `A.sched`'s start, which were refused before
+  (H) too, once phase 2 landed.
+- Replies are unaffected: 45 of 45 requests answered.
+
+### Known non-guarantees (theory appendix N10)
+
+Not fixed; stated here as limits of Theorem 5's coverage in the prototype.
+Neither occurs in svc as configured, nor in any grid instance: only svc has
+a shared-memory agent, and no instance creates a later task into a tainted
+conversation from outside the source side.
+- **(a) Per-conversation (non-shared) tainted contexts.** A later task of
+  that conversation, created after tau_1 by a sender outside the source side,
+  starts tainted and unlabelled, at h = 1, under either boundary setting. The
+  receding re-solve covers it only once it is seen (`tainted_after_tau1`
+  measures it).
+- **(b) Shared-memory agents' onward flows.** The class revocation covers
+  the context's protected classes only. Later invocations' dispatches,
+  results or store read-backs are not covered by it.
