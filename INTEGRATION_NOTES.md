@@ -575,3 +575,34 @@ within the margin), `test_receding_additions_during_the_waits_are_fenced_before_
 and, opt-in on the multi-process C2 (late variant, `freeze_plus_cut` and
 `adaptive`),
 `test_phase1_with_the_at_alert_cut_blocks_the_late_effect_from_the_first_round`.
+
+### The experiment harness on M4 (merged from `m3/harness`)
+
+`m3/harness` (`a21fc29`) is merged; its harness and det-worker now run on
+this branch's runtime and monitor (`HARNESS_RUNTIME_ROOT` is this checkout):
+
+- Registered effects go through agentd's gateway (`effect.execute`): the
+  stack's `effect_sink` is the run's ledger (the gateway's `http` adapter
+  posts each committed effect to the services' `/sink/<token>`, which records
+  it as `committed`) or, for the physical case, Home Assistant
+  (`configs/lab-homeassistant.json`: the gateway's `homeassistant` adapter
+  calls the services' Home Assistant front, which forwards the service call to
+  `HARNESS_HA_URL` without the worker's `ec_*` attribution keys and records
+  what Home Assistant accepted; the token stays in `HARNESS_HA_TOKEN_FILE` on
+  each edge host; a dry run answers for a per-run token). The worker records
+  `attempted`, `scheduled`, `denied` and `sink_failed`; only the sink records
+  `committed`. Each run also collects the gateway's decisions from Core
+  (`gateway_effects.jsonl`).
+- Consuming steps report inputs taken from agent memory with `trace.use`
+  (the delivery's task), so lineage links them to their producers.
+- Leases: every node enforces `EDGECITADEL_CONTROLLER_LEASE_MS=30000`
+  (`controller_lease_ms`); the monitor is configured with control in every
+  run and `enforce: false` for runs without containment (`none`,
+  `reference`); work starts once every node's lease is renewed.
+- Runs carry `profile`, `phase1_mode`, `phase1_labels` and
+  `receding_during_waits` (grid dimensions; `parts` add sub-grids); the
+  monitor's mechanisms per strategy are recorded in `run.json`.
+- Grids: `lab-smoke` (every strategy x scenario x early/late alert once
+  under the deployed profile, plus C2 under the shared profile: 165 runs),
+  `lab-pilot` (3 repetitions: 495 runs), `lab-main` a draft (size after the
+  pilot).
