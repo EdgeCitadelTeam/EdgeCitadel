@@ -48,6 +48,9 @@ from .trace_producer import RuntimeTrace
 Handler = Callable[[dict[str, Any], Any], Awaitable[tuple[dict[str, Any], str]]]
 Signal = Literal["run", "held", "egress", "terminal", "stopped"]
 WATCH_INTERVAL_SECONDS = 0.5
+# An idle slot's claim waits in agentd until a task is claimable (agentd wakes
+# it when one is created or released) for at most this long, then asks again.
+CLAIM_WAIT_MS = 1000
 TERMINAL_STATES = frozenset(
     {"completed", "failed", "rejected", "cancelled", "expired", "undeliverable"}
 )
@@ -319,15 +322,23 @@ async def run(
     try:
         if on_start is not None:
             await on_start(client)
+        claim_wait_ms = int(os.environ.get("EDGECITADEL_CLAIM_WAIT_MS", CLAIM_WAIT_MS))
         while not stop.is_set():
+            asked = loop.time()
             task = await asyncio.to_thread(
-                client.call, "task.claim", session_id=session_id
+                client.call,
+                "task.claim",
+                session_id=session_id,
+                wait_ms=claim_wait_ms,
             )
             if task is None:
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=0.5)
-                except TimeoutError:
-                    pass
+                # A claim that came back early without a task (agentd stopping
+                # its wait) must not turn into a busy loop.
+                if loop.time() - asked < claim_wait_ms / 2000:
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=0.05)
+                    except TimeoutError:
+                        pass
                 continue
             record = cast(Mapping[str, object], task)
             task_id = str(record["task_id"])

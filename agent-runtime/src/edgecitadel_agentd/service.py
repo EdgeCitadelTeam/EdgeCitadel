@@ -38,9 +38,13 @@ from .trace_exporter import EXPORT_IDLE_MS
 from .trace_sync_service import TraceSyncService
 from .trace_quota import TraceQuotaError
 from .transport import AgentdNatsTransport
+from .work_signal import interval_ms
 from .writer_lock import WriterActiveError, exclusive_writer
 
 MAX_REQUEST_BYTES = 1024 * 1024
+# ``task.claim`` may wait this long for a claimable task (``wait_ms``); the
+# client's socket timeout (5 s) must exceed it.
+MAX_CLAIM_WAIT_MS = 2000
 PROTOCOL_VERSION = 1
 MAX_UNIX_SOCKET_PATH_BYTES = 100
 PROCESS_STATE_NAME = "process.json"
@@ -242,6 +246,42 @@ class AgentdRequestHandler(socketserver.StreamRequestHandler):
                 + "\n"
             ).encode()
         )
+
+
+def _claim(
+    store: AgentdStore,
+    *,
+    connector_id: str,
+    token: str,
+    agent_id: str,
+    session_id: str,
+    wait_ms: object,
+) -> dict[str, object] | None:
+    """Claim the next task; with ``wait_ms``, wait that long for one.
+
+    A waiting claim sleeps on the store's work signal (a task created,
+    requeued or released), checks with a read before it tries again, and
+    re-checks every ``EDGECITADEL_CLAIM_POLL_MS`` in case a change came without
+    a signal. Each attempt is the ordinary claim, with its session check.
+    """
+    if type(wait_ms) is not int or not 0 <= wait_ms <= MAX_CLAIM_WAIT_MS:
+        raise StoreError(f"wait_ms must be an integer from 0 to {MAX_CLAIM_WAIT_MS}")
+    deadline = time.monotonic() + wait_ms / 1000
+    poll_s = interval_ms("EDGECITADEL_CLAIM_POLL_MS") / 1000
+    attempt = True
+    while True:
+        generation = store.work.generation
+        if attempt:
+            task = store.claim_next_task(
+                connector_id=connector_id, token=token, session_id=session_id
+            )
+            if task is not None:
+                return task
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        store.work.wait(generation, min(poll_s, remaining))
+        attempt = store.has_claimable_task(agent_id)
 
 
 def _params(request: Mapping[str, object]) -> dict[str, Any]:
@@ -630,10 +670,13 @@ def dispatch(
             context_id=params.get("context_id"),
         )
     if operation == "task.claim":
-        return store.claim_next_task(
+        return _claim(
+            store,
             connector_id=connector_id,
             token=token,
+            agent_id=str(connector["agent_id"]),
             session_id=str(params.get("session_id", "")),
+            wait_ms=params.get("wait_ms", 0),
         )
     if operation in {"memory.get", "memory.put"}:
         if transport is None:

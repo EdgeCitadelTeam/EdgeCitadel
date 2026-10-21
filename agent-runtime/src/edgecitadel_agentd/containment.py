@@ -353,6 +353,8 @@ def release_hold(
             )
     if kind == "event":
         store.effects.wake()  # an admitted effect is performed when due
+    # A released task, label or event may make work claimable or publishable.
+    store.work.notify()
     applied = (
         apply_released_deliveries(store, task_id=object_id) if kind == "task" else 0
     )
@@ -566,6 +568,7 @@ def remove_filter(
             "AND effect_class=? AND target=?",
             key,
         )
+    store.work.notify()  # messages the filter blocked may be published
     return {"removed": True, "applied_deliveries": apply_released_deliveries(store)}
 
 
@@ -616,6 +619,7 @@ def cancel_task(
             if "illegal task transition" in str(error):
                 raise ContainmentError("task_terminal") from error
             raise
+    store.work.notify()  # its cancellation result is an outbox message
     apply_released_deliveries(store, task_id=task_id)
     return {"state": "cancelled", "released_holds": sorted(h["kind"] for h in holds)}
 

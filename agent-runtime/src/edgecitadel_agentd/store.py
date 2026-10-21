@@ -55,6 +55,7 @@ from .trace_lineage import record_result_generated
 from .trace_marker_compaction import coalesce_loss_markers
 from .trace_retention import maintain_capacity
 from .trace_settlement_apply import SETTLEMENT_SCHEMA_SQL
+from .work_signal import WorkSignal
 
 READ_MAX_STEPS = 100_000
 READ_MAX_SECONDS = 0.05
@@ -64,6 +65,13 @@ READ_BUSY_MS = 50
 SCHEMA_VERSION = 34
 TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 RETENTION_INTERVAL_MS = 60 * 60 * 1000
+# Tasks an agent's session may claim (one parameter: the recipient agent).
+CLAIMABLE_SQL = """recipient_id = ? AND state IN ('queued', 'offered')
+    AND claimed_session_id IS NULL
+    AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task')
+    -- A held dispatch to a local recipient waits for admission.
+    AND task_id NOT IN (SELECT subject_id FROM held_events
+                        WHERE kind='dispatch' AND state='held')"""
 MAX_EVENT_RECORDS = 50_000
 MAX_SPAN_RECORDS = 50_000
 MAX_PRESENCE_RECORDS = 10_000
@@ -207,6 +215,8 @@ class AgentdStore:
             self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.execute("PRAGMA busy_timeout=5000")
             self._lock = threading.RLock()
+            # Wakes the outbound transport and waiting claims (work_signal).
+            self.work = WorkSignal()
             self._authentication_rejections = 0
             self._settled_retirement_after: tuple[str, str, str, int] | None = None
             self._last_retention_ms = 0
@@ -1699,6 +1709,7 @@ class AgentdStore:
                 )
             except sqlite3.IntegrityError as error:
                 raise StoreError("task_id already exists") from error
+            self.work.notify()  # a queued task to claim
             if self._connection.workspace is not None:
                 from .trace_reservations import Obligation, reserve
 
@@ -2102,6 +2113,17 @@ class AgentdStore:
             )
         return self.get_task(task_id)
 
+    def has_claimable_task(self, agent_id: str) -> bool:
+        """Whether ``claim_next_task`` would find a task for ``agent_id`` now
+        (a read, for waiting claims to skip pointless write transactions)."""
+        with self._lock:
+            return (
+                self._connection.execute(
+                    f"SELECT 1 FROM tasks WHERE {CLAIMABLE_SQL} LIMIT 1", (agent_id,)
+                ).fetchone()
+                is not None
+            )
+
     def claim_next_task(
         self, *, connector_id: str, token: str, session_id: str
     ) -> dict[str, object] | None:
@@ -2119,16 +2141,8 @@ class AgentdStore:
             if active is None:
                 raise StoreError("an active recipient session is required")
             row = self._connection.execute(
-                """
-                SELECT task_id, state FROM tasks
-                WHERE recipient_id = ? AND state IN ('queued', 'offered')
-                  AND claimed_session_id IS NULL
-                  AND task_id NOT IN (SELECT object_id FROM holds WHERE kind='task')
-                  -- A held dispatch to a local recipient waits for admission.
-                  AND task_id NOT IN (SELECT subject_id FROM held_events
-                                      WHERE kind='dispatch' AND state='held')
-                ORDER BY created_at_ms LIMIT 1
-                """,
+                f"SELECT task_id, state FROM tasks WHERE {CLAIMABLE_SQL} "
+                "ORDER BY created_at_ms LIMIT 1",
                 (connector["agent_id"],),
             ).fetchone()
             if row is None:
@@ -2821,6 +2835,7 @@ class AgentdStore:
         )
 
     def _recover_session_tasks_locked(self, session_id: str, now: int) -> None:
+        self.work.notify()  # accepted work it requeues is claimable again
         tasks = self._connection.execute(
             """
             SELECT task_id, sender_id, trace_id, state
@@ -3026,6 +3041,7 @@ class AgentdStore:
                 now,
             ),
         )
+        self.work.notify()  # an outbox message to publish
 
     @staticmethod
     def _iso_timestamp(timestamp_ms: int) -> str:

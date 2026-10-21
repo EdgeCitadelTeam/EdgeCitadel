@@ -1,4 +1,10 @@
-"""NATS transport owned by agentd on behalf of local native connectors."""
+"""NATS transport owned by agentd on behalf of local native connectors.
+
+The outbound loop publishes the outbox when the store signals new work
+(``store.work``: a message enqueued, a hold or label released) and otherwise
+re-checks every ``EDGECITADEL_TRANSPORT_POLL_MS`` (50 ms by default);
+consumer, presence and heartbeat upkeep keep their once-a-second cadence.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +33,10 @@ from .store import AgentdStore, StoreError
 from .trace_contract import TraceContractError
 from .trace_monitor import BrokerMonitor
 from .trace_transport import TransportTrace, delivery_metadata, publication_metadata
+from .work_signal import interval_ms
+
+# Consumers, presence and heartbeats are reconciled at this cadence.
+MAINTENANCE_SECONDS = 1.0
 
 
 def _timestamp() -> str:
@@ -262,6 +272,13 @@ class AgentdNatsTransport:
     async def _connected_loop(self, nc: NATS, js: JetStreamContext) -> None:
         consumers: dict[str, asyncio.Task[None]] = {}
         published_presence: set[str] = set()
+        poll_s = interval_ms("EDGECITADEL_TRANSPORT_POLL_MS") / 1000
+        loop = asyncio.get_running_loop()
+        wake = asyncio.Event()
+        remove_waker = self.store.work.add_waker(
+            lambda: loop.call_soon_threadsafe(wake.set)
+        )
+        upkeep_due = 0.0
         monitor = (
             asyncio.create_task(
                 BrokerMonitor(
@@ -273,56 +290,21 @@ class AgentdNatsTransport:
         )
         try:
             while not self._stop.is_set():
-                current_ids: set[str] = set()
-                for connector in self.store.list_connectors():
-                    if connector["revoked"]:
-                        continue
-                    agent_id = str(connector["agent_id"])
-                    current_ids.add(agent_id)
-                    if agent_id not in consumers:
-                        consumers[agent_id] = asyncio.create_task(
-                            self._consume_agent(js, agent_id)
-                        )
-                for agent_id, task in list(consumers.items()):
-                    if agent_id not in current_ids or task.done():
-                        task.cancel()
-                        await asyncio.gather(task, return_exceptions=True)
-                        consumers.pop(agent_id, None)
-                        with self._lock:
-                            self._ready_agents.discard(agent_id)
-                            self._status["ready_inbox_count"] = len(self._ready_agents)
-
-                active = {
-                    str(connector["agent_id"]): connector
-                    for connector in self.store.list_active_connectors()
-                }
-                for agent_id, connector in active.items():
-                    if agent_id not in published_presence:
-                        await self._publish_register(nc, connector)
-                    await self._publish_heartbeat(nc, agent_id)
-                for agent_id in published_presence - active.keys():
-                    await self._publish_offline(nc, agent_id)
-                published_presence = set(active)
-
-                for pending in self.store.pending_transport():
-                    envelope = json.dumps(
-                        pending["envelope"], separators=(",", ":")
-                    ).encode()
-                    message_id = str(pending["message_id"])
-                    with self.store.control_lock:
-                        # A containment decision may have landed since the
-                        # batch was selected; after this point it cannot
-                        # recall the message, and confirmations say so.
-                        if not self.store.publication_allowed(message_id):
-                            continue
-                        self._in_flight.add(message_id)
-                    try:
-                        await self._publish_one(nc, js, pending, envelope, message_id)
-                    finally:
-                        with self.store.control_lock:
-                            self._in_flight.discard(message_id)
-                await asyncio.sleep(1)
+                if loop.time() >= upkeep_due:
+                    published_presence = await self._upkeep(
+                        nc, js, consumers, published_presence
+                    )
+                    upkeep_due = loop.time() + MAINTENANCE_SECONDS
+                # Cleared before the scan: work enqueued meanwhile wakes us again.
+                wake.clear()
+                await self._publish_pending(nc, js)
+                timeout = max(0.0, min(poll_s, upkeep_due - loop.time()))
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout)
+                except TimeoutError:
+                    pass
         finally:
+            remove_waker()
             if monitor is not None:
                 monitor.cancel()
                 await asyncio.gather(monitor, return_exceptions=True)
@@ -332,6 +314,64 @@ class AgentdNatsTransport:
             with self._lock:
                 self._ready_agents.clear()
                 self._status["ready_inbox_count"] = 0
+
+    async def _upkeep(
+        self,
+        nc: NATS,
+        js: JetStreamContext,
+        consumers: dict[str, asyncio.Task[None]],
+        published_presence: set[str],
+    ) -> set[str]:
+        """Inbox consumers for the current connectors; presence and heartbeats."""
+        current_ids: set[str] = set()
+        for connector in self.store.list_connectors():
+            if connector["revoked"]:
+                continue
+            agent_id = str(connector["agent_id"])
+            current_ids.add(agent_id)
+            if agent_id not in consumers:
+                consumers[agent_id] = asyncio.create_task(
+                    self._consume_agent(js, agent_id)
+                )
+        for agent_id, task in list(consumers.items()):
+            if agent_id not in current_ids or task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                consumers.pop(agent_id, None)
+                with self._lock:
+                    self._ready_agents.discard(agent_id)
+                    self._status["ready_inbox_count"] = len(self._ready_agents)
+
+        active = {
+            str(connector["agent_id"]): connector
+            for connector in self.store.list_active_connectors()
+        }
+        for agent_id, connector in active.items():
+            if agent_id not in published_presence:
+                await self._publish_register(nc, connector)
+            await self._publish_heartbeat(nc, agent_id)
+        for agent_id in published_presence - active.keys():
+            await self._publish_offline(nc, agent_id)
+        return set(active)
+
+    async def _publish_pending(self, nc: NATS, js: JetStreamContext) -> None:
+        """Publish the outbox in order; each message is re-checked under the
+        control lock just before it is handed to the broker."""
+        for pending in self.store.pending_transport():
+            envelope = json.dumps(pending["envelope"], separators=(",", ":")).encode()
+            message_id = str(pending["message_id"])
+            with self.store.control_lock:
+                # A containment decision may have landed since the batch was
+                # selected; after this point it cannot recall the message, and
+                # confirmations say so.
+                if not self.store.publication_allowed(message_id):
+                    continue
+                self._in_flight.add(message_id)
+            try:
+                await self._publish_one(nc, js, pending, envelope, message_id)
+            finally:
+                with self.store.control_lock:
+                    self._in_flight.discard(message_id)
 
     async def _publish_one(
         self,

@@ -36,6 +36,7 @@ anything, and record what you find.
 | Containment monitor | absent | `EDGECITADEL_CONTAINMENT_MONITOR=1` | off until step 7. **M4**: Core image needs `highspy` (in `aggregator/requirements.txt`); rebuild it |
 | Controller lease | none | **on in the lab**: `EDGECITADEL_CONTROLLER_LEASE_MS=30000` on every agentd, renewed by the monitor from its start, alert or not | effects are denied (fail closed) whenever no renewal arrived within 30 s |
 | Trace export (**M4**) | new events polled every 1000 ms | every 100 ms (`EDGECITADEL_TRACE_EXPORT_IDLE_MS`, 10 to 60000) | measured export lag p95 958 ms before, 48 ms after |
+| Hand-offs (**M7**) | outbox published every 1 s; an idle Managed Agent slot asked for a task every 0.5 s | both woken when work arrives; fallback re-checks every 50 ms (`EDGECITADEL_TRANSPORT_POLL_MS`, `EDGECITADEL_CLAIM_POLL_MS`, 1 to 60000); `task.claim` takes `wait_ms` (0 to 2000) | either side may be older: an older agentd ignores `wait_ms` (the runtime then asks every 50 ms), an older runtime claims without waiting |
 | Pi packages | 0.1.1 | rebuilt from this revision (abort/resume, effect gate) | reinstall; state preserved |
 
 Upgrade all agentd nodes and Core in one maintenance window. Record the
@@ -171,6 +172,13 @@ Do the nodes one at a time and verify each before the next.
      then answers `effect_adapter_unavailable`.
    - **M4**, optional: `EDGECITADEL_TRACE_EXPORT_IDLE_MS` (default 100) is how
      often trace sync looks for new events when idle. Leave the default.
+   - **M7**, optional: `EDGECITADEL_TRANSPORT_POLL_MS` and
+     `EDGECITADEL_CLAIM_POLL_MS` (default 50) are the fallback re-checks of the
+     outbound loop and of a waiting task claim; both are woken when work
+     arrives, so these only bound a change that came without a wake-up (another
+     process writing the store). On the Managed Agent runtime,
+     `EDGECITADEL_CLAIM_WAIT_MS` (default 1000) is how long an idle slot's claim
+     waits in agentd. Leave the defaults.
 
    Why 30 s: the monitor renews every 10 s (`controller_lease_renew_ms`), so 30 s
    tolerates two lost renewals in a row or a monitor/aggregator restart; a
