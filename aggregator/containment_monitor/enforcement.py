@@ -251,9 +251,8 @@ class Decision:
     unavoidable: list[str] = field(default_factory=list)
     cut_valid: bool | None = None
     solve: dict = field(default_factory=dict)  # the last phase-2 solve
-    # Every solve, in order: the at-alert cut of phase 1 (phase1_mode other
-    # than freeze)
-    # and each phase-2 solve; "phase" says which.
+    # Every solve, in order: the at-alert cut of phase 1 (any phase1_mode but
+    # freeze) and each phase-2 solve; "phase" says which.
     solves: list[dict] = field(default_factory=list)
     graph: dict = field(default_factory=dict)
     # Adaptive phase 1: why the freeze was (not) added (freeze_trigger) and
@@ -335,12 +334,13 @@ def freeze_trigger(
 class TwoPhaseProtocol:
     """Orchestrates P1-P3 over callbacks owned by the monitor service.
 
-    ``project(phase, in_force)`` builds G_C (phase 1: holds only, no solve budget);
-    ``fence(records)`` ingests events until every confirmed record's nodes are
-    ingested up to their journal positions (reconciling taint from them) and
-    returns whether that happened in time (with ``receding``, it is called with
-    ``on_poll``, which it calls while it waits); ``choose(cg)`` returns the phase-2 strategy result. ``in_force``
-    maps actions to their records and is updated in place.
+    ``project(phase, in_force)`` builds G_C (phase 1: holds only, no solve
+    budget); ``fence(records)`` ingests events until every confirmed record's
+    nodes are ingested up to their journal positions (reconciling taint from
+    them) and returns whether that happened in time (with ``receding`` it is
+    called with ``on_poll``, which it calls while it waits); ``choose(cg)``
+    returns the phase-2 strategy result. ``in_force`` maps actions to their
+    records and is updated in place.
 
     Phase 1 (``phase1_mode``):
 
