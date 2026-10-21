@@ -1,0 +1,59 @@
+{
+  "name": "compare-a2a",
+  "note": "System comparison (draft, for H10; set once H10 is registered). Content faults: the 7 smoke workloads x early/late x 3 repetitions. Rogue part: C2 at rogue rate 0.3 and 1.0 (1.0: every step boundary of a tainted invocation acts and messages always spawn, up to the run's 200-invocation cap) x early/late x 5 repetitions, compared as distributions. Run on lab-a2a.",
+  "instances": [
+    "../workloads/c2.json",
+    "../workloads/c3.json",
+    "../workloads/n2.json",
+    "../workloads/n3.json",
+    "../workloads/rand-n7-s0.json",
+    "../workloads/rand-n7-s1.json",
+    "../workloads/rand-n7-s2.json"
+  ],
+  "strategies": [
+    "a2a_block_input",
+    "a2a_cancel_agent",
+    "a2a_cancel_all",
+    "none"
+  ],
+  "repetitions": 3,
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    }
+  ],
+  "time_scale": 2.0,
+  "reference": true,
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90,
+  "root_modes": [
+    "given"
+  ],
+  "parts": [
+    {
+      "instances": [
+        "../workloads/c2.json"
+      ],
+      "rogue_rates": [
+        0.3,
+        1.0
+      ],
+      "repetitions": 5,
+      "reference": false
+    }
+  ]
+}

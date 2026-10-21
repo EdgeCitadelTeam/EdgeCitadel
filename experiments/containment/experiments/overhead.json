@@ -1,6 +1,6 @@
 {
   "name": "overhead",
-  "note": "System comparison, no fault: reference runs of the 7 smoke workloads (10 repetitions, the main runs' time scale) and of the overhead benchmarks (six-hop chains per host pair and a 12-task fan-out, 40 repetitions). Run the same file on each system's stack (lab-ec-overhead, lab-bare, lab-a2a); grid dimensions match the comparison runs so rows pair.",
+  "note": "System comparison, no fault: reference runs of the 7 smoke workloads (5 repetitions, the main runs' time scale) and of the overhead benchmarks (six-hop chains per host pair and a 12-task fan-out, 40 repetitions). Run the same file on each system's stack (lab-ec-overhead, lab-bare, lab-a2a, lab-a2a-sqlite); grid dimensions match the comparison runs so rows pair.",
   "instances": [
     "../workloads/c2.json",
     "../workloads/c3.json",
@@ -20,7 +20,7 @@
       }
     }
   ],
-  "repetitions": 10,
+  "repetitions": 5,
   "time_scale": 2.0,
   "reference": true,
   "phase1_modes": [
