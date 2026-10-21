@@ -406,6 +406,9 @@ def run_cell(
         "experiment": experiment.name,
         "mode": stack_config.mode,
         "system": stack_config.system,
+        "a2a_task_store": stack_config.a2a_task_store
+        if stack_config.system == "a2a"
+        else None,
         "instance": cell.instance.stem,
         "spec_name": spec.name,
         "fault": spec.fault.cls,

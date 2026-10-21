@@ -5,10 +5,10 @@ Everything comes from the run's own records, computed the same way for every
 system (the services clock, the plan, the process samples):
 
 - ``makespan_s``: the last task's end after the run's start;
-- handoff latency (one row per created task in ``overhead_hops.csv``): the
-  child's first start minus its dispatcher's produced event, i.e. the creating
-  message to the child's agent plus that agent's dispatch of the task to
-  itself, with the nodes on both ends;
+- handoff latency (one row per created task without pushed inputs, in
+  ``overhead_hops.csv``): the child's first start minus its dispatcher's
+  produced event, i.e. the creating message to the child's agent plus that
+  agent's dispatch of the task to itself, with the nodes on both ends;
 - ``throughput_tps`` for fan-outs: created tasks ended per second between the
   root's produced event and the last child's end;
 - CPU-seconds and peak resident memory per process role over the run, from
@@ -67,7 +67,8 @@ def hops(
     rows = []
     for task, spec in plan["tasks"].items():
         dispatcher = spec["creation"]["dispatcher"]
-        if dispatcher is None:
+        # A task with pushed inputs waits for them, not for its creation.
+        if dispatcher is None or spec["deliveries_in"]:
             continue
         start = times.get(task, {}).get("start")
         produced = times.get(dispatcher, {}).get("produced")
@@ -122,7 +123,9 @@ def run_row(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]] | None
     hop_rows = hops(plan, times)
     identity = {
         "run_id": meta["run_id"],
-        "system": meta.get("system", "edgecitadel"),
+        # The A2A baseline's durable variant is its own system in these tables.
+        "system": meta.get("system", "edgecitadel")
+        + ("-sqlite" if meta.get("a2a_task_store") == "sqlite" else ""),
         "mode": meta.get("mode"),
         "instance": meta.get("instance"),
         "rep": meta.get("rep"),
