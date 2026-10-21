@@ -25,6 +25,9 @@ from .trace_contract import TraceContractError, canonical_bytes, validate_export
 from .trace_metrics import SourceMetrics
 
 BATCH_SIZE = 32
+# How long an idle exporter waits before it looks for newly journaled events:
+# the floor of the node-to-Core lag. EDGECITADEL_TRACE_EXPORT_IDLE_MS sets it.
+EXPORT_IDLE_MS = 100
 
 
 @dataclass(frozen=True)
@@ -133,9 +136,15 @@ class TraceExporter:
     """One source/generation worker; independent from task execution and retry."""
 
     def __init__(
-        self, store: AgentdStore, js: JetStreamContext, scope: ExportScope
+        self,
+        store: AgentdStore,
+        js: JetStreamContext,
+        scope: ExportScope,
+        *,
+        idle_ms: int = EXPORT_IDLE_MS,
     ) -> None:
         self.store, self.js, self.scope = store, js, scope
+        self.idle_ms = idle_ms
         self.metrics = SourceMetrics()
         self.state = "idle"
         self.fault: str | None = None
@@ -240,7 +249,7 @@ class TraceExporter:
                         replay_after = last if last != after else None
                     if last == after:
                         self.state = "idle"
-                        await self._wait(stop, 1.0)
+                        await self._wait(stop, self.idle_ms / 1000)
                     else:
                         await asyncio.sleep(0)
         finally:

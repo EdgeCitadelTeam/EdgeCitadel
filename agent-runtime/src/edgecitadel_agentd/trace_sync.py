@@ -15,7 +15,7 @@ from nats.js import JetStreamContext
 from .store import AgentdStore
 from .trace_collector_recovery import begin_recovery, recover_batch
 from .trace_contract import TraceContractError
-from .trace_exporter import ExportScope, TraceExporter
+from .trace_exporter import EXPORT_IDLE_MS, ExportScope, TraceExporter
 from .trace_metrics import SourceMetrics
 from .trace_settlement_poll import SettlementPoller
 
@@ -24,13 +24,20 @@ class TraceSyncWorker:
     """Publishing stays live during control backoff; recovery fences both paths."""
 
     def __init__(
-        self, store: AgentdStore, js: JetStreamContext, nc: NATS, scope: ExportScope
+        self,
+        store: AgentdStore,
+        js: JetStreamContext,
+        nc: NATS,
+        scope: ExportScope,
+        *,
+        idle_ms: int = EXPORT_IDLE_MS,
     ) -> None:
         self.store, self.js, self.nc, self.scope = store, js, nc, scope
+        self.idle_ms = idle_ms
         self.metrics = SourceMetrics()
         self.state = "idle"
         self.fault: str | None = None
-        self.exporter = TraceExporter(store, js, scope)
+        self.exporter = TraceExporter(store, js, scope, idle_ms=idle_ms)
         self.poller = SettlementPoller(store, nc, scope.values())
         self._replay = asyncio.Event()
         self._publisher: asyncio.Task[None] | None = None
@@ -87,7 +94,9 @@ class TraceSyncWorker:
         self.state, self.fault = "running", None
 
     def _start_publisher(self, stop: asyncio.Event) -> None:
-        self.exporter = TraceExporter(self.store, self.js, self.scope)
+        self.exporter = TraceExporter(
+            self.store, self.js, self.scope, idle_ms=self.idle_ms
+        )
         self.exporter.metrics = self.metrics
         self._publisher = asyncio.create_task(
             self.exporter.run(stop, replay_requested=self._replay)

@@ -292,3 +292,22 @@ def test_recovery_delivery_id_changes_once_per_epoch_and_survives_restart(source
     second = selected_batch(store, scope)[0]
     assert second.payload == original.payload
     assert second.message_id not in (original.message_id, replay.message_id)
+
+
+@pytest.mark.asyncio
+async def test_an_idle_exporter_polls_at_its_configured_interval(source, monkeypatch):
+    """The idle wait bounds how long a new event sits before it is published."""
+    store, scope, _ = source
+    js = SimpleNamespace(publish=AsyncMock())
+    exporter = TraceExporter(store, js, scope, idle_ms=50)
+    stop = asyncio.Event()
+    waits = []
+
+    async def wait(_stop, seconds):
+        waits.append(seconds)
+        stop.set()
+
+    monkeypatch.setattr(exporter, "_wait", wait)
+    await exporter.run(stop)
+    assert waits == [0.05]
+    assert TraceExporter(store, js, scope).idle_ms == 100  # the default

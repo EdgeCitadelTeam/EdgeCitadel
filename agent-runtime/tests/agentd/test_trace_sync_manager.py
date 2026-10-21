@@ -89,7 +89,7 @@ async def test_rotating_windows_bound_workers_and_eventually_serve_all_scopes(
     maximum = 0
 
     class Worker:
-        def __init__(self, store, js, nc, scope):
+        def __init__(self, store, js, nc, scope, **options):
             self.scope, self.state = scope, "running"
 
         async def run(self, stop):
@@ -127,7 +127,7 @@ async def test_paused_fault_survives_rotation_and_reopen_until_explicit_retry(
     starts = []
 
     class Worker:
-        def __init__(self, store, js, nc, scope):
+        def __init__(self, store, js, nc, scope, **options):
             self.state, self.fault = "paused", "unsupported_version"
 
         async def run(self, stop):
@@ -356,7 +356,7 @@ async def test_fault_persistence_failure_pauses_manager_and_releases_all_workers
         )
 
     class Worker:
-        def __init__(self, *args):
+        def __init__(self, *args, **options):
             self.state, self.fault = "paused", "local_sync_fault"
 
         async def run(self, stop):

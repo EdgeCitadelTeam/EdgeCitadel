@@ -10,7 +10,7 @@ from nats.js import JetStreamContext
 
 from .store import AgentdStore
 from .trace_contract import TraceContractError
-from .trace_exporter import ExportScope, TraceExporter
+from .trace_exporter import EXPORT_IDLE_MS, ExportScope, TraceExporter
 from .trace_metrics import SourceMetrics
 from .trace_sync import TraceSyncWorker
 from .writer_lock import WriterActiveError, exclusive_writer
@@ -76,8 +76,16 @@ class TraceSyncManager:
     proportional to eligible pages and remains a separate measured acceptance gate.
     """
 
-    def __init__(self, store: AgentdStore, js: JetStreamContext, nc: NATS) -> None:
+    def __init__(
+        self,
+        store: AgentdStore,
+        js: JetStreamContext,
+        nc: NATS,
+        *,
+        idle_ms: int = EXPORT_IDLE_MS,
+    ) -> None:
         self.store, self.js, self.nc = store, js, nc
+        self.idle_ms = idle_ms
         self.metrics = SourceMetrics()
         self.state = "idle"
         self.fault: str | None = None
@@ -85,7 +93,9 @@ class TraceSyncManager:
         self._running = False
 
     async def _serve(self, scope: ExportScope, stop: asyncio.Event) -> None:
-        worker = TraceSyncWorker(self.store, self.js, self.nc, scope)
+        worker = TraceSyncWorker(
+            self.store, self.js, self.nc, scope, idle_ms=self.idle_ms
+        )
         worker.metrics = self.metrics
         try:
             await worker.run(stop)

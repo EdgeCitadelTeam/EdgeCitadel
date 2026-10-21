@@ -2408,6 +2408,14 @@ pauses on observed policy drift. Initial transient connection failures retry wit
 capped backoff. Shutdown cancels and joins manager/worker requests before closing
 its connection and store. No Core consumer is created by source startup.
 
+An exporter that found nothing new waits `EDGECITADEL_TRACE_EXPORT_IDLE_MS`
+(default 100, 10 to 60000) before it looks again; this is the floor of the
+node-to-Core lag that containment decisions and alerts wait on. Measured
+locally against nats-server 2.14.6 (40 events journaled at random 50-600 ms
+gaps, journal commit to the broker's delivery): mean 493 ms, p95 958 ms at the
+former fixed 1 s; mean 23 ms, p95 48 ms at 100 ms. The cost is one indexed spool
+query per idle interval and scope.
+
 Health exposes enabled/state/connected/active_scopes/fault without credentials or
 exception text. Configuration or lifecycle faults pause telemetry rather than the
 command transport. Scope faults remain durable across service restart. Shared SQLite

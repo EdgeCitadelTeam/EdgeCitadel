@@ -34,6 +34,7 @@ from .trace_security import (
     flush_authentication_rejections,
     note_authentication_rejection,
 )
+from .trace_exporter import EXPORT_IDLE_MS
 from .trace_sync_service import TraceSyncService
 from .trace_quota import TraceQuotaError
 from .transport import AgentdNatsTransport
@@ -123,6 +124,21 @@ def _controller_lease_ms() -> int | None:
     if not 0 <= lease_ms <= 3_600_000:
         raise StoreError("EDGECITADEL_CONTROLLER_LEASE_MS must be at most one hour")
     return lease_ms or None
+
+
+def _export_idle_ms() -> int:
+    """EDGECITADEL_TRACE_EXPORT_IDLE_MS: how often an idle exporter looks for
+    new events (default 100 ms), the floor of the node-to-Core lag."""
+    value = os.environ.get("EDGECITADEL_TRACE_EXPORT_IDLE_MS", str(EXPORT_IDLE_MS))
+    try:
+        idle_ms = int(value)
+    except ValueError as error:
+        raise StoreError(
+            "EDGECITADEL_TRACE_EXPORT_IDLE_MS must be an integer"
+        ) from error
+    if not 10 <= idle_ms <= 60_000:
+        raise StoreError("EDGECITADEL_TRACE_EXPORT_IDLE_MS must be 10 to 60000")
+    return idle_ms
 
 
 def _effect_adapters() -> dict[str, EffectAdapter]:
@@ -797,6 +813,7 @@ def _serve_locked(
         state_dir.parent,
         open_store,
         enabled=os.environ.get("EDGECITADEL_TRACE_SYNC") == "1",
+        export_idle_ms=_export_idle_ms(),
     )
     server = AgentdServer(
         socket_path, store, transport, supervisor, admin_token, telemetry

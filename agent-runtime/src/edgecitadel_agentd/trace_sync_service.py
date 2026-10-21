@@ -19,7 +19,7 @@ from edgecitadel_plugin_runtime.telemetry_stream import (
 
 from .node_state import read_node
 from .store import AgentdStore, StoreError
-from .trace_exporter import ExportScope
+from .trace_exporter import EXPORT_IDLE_MS, ExportScope
 from .trace_metrics import SourceMetrics
 from .trace_sync_manager import TraceSyncManager, clear_scope_fault
 
@@ -31,8 +31,10 @@ class TraceSyncService:
         open_store: Callable[[], AgentdStore],
         *,
         enabled: bool = False,
+        export_idle_ms: int = EXPORT_IDLE_MS,
     ) -> None:
         self.state_dir, self.enabled = state_dir, enabled
+        self.export_idle_ms = export_idle_ms
         self._open_store = open_store
         self._metrics = SourceMetrics()
         self._lock = threading.Lock()
@@ -249,7 +251,7 @@ class TraceSyncService:
                 store.close()
 
     async def _manage(self, store: AgentdStore, nc: NATS, js: JetStreamContext) -> None:
-        manager = TraceSyncManager(store, js, nc)
+        manager = TraceSyncManager(store, js, nc, idle_ms=self.export_idle_ms)
         manager.metrics = self._metrics
         stop = asyncio.Event()
         task = asyncio.create_task(manager.run(stop))
