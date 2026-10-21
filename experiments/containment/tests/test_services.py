@@ -196,3 +196,16 @@ def test_the_home_assistant_front_forwards_without_the_workers_keys(sink):
         ("E_B", "homeassistant")
     ]
     assert committed[0]["gateway"]["service"] == "light/turn_on"
+
+
+def test_scheduled_effects_stay_pending_until_the_sink_commits(served):
+    url, services, _ = served
+    client = ServicesClient(url, "secret")
+    for effect, due in (("E_1", 5000), ("E_2", 7000)):
+        client.ledger(
+            {"effect_id": effect, "issuer": "B.t0", "phase": "scheduled", "due_ms": due}
+        )
+    assert services.pending_effects()["due_ms"] == [5000, 7000]
+    client.ledger({"effect_id": "E_1", "issuer": "B.t0", "phase": "committed"})
+    client.ledger({"effect_id": "E_2", "issuer": "B.t0", "phase": "denied"})
+    assert services.pending_effects()["due_ms"] == []

@@ -19,7 +19,7 @@ of operations, all confined to the host's experiment root (the stack file's
 - ``remove``: one run directory directly under the root.
 
 Anything else, a path outside the root or another program is refused. Start it
-once per host, for example as a ``firebreak-exp-labhelper`` unit::
+once per host, for example as a ``firebreak-exp-harness-helper`` unit::
 
     python -m harness.labhelper --host netsys-endurance \\
         --root /home/zhonghao/firebreak-exp/m5/harness-work \\

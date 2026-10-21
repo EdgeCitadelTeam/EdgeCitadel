@@ -92,6 +92,13 @@ def _regime(meta: Mapping[str, Any]) -> str:
     return "stress" if max(values, default=0.0) > MEASURED_RTT_MS else "measured"
 
 
+def _decision_time(record: Mapping[str, Any]) -> float:
+    for key in ("t_received", "t_decided"):
+        if record.get(key) is not None:
+            return float(record[key])
+    return -math.inf
+
+
 def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     meta = json.loads((run_dir / "run.json").read_text())
     code = meta["strategy"]
@@ -151,6 +158,11 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         return row, actions
     spec = from_dict(json.loads((run_dir / "spec.json").read_text()))
     decisions = _jsonl(run_dir / "decisions.jsonl")
+    t_end = meta.get("t_end_ms")
+    if t_end is not None:
+        # The monitor's answers to the teardown (interrupted sessions) are not
+        # part of the run.
+        decisions = [d for d in decisions if _decision_time(d) <= t_end]
     status = _optional_json(run_dir / "status_at_decision.json") or _optional_json(
         run_dir / "status.json"
     )

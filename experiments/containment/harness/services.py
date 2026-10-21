@@ -18,6 +18,9 @@ on one clock (the monitor runs on the same host in both modes):
   gateway's commit; a repeated delivery is not recorded twice.
 - ``POST /events``: append a worker event; ``GET /events?after=<seq>`` feeds the
   controller (alert triggers, quiescence).
+- ``GET /effects/pending``: the due times of effects the gateway scheduled (or
+  held) that the sink has not committed and no worker record refused: the
+  controller ends a run only after they are resolved or overdue.
 - ``GET /ready?task=<id>``: pushed items that landed for a planned task, with
   the number of distinct delivery invocations. It carries no content.
 - ``POST /spawn``: reserve one undeclared invocation under the run's cap.
@@ -67,6 +70,8 @@ class RunServices:
             lambda: defaultdict(set)
         )
         self._spawned: set[str] = set()
+        # Effect id -> due time of a scheduled (or held) effect not yet resolved.
+        self._pending: dict[str, int] = {}
 
     def close(self) -> None:
         with self._lock:
@@ -98,6 +103,11 @@ class RunServices:
             stamped = {**record, "t_ms": now_ms()}
             self._ledger[key] = stamped
             self._append("ledger", stamped)
+            effect = str(record["effect_id"])
+            if record["phase"] in {"scheduled", "held"} and "due_ms" in record:
+                self._pending.setdefault(effect, int(record["due_ms"]))
+            elif record["phase"] in {"committed", "denied", "sink_failed"}:
+                self._pending.pop(effect, None)
         return {"t_ms": stamped["t_ms"], "repeated": False}
 
     def committed(
@@ -121,6 +131,10 @@ class RunServices:
                 "attributed": attempted is not None,
             }
         )
+
+    def pending_effects(self) -> dict[str, Any]:
+        with self._lock:
+            return {"due_ms": sorted(self._pending.values()), "t_ms": now_ms()}
 
     def ready(self, task: str) -> dict[str, Any]:
         with self._lock:
@@ -222,6 +236,8 @@ def make_handler(
                 self._reply(200, services.events_after(after, limit))
             elif url.path == "/clock":
                 self._reply(200, {"t_ms": now_ms()})
+            elif url.path == "/effects/pending":
+                self._reply(200, services.pending_effects())
             elif url.path == "/health":
                 self._reply(200, {"ok": True})
             else:

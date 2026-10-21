@@ -289,3 +289,21 @@ def test_helper_hosts_need_the_nats_control_path_and_no_netem(tmp_path, monkeypa
     path.write_text(json.dumps(document))
     with pytest.raises(stack.StackError, match="control_transport nats"):
         stack.StackConfig.load(path)
+
+
+def test_teardown_stops_core_after_the_nodes_and_before_its_broker(tmp_path):
+    run = local_stack(tmp_path)
+    stopped = []
+
+    class Host:
+        def alive(self, proc):
+            return True
+
+        def stop(self, proc):
+            stopped.append(proc.name)
+
+    run.hosts["ctl"] = Host()
+    for name in ("services", "nats", "agentd-core", "aggregator", "worker-a"):
+        run.procs.append(stack.Proc(name, "ctl", 1, "log"))
+    assert run.down() == []
+    assert stopped == ["worker-a", "agentd-core", "aggregator", "nats", "services"]

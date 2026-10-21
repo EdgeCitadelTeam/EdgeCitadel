@@ -20,7 +20,12 @@ without containment (``none``, ``reference``) keep the monitor running with
 One run: fresh stack, external requests (root tasks) submitted at ``t0`` plus
 their release by a scheduler on their agent's node, the alert posted when its
 trigger fires on the workers' events (same trigger for every strategy), then
-wait until every task ended, the run is quiescent, or it times out.
+wait until every task ended, the run is quiescent, or it times out. A run
+ends only once no effect the gateway scheduled is pending before its due time
+plus ``EFFECT_GRACE_MS`` (the services' ``/effects/pending``), so a late
+commit is recorded by the sink and by Core, which the teardown stops after
+the nodes. Decisions the monitor makes after the run's end (``t_end_ms``;
+interrupted sessions at teardown raise lease alerts) are not scored.
 
 Root modes decouple containment from root-cause analysis: in the main runs
 (``given``) the alert names the faulty invocation and hands it to the monitor
@@ -65,6 +70,8 @@ from .stack import RunStack, StackConfig, StackError
 
 POLL_S = 0.2
 START_MARGIN_MS = 1500
+# A gateway-scheduled effect keeps the run open until its due time plus this.
+EFFECT_GRACE_MS = 5000
 # Core ingests the faulty task's run/started about a second after it happened.
 ATTEMPT_LOOKUP_S = 1.0
 # How long a ranked-mode alert waits for Core to know the symptom invocation.
@@ -658,13 +665,19 @@ def _drive(
             if status.get("last_decision"):
                 decision_seen = True
                 (run_dir / "status_at_decision.json").write_text(json.dumps(status))
-        if len(ended) == len(spec.tasks) and time.monotonic() - last_change > 1.0:
-            meta["status"] = "complete"
-            break
-        if (
+        finished = (
+            len(ended) == len(spec.tasks) and time.monotonic() - last_change > 1.0
+        )
+        idle = (
             time.monotonic() - last_change > quiet
             and (now_ms - t0) / 1000 > makespan(spec) * scale
-        ):
+        )
+        if (finished or idle) and not _effects_settled(stack):
+            pass  # a scheduled effect may still commit
+        elif finished:
+            meta["status"] = "complete"
+            break
+        elif idle:
             meta["status"] = "quiescent"
             break
         if time.monotonic() > deadline:
@@ -672,6 +685,7 @@ def _drive(
             break
         time.sleep(POLL_S)
     meta["n_ended"] = len(ended)
+    meta["t_end_ms"] = int(stack.services("GET", "/clock")["t_ms"])
     if trigger is not None and meta["t_alert_ms"] is None:
         meta["errors"].append("alert trigger never fired")
     if alert_due and meta["t_alert_ms"] is not None and "alert_payload" not in meta:
@@ -680,6 +694,12 @@ def _drive(
         (run_dir / "status.json").write_text(json.dumps(stack.monitor_status()))
     except OSError as error:
         meta["errors"].append(f"final monitor status unavailable: {error}")
+
+
+def _effects_settled(stack: RunStack) -> bool:
+    """No gateway-scheduled effect is pending before its due time plus grace."""
+    pending = stack.services("GET", "/effects/pending")
+    return all(due + EFFECT_GRACE_MS <= pending["t_ms"] for due in pending["due_ms"])
 
 
 def _post_alert(

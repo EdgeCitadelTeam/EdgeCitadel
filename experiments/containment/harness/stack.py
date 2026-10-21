@@ -1192,14 +1192,19 @@ class RunStack:
     def down(self) -> list[str]:
         """Stop every process; returns the ones that had died early.
 
-        The Core aggregator goes first: stopping workers ends their sessions,
-        which agentd records as interrupted invocations, and a running monitor
-        would answer those with lease-violation decisions after the run ended.
+        Workers and nodes go first and the Core aggregator after them (before
+        NATS and the services it reads from), so Core records whatever the
+        nodes journal until they stop. Stopping workers ends their sessions,
+        which agentd records as interrupted invocations; the monitor may answer
+        those with lease-violation decisions, which the scorer ignores after
+        the run's end.
         """
         died = []
-        first = [p for p in self.procs if p.name == "aggregator"]
+        core = [p for p in self.procs if p.name == "aggregator"]
         rest = [p for p in reversed(self.procs) if p.name != "aggregator"]
-        for proc in first + rest:
+        last = [p for p in rest if p.name in {"nats", "services"}]
+        order = [p for p in rest if p not in last] + core + last
+        for proc in order:
             host = self.hosts[proc.host]
             try:
                 if not host.alive(proc):

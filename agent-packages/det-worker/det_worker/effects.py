@@ -149,7 +149,10 @@ class GatewayExecute:
         result = reply["result"]
         op.state = "done"
         if result.get("state") in {"scheduled", "held"}:
-            await port.ledger({**record, "phase": result["state"]})
+            # Its due time lets the run's end wait for the gateway's commit.
+            await port.ledger(
+                {**record, "phase": result["state"], "due_ms": int(p["due_ms"])}
+            )
             return
         outcome = result.get("outcome") or {}
         if not outcome.get("performed"):

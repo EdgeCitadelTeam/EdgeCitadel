@@ -303,3 +303,17 @@ def test_a_resumed_experiment_skips_finished_runs_and_their_retries(
     assert ran == [c.run_id for c in cells[1:]]
     assert len(done) == 3
     assert json.loads((finished / "run.json").read_text())["attempts"] == 2
+
+
+def test_a_run_ends_only_after_its_scheduled_effects_are_due_plus_grace():
+    class Stack:
+        def __init__(self, now: int) -> None:
+            self.now = now
+
+        def services(self, method: str, path: str) -> dict:
+            assert (method, path) == ("GET", "/effects/pending")
+            return {"due_ms": [10_000, 12_000], "t_ms": self.now}
+
+    grace = runner.EFFECT_GRACE_MS
+    assert not runner._effects_settled(Stack(12_000 + grace - 1))
+    assert runner._effects_settled(Stack(12_000 + grace))

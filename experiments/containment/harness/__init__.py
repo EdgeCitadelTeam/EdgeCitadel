@@ -83,7 +83,7 @@ touches the resident EdgeCitadel services.
 
 Without SSH from jim-eq (``configs/lab-helper.json``): start
 ``python -m harness.labhelper`` once on each edge host (see its docstring; a
-``firebreak-exp-labhelper`` unit), connected to the lab's experiment broker,
+``firebreak-exp-harness-helper`` unit), connected to the lab's experiment broker,
 and run the grid on jim-eq. The runner then starts, stops and collects each
 run's processes (``firebreak-exp-h-<run>-<process>`` units) and run
 directories through the helper, which refuses anything outside the host's

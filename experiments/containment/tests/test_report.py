@@ -133,3 +133,26 @@ def test_report_pairs_strategies_on_matched_runs(tmp_path):
     assert not math.isnan(summary.loc["firebreak", "clean_after_alert"])
     for column in ("established", "unconfirmed_runs", "infeasible_runs", "timeouts"):
         assert column in summary.columns
+
+
+def test_decisions_after_the_runs_end_are_not_scored(tmp_path):
+    """The monitor answers the teardown's interrupted sessions; those decisions
+    come after the run's end and stay out of its row."""
+    write_run(tmp_path, strategy="firebreak", rep=0, kept=True)
+    run = tmp_path / "runs" / "mini__late__native__r0__firebreak"
+    meta = json.loads((run / "run.json").read_text())
+    meta["t_end_ms"] = 20_000
+    (run / "run.json").write_text(json.dumps(meta))
+    decision = {
+        "type": "decision",
+        "incident_id": "i9",
+        "alert": {"kind": "lease_violation", "origin": "detector"},
+        "status": "contained",
+        "t_received": 21_000,
+        "phase1": [],
+        "phase2": [],
+        "released": [],
+    }
+    (run / "decisions.jsonl").write_text(json.dumps(decision) + "\n")
+    [row] = report.score(tmp_path)
+    assert row["n_decisions"] == 0
