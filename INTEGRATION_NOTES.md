@@ -576,6 +576,45 @@ and, opt-in on the multi-process C2 (late variant, `freeze_plus_cut` and
 `adaptive`),
 `test_phase1_with_the_at_alert_cut_blocks_the_late_effect_from_the_first_round`.
 
+### Convergence and release checks cover every protected sink (safety fix)
+
+The simulator team found that the check used for phase-1 convergence and for
+the guarded release (`cut_holds`) left out the sinks the deadline-aware graph
+judged unavoidable, so it could declare tau_1 while a doomed protected effect
+was still reachable (with the monitor's semantics, 12 tainted effects after a
+"converged" tau_1 in V1; 0 with the theory's check). Now:
+
+- The tau_1 convergence check (every phase-1 mode; (C4) of the adaptive one)
+  and the release re-check test separation from every avoidable sink and from
+  every protected effect, doomed or not. Only unavoidable boundary sinks (new
+  invocations at the horizon) stay out, as in the solve.
+- A sink still reached means not converged (or no release): the holds stay,
+  the last hop into each blocking sink is guarded (every action on an edge
+  into it, timely or not, since deadlines are lower bounds), the check runs
+  again, and otherwise the freeze is (re)computed for the next round; in phase
+  2 the guard is added and the cut solved again. A sink no action can reach
+  keeps every hold (`phase2_check_failed`).
+- The decision records every check under `convergence` (`phase`, `round`,
+  `converged`, `blocking_sinks`, and the `guard` it added); the adaptive
+  checks also carry `blocked_by` and `guard`.
+- Phase 2 sees an admission label in force as held: an egress stopped by an
+  action in force keeps that action in the phase-2 graph (a phase-1
+  `hold:egress` label as much as a `revoke:egress`), so flows behind it have
+  d = infinity and the label counts in the checks.
+- Every action added during the waits (receding additions, label pushes,
+  guards) must be in force before the guarded release; otherwise nothing is
+  released (`receding_unconfirmed`, or `phase2_unconfirmed` when phase 2 asks
+  for it again).
+
+Tests: `test_a_doomed_sink_reachable_through_an_unheld_edge_blocks_convergence`
+(an effect due before any control lands, judged unavoidable at the alert and
+reachable only through its unheld last hop: round 1 reports it blocking,
+the guard holds it, then phase 1 converges; fails with the old check),
+`test_a_sink_no_action_can_reach_keeps_every_hold` (fails with the old check),
+`test_phase_two_sees_an_admission_label_in_force_as_held`,
+`test_receding_additions_must_be_confirmed_before_any_release`, and the
+adaptive (C4) cases in `test_a_failed_convergence_check_adds_the_frontier_freeze`.
+
 ### The experiment harness on M4 (merged from `m3/harness`)
 
 `m3/harness` (`a21fc29`) is merged; its harness and det-worker now run on

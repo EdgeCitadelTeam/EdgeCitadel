@@ -1008,7 +1008,7 @@ def late_effect(tmp_path, mode, seed=0, due=60_000, latency_ms=50.0, **config):
     return harness, control, decision, ids["effect"]
 
 
-def late_effect_setup(tmp_path, mode, seed, due, latency_ms, **settings):
+def late_effect_setup(tmp_path, mode, seed, due, latency_ms, control=None, **settings):
     from aggregator.containment_monitor.config import MonitorConfig
     from containment_support import TraceBuilder
 
@@ -1041,7 +1041,7 @@ def late_effect_setup(tmp_path, mode, seed, due, latency_ms, **settings):
     b, _ = (trace.start(t, 11) for t in (task_b, task_c))
     effect = trace.effect(b, "device.command", "requested", 12, scheduled=due)
     trace.complete(b, 13)
-    control = FakeControlClient(delay=jittered(seed))
+    control = control or FakeControlClient(delay=jittered(seed))
     harness = Harness(tmp_path, config, control)
     harness.feed(trace.events)
     harness.at(20)
@@ -1129,7 +1129,9 @@ def test_adaptive_phase_one_freezes_only_when_the_cut_is_not_safely_timely(
     assert all(
         a.op == "hold" and a.kind in {"egress", "task"} for a in issued - at_alert
     )
-    assert timely.phase1_trigger["checks"] == [{"C1": True, "C2": True, "C4": True}]
+    assert timely.phase1_trigger["checks"] == [
+        {"C1": True, "C2": True, "C4": True, "blocking_sinks": []}
+    ]
     harness.close()
     harness, _, untimely, effect_id = late_effect(
         tmp_path / "untimely", "adaptive", due=25, latency_ms=200.0
@@ -1206,8 +1208,10 @@ def test_a_failed_convergence_check_adds_the_frontier_freeze(tmp_path):
     """(C4): before B_a landed, the tainted root dispatched once more and the
     new task scheduled a protected effect and ended; once that is ingested,
     the in-force set is no longer a cut (no label can cover a pending effect
-    whose issuer ended), so the freeze is added and the check repeated. (C1):
-    a fence that times out fails the check too."""
+    whose issuer ended): the check guards the effect's last hop and passes.
+    Where no action can reach that sink (the node offers no effect hold), the
+    check fails, the freeze is added and the check repeated. (C1): a fence that
+    times out fails the check too."""
     harness, _, trace, ids = late_effect_setup(
         tmp_path / "c4", "adaptive", 0, 60_000, 50.0
     )
@@ -1232,12 +1236,32 @@ def test_a_failed_convergence_check_adds_the_frontier_freeze(tmp_path):
     decision = harness.monitor.respond(
         operator_alert(ids["a"], harness.now), strategy="firebreak", roots=[ids["a"]]
     )
-    first, *later = decision.phase1_trigger["checks"]
-    assert first == {"C1": True, "C2": True, "C4": False}
-    assert decision.phase1_trigger["freeze_after_check"] and later
-    assert all(later[-1].values())
+    first = decision.phase1_trigger["checks"][0]
+    assert first["blocked_by"] == [f"fx:{late['effect']}"]
+    assert first["guard"] == [hold_effect("n2", late["effect"]).label()]
+    assert first["C4"] and first["blocking_sinks"] == []
     assert hold_effect("n2", late["effect"]) in {r.action for r in decision.phase1}
     assert decision.status == "contained"
+    harness.close()
+
+    no_effect_hold = FakeControlClient(
+        {
+            "n0": AGENTD_CAPABILITIES,
+            "n1": AGENTD_CAPABILITIES,
+            "n2": AGENTD_CAPABILITIES - {"hold:effect"},
+        }
+    )
+    harness, _, decision, effect_id = late_effect(
+        tmp_path / "unreachable", "adaptive", control=no_effect_hold
+    )
+    checks = decision.phase1_trigger["checks"]
+    assert checks[0]["C4"] is False
+    assert checks[0]["blocking_sinks"] == [f"fx:{effect_id}"]
+    # Untimely at the alert already: the freeze went out with B_a; the check
+    # still fails, round after round, and nothing is released.
+    assert decision.phase1_trigger["freeze"] and len(checks) > 1
+    assert not any(c["C4"] for c in checks)
+    assert decision.status == "phase2_check_failed" and decision.released == []
     harness.close()
 
     harness, _, _, ids = late_effect_setup(tmp_path / "c1", "adaptive", 0, 60_000, 50.0)
@@ -1379,4 +1403,157 @@ def test_forward_closure_labels_cover_every_unit_the_taint_can_reach(tmp_path):
     last = max(r.t_confirmed for r in closure.phase2)
     assert all(r.t_release_sent >= last for r in closure.released)
     assert closure.status == "contained"
+    harness.close()
+
+
+# ---------------------------------------------------------------------------
+# Convergence and release checks cover every protected sink, doomed or not
+# ---------------------------------------------------------------------------
+def test_a_doomed_sink_reachable_through_an_unheld_edge_blocks_convergence(
+    tmp_path,
+):
+    """The late effect is due before any control can land: the deadline-aware
+    graph judges it unavoidable, and no phase-1 block holds the edge into it.
+    Ignoring unavoidable sinks would declare phase 1 converged while the
+    effect is still reachable; the check instead reports it as the blocking
+    sink, guards its last hop, and converges only once that is in force.
+    Releases still follow the confirmed phase-2 cut."""
+    from aggregator.containment_monitor.model import fx, hold_effect
+
+    harness, _, _, ids = late_effect_setup(
+        tmp_path, "freeze", 0, due=25, latency_ms=200.0
+    )
+    effect = fx(ids["effect"])
+    harness.monitor.graph.mark_roots([ids["a"]])
+    at_alert = harness.monitor._project(2, frozenset()).instance()
+    assert effect in solver.unavoidable_sinks(at_alert)  # doomed at the alert
+    decision = harness.monitor.respond(
+        operator_alert(ids["a"], harness.now), strategy="firebreak", roots=[ids["a"]]
+    )
+    first, guarded, *_ = decision.convergence
+    assert (first["phase"], first["converged"]) == (1, False)
+    assert first["blocking_sinks"] == [effect]
+    assert guarded["guard"] == [hold_effect("n2", ids["effect"]).label()]
+    assert guarded["converged"] and guarded["blocking_sinks"] == []
+    assert hold_effect("n2", ids["effect"]) in harness.monitor.in_force
+    assert decision.status == "contained"
+    last = max(r.t_confirmed for r in decision.phase2)
+    assert all(r.t_release_sent >= last for r in decision.released)
+    assert decision.to_json()["convergence"] == decision.convergence
+    harness.close()
+
+
+def test_a_sink_no_action_can_reach_keeps_every_hold(tmp_path):
+    """No node offers an action on the edge into the effect: phase 1 never
+    converges, the release re-check fails on the same sink, and every hold
+    stays in force."""
+    from aggregator.containment_monitor.model import fx
+
+    control = FakeControlClient(
+        {
+            "n0": AGENTD_CAPABILITIES,
+            "n1": AGENTD_CAPABILITIES,
+            "n2": AGENTD_CAPABILITIES - {"hold:effect"},
+        }
+    )
+    harness, _, decision, effect_id = late_effect(tmp_path, "freeze", control=control)
+    assert decision.status == "phase2_check_failed"
+    assert decision.released == []
+    assert all(not c["converged"] for c in decision.convergence)
+    assert decision.convergence[-1]["phase"] == 2
+    assert decision.convergence[-1]["blocking_sinks"] == [fx(effect_id)]
+    held = {r.action for r in decision.phase1 if r.state == "in_force"}
+    assert held and held <= set(harness.monitor.in_force)
+    harness.close()
+
+
+def test_phase_two_sees_an_admission_label_in_force_as_held(tmp_path):
+    """A phase-1 admission label (hold:egress) in force stops the egress in
+    the phase-2 graph too: the edge carries the hold, flows behind it have
+    d = infinity, and the label separates them."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from aggregator.containment_monitor.model import hold_egress, revoke_egress
+    from aggregator.containment_monitor.projection import project
+    from containment_support import TraceBuilder
+
+    config = MonitorConfig(
+        grants={"a": frozenset({"w"})},
+        agent_nodes={"a": "n0", "w": "n1"},
+        session_isolated_agents=frozenset({"a"}),
+        min_emission_ms={"a": 1000},
+    )
+    harness = Harness(tmp_path, config)
+    trace = TraceBuilder()
+    task_a = trace.root("a", "n0", 0)
+    a = trace.start(task_a, 1)
+    harness.feed(trace.events)
+    harness.monitor.graph.mark_roots([inv(a)])
+    harness.at(10)
+    label = hold_egress("n0", task_a)
+    graphs = {
+        name: project(
+            harness.monitor.graph,
+            config,
+            now_ms=harness.now,
+            capabilities=lambda node: AGENTD_CAPABILITIES,
+            in_force=in_force,
+        )
+        for name, in_force in (("free", []), ("labelled", [label]))
+    }
+    egress = {
+        name: [e for e in cg.edges if e.kind == "egress"] for name, cg in graphs.items()
+    }
+    assert {e.action for e in egress["free"]} == {revoke_egress("n0", task_a)}
+    assert {e.action for e in egress["labelled"]} == {label}
+    cg = graphs["labelled"]
+    behind = [
+        e
+        for e in cg.edges
+        if e.action is not None and e.kind not in {"egress", "split"}
+    ]
+    assert behind and all(e.deadline == float("inf") for e in behind)
+    assert solver.separated(cg.instance(), [label])
+    harness.close()
+
+
+def test_receding_additions_must_be_confirmed_before_any_release(tmp_path):
+    """An action the receding trigger added during a wait that is not
+    confirmed keeps every hold: what it was to stop may still flow."""
+    late: dict[str, str] = {}
+    control = FakeControlClient(
+        fail=lambda node, op, object_id: (
+            "node_unreachable" if object_id == late.get("task") else None
+        )
+    )
+    harness, _, trace, ids = late_effect_setup(
+        tmp_path,
+        "freeze",
+        0,
+        60_000,
+        50.0,
+        control=control,
+        receding_during_waits=True,
+    )
+    original = harness.monitor.fence
+
+    def fence(records, on_poll=None):
+        if not late:
+            seen = len(trace.events)
+            late["task"] = trace.dispatch(ids["root"], "c", "n2", 21)
+            trace.arrive(late["task"], 22)
+            for event in trace.events[seen:]:
+                ingest(harness.core, event)
+        return original(records, on_poll=on_poll)
+
+    harness.monitor.fence = fence
+    decision = harness.monitor.respond(
+        operator_alert(ids["a"], harness.now), strategy="firebreak", roots=[ids["a"]]
+    )
+    assert any(late["task"] in label for label in decision.receding)
+    added = [r for r in decision.phase1 if r.action.label() in decision.receding]
+    assert any(r.state == "failed" for r in added)
+    # Never released: the added action is not in force (phase 2, which wants
+    # it too, finds it refused again, or the check on additions stops it).
+    assert decision.status in {"receding_unconfirmed", "phase2_unconfirmed"}
+    assert decision.released == []
     harness.close()

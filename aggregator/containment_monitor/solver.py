@@ -163,6 +163,27 @@ def removed_by(instance: CutInstance, actions: Iterable[Hashable]) -> set[int]:
     }
 
 
+def reached_sinks(
+    instance: CutInstance,
+    actions: Iterable[Hashable],
+    sinks: frozenset[str] | None = None,
+) -> frozenset[str]:
+    """The (given) sinks a source still reaches after removing the actions' edges."""
+    targets = instance.sinks if sinks is None else sinks
+    removed = removed_by(instance, actions)
+    out = _adjacency(instance.edges)
+    seen = set(instance.sources)
+    queue = deque(seen)
+    while queue:
+        node = queue.popleft()
+        for index in out.get(node, ()):
+            head = instance.edges[index][1]
+            if index not in removed and head not in seen:
+                seen.add(head)
+                queue.append(head)
+    return frozenset(seen & targets)
+
+
 def separated(
     instance: CutInstance,
     actions: Iterable[Hashable],

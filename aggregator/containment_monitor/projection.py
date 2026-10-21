@@ -27,7 +27,9 @@ the sender's node when it dispatches. Inherited scopes narrow which targets a hu
 reaches but have no separate actuator, so all of an agent's hubs share its gates.
 
 In the phase-1 projection (``freeze``) the egress edge carries the reversible
-``hold:egress`` instead of ``revoke:egress``: phase 1 places holds only.
+``hold:egress`` instead of ``revoke:egress``: phase 1 places holds only. An
+egress stopped by an action in force keeps that action in either projection
+(a phase-1 admission label is held in the phase-2 graph too).
 
 Horizon ``h``: ``Fout:a>b`` is a new invocation of b requested by a. With h = 1 it
 is the horizon boundary (a sink for ``boundary="sink"``, a dead end for
@@ -334,10 +336,20 @@ class _Builder:
             return
         cg, site = self.cg, unit.node
         egress = cg.node(f"Eg:{unit.key}{tag}", kind="egress", unit=unit.key)
-        stop = hold_egress if self.freeze else revoke_egress
-        block = (
-            self.allowed(stop(site, unit.task_id)) if site and unit.task_id else None
-        )
+        block = None
+        if site and unit.task_id:
+            # An egress already stopped keeps its action: a revocation, or the
+            # admission label of phase 1 (a hold) that the phase-2 graph must
+            # see as held too. Otherwise phase 1 offers holds, phase 2 the
+            # revocation.
+            revoked = revoke_egress(site, unit.task_id)
+            label = hold_egress(site, unit.task_id)
+            if revoked in self.in_force:
+                block = revoked
+            elif label in self.in_force:
+                block = label
+            else:
+                block = self.allowed(label if self.freeze else revoked)
         cg.edge(tail, egress, "egress", action=block, declared=False)
         self.credential_edge(egress, unit.credential, tag, depth=1)
 

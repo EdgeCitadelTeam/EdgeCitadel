@@ -260,6 +260,10 @@ class Decision:
     phase1_trigger: dict = field(default_factory=dict)
     # Actions the receding trigger added while the protocol waited.
     receding: list[str] = field(default_factory=list)
+    # Every convergence check (phase 1) and release re-check (phase 2): whether
+    # the actions in force separated the sources from every avoidable sink
+    # and every protected effect, and which sinks blocked it.
+    convergence: list[dict] = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {
@@ -272,6 +276,7 @@ class Decision:
             "receding_during_waits": self.receding_during_waits,
             "phase1_trigger": self.phase1_trigger,
             "receding": self.receding,
+            "convergence": self.convergence,
             "status": self.status,
             "rounds": self.rounds,
             "phase1": [r.to_json() for r in self.phase1],
@@ -285,13 +290,35 @@ class Decision:
         }
 
 
+def protected_sinks(cg: ControlGraph) -> frozenset[str]:
+    """The sinks that are protected effects (pending, of a protected class)."""
+    return frozenset(n for n in cg.sinks if cg.nodes.get(n, {}).get("kind") == "effect")
+
+
 def cut_holds(cg: ControlGraph, actions: Iterable[Action]) -> tuple[bool, list[str]]:
-    """Whether the actions separate every avoidable sink of cg; also the unavoidable."""
+    """Whether the actions separate the sources from every avoidable sink of cg
+    and from every protected effect, doomed or not; also the sinks still
+    reached (the ones that block convergence or a release).
+
+    A sink the deadline-aware graph judges unavoidable is no reason to call a
+    cut converged: an effect that is still reachable may fire with a tainted
+    tail. Only unavoidable boundary sinks (new invocations at the horizon,
+    which no action can separate once their creating flow is untimely) are
+    left out, as in the solve.
+    """
     instance = cg.instance()
     unavoidable = solver.unavoidable_sinks(instance)
-    return solver.separated(instance, actions, instance.sinks - unavoidable), sorted(
-        unavoidable
-    )
+    targets = (instance.sinks - unavoidable) | protected_sinks(cg)
+    reached = solver.reached_sinks(instance, actions, targets)
+    return not reached, sorted(reached)
+
+
+def last_hops(cg: ControlGraph, sinks: Iterable[str]) -> set[Action]:
+    """Every action on an edge into the sinks, timely or not (deadlines are
+    lower bounds, so an untimely one may still land in time): the guard that
+    a failed convergence check or re-check adds before it tries again."""
+    sinks = set(sinks)
+    return {e.action for e in cg.edges if e.head in sinks and e.action is not None}
 
 
 def freeze_trigger(
@@ -406,10 +433,13 @@ class TwoPhaseProtocol:
             in_force.update({r.action: r for r in records if r.state == "in_force"})
             return records
 
+        added_records: list[ActionRecord] = []
+
         def add_receding() -> None:
             added = receding() - in_force.keys() if receding is not None else set()
             if added:
                 records = apply(added)
+                added_records.extend(records)
                 decision.receding.extend(r.action.label() for r in records)
 
         def wait(records: list[ActionRecord]) -> bool:
@@ -481,8 +511,20 @@ class TwoPhaseProtocol:
             else:
                 check["C2"] = False
                 return check
-            held, _ = cut_holds(project(2, frozenset(in_force)), in_force)
+            cg = project(2, frozenset(in_force))
+            held, blocking = cut_holds(cg, in_force)
+            if not held:
+                # A doomed sink still reached: guard its last hop and re-check.
+                check["blocked_by"] = blocking
+                guard = last_hops(cg, blocking) - in_force.keys()
+                if guard:
+                    check["guard"] = sorted(a.label() for a in guard)
+                    records = apply(guard)
+                    if all(r.state == "in_force" for r in records) and wait(records):
+                        cg = project(2, frozenset(in_force))
+                        held, blocking = cut_holds(cg, in_force)
             check["C4"] = held
+            check["blocking_sinks"] = blocking
             return check
 
         if two_phase:
@@ -505,13 +547,47 @@ class TwoPhaseProtocol:
                 if phase1_mode == "adaptive":
                     check = converged(fenced)
                     decision.phase1_trigger.setdefault("checks", []).append(check)
-                    held = all(check.values())
+                    held = all(check[c] for c in ("C1", "C2", "C4"))
+                    decision.convergence.append(
+                        {
+                            "phase": 1,
+                            "round": round_ + 1,
+                            "converged": held,
+                            "blocking_sinks": check.get("blocking_sinks", []),
+                        }
+                    )
                     if not held and not frozen:
                         # On failure, add the frontier freeze and repeat.
                         frozen = True
                         decision.phase1_trigger["freeze_after_check"] = True
                 else:
-                    held, _ = cut_holds(project(1, frozenset(in_force)), in_force)
+                    cg = project(1, frozenset(in_force))
+                    held, blocking = cut_holds(cg, in_force)
+                    decision.convergence.append(
+                        {
+                            "phase": 1,
+                            "round": round_ + 1,
+                            "converged": held,
+                            "blocking_sinks": blocking,
+                        }
+                    )
+                    if not held:
+                        # A sink still reached, doomed or not: guard its last
+                        # hop and check again (next round: a recomputed freeze).
+                        guard = last_hops(cg, blocking) - in_force.keys()
+                        if guard:
+                            wait(apply(guard))
+                            cg = project(1, frozenset(in_force))
+                            held, blocking = cut_holds(cg, in_force)
+                            decision.convergence.append(
+                                {
+                                    "phase": 1,
+                                    "round": round_ + 1,
+                                    "converged": held,
+                                    "blocking_sinks": blocking,
+                                    "guard": sorted(a.label() for a in guard),
+                                }
+                            )
                 if held:
                     break
         phase[0] = 2
@@ -539,11 +615,31 @@ class TwoPhaseProtocol:
                 # what crossed before it is unknown, so nothing is released.
                 decision.status = "ingest_timeout"
                 return decision
-            held, _ = cut_holds(project(2, frozenset(in_force)), chosen)
+            cg = project(2, frozenset(in_force))
+            held, blocking = cut_holds(cg, chosen)
             decision.cut_valid = held
             if not two_phase:
                 decision.status = "applied"
                 return decision
+            decision.convergence.append(
+                {
+                    "phase": 2,
+                    "round": len(decision.solves),
+                    "converged": held,
+                    "blocking_sinks": blocking,
+                }
+            )
+            if any(r.action not in in_force for r in added_records):
+                # An action added during the waits is not confirmed: what it
+                # was meant to stop may still flow, so nothing is released.
+                decision.status = "receding_unconfirmed"
+                return decision
+            if not held:
+                # Keep every hold; guard the doomed sinks still reached, and
+                # solve again.
+                guard = last_hops(cg, blocking) - in_force.keys()
+                if guard:
+                    apply(guard)
             if held:
                 releasable = [
                     r for a, r in phase1.items() if a not in chosen and a.op == "hold"

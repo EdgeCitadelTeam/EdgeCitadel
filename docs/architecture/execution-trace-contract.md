@@ -3627,7 +3627,13 @@ every mode, and the holds of phase 1 it does not keep are released under the
 same guarded release (revocations stay). With `receding_during_waits`
 (default false) a taint advance during the protocol's ingest waits adds the
 strategy's new actions at once (never a release), fenced before any release
-and listed under `receding`. Phase 1
+and listed under `receding`. The convergence check at tau_1 and the release
+re-check test separation from every avoidable sink and every protected effect,
+doomed or not: a sink still reached blocks convergence or the release (the
+holds stay, its last hop is guarded and the check repeated), every check is
+recorded under `convergence` with its blocking sinks, an admission label in
+force counts as held in the phase-2 graph, and every action added during the
+waits must be in force before anything is released. Phase 1
 also freezes admission: every unit on the source side that may still emit is
 held (its task, or its egress where the node offers no task hold; a pending
 task before it starts), so agentd denies every new dispatch, effect and result
