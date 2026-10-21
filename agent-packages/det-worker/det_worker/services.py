@@ -67,6 +67,10 @@ class ServicesClient:
             "items"
         ]
 
+    def mark(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """A time stamp of the run (the services' clock)."""
+        return self._request("POST", "/mark", record)
+
     def spawn(self, record: Mapping[str, Any]) -> bool:
         """Reserve one spawned invocation under the run's safety cap."""
         return bool(self._request("POST", "/spawn", record)["allowed"])

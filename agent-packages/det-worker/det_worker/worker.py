@@ -121,9 +121,14 @@ class Delivered:
 
 @dataclass
 class AgentState:
-    """This agent's memory, shared by its slots; workload content lives here."""
+    """This agent's memory, shared by its slots; workload content lives here.
+
+    ``memory_labels``: for a shared-memory agent, the fault labels every
+    invocation so far took in; each later invocation continues that memory.
+    """
 
     delivered: dict[str, dict[str, list[Delivered]]] = field(default_factory=dict)
+    memory_labels: set[str] = field(default_factory=set)
     pollution: dict[str, set[str]] = field(default_factory=dict)
     # The rogue messages behind each task's pollution (their runtime tasks).
     polluters: dict[str, list[str]] = field(default_factory=dict)
@@ -165,7 +170,8 @@ class DetWorker:
         self.fault = plan["fault"]
         self.rogue = plan["rogue"]
         self.scope = plan["agents"][agent]
-        self.effects = GatewayExecute(plan["effect_sink"])
+        self.shared_memory = bool(self.scope.get("shared_memory"))
+        self.effects = GatewayExecute(plan["effect_sink"], plan["effect_classes"])
 
     # -- entry point ----------------------------------------------------------
     async def handle(
@@ -300,11 +306,16 @@ class DetWorker:
         inv.inputs = [content for _, content in consumed]
         inv.labels = set(labels_of(inv.inputs)) | extra
         inv.labels |= self.state.pollution.pop(inv.task, set())
+        if self.shared_memory:
+            # The agent's memory carries every earlier invocation's inputs.
+            inv.labels |= self.state.memory_labels
         used += [("rogue_msg", rt) for rt in self.state.polluters.pop(inv.task, [])]
         if self.fault["origin"] == inv.task and self.fault["class"] in CONTENT_FAULTS:
             subject = self.fault["item"] or self.fault["origin"]
             inv.labels.add(fault_label(self.fault["class"], str(subject)))
             await self.emit("fault", inv, fault=self.fault["class"])
+        if self.shared_memory:
+            self.state.memory_labels |= inv.labels
         self.state.computing.add(inv.task)
         for item, delivery in used:
             await self._use(inv, context, item, delivery)

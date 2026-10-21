@@ -73,6 +73,7 @@ class FakeRuntime:
         self.executed: dict[str, dict[str, Any]] = {}  # request id -> reply
         self.requests: dict[str, dict[str, Any]] = {}  # request id -> request
         self.held = False  # the issuing task is held: effects are denied
+        self.labelled = False  # under an admission label: effects are held
         self._timers: list[threading.Timer] = []
 
     def call(self, operation: str, **params: Any) -> dict[str, Any]:
@@ -96,6 +97,8 @@ class FakeRuntime:
         self.requests[params["request_id"]] = params
         if self.held:
             reply = {"status": "error", "code": "execution_held"}
+        elif self.labelled:
+            reply = {"status": "ok", "result": {"state": "held", "outcome": None}}
         elif params["scheduled_at_ms"] is not None:
             delay = max(0.0, (params["scheduled_at_ms"] - time.time() * 1000) / 1000)
             timer = threading.Timer(delay, self._perform, (params,))
@@ -584,3 +587,83 @@ async def test_effects_go_to_the_plans_sink(mini_spec, tmp_path):
             services,  # type: ignore[arg-type]
             node="edge-2",
         )
+
+
+@pytest.mark.asyncio
+async def test_a_labelled_invocations_effect_is_recorded_held(mini_spec, tmp_path):
+    """Under an admission label the gateway holds the effect for its
+    admission: the worker records it held (not denied) and moves on."""
+    services = LocalServices(tmp_path)
+    expected = G.expected_contents(mini_spec)
+    worker = worker_for(mini_spec, "b1", services)
+    await land_x(worker, expected["X@v1"])
+    runtime = FakeRuntime(services)
+    runtime.labelled = True
+    _, state = await worker.handle(
+        envelope("t-b", b_request(expected)), context(runtime)
+    )
+    assert state == "completed"
+    assert [r["phase"] for r in services.ledger_records()] == ["attempted", "held"]
+    effects = G.ledger_effects(G.read_records(mini_spec, [], services.ledger_records()))
+    assert effects["E_B"]["state"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_a_shared_memory_agent_carries_taint_to_its_later_invocations(
+    tmp_path,
+):
+    """b1's memory is shared: once B.t0 took the faulty X@v1 in, B.n (its own
+    session, no faulty input) continues that memory and is tainted too; without
+    shared memory it is not."""
+    label = fault_label("wrong_value", "X@v1")
+    for shared in (True, False):
+        document = mini_document()
+        document["shared_memory_agents"] = ["b1"] if shared else []
+        spec = S.from_dict(document)
+        services = LocalServices(tmp_path / str(shared))
+        expected = G.expected_contents(spec)
+        worker = worker_for(spec, "b1", services)
+        await land_x(worker, {"value": "0" * 16, "labels": [label]})
+        runtime = FakeRuntime(services)
+        await worker.handle(envelope("t-b", b_request(expected)), context(runtime))
+        b_n = request(
+            "task", task="B.n", input={"item": "dBn", "content": expected["dBn"]}
+        )
+        await worker.handle(envelope("t-n", b_n), context(runtime))
+        runtime.drain()
+        [started] = [e for e in services.events("compute_start") if e["task"] == "B.n"]
+        assert started["labels"] == ([label] if shared else [])
+
+
+@pytest.mark.asyncio
+async def test_unprotected_classes_and_unmapped_classes_take_their_own_path(tmp_path):
+    """A reply (unprotected) is a network.http effect to the ledger; with a
+    Home Assistant sink mapping only another class, it still goes to the
+    ledger."""
+    document = mini_document()
+    for effect_class in document["effect_classes"]:
+        if effect_class["id"] == "act_b":
+            effect_class["protected"] = False
+    spec = S.from_dict(document)
+    services = LocalServices(tmp_path)
+    plan = S.compile_plan(
+        spec,
+        run_id="run-1",
+        time_scale=SCALE,
+        effect_sink={
+            "adapter": "homeassistant",
+            "targets": {"final": "light.on/light.x"},
+        },
+    )
+    worker = DetWorker(plan, "b1", services, node="edge-2")  # type: ignore[arg-type]
+    expected = G.expected_contents(spec)
+    await land_x(worker, expected["X@v1"])
+    runtime = FakeRuntime(services)
+    await worker.handle(envelope("t-b", b_request(expected)), context(runtime))
+    runtime.drain()
+    [sent] = runtime.requests.values()
+    assert (sent["adapter"], sent["effect_class"], sent["target"]) == (
+        "http",
+        "network.http",
+        "actuator://act_b/E_B",
+    )

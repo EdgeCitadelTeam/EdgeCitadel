@@ -14,7 +14,7 @@ from typing import Any
 
 from ._worker import effects
 from .names import STRATEGY_CODES
-from .spec import RUNTIME_EFFECT_CLASS, Spec, derive, node_of_agent
+from .spec import RUNTIME_EFFECT_CLASS, Spec, derive, node_of_agent, runtime_class
 
 # The monitor's strategy codes (display names in names.CODE_NAME).
 STRATEGIES = STRATEGY_CODES
@@ -23,18 +23,32 @@ STRATEGIES = STRATEGY_CODES
 MONITOR_OWNER = "core-monitor"
 
 
-def effect_rule(cls: str, sink: Mapping[str, Any] | None = None) -> dict[str, str]:
+def effect_rule(
+    spec: Spec, cls: str, sink: Mapping[str, Any] | None = None
+) -> dict[str, str]:
     """The grant rule of one workload effect class on the run's sink: the
     ledger's ``actuator://<class>/*``, or the Home Assistant service the
-    class maps to (exactly that target)."""
-    if sink is not None and sink.get("adapter") == "homeassistant":
-        target = effects.runtime_target(sink, cls, "")
-        return {"effect_class": RUNTIME_EFFECT_CLASS, "target": target}
-    return {"effect_class": RUNTIME_EFFECT_CLASS, "target": f"actuator://{cls}/*"}
+    class maps to (exactly that target), under the class's runtime class."""
+    effect_class = runtime_class(spec.effect_class(cls).protected)
+    if sink is not None and effects.adapter_for(sink, cls) == "homeassistant":
+        return {
+            "effect_class": effect_class,
+            "target": effects.runtime_target(sink, cls, ""),
+        }
+    return {"effect_class": effect_class, "target": f"actuator://{cls}/*"}
 
 
 def nodes(spec: Spec) -> list[str]:
     return sorted({node_of_agent(spec, a.id) for a in spec.agents})
+
+
+def external_recipients(spec: Spec) -> dict[str, list[str]]:
+    """Per node: the agents the harness submits external requests to."""
+    out: dict[str, set[str]] = defaultdict(set)
+    for task_id in derive(spec).roots:
+        agent = spec.task(task_id).agent
+        out[node_of_agent(spec, agent)].add(agent)
+    return {node: sorted(agents) for node, agents in sorted(out.items())}
 
 
 def agent_records(
@@ -53,7 +67,8 @@ def agent_records(
                     {
                         rule["target"]: rule
                         for rule in (
-                            effect_rule(c, sink) for c in derived.effect_grant[a.id]
+                            effect_rule(spec, c, sink)
+                            for c in derived.effect_grant[a.id]
                         )
                     }.values()
                 ),
@@ -63,7 +78,7 @@ def agent_records(
 
 
 def slots(spec: Spec, agent: str) -> int:
-    """Concurrent invocations of one agent.
+    """Concurrent invocations of one agent: the spec's ``slots``, else as below.
 
     Only a pending creation waits on other work (its task's pushed inputs),
     and each session has at most one waiting at a time; every other
@@ -72,6 +87,8 @@ def slots(spec: Spec, agent: str) -> int:
     from queueing behind running turns. Each idle slot polls agentd, so more
     slots cost the node real load.
     """
+    if agent in spec.slots:
+        return spec.slots[agent]
     sessions = {t.session for t in spec.tasks if t.agent == agent}
     spare = 3 if spec.rogue.rate > 0 else 2
     return len(sessions) + spare
@@ -100,11 +117,17 @@ def monitor_config(
     config: dict[str, Any] = {
         "grants": {a.id: list(derived.grants[a.id]) for a in spec.agents},
         "effect_scopes": {
-            a.id: [RUNTIME_EFFECT_CLASS]
+            a.id: sorted(
+                {
+                    runtime_class(spec.effect_class(c).protected)
+                    for c in derived.effect_grant[a.id]
+                }
+            )
             for a in spec.agents
             if derived.effect_grant[a.id]
         },
         "protected_effect_classes": [RUNTIME_EFFECT_CLASS],
+        "shared_memory_agents": list(spec.shared_memory_agents),
         "agent_nodes": {a.id: node_of_agent(spec, a.id) for a in spec.agents},
         "org_parent": {a.id: a.parent for a in spec.agents if a.parent is not None},
         "control_latency_ms": {

@@ -12,9 +12,12 @@ node has its own state directory, created fresh for each run.
 - ``configure``: write ``node.json`` (node id and NATS endpoint).
 - ``install``: register each workload agent as a Managed Agent whose grant is
   derived from the workload (recipients and effect rules) and write its token.
-- ``operator``: register the harness's root submitter (a native connector
-  allowed to create tasks for the root agent only).
-- ``submit``: create a root task through that connector.
+- ``operator``: register the harness's submitter on this node (a native
+  connector allowed to create tasks for the node's agents with external
+  requests only).
+- ``schedule``: submit external requests through that connector, each at its
+  time, and mark each with the run's services (``submitted`` with its runtime
+  task, or ``refused`` with agentd's code) on the services' clock.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -135,36 +139,67 @@ def operator(state: Path, recipients: Sequence[str]) -> None:
     path.chmod(0o600)
 
 
-def submit(state: Path, recipient: str, body: Mapping[str, Any]) -> str:
-    from edgecitadel_agentd.client import AgentdClient
+# agentd's transport failures (busy or restarting), retried in place.
+TRANSPORT_ERRORS = ("agentd is unavailable", "agentd closed the connection")
+SUBMIT_ATTEMPTS = 4
+
+
+def schedule(
+    state: Path,
+    entries: Sequence[Mapping[str, Any]],
+    services: Any,
+    stop: threading.Event | None = None,
+) -> None:
+    """Submit ``[{"at_ms", "recipient", "task", "body"}]`` at their times
+    (wall clock) through the operator connector; mark each with the services."""
+    from edgecitadel_agentd.client import AgentdClient, AgentdClientError
     from edgecitadel_agentd.service import socket_path_for
 
+    stop = stop or threading.Event()
     client = AgentdClient(
         socket_path_for(agentd_dir(state)),
         connector_id=OPERATOR,
         token=(state / "connectors" / f"{OPERATOR}.token").read_text().strip(),
     )
-    task = client.call(
-        "task.create",
-        recipient_id=recipient,
-        payload={"body": json.dumps(dict(body), separators=(",", ":"))},
-        skill_id="det.task",
-    )
-    return str(task["task_id"])
+    for entry in sorted(entries, key=lambda e: (e["at_ms"], e["task"])):
+        if stop.wait(max(0.0, entry["at_ms"] / 1000 - time.time())):
+            return
+        mark: dict[str, Any] = {"task": entry["task"], "at_ms": entry["at_ms"]}
+        for attempt in range(SUBMIT_ATTEMPTS):
+            try:
+                task = client.call(
+                    "task.create",
+                    recipient_id=entry["recipient"],
+                    payload={
+                        "body": json.dumps(dict(entry["body"]), separators=(",", ":"))
+                    },
+                    skill_id="det.task",
+                )
+            except AgentdClientError as error:
+                if str(error).startswith(TRANSPORT_ERRORS) and (
+                    attempt + 1 < SUBMIT_ATTEMPTS
+                ):
+                    time.sleep(0.2 * (attempt + 1))
+                    continue
+                mark.update(name="refused", code=str(error)[:200])
+            else:
+                mark.update(name="submitted", rt=str(task["task_id"]))
+            break
+        services.mark(mark)
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="harness.nodectl")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("serve", "configure", "install", "operator", "submit"):
+    for name in ("serve", "configure", "install", "operator", "schedule"):
         command = sub.add_parser(name)
         command.add_argument("--state", required=True, type=Path)
     sub.choices["configure"].add_argument("--node", required=True)
     sub.choices["configure"].add_argument("--nats-url")
     sub.choices["install"].add_argument("--agents", required=True, type=Path)
     sub.choices["operator"].add_argument("--recipient", action="append", required=True)
-    sub.choices["submit"].add_argument("--recipient", required=True)
-    sub.choices["submit"].add_argument("--body", required=True, type=Path)
+    sub.choices["schedule"].add_argument("--entries", required=True, type=Path)
+    sub.choices["schedule"].add_argument("--services", required=True)
     args = parser.parse_args(argv)
     if args.command == "serve":
         stop = threading.Event()
@@ -180,16 +215,18 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(install(args.state, json.loads(args.agents.read_text()))))
     elif args.command == "operator":
         operator(args.state, args.recipient)
-    elif args.command == "submit":
-        print(
-            json.dumps(
-                {
-                    "task_id": submit(
-                        args.state, args.recipient, json.loads(args.body.read_text())
-                    )
-                }
-            )
+    elif args.command == "schedule":
+        from ._worker import services as det_services
+
+        stop = threading.Event()
+        signal.signal(signal.SIGTERM, lambda *_: stop.set())
+        signal.signal(signal.SIGINT, lambda *_: stop.set())
+        # The services token comes from the environment, never the command line.
+        services = det_services.ServicesClient(
+            args.services, os.environ["HARNESS_SERVICES_TOKEN"]
         )
+        schedule(args.state, json.loads(args.entries.read_text()), services, stop)
+        stop.wait()  # a run's process lives until the stack stops it
     sys.stdout.flush()
 
 

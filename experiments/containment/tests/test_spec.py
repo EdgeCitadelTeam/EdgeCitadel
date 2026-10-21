@@ -60,11 +60,23 @@ def test_invalid_documents_are_rejected_with_the_field(mutate, message):
         load(document)
 
 
-def test_a_task_without_a_creator_outside_the_root_agent_is_rejected():
+def test_a_task_nobody_creates_is_an_external_request_at_its_release():
+    from harness import deploy, runner
+
     document = mini_document()
     document["messages"] = [m for m in document["messages"] if m["receiver"] != "B.n"]
-    with pytest.raises(S.SpecError, match="no creating message"):
-        load(document)
+    [task] = [t for t in document["tasks"] if t["id"] == "B.n"]
+    task["release"] = 7.0
+    spec = load(document)
+    assert set(S.derive(spec).roots) == {"R.plan", "B.n"}
+    plan = S.compile_plan(spec, run_id="run", time_scale=2.0)
+    schedule = runner.request_schedule(spec, plan, "run", 1000, 2.0)
+    entries = {e["task"]: (node, e) for node, es in schedule.items() for e in es}
+    node, entry = entries["B.n"]
+    assert (node, entry["recipient"], entry["at_ms"]) == ("edge-2", "b1", 15_000)
+    assert entry["body"]["kind"] == "task" and entry["body"]["t0_ms"] == 1000
+    assert entries["R.plan"][1]["at_ms"] == 1000
+    assert deploy.external_recipients(spec) == {"core": ["r"], "edge-2": ["b1"]}
 
 
 def test_dependency_cycles_are_rejected():
@@ -140,7 +152,10 @@ def test_compiled_plan_carries_what_workers_need(mini_spec):
         "tasks": ["B.t0", "B.n"],
         "scope_agents": ["r"],
         "scope_classes": ["act_b"],
+        "shared_memory": False,
     }
+    # A protected class acts as a device command at the runtime.
+    assert plan["effect_classes"]["act_b"]["runtime_class"] == "device.command"
     assert plan["fault"]["origin"] == "A.t0"
 
 

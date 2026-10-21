@@ -37,6 +37,7 @@ from typing import Any
 
 from .metrics import evaluate
 from .names import CODE_NAME, COLOR, FAMILY, MARKER, PLOTTED_NAMES
+from . import svc
 from .netem import MEASURED_RTT_MS
 from .runner import PROFILE_PHASE1_MODES, infrastructure_failure, testbed_counts
 from .spec import from_dict
@@ -163,6 +164,15 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             status,
         )
     )
+    if spec.service and meta.get("t_alert_ms") is not None:
+        row.update(
+            svc.metrics(
+                spec,
+                meta,
+                _jsonl(run_dir / "ledger.jsonl"),
+                _jsonl(run_dir / "marks.jsonl"),
+            )
+        )
     t_alert = meta.get("t_alert_ms")
     for d in decisions:
         for record in [*d.get("phase1", ()), *d.get("phase2", ())]:
@@ -219,6 +229,7 @@ def score(out: Path) -> list[dict[str, Any]]:
         row, acts = score_run(run_dir.parent)
         rows.append(row)
         actions += acts
+    svc.added_latency(rows, [k for k in PAIR])
     _write_csv(out / "runs.csv", rows, IDENTITY)
     _write_csv(out / "actions.csv", actions)
     return rows

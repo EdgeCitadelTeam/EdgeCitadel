@@ -1,0 +1,50 @@
+{
+  "name": "svc-pilot",
+  "note": "svc-smoke with 5 repetitions per cell: 105 runs.",
+  "instances": [
+    "../workloads/svc.json"
+  ],
+  "strategies": [
+    "reject_source",
+    "stop_team",
+    "stop_downstream",
+    "sink_guard",
+    "trace_and_stop",
+    "trace_and_quarantine",
+    "greedy_cut",
+    "cut_without_deadlines",
+    "firebreak",
+    "none"
+  ],
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    }
+  ],
+  "time_scale": 1.0,
+  "reference": true,
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_labels": [
+    "frontier"
+  ],
+  "receding_during_waits": [
+    false
+  ],
+  "root_modes": [
+    "given"
+  ],
+  "request_value": 1.0,
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90,
+  "repetitions": 5
+}

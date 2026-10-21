@@ -12,15 +12,20 @@ The sink (``plan["effect_sink"]``) is the experiment's actuator:
 
 - ``http``: the gateway's ledger adapter posts each committed effect to the
   run's services, which record it as ``committed``;
-- ``homeassistant``: the gateway calls a Home Assistant service; the effect's
-  class maps to a service target ``<domain>.<service>/<entity_id>``
+- ``homeassistant``: the gateway calls a Home Assistant service for every
+  effect class mapped to a service target ``<domain>.<service>/<entity_id>``
   (``targets``, ``*`` for every class), and the run's services sit in front of
-  Home Assistant and record each call that reached it as ``committed``.
+  Home Assistant and record each call that reached it as ``committed``; an
+  effect class it does not map goes to the run's ledger (``http``).
 
-The worker writes the other ledger phases: ``attempted`` before the request,
-then ``scheduled`` (the gateway keeps it until due), ``denied`` (refused, with
-agentd's code) or ``sink_failed`` (committed but the adapter could not perform
-it). ``committed`` comes only from the sink. The worker passes its identity of
+The runtime effect class is the workload class's (``runtime_class`` in the
+plan: ``device.command`` for a protected class, ``network.http`` for an
+unprotected one, such as a reply to a user). The worker writes the other
+ledger phases: ``attempted`` before the request, then ``scheduled`` (the
+gateway keeps it until due), ``held`` (its invocation carries an admission
+label: the gateway holds it until the label's owner admits it), ``denied``
+(refused, with agentd's code) or ``sink_failed`` (committed but the adapter
+could not perform it). ``committed`` comes only from the sink. The worker passes its identity of
 the effect as ``data`` (``ec_run``, ``ec_effect``, ``ec_issuer``) so the sink
 can attribute the call; the Home Assistant front strips those keys.
 
@@ -65,9 +70,18 @@ def check_sink(sink: Mapping[str, Any]) -> dict[str, Any]:
     return {"adapter": adapter}
 
 
+def adapter_for(sink: Mapping[str, Any], cls: str) -> str:
+    """The gateway adapter that performs an effect of workload class ``cls``."""
+    if sink["adapter"] == "homeassistant" and (
+        cls in sink["targets"] or "*" in sink["targets"]
+    ):
+        return "homeassistant"
+    return "http"
+
+
 def runtime_target(sink: Mapping[str, Any], cls: str, target: str) -> str:
     """What the gateway is asked to act on for an effect of class ``cls``."""
-    if sink["adapter"] == "homeassistant":
+    if adapter_for(sink, cls) == "homeassistant":
         targets = sink["targets"]
         return str(targets.get(cls, targets.get("*", "")))
     return target
@@ -83,10 +97,20 @@ def sink_data(record: Mapping[str, Any]) -> dict[str, str]:
 
 
 class GatewayExecute:
-    """One effect through ``effect.execute``; ``op.params`` keeps its progress."""
+    """One effect through ``effect.execute``; ``op.params`` keeps its progress.
 
-    def __init__(self, sink: Mapping[str, Any]) -> None:
+    ``classes`` is the plan's ``effect_classes`` (each with its runtime class).
+    """
+
+    def __init__(
+        self, sink: Mapping[str, Any], classes: Mapping[str, Mapping[str, Any]]
+    ) -> None:
         self.sink = check_sink(sink)
+        self.classes = classes
+
+    def runtime_class(self, cls: str) -> str:
+        known = self.classes.get(cls)
+        return str(known["runtime_class"]) if known else RUNTIME_EFFECT_CLASS
 
     async def run(
         self,
@@ -111,8 +135,8 @@ class GatewayExecute:
             schema_version=1,
             request_id=request_id,
             binding_id=context.trace.binding_id,
-            adapter=self.sink["adapter"],
-            effect_class=RUNTIME_EFFECT_CLASS,
+            adapter=adapter_for(self.sink, record["class"]),
+            effect_class=self.runtime_class(record["class"]),
             target=runtime_target(self.sink, record["class"], p["target"]),
             data=sink_data(record),
             tool_call_id=None,
@@ -124,8 +148,8 @@ class GatewayExecute:
             return
         result = reply["result"]
         op.state = "done"
-        if result.get("state") == "scheduled":
-            await port.ledger({**record, "phase": "scheduled"})
+        if result.get("state") in {"scheduled", "held"}:
+            await port.ledger({**record, "phase": result["state"]})
             return
         outcome = result.get("outcome") or {}
         if not outcome.get("performed"):

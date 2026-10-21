@@ -17,9 +17,10 @@ instance also gets a no-fault reference run per latency setting and repetition
 without containment (``none``, ``reference``) keep the monitor running with
 ``enforce: false``, so the nodes' controller leases are renewed in every run.
 
-One run: fresh stack, root task(s) submitted at ``t0``, the alert posted when
-its trigger fires on the workers' events (same trigger for every strategy),
-then wait until every task ended, the run is quiescent, or it times out.
+One run: fresh stack, external requests (root tasks) submitted at ``t0`` plus
+their release by a scheduler on their agent's node, the alert posted when its
+trigger fires on the workers' events (same trigger for every strategy), then
+wait until every task ended, the run is quiescent, or it times out.
 
 Root modes decouple containment from root-cause analysis: in the main runs
 (``given``) the alert names the faulty invocation and hands it to the monitor
@@ -49,7 +50,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from . import deploy, netem
+from . import deploy, netem, svc
 from .spec import (
     AlertTrigger,
     Fault,
@@ -129,6 +130,8 @@ class Experiment:
     phase1_modes: tuple[str | None, ...] = (None,)
     phase1_labels: tuple[str, ...] = ("frontier",)
     receding_during_waits: tuple[bool, ...] = (False,)
+    # The value of one future request of a service agent (svc scenario cost).
+    request_value: float | None = None
     # Sub-grids run after this one, each overriding some of its dimensions.
     parts: tuple[Experiment, ...] = ()
 
@@ -211,6 +214,7 @@ def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any
         ("timeout_extra_s", float),
         ("keep_state", bool),
         ("infra_retries", int),
+        ("request_value", float),
     ):
         if key in document:
             out[key] = kind(document[key])
@@ -446,6 +450,10 @@ def run_cell(
         "phase1_labels": cell.phase1_labels,
         "receding_during_waits": cell.receding,
         "mechanisms": None,  # the monitor's, for this strategy (from its status)
+        # The scenario's own monitor settings (svc: horizon, future requests).
+        "monitor_settings": svc.monitor_settings(
+            spec, cell.alert, experiment.request_value
+        ),
         "control_latency_ms": cell.latency.per_node(nodes),
         "control_delay_ms": dict(cell.latency.control_delay_ms),
         "rep": cell.rep,
@@ -472,6 +480,7 @@ def run_cell(
             phase1_mode=cell.phase1_mode,
             phase1_labels=cell.phase1_labels,
             receding_during_waits=cell.receding,
+            monitor=meta["monitor_settings"],
         )
         if cell.strategy in deploy.STRATEGIES:
             status = stack.monitor_status()
@@ -488,8 +497,52 @@ def run_cell(
             stack.clear_netem()
         _collect(stack, stack_config, run_dir, keep_state=experiment.keep_state)
         meta.update(testbed_counts(run_dir))
+        meta.update(submitted_requests(run_dir))
         (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
     return run_dir
+
+
+def request_schedule(
+    spec: Spec, plan: Mapping[str, Any], run_id: str, t0: int, scale: float
+) -> dict[str, list[dict[str, Any]]]:
+    """Per node: the external requests (tasks nobody creates), each submitted
+    to its agent at its release (``t0`` plus the scaled release)."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for task_id in derive(spec).roots:
+        task = spec.task(task_id)
+        node = plan["agents"][task.agent]["node"]
+        out.setdefault(node, []).append(
+            {
+                "at_ms": t0 + int(task.release * scale * 1000),
+                "recipient": task.agent,
+                "task": task_id,
+                "body": {
+                    "protocol": "det-worker.v1",
+                    "run": run_id,
+                    "t0_ms": t0,
+                    "kind": "task",
+                    "task": task_id,
+                    "input": None,
+                },
+            }
+        )
+    return out
+
+
+def submitted_requests(run_dir: Path) -> dict[str, Any]:
+    """What the request scheduler submitted (runtime task) or saw refused."""
+    path = run_dir / "marks.jsonl"
+    marks = (
+        [json.loads(line) for line in path.read_text().splitlines()]
+        if path.exists()
+        else []
+    )
+    return {
+        "roots": {m["task"]: m["rt"] for m in marks if m.get("name") == "submitted"},
+        "refused_requests": {
+            m["task"]: m["code"] for m in marks if m.get("name") == "refused"
+        },
+    }
 
 
 TRANSPORT_CODES = ("rpc:agentd is unavailable", "rpc:agentd closed the connection")
@@ -528,23 +581,8 @@ def _drive(
     t0 = int(stack.services("GET", "/clock")["t_ms"]) + START_MARGIN_MS
     meta["t0_ms"] = t0
     stack.services("POST", "/mark", {"name": "t0", "t0_ms": t0})
-    root_agent = plan["root_agent"]
-    root_node = plan["agents"][root_agent]["node"]
-    meta["roots"] = {
-        root: stack.submit(
-            root_node,
-            root_agent,
-            {
-                "protocol": "det-worker.v1",
-                "run": cell.run_id,
-                "t0_ms": t0,
-                "kind": "task",
-                "task": root,
-                "input": None,
-            },
-        )
-        for root in derive(spec).roots
-    }
+    for node, entries in request_schedule(spec, plan, cell.run_id, t0, scale).items():
+        stack.schedule(node, entries)
     trigger = (
         spec.alerts.get(cell.alert)
         if cell.alert and cell.strategy != "reference"

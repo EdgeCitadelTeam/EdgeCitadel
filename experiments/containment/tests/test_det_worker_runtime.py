@@ -150,6 +150,20 @@ def events(run: RunServices, kind: str, task: str | None = None) -> list[dict]:
     ]
 
 
+def submit(node, run: RunServices, body: dict) -> None:
+    """The harness's external request, now (``nodectl schedule``)."""
+    nodectl.schedule(
+        node, [{"at_ms": 0, "recipient": "r", "task": body["task"], "body": body}], run
+    )
+    [mark] = [m for m in marks(run) if m.get("task") == body["task"]]
+    assert mark["name"] == "submitted" and mark["rt"]
+
+
+def marks(run: RunServices) -> list[dict]:
+    path = run.directory / "marks.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
 def test_held_task_pauses_resumes_and_the_workload_completes_once(
     tmp_path, node, services
 ):
@@ -171,7 +185,7 @@ def test_held_task_pauses_resumes_and_the_workload_completes_once(
             "task": "R.plan",
             "input": None,
         }
-        nodectl.submit(node, "r", body)
+        submit(node, run, body)
         [started] = wait_for(
             lambda: events(run, "compute_start", "B.t0"), "B.t0 computing"
         )
@@ -256,7 +270,7 @@ def test_gateway_refuses_effects_outside_the_derived_scope(tmp_path, node, servi
             "task": "R.plan",
             "input": None,
         }
-        nodectl.submit(node, "r", body)
+        submit(node, run, body)
         wait_for(lambda: events(run, "end", "B.n"), "B.n ended", 60)
         wait_for(lambda: "E_Bn" in performed(run), "E_Bn performed", 30)
     finally:

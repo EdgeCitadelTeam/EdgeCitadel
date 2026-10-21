@@ -18,27 +18,38 @@ Layout (``experiments/containment``):
 - ``harness/runner.py``: the paired grid and one run's control loop
 - ``harness/simbackend.py``, ``report.py``, ``names.py``: simulator rows,
   CSVs, statistics and figures; ``netem.py``: lab latency profiles
+- ``harness/svc.py``: the pre-registered service-continuity scenario (its
+  generator, monitor settings and metrics)
 - ``workloads/``: exported instances; ``experiments/``: grids (``lab-smoke``
-  165 runs: every strategy x scenario x early/late alert once under the
-  deployed profile plus C2 under the shared profile; ``lab-pilot`` the same
-  with 3 repetitions, 495; ``lab-main`` a draft sized after the pilot;
-  ``lab-stress`` and ``lab-rootcause`` in the ranked-root mode); ``configs/``:
-  stacks (``dryrun.json`` local sockets, ``dryrun-nats.json`` the lab's NATS
-  control path locally, ``lab.json`` jim-eq + Endurance + Cluster;
+  169 runs: every strategy x scenario x early/late alert once under the
+  deployed profile, C2 under the shared profile and the C2 phase-1 ablation
+  (Firebreak with ``freeze`` and ``freeze_plus_cut``); ``lab-pilot`` the same
+  with 3 repetitions, 507; ``lab-main`` a draft sized after the pilot;
+  ``lab-stress`` and ``lab-rootcause`` in the ranked-root mode; ``svc-smoke``
+  21 and ``svc-pilot`` 105 runs of ``svc``); ``configs/``: stacks
+  (``dryrun.json`` local sockets, ``dryrun-nats.json`` the lab's NATS control
+  path locally, ``lab.json`` jim-eq + Endurance + Cluster;
   ``*-homeassistant.json`` the physical case)
 - ``agent-packages/det-worker``: the deterministic worker. agentd's effect
   gateway performs its effects (``effect.execute``) on the stack's
   ``effect_sink``: the run's ledger (http adapter) or Home Assistant, fronted
   by the run's services, which record what reached it. A consuming step that
-  takes a pushed input from the agent's memory reports it (``trace.use``)
+  takes a pushed input from the agent's memory reports it (``trace.use``);
+  an agent in ``shared_memory_agents`` keeps one memory across invocations.
+  An effect agentd holds under an egress label is recorded ``held``
+
+External requests (root tasks of any agent, as in ``svc``) are submitted at
+their release times by a ``nodectl schedule`` process on the agent's node,
+which records each submission (``submitted``/``refused`` marks).
 
 Every run: agentd enforces the fail-closed controller lease
 (``controller_lease_ms``, 30 s) on every node and the monitor renews it from
 its start, also in runs without containment (``none``, ``reference``), which
 configure the monitor with ``enforce: false``. Each run records its mechanism
 ``profile`` (``deployed`` by default, ``shared`` as the ablation) and
-``phase1_mode``, ``phase1_labels`` and ``receding_during_waits``;
-experiments set them per grid or part.
+``phase1_mode`` (by default the profile's: adaptive for the deployed cut
+strategies, freeze under ``shared``), ``phase1_labels`` and
+``receding_during_waits``; experiments set them per grid or part.
 
 Latency settings and netem profiles above the measured LAN round trip
 (1.5-4 ms between sites) must be labelled ``stress``; the runner refuses
@@ -72,5 +83,8 @@ Assistant the services forward to), ``HARNESS_HA_TOKEN_FILE`` (the path, the
 same on every edge host, of a mode-600 file with its long-lived token, owned by
 the user running the experiment's agentd) and ``HARNESS_HA_TARGET`` (the
 service and entity every effect acts on, ``<domain>.<service>/<entity_id>``,
-for example a test ``input_boolean``).
+for example a test ``input_boolean``). ``configs/lab-svc-homeassistant.json``
+routes only the svc lamp (``dev_lamp``) to Home Assistant, only on ``core``
+(site K), with ``HARNESS_HA_TARGET`` the desk lamp; every other class goes to
+the ledger.
 """

@@ -65,6 +65,8 @@ def run_grid(
             continue  # the simulator always starts from the known source
         if cell.profile != "deployed" or not cell.main_design:
             continue  # the simulator's own pipelines are the main design
+        if cell_spec(cell).service:
+            continue  # a runtime scenario (svc): no simulator workflow
         blocks[(cell.instance, cell.rogue_rate, cell.alert, cell.latency.name)].append(
             cell
         )

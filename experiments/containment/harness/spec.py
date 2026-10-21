@@ -22,9 +22,19 @@ runtime; ``simexport`` converts in both directions.
   "fault": {"class": "wrong_value", "item": "A@v1"},
   "alerts": {"early": {"event": "produce", "item": "A@v1", "delay_s": 0.4},
              "late": {"event": "consume", "item": "A@v1", "count": 1, "delay_s": 0.4}},
-  "rogue": {"rate": 0.0, "seed": 0}
+  "rogue": {"rate": 0.0, "seed": 0},
+  "shared_memory_agents": [],
+  "slots": {},
+  "service": {}
 }
 ```
+
+``shared_memory_agents``: agents whose invocations share one memory (an
+inbox, a store): each continues the previous one, so an invocation that
+took tainted input taints every later one of its agent (the monitor's
+``shared_memory_agents``). ``slots``: concurrent invocations per agent,
+where the session count would overstate them. ``service``: the
+service-continuity roles and metrics of a scenario (``harness.svc``).
 
 Semantics (as in the simulator): a task starts when every declared input is
 available (its creating message or session predecessor, the artifacts it reads,
@@ -34,11 +44,14 @@ outputs its artifacts and messages, and issues its effects, which commit
 ``delay`` seconds later. Turns of one session run in list order. Every effect
 class is a protected sink unless ``protected`` is false. ``rogue`` is the hidden
 malfunction: at each step boundary a tainted invocation takes, with probability
-``rate``, an undeclared action inside its authority scope.
+``rate``, an undeclared action inside its authority scope. A task nobody
+creates (no creating message, no session predecessor) is an external request:
+the harness submits it to its agent at ``release``.
 
 Runtime realization (``compile_plan``), fixed by what the runtime's lineage
 records: a task is created through its *dispatcher* (its session predecessor,
-else its creating message's sender, else the harness for a root task), which
+else its creating message's sender, else the harness for a root task, at its
+``release``), which
 hands the creating input to the task's agent as a pending creation; every other
 input is *pushed* by its producer as a delivery task to the consumer's agent.
 The pending creation dispatches the task once its deliveries have landed, so
@@ -48,6 +61,8 @@ Agent identities, grants and effect rules derive from the declared flows: an
 agent's scope covers the agents it delivers or dispatches to and the effect
 classes it issues, closed upward along the agent tree like the simulator's
 witness scopes; every agent may also dispatch to itself (session successors).
+A protected effect class is a ``device.command`` at the runtime, an
+unprotected one (a reply to a user) a ``network.http``.
 """
 
 from __future__ import annotations
@@ -78,8 +93,13 @@ ITEM_FAULTS = frozenset(
     {"wrong_value", "stale_version", "message_delay", "message_duplicate"}
 )
 ALERT_EVENTS = ("produce", "consume", "start", "end", "fault", "at")
-# Runtime effect class of every workload actuation; the spec class is the target.
-RUNTIME_EFFECT_CLASS = "device.command"
+# Runtime effect class of a workload effect class; the spec class is the target.
+RUNTIME_EFFECT_CLASS = "device.command"  # protected: an actuation
+UNPROTECTED_EFFECT_CLASS = "network.http"  # unprotected: e.g. a reply to a user
+
+
+def runtime_class(protected: bool) -> str:
+    return RUNTIME_EFFECT_CLASS if protected else UNPROTECTED_EFFECT_CLASS
 
 
 class SpecError(ValueError):
@@ -211,6 +231,9 @@ class Spec:
     placement: Mapping[str, str] = field(default_factory=dict)
     scope_extra: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     read_lat: float = 0.0
+    shared_memory_agents: tuple[str, ...] = ()
+    slots: Mapping[str, int] = field(default_factory=dict)
+    service: Mapping[str, Any] = field(default_factory=dict)
     # Simulator-only parameters kept for sim-to-real (site control latency, ...).
     sim: Mapping[str, Any] = field(default_factory=dict)
     source: Mapping[str, Any] = field(default_factory=dict)
@@ -298,6 +321,9 @@ def from_dict(document: Mapping[str, Any]) -> Spec:
             "read_lat",
             "sim",
             "source",
+            "shared_memory_agents",
+            "slots",
+            "service",
         },
         "spec",
     )
@@ -465,6 +491,17 @@ def from_dict(document: Mapping[str, Any]) -> Spec:
     scope_extra = document.get("scope_extra", {})
     if not isinstance(placement, Mapping) or not isinstance(scope_extra, Mapping):
         raise SpecError("placement and scope_extra must be objects")
+    shared = document.get("shared_memory_agents", [])
+    if not isinstance(shared, list) or not all(isinstance(a, str) for a in shared):
+        raise SpecError("shared_memory_agents: expected a list of agent ids")
+    slots = document.get("slots", {})
+    if not isinstance(slots, Mapping) or not all(
+        type(n) is int and n >= 1 for n in slots.values()
+    ):
+        raise SpecError("slots: expected positive integers per agent")
+    service = document.get("service", {})
+    if not isinstance(service, Mapping):
+        raise SpecError("service: expected an object")
     spec = Spec(
         name=str(_require(document, "name", "spec")),
         agents=tuple(agents),
@@ -482,6 +519,9 @@ def from_dict(document: Mapping[str, Any]) -> Spec:
         read_lat=_number(document.get("read_lat", 0.0), "read_lat"),
         sim=dict(document.get("sim", {})),
         source=dict(document.get("source", {})),
+        shared_memory_agents=tuple(shared),
+        slots=dict(slots),
+        service=dict(service),
     )
     validate(spec)
     return spec
@@ -549,6 +589,12 @@ def to_dict(spec: Spec) -> dict[str, Any]:
         document["sim"] = dict(spec.sim)
     if spec.source:
         document["source"] = dict(spec.source)
+    if spec.shared_memory_agents:
+        document["shared_memory_agents"] = list(spec.shared_memory_agents)
+    if spec.slots:
+        document["slots"] = dict(spec.slots)
+    if spec.service:
+        document["service"] = dict(spec.service)
     return document
 
 
@@ -641,6 +687,9 @@ def validate(spec: Spec) -> None:
             raise SpecError(f"effect '{e.id}': unknown class '{e.cls}'")
         if e.delay < spec.effect_class(e.cls).min_delay - 1e-12:
             raise SpecError(f"effect '{e.id}': delay below its class minimum")
+    for agent in [*spec.shared_memory_agents, *spec.slots]:
+        if agent not in agents:
+            raise SpecError(f"unknown agent '{agent}' in shared_memory_agents or slots")
     for agent, extra in spec.scope_extra.items():
         if agent not in agents:
             raise SpecError(f"scope_extra: unknown agent '{agent}'")
@@ -764,14 +813,8 @@ def derive(spec: Spec) -> Derived:
             creation[t.id] = Creation(t.id, creating.sender, "message", creating.id)
             continue
         creation[t.id] = Creation(t.id, None, "root", None)
+    # Tasks nobody creates: external requests the harness submits.
     roots = tuple(t for t, c in creation.items() if c.dispatcher is None)
-    root_agent = next(a.id for a in spec.agents if a.parent is None)
-    for r in roots:
-        if spec.task(r).agent != root_agent:
-            raise SpecError(
-                f"task '{r}' has no creating message or session predecessor; "
-                "only tasks of the root agent can be submitted by the harness"
-            )
     producer: dict[str, str] = {a.id: a.producer for a in spec.artifacts}
     producer.update({m.id: m.sender for m in spec.messages})
     deliveries: list[Delivery] = []
@@ -1069,6 +1112,7 @@ def compile_plan(
                 for e in derived.effects_of.get(t.id, ())
             ],
         }
+    shared = set(spec.shared_memory_agents)
     return {
         "plan_version": 1,
         "run_id": run_id,
@@ -1084,12 +1128,17 @@ def compile_plan(
                 "tasks": [t.id for t in spec.tasks if t.agent == a.id],
                 "scope_agents": list(derived.scope_agents[a.id]),
                 "scope_classes": list(derived.scope_classes[a.id]),
+                "shared_memory": a.id in shared,
             }
             for a in spec.agents
         },
         "tasks": tasks,
         "effect_classes": {
-            c.id: {"min_delay": c.min_delay, "protected": c.protected}
+            c.id: {
+                "min_delay": c.min_delay,
+                "protected": c.protected,
+                "runtime_class": runtime_class(c.protected),
+            }
             for c in spec.effect_classes
         },
         "external_inputs": list(spec.external_inputs),

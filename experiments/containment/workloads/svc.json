@@ -1,0 +1,1452 @@
+{
+ "spec_version": 1,
+ "name": "svc",
+ "agents": [
+  {
+   "id": "planner",
+   "parent": null,
+   "site": "P",
+   "label": "PLANNER"
+  },
+  {
+   "id": "assistant",
+   "parent": "planner",
+   "site": "K",
+   "label": "ASSISTANT"
+  },
+  {
+   "id": "automation",
+   "parent": "planner",
+   "site": "A",
+   "label": "AUTOMATION"
+  }
+ ],
+ "placement": {
+  "K": "core",
+  "A": "edge-1",
+  "P": "edge-2"
+ },
+ "effect_classes": [
+  {
+   "id": "reply",
+   "site": "K",
+   "min_delay": 0.0,
+   "protected": false
+  },
+  {
+   "id": "dev_lamp",
+   "site": "K",
+   "min_delay": 0.2,
+   "protected": true
+  },
+  {
+   "id": "dev_auto_1",
+   "site": "A",
+   "min_delay": 0.2,
+   "protected": true
+  },
+  {
+   "id": "dev_auto_2",
+   "site": "A",
+   "min_delay": 0.2,
+   "protected": true
+  }
+ ],
+ "tasks": [
+  {
+   "id": "Q001",
+   "agent": "assistant",
+   "session": "sQ001",
+   "compute": 1.0,
+   "release": 6.58,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q002",
+   "agent": "assistant",
+   "session": "sQ002",
+   "compute": 1.0,
+   "release": 7.552,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q003",
+   "agent": "assistant",
+   "session": "sQ003",
+   "compute": 1.0,
+   "release": 11.37,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q004",
+   "agent": "assistant",
+   "session": "sQ004",
+   "compute": 1.0,
+   "release": 11.392,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q005",
+   "agent": "assistant",
+   "session": "sQ005",
+   "compute": 1.0,
+   "release": 12.352,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q006",
+   "agent": "assistant",
+   "session": "sQ006",
+   "compute": 1.0,
+   "release": 13.106,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q007",
+   "agent": "assistant",
+   "session": "sQ007",
+   "compute": 1.0,
+   "release": 15.167,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q008",
+   "agent": "assistant",
+   "session": "sQ008",
+   "compute": 1.0,
+   "release": 16.482,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q009",
+   "agent": "assistant",
+   "session": "sQ009",
+   "compute": 1.0,
+   "release": 17.522,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q010",
+   "agent": "assistant",
+   "session": "sQ010",
+   "compute": 1.0,
+   "release": 22.303,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q011",
+   "agent": "assistant",
+   "session": "sQ011",
+   "compute": 1.0,
+   "release": 22.34,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q012",
+   "agent": "assistant",
+   "session": "sQ012",
+   "compute": 1.0,
+   "release": 24.627,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q013",
+   "agent": "assistant",
+   "session": "sQ013",
+   "compute": 1.0,
+   "release": 26.393,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q014",
+   "agent": "assistant",
+   "session": "sQ014",
+   "compute": 1.0,
+   "release": 26.521,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q015",
+   "agent": "assistant",
+   "session": "sQ015",
+   "compute": 1.0,
+   "release": 27.76,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q016",
+   "agent": "assistant",
+   "session": "sQ016",
+   "compute": 1.0,
+   "release": 27.95,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q017",
+   "agent": "assistant",
+   "session": "sQ017",
+   "compute": 1.0,
+   "release": 28.686,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q018",
+   "agent": "assistant",
+   "session": "sQ018",
+   "compute": 1.0,
+   "release": 32.454,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q019",
+   "agent": "assistant",
+   "session": "sQ019",
+   "compute": 1.0,
+   "release": 33.054,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q020",
+   "agent": "assistant",
+   "session": "sQ020",
+   "compute": 1.0,
+   "release": 33.448,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q021",
+   "agent": "assistant",
+   "session": "sQ021",
+   "compute": 1.0,
+   "release": 33.779,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q022",
+   "agent": "assistant",
+   "session": "sQ022",
+   "compute": 1.0,
+   "release": 41.079,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q023",
+   "agent": "assistant",
+   "session": "sQ023",
+   "compute": 1.0,
+   "release": 43.19,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q024",
+   "agent": "assistant",
+   "session": "sQ024",
+   "compute": 1.0,
+   "release": 43.433,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q025",
+   "agent": "assistant",
+   "session": "sQ025",
+   "compute": 1.0,
+   "release": 43.536,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q026",
+   "agent": "assistant",
+   "session": "sQ026",
+   "compute": 1.0,
+   "release": 48.303,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q027",
+   "agent": "assistant",
+   "session": "sQ027",
+   "compute": 1.0,
+   "release": 48.676,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q028",
+   "agent": "assistant",
+   "session": "sQ028",
+   "compute": 1.0,
+   "release": 51.416,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q029",
+   "agent": "assistant",
+   "session": "sQ029",
+   "compute": 1.0,
+   "release": 51.442,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q030",
+   "agent": "assistant",
+   "session": "sQ030",
+   "compute": 1.0,
+   "release": 53.215,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q031",
+   "agent": "assistant",
+   "session": "sQ031",
+   "compute": 1.0,
+   "release": 54.126,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q032",
+   "agent": "assistant",
+   "session": "sQ032",
+   "compute": 1.0,
+   "release": 55.631,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q033",
+   "agent": "assistant",
+   "session": "sQ033",
+   "compute": 1.0,
+   "release": 55.961,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q034",
+   "agent": "assistant",
+   "session": "sQ034",
+   "compute": 1.0,
+   "release": 56.683,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q035",
+   "agent": "assistant",
+   "session": "sQ035",
+   "compute": 1.0,
+   "release": 57.92,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q036",
+   "agent": "assistant",
+   "session": "sQ036",
+   "compute": 1.0,
+   "release": 61.796,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q037",
+   "agent": "assistant",
+   "session": "sQ037",
+   "compute": 1.0,
+   "release": 62.009,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q038",
+   "agent": "assistant",
+   "session": "sQ038",
+   "compute": 1.0,
+   "release": 62.494,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q039",
+   "agent": "assistant",
+   "session": "sQ039",
+   "compute": 1.0,
+   "release": 63.504,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q040",
+   "agent": "assistant",
+   "session": "sQ040",
+   "compute": 1.0,
+   "release": 63.704,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q041",
+   "agent": "assistant",
+   "session": "sQ041",
+   "compute": 1.0,
+   "release": 70.732,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q042",
+   "agent": "assistant",
+   "session": "sQ042",
+   "compute": 1.0,
+   "release": 71.834,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q043",
+   "agent": "assistant",
+   "session": "sQ043",
+   "compute": 1.0,
+   "release": 72.29,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q044",
+   "agent": "assistant",
+   "session": "sQ044",
+   "compute": 1.0,
+   "release": 72.32,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q045",
+   "agent": "assistant",
+   "session": "sQ045",
+   "compute": 1.0,
+   "release": 73.118,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q046",
+   "agent": "assistant",
+   "session": "sQ046",
+   "compute": 1.0,
+   "release": 75.331,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q047",
+   "agent": "assistant",
+   "session": "sQ047",
+   "compute": 1.0,
+   "release": 75.953,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q048",
+   "agent": "assistant",
+   "session": "sQ048",
+   "compute": 1.0,
+   "release": 78.561,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q049",
+   "agent": "assistant",
+   "session": "sQ049",
+   "compute": 1.0,
+   "release": 80.461,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q050",
+   "agent": "assistant",
+   "session": "sQ050",
+   "compute": 1.0,
+   "release": 80.522,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q051",
+   "agent": "assistant",
+   "session": "sQ051",
+   "compute": 1.0,
+   "release": 80.675,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q052",
+   "agent": "assistant",
+   "session": "sQ052",
+   "compute": 1.0,
+   "release": 81.287,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q053",
+   "agent": "assistant",
+   "session": "sQ053",
+   "compute": 1.0,
+   "release": 81.84,
+   "step_len": 1.0
+  },
+  {
+   "id": "Q054",
+   "agent": "assistant",
+   "session": "sQ054",
+   "compute": 1.0,
+   "release": 83.772,
+   "step_len": 1.0
+  },
+  {
+   "id": "M01",
+   "agent": "automation",
+   "session": "sM01",
+   "compute": 0.2,
+   "release": 5.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M02",
+   "agent": "automation",
+   "session": "sM02",
+   "compute": 0.2,
+   "release": 10.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M03",
+   "agent": "automation",
+   "session": "sM03",
+   "compute": 0.2,
+   "release": 15.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M04",
+   "agent": "automation",
+   "session": "sM04",
+   "compute": 0.2,
+   "release": 20.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M05",
+   "agent": "automation",
+   "session": "sM05",
+   "compute": 0.2,
+   "release": 25.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M06",
+   "agent": "automation",
+   "session": "sM06",
+   "compute": 0.2,
+   "release": 30.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M07",
+   "agent": "automation",
+   "session": "sM07",
+   "compute": 0.2,
+   "release": 35.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M08",
+   "agent": "automation",
+   "session": "sM08",
+   "compute": 0.2,
+   "release": 40.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M09",
+   "agent": "automation",
+   "session": "sM09",
+   "compute": 0.2,
+   "release": 45.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M10",
+   "agent": "automation",
+   "session": "sM10",
+   "compute": 0.2,
+   "release": 50.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M11",
+   "agent": "automation",
+   "session": "sM11",
+   "compute": 0.2,
+   "release": 55.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M12",
+   "agent": "automation",
+   "session": "sM12",
+   "compute": 0.2,
+   "release": 60.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M13",
+   "agent": "automation",
+   "session": "sM13",
+   "compute": 0.2,
+   "release": 65.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M14",
+   "agent": "automation",
+   "session": "sM14",
+   "compute": 0.2,
+   "release": 70.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M15",
+   "agent": "automation",
+   "session": "sM15",
+   "compute": 0.2,
+   "release": 75.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M16",
+   "agent": "automation",
+   "session": "sM16",
+   "compute": 0.2,
+   "release": 80.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "M17",
+   "agent": "automation",
+   "session": "sM17",
+   "compute": 0.2,
+   "release": 85.0,
+   "step_len": 0.2
+  },
+  {
+   "id": "P1",
+   "agent": "planner",
+   "session": "sP1",
+   "compute": 0.5,
+   "release": 10.0,
+   "step_len": 0.5
+  },
+  {
+   "id": "A.plan1",
+   "agent": "assistant",
+   "session": "sA.plan1",
+   "compute": 1.0,
+   "step_len": 1.0
+  },
+  {
+   "id": "P2",
+   "agent": "planner",
+   "session": "sP2",
+   "compute": 0.5,
+   "release": 30.0,
+   "step_len": 0.5
+  },
+  {
+   "id": "A.plan2",
+   "agent": "assistant",
+   "session": "sA.plan2",
+   "compute": 1.0,
+   "step_len": 1.0
+  },
+  {
+   "id": "P3",
+   "agent": "planner",
+   "session": "sP3",
+   "compute": 0.5,
+   "release": 50.0,
+   "step_len": 0.5
+  },
+  {
+   "id": "A.plan3",
+   "agent": "assistant",
+   "session": "sA.plan3",
+   "compute": 1.0,
+   "step_len": 1.0
+  },
+  {
+   "id": "P4",
+   "agent": "planner",
+   "session": "sP4",
+   "compute": 0.5,
+   "release": 70.0,
+   "step_len": 0.5
+  },
+  {
+   "id": "A.plan4",
+   "agent": "assistant",
+   "session": "sA.plan4",
+   "compute": 1.0,
+   "step_len": 1.0
+  },
+  {
+   "id": "P.sched",
+   "agent": "planner",
+   "session": "sP.sched",
+   "compute": 0.5,
+   "release": 20.0,
+   "step_len": 0.5
+  },
+  {
+   "id": "A.sched",
+   "agent": "assistant",
+   "session": "sA.sched",
+   "compute": 1.0,
+   "reads": [
+    "sched@v1"
+   ],
+   "step_len": 1.0
+  }
+ ],
+ "external_inputs": [],
+ "artifacts": [
+  {
+   "id": "sched@v1",
+   "producer": "P.sched"
+  }
+ ],
+ "messages": [
+  {
+   "id": "h.A.plan1",
+   "sender": "P1",
+   "receiver": "A.plan1",
+   "latency": 0.0
+  },
+  {
+   "id": "h.A.plan2",
+   "sender": "P2",
+   "receiver": "A.plan2",
+   "latency": 0.0
+  },
+  {
+   "id": "h.A.plan3",
+   "sender": "P3",
+   "receiver": "A.plan3",
+   "latency": 0.0
+  },
+  {
+   "id": "h.A.plan4",
+   "sender": "P4",
+   "receiver": "A.plan4",
+   "latency": 0.0
+  },
+  {
+   "id": "h.A.sched",
+   "sender": "P.sched",
+   "receiver": "A.sched",
+   "latency": 0.0
+  }
+ ],
+ "effects": [
+  {
+   "id": "Q001.reply",
+   "issuer": "Q001",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q002.reply",
+   "issuer": "Q002",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q002.lamp",
+   "issuer": "Q002",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q003.reply",
+   "issuer": "Q003",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q004.reply",
+   "issuer": "Q004",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q005.reply",
+   "issuer": "Q005",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q005.lamp",
+   "issuer": "Q005",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q006.reply",
+   "issuer": "Q006",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q007.reply",
+   "issuer": "Q007",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q007.lamp",
+   "issuer": "Q007",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q008.reply",
+   "issuer": "Q008",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q009.reply",
+   "issuer": "Q009",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q009.lamp",
+   "issuer": "Q009",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q010.reply",
+   "issuer": "Q010",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q011.reply",
+   "issuer": "Q011",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q011.lamp",
+   "issuer": "Q011",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q012.reply",
+   "issuer": "Q012",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q013.reply",
+   "issuer": "Q013",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q013.lamp",
+   "issuer": "Q013",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q014.reply",
+   "issuer": "Q014",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q015.reply",
+   "issuer": "Q015",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q015.lamp",
+   "issuer": "Q015",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q016.reply",
+   "issuer": "Q016",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q016.lamp",
+   "issuer": "Q016",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q017.reply",
+   "issuer": "Q017",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q018.reply",
+   "issuer": "Q018",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q019.reply",
+   "issuer": "Q019",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q020.reply",
+   "issuer": "Q020",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q021.reply",
+   "issuer": "Q021",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q021.lamp",
+   "issuer": "Q021",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q022.reply",
+   "issuer": "Q022",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q023.reply",
+   "issuer": "Q023",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q024.reply",
+   "issuer": "Q024",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q025.reply",
+   "issuer": "Q025",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q025.lamp",
+   "issuer": "Q025",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q026.reply",
+   "issuer": "Q026",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q027.reply",
+   "issuer": "Q027",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q028.reply",
+   "issuer": "Q028",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q029.reply",
+   "issuer": "Q029",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q030.reply",
+   "issuer": "Q030",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q030.lamp",
+   "issuer": "Q030",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q031.reply",
+   "issuer": "Q031",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q031.lamp",
+   "issuer": "Q031",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q032.reply",
+   "issuer": "Q032",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q032.lamp",
+   "issuer": "Q032",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q033.reply",
+   "issuer": "Q033",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q033.lamp",
+   "issuer": "Q033",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q034.reply",
+   "issuer": "Q034",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q035.reply",
+   "issuer": "Q035",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q036.reply",
+   "issuer": "Q036",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q036.lamp",
+   "issuer": "Q036",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q037.reply",
+   "issuer": "Q037",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q038.reply",
+   "issuer": "Q038",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q039.reply",
+   "issuer": "Q039",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q040.reply",
+   "issuer": "Q040",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q041.reply",
+   "issuer": "Q041",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q041.lamp",
+   "issuer": "Q041",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q042.reply",
+   "issuer": "Q042",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q043.reply",
+   "issuer": "Q043",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q044.reply",
+   "issuer": "Q044",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q044.lamp",
+   "issuer": "Q044",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q045.reply",
+   "issuer": "Q045",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q046.reply",
+   "issuer": "Q046",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q047.reply",
+   "issuer": "Q047",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q048.reply",
+   "issuer": "Q048",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q049.reply",
+   "issuer": "Q049",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q049.lamp",
+   "issuer": "Q049",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q050.reply",
+   "issuer": "Q050",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q051.reply",
+   "issuer": "Q051",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q052.reply",
+   "issuer": "Q052",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q052.lamp",
+   "issuer": "Q052",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q053.reply",
+   "issuer": "Q053",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "Q053.lamp",
+   "issuer": "Q053",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "Q054.reply",
+   "issuer": "Q054",
+   "class": "reply",
+   "delay": 0.05
+  },
+  {
+   "id": "M01.cmd",
+   "issuer": "M01",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "M02.cmd",
+   "issuer": "M02",
+   "class": "dev_auto_2",
+   "delay": 0.2
+  },
+  {
+   "id": "M03.cmd",
+   "issuer": "M03",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "M04.cmd",
+   "issuer": "M04",
+   "class": "dev_auto_2",
+   "delay": 0.2
+  },
+  {
+   "id": "M05.cmd",
+   "issuer": "M05",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "M06.cmd",
+   "issuer": "M06",
+   "class": "dev_auto_2",
+   "delay": 0.2
+  },
+  {
+   "id": "M07.cmd",
+   "issuer": "M07",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "M08.cmd",
+   "issuer": "M08",
+   "class": "dev_auto_2",
+   "delay": 0.2
+  },
+  {
+   "id": "M09.cmd",
+   "issuer": "M09",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "M10.cmd",
+   "issuer": "M10",
+   "class": "dev_auto_2",
+   "delay": 0.2
+  },
+  {
+   "id": "M11.cmd",
+   "issuer": "M11",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "M12.cmd",
+   "issuer": "M12",
+   "class": "dev_auto_2",
+   "delay": 0.2
+  },
+  {
+   "id": "M13.cmd",
+   "issuer": "M13",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "M14.cmd",
+   "issuer": "M14",
+   "class": "dev_auto_2",
+   "delay": 0.2
+  },
+  {
+   "id": "M15.cmd",
+   "issuer": "M15",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "M16.cmd",
+   "issuer": "M16",
+   "class": "dev_auto_2",
+   "delay": 0.2
+  },
+  {
+   "id": "M17.cmd",
+   "issuer": "M17",
+   "class": "dev_auto_1",
+   "delay": 0.2
+  },
+  {
+   "id": "A.plan1.lamp",
+   "issuer": "A.plan1",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "A.plan2.lamp",
+   "issuer": "A.plan2",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "A.plan3.lamp",
+   "issuer": "A.plan3",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "A.plan4.lamp",
+   "issuer": "A.plan4",
+   "class": "dev_lamp",
+   "delay": 0.2
+  },
+  {
+   "id": "A.sched.lamp",
+   "issuer": "A.sched",
+   "class": "dev_lamp",
+   "delay": 0.2
+  }
+ ],
+ "fault": {
+  "class": "wrong_value",
+  "item": "sched@v1"
+ },
+ "alerts": {
+  "early": {
+   "event": "produce",
+   "item": "sched@v1",
+   "delay_s": 0.3,
+   "designate_root": true
+  },
+  "late": {
+   "event": "consume",
+   "item": "sched@v1",
+   "delay_s": 15.0,
+   "designate_root": true
+  }
+ },
+ "rogue": {
+  "rate": 0.0,
+  "p_eff": 0.5,
+  "extra_delay": 1.5,
+  "p_spawn": 1.0,
+  "seed": 0,
+  "dyn_steps": 3,
+  "dyn_step_len": 2.0,
+  "new_inv_step": 0.5,
+  "max_dyn": 200
+ },
+ "source": {
+  "generator": "harness.svc",
+  "params": {
+   "seed": 20261021,
+   "request_rate_per_s": 0.5,
+   "request_window_s": [
+    5.0,
+    85.0
+   ],
+   "actuation_share": 0.3,
+   "request_compute_s": 1.0,
+   "reply_delay_s": 0.05,
+   "command_delay_s": 0.2,
+   "automation_period_s": 5.0,
+   "automation_window_s": [
+    5.0,
+    85.0
+   ],
+   "automation_compute_s": 0.2,
+   "planner_hand_s": [
+    10.0,
+    30.0,
+    50.0,
+    70.0
+   ],
+   "planner_compute_s": 0.5,
+   "schedule_s": 20.0,
+   "alert_early_delay_s": 0.3,
+   "alert_late_delay_s": 15.0,
+   "spare_slots": 2
+  }
+ },
+ "shared_memory_agents": [
+  "assistant"
+ ],
+ "slots": {
+  "planner": 3,
+  "assistant": 6,
+  "automation": 3
+ },
+ "service": {
+  "assistant": "assistant",
+  "automation": "automation",
+  "reply_class": "reply",
+  "requests": [
+   "Q001",
+   "Q002",
+   "Q003",
+   "Q004",
+   "Q005",
+   "Q006",
+   "Q007",
+   "Q008",
+   "Q009",
+   "Q010",
+   "Q011",
+   "Q012",
+   "Q013",
+   "Q014",
+   "Q015",
+   "Q016",
+   "Q017",
+   "Q018",
+   "Q019",
+   "Q020",
+   "Q021",
+   "Q022",
+   "Q023",
+   "Q024",
+   "Q025",
+   "Q026",
+   "Q027",
+   "Q028",
+   "Q029",
+   "Q030",
+   "Q031",
+   "Q032",
+   "Q033",
+   "Q034",
+   "Q035",
+   "Q036",
+   "Q037",
+   "Q038",
+   "Q039",
+   "Q040",
+   "Q041",
+   "Q042",
+   "Q043",
+   "Q044",
+   "Q045",
+   "Q046",
+   "Q047",
+   "Q048",
+   "Q049",
+   "Q050",
+   "Q051",
+   "Q052",
+   "Q053",
+   "Q054"
+  ],
+  "request_rate_per_s": 0.5,
+  "requests_until_s": 85.0
+ }
+}

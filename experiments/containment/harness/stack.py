@@ -19,9 +19,11 @@ Every agentd node enforces the fail-closed controller lease
 (``EDGECITADEL_CONTROLLER_LEASE_MS``, ``controller_lease_ms``, 30 s by default)
 and the monitor renews it from its start in every run, including runs that
 must not contain (``enforce: false``: the monitor decides and logs but sends
-no decision). Effects are performed by agentd's effect gateway through the
-adapter of the stack's ``effect_sink``: the run's ledger (``ledger``) or Home
-Assistant (``homeassistant``, fronted by the run's services).
+no decision). Effects are performed by agentd's effect gateway: through the
+run's ledger (``http``, every node), and with an ``effect_sink`` of kind
+``homeassistant`` also through Home Assistant (fronted by the run's services)
+for the effect classes its ``targets`` map, on the ``nodes`` it names (every
+node by default).
 """
 
 from __future__ import annotations
@@ -373,8 +375,14 @@ def _effect_sink(document: Mapping[str, Any]) -> dict[str, Any]:
         "targets",
         "upstream",
         "token_file",
+        "nodes",
     }:
         raise StackError("effect_sink: kind ledger, or homeassistant with targets")
+    nodes = sink.get("nodes")
+    if nodes is not None and (
+        not isinstance(nodes, list) or not all(isinstance(n, str) for n in nodes)
+    ):
+        raise StackError("effect_sink: nodes lists the workload nodes with the adapter")
     unresolved = [k for k, v in sink.items() if "${" in json.dumps(v)]
     if unresolved:
         raise StackError(f"effect_sink: unset environment variables in {unresolved}")
@@ -392,6 +400,7 @@ def _effect_sink(document: Mapping[str, Any]) -> dict[str, Any]:
         "targets": dict(sink["targets"]),
         "upstream": sink.get("upstream") or None,
         "token_file": sink.get("token_file") or None,
+        "nodes": nodes,
     }
 
 
@@ -513,10 +522,12 @@ class RunStack:
         phase1_mode: str | None = None,
         phase1_labels: str = "frontier",
         receding_during_waits: bool = False,
+        monitor: Mapping[str, Any] | None = None,
     ) -> None:
         """Start everything. With ``enforce`` False the monitor decides and logs
         but sends no decision (baseline runs); it still renews every node's
-        controller lease, so effects pass in those runs too."""
+        controller lease, so effects pass in those runs too. ``monitor`` adds
+        the scenario's own monitor settings (``svc.monitor_settings``)."""
         controller = self.config.controller
         for host in {controller, *self.config.node_hosts.values()}:
             self.hosts[host].write(f"{self.host_dir(host)}/.keep", b"")
@@ -532,20 +543,19 @@ class RunStack:
             self._start_node(node, nats_url)
         for node in deploy.nodes(spec):
             self._install(node, records.get(node, []))
-        root_node = plan["agents"][plan["root_agent"]]["node"]
-        host = self.config.node_hosts[root_node]
-        self.hosts[host].run(
-            [
-                self._python(host),
-                "-m",
-                "harness.nodectl",
-                "operator",
-                "--state",
-                self.node_state(root_node),
-                "--recipient",
-                plan["root_agent"],
-            ]
-        )
+        for node, agents in deploy.external_recipients(spec).items():
+            host = self.config.node_hosts[node]
+            self.hosts[host].run(
+                [
+                    self._python(host),
+                    "-m",
+                    "harness.nodectl",
+                    "operator",
+                    "--state",
+                    self.node_state(node),
+                    *[arg for agent in agents for arg in ("--recipient", agent)],
+                ]
+            )
         self._start_aggregator(
             controller,
             spec,
@@ -560,6 +570,7 @@ class RunStack:
                 **({"phase1_mode": phase1_mode} if phase1_mode else {}),
                 "phase1_labels": phase1_labels,
                 "receding_during_waits": receding_during_waits,
+                **(monitor or {}),
             },
         )
         self._await_leases(spec)
@@ -673,24 +684,26 @@ class RunStack:
         wait_until(lambda: self.hosts[host].exists(socket), f"agentd {node} socket")
 
     def _effect_adapters(self, node: str) -> str:
-        """Write the node's gateway adapter file (no secret in it); its path."""
+        """Write the node's gateway adapter file (no secret in it); its path.
+
+        Every node has the run's ledger; Home Assistant only where the sink
+        names the node (every node without ``nodes``)."""
         host = self.config.node_hosts[node]
         state = self.node_state(node)
         sink = self.config.effect_sink
-        if sink["kind"] == "homeassistant":
+        adapters: dict[str, Any] = {
+            "http": {"ledger_url": f"{self.services_url}/sink/{self.sink_token}"}
+        }
+        if sink["kind"] == "homeassistant" and (
+            sink.get("nodes") is None or node in sink["nodes"]
+        ):
             token_file = sink["token_file"]
             if token_file is None:  # dry run: the services stand in for HA
                 token_file = f"{state}/agentd/credentials/homeassistant.token"
                 self.hosts[host].write(token_file, self.ha_token.encode())
-            adapters = {
-                "homeassistant": {
-                    "base_url": f"{self.services_url}/ha/{self.sink_token}",
-                    "token_file": token_file,
-                }
-            }
-        else:
-            adapters = {
-                "http": {"ledger_url": f"{self.services_url}/sink/{self.sink_token}"}
+            adapters["homeassistant"] = {
+                "base_url": f"{self.services_url}/ha/{self.sink_token}",
+                "token_file": token_file,
             }
         path = f"{state}/effect-adapters.json"
         # The URL carries the sink token: the file is mode 600 like the others.
@@ -984,25 +997,30 @@ class RunStack:
             headers={"x-edgecitadel-admin-token": self.admin_token},
         )
 
-    def submit(self, node: str, recipient: str, body: Mapping[str, Any]) -> str:
+    def schedule(self, node: str, entries: list[dict[str, Any]]) -> None:
+        """Submit the node's external requests at their times (``nodectl
+        schedule``); each is marked ``submitted`` or ``refused`` in the run's
+        marks."""
         host = self.config.node_hosts[node]
-        path = f"{self.node_state(node)}/submit-{secrets.token_hex(4)}.json"
-        self.hosts[host].write(path, json.dumps(dict(body)).encode())
-        out = self.hosts[host].run(
+        path = f"{self.node_state(node)}/requests.json"
+        self.hosts[host].write(path, json.dumps(entries).encode())
+        self._start(
+            host,
+            f"requests-{node}",
             [
                 self._python(host),
                 "-m",
                 "harness.nodectl",
-                "submit",
+                "schedule",
                 "--state",
                 self.node_state(node),
-                "--recipient",
-                recipient,
-                "--body",
+                "--entries",
                 path,
-            ]
+                "--services",
+                self.services_url,
+            ],
+            env={"HARNESS_SERVICES_TOKEN": self.services_token},
         )
-        return json.loads(out)["task_id"]
 
     def attempt_of(self, task_id: str) -> str | None:
         """The execution attempt Core recorded for a task (None until ingested)."""

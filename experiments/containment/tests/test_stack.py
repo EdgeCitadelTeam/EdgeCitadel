@@ -150,6 +150,7 @@ def test_effect_sinks_are_validated_when_the_stack_is_loaded(monkeypatch):
         ),
         ({"kind": "homeassistant", "targets": {"*": "${NOT_SET_ANYWHERE}"}}, "unset"),
         ({"kind": "ledger", "upstream": "http://ha"}, "kind"),
+        ({"kind": "homeassistant", "targets": {"*": "x"}, "nodes": "core"}, "nodes"),
     ):
         with pytest.raises(stack.StackError, match=match):
             stack._effect_sink(bad)
@@ -203,3 +204,25 @@ def test_nodes_perform_effects_on_the_runs_sink(tmp_path):
         "adapter": "homeassistant",
         "targets": targets,
     }
+    # Every node keeps the ledger for the classes Home Assistant does not map.
+    assert adapters["http"] == {
+        "ledger_url": f"http://127.0.0.1:9/sink/{physical.sink_token}"
+    }
+
+
+def test_home_assistant_is_configured_only_on_the_nodes_it_names(tmp_path):
+    """The svc physical case: only site K's node reaches the desk lamp."""
+    run = local_stack(
+        tmp_path,
+        effect_sink=stack._effect_sink(
+            {
+                "kind": "homeassistant",
+                "targets": {"dev_lamp": "light.toggle/light.desk_lamp"},
+                "nodes": ["core"],
+            }
+        ),
+    )
+    run.config.node_hosts["edge-1"] = "ctl"
+    core = json.loads(stack.Path(run._effect_adapters("core")).read_text())
+    edge = json.loads(stack.Path(run._effect_adapters("edge-1")).read_text())
+    assert set(core) == {"http", "homeassistant"} and set(edge) == {"http"}

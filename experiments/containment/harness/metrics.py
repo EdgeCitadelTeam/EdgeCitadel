@@ -321,6 +321,31 @@ def decision_metrics(
     return row
 
 
+def admission_metrics(decisions: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Per-event admission of labelled units (the monitor's ``admission``
+    records): events admitted and kept, and the latency from the hold to the
+    admission at the node (node clock)."""
+    admissions = [d for d in decisions if d.get("type") == "admission"]
+    latency = sorted(
+        float(d["latency_ms"])
+        for d in admissions
+        if d.get("decision") == "admit" and d.get("latency_ms") is not None
+    )
+
+    def quantile(q: float) -> float:
+        return latency[min(len(latency) - 1, int(q * len(latency)))] if latency else NAN
+
+    return {
+        "n_events_admitted": sum(1 for d in admissions if d.get("decision") == "admit"),
+        "n_events_kept": len(
+            {d["event_id"] for d in admissions if d.get("decision") == "keep"}
+            - {d["event_id"] for d in admissions if d.get("decision") == "admit"}
+        ),
+        "admission_latency_ms_median": quantile(0.5),
+        "admission_latency_ms_p95": quantile(0.95),
+    }
+
+
 def _action_label(action: Mapping[str, Any]) -> str:
     return f"{action['op']}:{action['kind']}:{action['object_id']}@{action['node_id']}"
 
@@ -453,6 +478,7 @@ def evaluate(
         "rpc_retries": sum(1 for e in records.events if e["kind"] == "rpc_retry"),
     }
     row.update(decision)
+    row.update(admission_metrics(decisions or []))
     row.pop("t_established_ms", None)
     origin = meta.get("origin_attempt")
     roots = json.loads(row.get("roots") or "[]")
