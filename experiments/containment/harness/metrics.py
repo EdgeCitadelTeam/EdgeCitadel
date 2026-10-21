@@ -372,7 +372,10 @@ def _worker_clock(
     def at(e: Mapping[str, Any]) -> float:
         if e.get("t_local_ms") is None:
             return float(e["t_ms"])
-        return float(e["t_local_ms"]) + offset[str(e.get("agent"))]
+        # A dispatch counts from when it was sent (``sent_local_ms``), not
+        # from when its call returned.
+        local = e.get("sent_local_ms", e["t_local_ms"])
+        return float(local) + offset[str(e.get("agent"))]
 
     return at
 
@@ -407,12 +410,11 @@ def _dispatches(
 
 def handoff_latencies(records: RunRecords) -> list[float]:
     """The run's per-hop hand-off latencies in ms: for each message through
-    agentd, from its dispatch to the start of the invocation it delivered (a
-    created task's pending creation, a created task, a pushed item's
-    delivery).
-
-    A dispatch is reported once its RPC returned, so a hop can come out a few
-    ms below 0. Spawned and rogue messages (faults) are not hand-offs.
+    the runtime, from when its dispatch was sent to the start of the
+    invocation it delivered (a created task's pending creation, a created
+    task, a pushed item's delivery). A dispatch recorded before workers sent
+    ``sent_local_ms`` counts from its report, once its call returned.
+    Spawned and rogue messages (faults) are not hand-offs.
     """
     first = _handoff_index(records)
     invocation = {

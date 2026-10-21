@@ -416,7 +416,8 @@ def test_handoffs_leave_out_data_waits_and_report_delays():
     of a pushed item, timed on each worker's clock: a0's clock is 1 s behind
     the services', a1's 5 s ahead, and a0's dispatch reaches the services
     400 ms late. The task's hand-off is its two hops, without the creation's
-    wait for its data."""
+    wait for its data. The pushed item's send returned only after its
+    delivery started (as A2A's blocking send does): it counts from its send."""
     skew = {"a0": -1000, "a1": 5000, "a2": 0}
 
     def ev(kind, agent, task, t, late=0, **data):
@@ -446,8 +447,18 @@ def test_handoffs_leave_out_data_waits_and_report_delays():
         # the creation waits for T1's pushed inputs until 200
         ev("dispatch", "a1", "create:T1", 200, purpose="start", item="h1", target="T1"),
         ev("start", "a1", "T1", 230),
-        ev("dispatch", "a0", "T0", 300, purpose="deliver", item="X", target="T2"),
         ev("start", "a2", "deliver:X->T2", 310),
+        # sent at 300, its blocking call returned after the delivery started
+        ev(
+            "dispatch",
+            "a0",
+            "T0",
+            335,
+            purpose="deliver",
+            item="X",
+            target="T2",
+            sent_local_ms=300 + skew["a0"],
+        ),
         # a refused dispatch is no hand-off
         ev(
             "dispatch",

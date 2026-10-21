@@ -707,6 +707,10 @@ class DetWorker:
         }
         if p.get("lease"):
             params["lease"] = p["lease"]
+        # When the hand-off began: a runtime whose send returns only once the
+        # recipient finished (A2A's blocking message/send) reports the dispatch
+        # after the child started, so hand-offs are timed from here.
+        sent = now_ms()
         reply = await self._call(context, "trace.dispatch", **params)
         code = None if reply.get("status") == "ok" else str(reply.get("code"))
         op.state = "done" if code is None else "denied"
@@ -719,6 +723,7 @@ class DetWorker:
             recipient=p["recipient"],
             child=child,
             code=code,
+            sent_local_ms=sent,
         )
 
     async def _await_ready(self, task: str) -> None:
