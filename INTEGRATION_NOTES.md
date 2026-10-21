@@ -662,3 +662,261 @@ Scores of the dry run: Firebreak clean and established in 13 of 13 runs, the
 three cut strategies and Trace & stop/quarantine clean in every run, Reject
 source clean in 2 of 9 under the deployed profile (its rule alone) and 2 of 2
 under the shared one; `none` leaked in 12 of 13.
+
+## M6 (`m6/service`, from `m5/integration` at `e445457`)
+
+### Defaults: the adaptive phase 1 for the deployed cut strategies
+
+`phase1_mode` is unset by default (`MonitorConfig.phase1_mode_for`): the
+profile decides (`PROFILE_PHASE1_MODES`). Under `deployed` the three cut
+strategies (Greedy cut, Cut without deadlines, Firebreak) run the adaptive
+phase 1 (V3) with the theory's conditions; the rule-based baselines apply
+their rule directly as before. Under `shared` (the ablation in which
+strategies differ only in the phase-2 rule) every strategy keeps the frontier
+freeze, so they still share one phase 1. `freeze` and `freeze_plus_cut` stay
+settable as ablations. The (J') reconciliation is used only inside an
+adaptive decision. Harness: `lab-smoke` (169 runs) and `lab-pilot` (507) run
+the deployed profile with the default and gain an ablation part (C2,
+Firebreak, `freeze` and `freeze_plus_cut`); run ids carry a mode suffix only
+for a non-default mode; `run.json` records the mode each run used.
+
+### Per-event admission for labelled units ((AI) with the guarded release (R))
+
+Before M6 an admission label did not admit anything event by event. Under
+`hold:egress` agentd denied each new dispatch and each effect outright
+(`egress_held`), refused the unit's result (its terminal transition) until the
+label was released, and withheld its outbox messages until then; under the
+`revoke:egress` that taint-aware admission placed, dispatches and effects were
+denied for good and results flowed. A labelled unit's egress was therefore
+blocked until the guarded release, whatever the event.
+
+Now (schema 34):
+
+- agentd holds each new event of a unit under an egress label, once the
+  event passes every other gate: an effect (`effect.execute` replies
+  `state: held`; the label is checked right after the task hold, so a
+  labelled effect is held whatever else would deny it, and it is checked
+  again without the label once admitted), a dispatch (the child task is
+  created but its request is not published and a local recipient cannot
+  claim it; the label is checked last) and a result (the terminal transition
+  is refused once and held; the managed runtime retries it). Each held event
+  gets its own hold (`kind: event`, object the held event's id, owned at the
+  label's owner and version), a `held_events` row and a `containment/held`
+  journal event in the same transaction, so the event enters G already
+  removed. Releasing the event hold admits that event alone; agentd then
+  publishes the dispatch, lets the result through, or performs the effect
+  after its other checks.
+- The monitor (`admission.py`, `ContainmentMonitor.admit_held`, every step
+  while enforcing) decides each held event not yet decided under the current
+  policy version: an effect of an unprotected class is admitted; one of a
+  protected class is kept while its invocation is on the source side of the
+  actions in force; a dispatch or a result (head: the new task, or the live
+  parent that would consume it) is admitted only after every unit the head
+  reaches past the actions in force carries a label, confirmed and fenced
+  (a unit that cannot carry one keeps the event held), and the head reaches
+  no avoidable or protected sink. An event whose invocation is not on the
+  source side is admitted. A kept event is decided again when the policy
+  version changes. Each decision is an `admission` record in the decision log
+  (decision, reason, blocking sinks, labels pushed for it, node-clock hold
+  time, decision time, release sent and applied, latency); the harness
+  reports `n_events_admitted`, `n_events_kept` and the admission latency
+  (median, p95).
+- Taint-aware admission now places labels (`hold:egress`) instead of
+  `revoke:egress`, so a tainted unit keeps serving unprotected work; the
+  adaptive phase-1 labels no longer pause pending effects (their effects are
+  held per event).
+- The projection removes a pending scheduled effect at its commit when its
+  class is revoked for the agent, its credential is revoked or its issuer is
+  labelled (commit gate), so such an effect no longer forces the freeze.
+- The guarded release also releases phase-1 holds that never confirmed
+  (`hold_not_found` counts as released), which leaked worker slots.
+- Cost: `future_requests` (expected future requests per agent pattern) times
+  `future_request_value` is added to revoking that agent's credential or
+  admission; pausing one of its invocations or revoking its egress costs one
+  request; labels and grant revocations cost none.
+
+The managed runtime offers a labelled result again every watch interval; a
+labelled task that a frontier pause caught after its handler finished now
+offers its result again once the pause ends (it waited for the label too,
+which stays in force, and kept its worker slot: the first svc dry run of
+Greedy cut stalled the assistant with six such slots;
+`test_a_labelled_result_paused_at_commit_is_admitted_after_the_pause`).
+Limitation: held events are decided in the monitor's step, so they wait while
+a decision's two-phase protocol runs (its waits for confirmations and
+ingest); with slow control rounds this adds to their admission latency.
+
+Tests: `test_a_labelled_units_reply_is_admitted_and_its_device_command_stays_held`
+(real agentd: the reply is admitted after one round, the device command whose
+class the cut blocks stays held),
+`test_a_labelled_dispatch_is_admitted_once_its_new_task_is_labelled`,
+`test_a_released_decision_also_releases_its_unconfirmed_holds`,
+`test_a_pending_effect_whose_class_is_revoked_is_refused_at_its_commit`,
+`test_stopping_a_service_costs_its_requests_and_a_label_does_not`; agentd:
+`test_an_egress_label_holds_each_new_event_until_it_is_admitted`,
+`test_a_held_local_dispatch_cannot_be_claimed_until_admitted`,
+`test_a_labelled_effect_is_held_then_performed_once_admitted`,
+`test_an_admitted_effect_is_checked_again_without_its_label` and
+`test_a_label_placed_before_a_scheduled_effect_is_due_holds_it`. The safety
+tests (every phase-1 mode, convergence and release checks) still pass.
+
+### Service-continuity scenario `svc` (pre-registered)
+
+`harness/svc.py` generates `workloads/svc.json` deterministically from
+`PARAMS` (seed 20261021): an assistant (site K, one det-worker whose memory is
+shared across invocations, `shared_memory_agents`) serves Poisson user
+requests (0.5/s in [5, 85] s: 54 requests, each 1 s of compute and a reply;
+30 % also command the desk lamp); an automation agent (site A) commands two
+other devices every 5 s; a planner (site P, the root) hands the assistant a
+lamp task at 10, 30, 50 and 70 s and the device schedule at 20 s. Fault: the
+schedule artifact is wrong (`sched@v1`); the assistant reads it, and every
+later invocation of it is tainted. Alerts: `early` 0.3 s after the schedule is
+produced, `late` 15 s after the assistant read it. Protected sinks: device
+commands (`device.command`); replies (`network.http`) are unprotected and go to
+the ledger as class `reply`. Requests are external: each node's `nodectl
+schedule` submits its agent's root tasks at their release times and marks
+each submission. The monitor runs with `boundary: defer` (a future request is
+handled when it arrives, not as a horizon sink) and `future_requests` = the
+request rate times the time left after the alert's nominal time, at
+`request_value` 1.0 per request (the same for every strategy).
+
+Pre-registration record: `PARAMS`, the metrics, the cost (`request_value`
+1.0) and the grids are as committed in `ee76f03`. One functional dry run
+(Firebreak, late alert) came before that commit; it exposed mechanism defects
+(unconfirmed phase-1 pauses leaking worker slots, tie-chosen pauses of
+tainted requests, pending effects already blocked by a revoked class forcing
+the freeze) that were fixed in the monitor, and the svc monitor setting
+`boundary: defer` was chosen then: under the default horizon the solver
+revoked the assistant's self-dispatch grant, which the planner's hand-offs
+need. After the commit, the svc-smoke dry runs exposed two runtime defects
+(a paused labelled result never offered again; the ordinary store's write
+deadlock, below), both fixed in agentd. No scenario parameter, metric or
+cost setting was changed after any result.
+
+Metrics from the alert to the end of the run: `svc_tainted_device_commands`,
+`svc_answered` (of `svc_requests`), `svc_automation_committed` (of
+`svc_automation_due`), `svc_tainted_replies`, per-request latency and
+`svc_added_latency_s` against the uncontained run of the same cell.
+Grids: `svc-smoke` (every strategy and `none` once per alert, plus the
+reference: 21 runs) and `svc-pilot` (5 repetitions: 105). The physical
+configuration `configs/lab-svc-homeassistant.json` sends only the lamp
+(`dev_lamp`) through Home Assistant and only on site K's node (`core`); the
+automation's commands and the replies go to the ledger on every node.
+
+Local dry run of `svc-smoke` (`configs/dryrun-nats.json`, one 2-CPU machine
+shared with two simulator processes, at this branch's final revision): 21
+runs in 42.7 min, **114–129 s per run** (stack start, the 85 s workload at
+`time_scale` 1, quiet period, collection), no testbed retry, no slot lost,
+the scorer checks (`commits_unlabelled`, `commits_unresolved`,
+`commits_label_mismatch`) all 0. Per run, from the alert on (requests
+answered of those submitted after the alert; added latency per answered
+request against `none`):
+
+| Strategy | Early: tainted cmds / answered / automation / added s | Late: tainted cmds / answered / automation / added s |
+|---|---|---|
+| none | 19 / 45 of 45 / 13 of 13 / 0 | 13 / 33 of 33 / 10 of 10 / 0 |
+| Reject source | 0 / 45 / 13 / -0.1 (taint never reaches the assistant) | 13 / 33 / 10 / 0.0 |
+| Sink guard | 0 / 45 / **0 of 13** / -0.5 | 0 / 33 / **0 of 9** / -0.2 |
+| Stop team, Stop everything downstream, Trace & stop, Trace & quarantine | 0 / **0** / 13 / – | 0 / **0** / 10 / – |
+| Greedy cut | 0 / 45 / 13 / 2.6 | 0 / 33 / 10 / 2.5 |
+| Cut without deadlines | 0 / 45 / 13 / 3.0 | 0 / 32 / 10 / 2.5 |
+| Firebreak | 0 / 44 / 13 / 3.3 | 0 / 33 / 10 / 2.4 |
+
+The cut strategies revoke the assistant's device class and label each of
+its tainted invocations; its replies (tainted, unprotected) are admitted one
+by one (Firebreak: 78 events admitted and 12 device commands kept early, 60
+and 9 late; admission latency p50 1.8–2.3 s, p95 5.4–6.6 s on this loaded
+machine), which is the added latency. One Firebreak late run with
+`configs/dryrun-svc-homeassistant.json` sent the lamp's 12 commands through
+the Home Assistant front on `core` and everything else to the ledger (0
+tainted commands, 32 of 33 answered). The first two local svc-smoke runs,
+before the runtime fixes below, lost slots in most runs and stalled the
+assistant in Greedy cut and Cut without deadlines; they are not results.
+`svc-pilot` (105 runs) would take about 3.6 h locally at this rate.
+
+### Fixes from the G1 lab smoke
+
+- **Scorer: leaks are classified by lineage.** The sink copied a committed
+  effect's fault labels from the worker's earlier `attempted` record, so a
+  commit without one carried no labels and could never count as a leak (its
+  ledger entry also lacked the class the scorer read). Every committed sink
+  entry is now classified by `groundtruth.commit_lineage`: the runtime task
+  the gateway committed for (the gateway's post to the sink, or Core's
+  gateway record of the same commit in `gateway_effects.jsonl`), mapped to
+  its planned task by the run's worker events and request marks, is tainted
+  when the fault reaches it (the fault's seeds, every task the worker events
+  show computing on fault-labelled content or polluted, and their declared
+  dependents; spawned invocations always). An issuer that cannot be resolved
+  counts as tainted. Runs report `commits_unlabelled` (no `attempted`
+  record), `commits_unresolved` and `commits_label_mismatch`, each 0 in a
+  sound run; the svc metrics use the same classification. Rescoring the
+  first local svc-smoke gave the same leak counts with all three at 0.
+  Tests: `test_a_tainted_commit_without_an_attempted_record_is_a_violation`,
+  `test_the_commit_lineage_joins_cores_gateway_record`.
+- **Bind addresses.** In lab mode the run's NATS and services listen on the
+  controller's tailnet address only (host field `listen`,
+  `HARNESS_CONTROLLER_LISTEN` in the lab configs; the URLs handed to nodes
+  use it too), NATS monitoring on the loopback, and Core's API, used by the
+  runner alone, on the loopback when the runner runs on the controller (a
+  runner elsewhere reaches it at the controller's address). Dry runs bind
+  everything to the loopback.
+- **A runner on jim-eq without SSH.** A host listed with `helper` is driven
+  by `harness.labhelper` running on it, over request/reply on the lab's
+  token-protected experiment broker (`configs/lab-helper.json`: Endurance and
+  Cluster through helpers, control over the run's NATS). The helper's fixed
+  operations: start a harness process (`python -m harness.nodectl` or
+  `det_worker`) as a transient `firebreak-exp-h-<run>-<process>` unit (user
+  or system units; plain process groups for a dry run) with its environment
+  in a mode-600 file of the run directory, check and stop those units, run a
+  short `nodectl` command (`configure`, `install`, `operator`, `socket`), and
+  write, read (in chunks), list and remove files and run directories, all
+  under the host's work root; other programs and paths are refused. SSH mode
+  is unchanged; netem profiles are not installed through a helper. The
+  existing `deploy/fbx_lab` helper is not changed: `harness.labhelper` is the
+  harness's own per-host helper with the same pattern and can run beside it
+  on the same broker, as a unit of its own (for example
+  `firebreak-exp-harness-helper`).
+- **SQLite write contention on agentd (slot losses).** Instrumenting the
+  store lock and every SQLite call of the experiment nodes on a local
+  rand-n7-s1 run (lab-smoke settings) found the losses' cause: the harness's
+  nodes (and `e2e/containment`'s) run an ordinary store, which has no
+  completion workspace, and the workspace's lock is what keeps agentd's own
+  connection and its telemetry (trace export) connection from writing at the
+  same time on a provisioned store. Without it, a session renewal or close
+  (writes the task member, after reading the trace member) and the
+  exporter's broker-ack checkpoint (writes the trace member, after reading
+  the task member) each waited at commit for the lock the other held; both
+  failed with "database is locked" after the 5 s busy timeout, with agentd's
+  store lock held the whole time, so every RPC queued behind them and worker
+  slots timed out. The journal mode (rollback, required for the attached
+  pair's atomic commits) and busy timeout (5 s) were already as the store
+  contract wants them. Fix (`storage_workspace.ordinary_writer`): every
+  connection a process opens to an ordinary store takes one per-file writer
+  lock where the workspace lock is taken, so their write transactions are
+  serialized as on a provisioned store; persistence semantics and the store
+  and control lock order are unchanged. Measured on 6 local rand-n7-s1 runs
+  (none, stop_team, firebreak; late alert; 2 repetitions; no retries) on the
+  shared 2-CPU machine: before, 102 slot restarts (17 per run, every run
+  lost slots), 26 locked commits, RPC waits on the store lock up to 6.5 s,
+  and only 1 of 6 runs reached its alert; after, 0 slot restarts, 0 locked
+  commits, the longest store-lock wait 1.9 s, all 6 runs reached their
+  alert. Test: `test_writes_of_two_connections_to_one_store_do_not_deadlock`
+  (fails with both "database is locked" without the lock). Batching the
+  exporter's checkpoints was not needed after this.
+- **Run end and teardown.** The services track effects the gateway
+  scheduled (or held) until the sink commits them or a worker record refuses
+  them (`GET /effects/pending`, from the due time the worker now records); a
+  run ends only once each is resolved or past its due time plus 5 s. The
+  teardown stops workers and nodes first, then Core, then NATS and the
+  services, so Core records commits up to the nodes' stop; decisions the
+  monitor makes after the run's end (`t_end_ms`; lease alerts for the
+  sessions the teardown interrupts) are not scored.
+- **Lab runner.** From the G1 jim-eq launcher: SSH hosts with `"units":
+  "user"` (or `"system"`) run each process as a transient
+  `firebreak-exp-h-<run>-<process>` unit; before every attempt the runner
+  stops harness units an interrupted run left on such hosts (never the
+  runner's), removes the run's stale directories and waits for the stack's
+  fixed ports (busy after 30 s: a testbed failure; it kills nothing);
+  `python -m harness unit --log <file> -- run ...` starts the runner as the
+  transient unit `firebreak-exp-h-runner`; copies off a Mac use
+  `COPYFILE_DISABLE=1 tar`. With the approved SSH route from jim-eq the
+  helper mode above is optional.

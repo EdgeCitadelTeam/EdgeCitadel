@@ -1,7 +1,8 @@
 # Deployment runbook: containment milestone (m4/design) on the 3-node testbed
 
 This runbook upgrades the real testbed to the containment milestone: agentd
-schema 33 with the control channel and the effect gateway (which performs
+schema 34 (**M6**: events an egress label holds, admitted one by one) with the
+control channel and the effect gateway (which performs
 registered effects itself) on every node, and Core with trace projection v9 and
 the containment monitor (checked solver with HiGHS, ingest-then-release).
 A testbed already on `m3/integration` (schema 32) needs only the changes marked
@@ -25,7 +26,7 @@ anything, and record what you find.
 
 | Component | Before (last recorded) | After | Compatibility |
 |---|---|---|---|
-| agentd SQLite | schema 29 (main `4d464fe`), 31 or 32 | **33** | migrated in place at first start; an older agentd refuses a newer database. **M4**: scheduled effects recorded by schema 32 (no adapter) are marked denied by the migration |
+| agentd SQLite | schema 29 (main `4d464fe`), 31, 32 or 33 | **34** | migrated in place at first start; an older agentd refuses a newer database. **M4**: scheduled effects recorded by schema 32 (no adapter) are marked denied by the migration. **M6**: `held_events` and the `event` hold kind |
 | Delegation envelopes | no `effect_scope`/`lease`/`authority_chain` | carried in `payload.execution_context` | a schema 32 node rejects delegations without an authority scope; mixed versions break cross-node delegation |
 | Control RPC | `containment.hold`/`containment.release` | `containment.control` (+ NATS `edgecitadel.control.v1.<node>`) | old RPCs removed. **M4**: confirmations carry `journal` (the monitor waits until it has ingested the node's events through it) |
 | Effects (**M4**) | `effect.authorize` + harness-performed, `effect.commit` for scheduled ones | `effect.execute`: agentd performs Home Assistant and HTTP-ledger effects through adapters in `EDGECITADEL_EFFECT_ADAPTERS`, re-checked at commit; `effect.authorize` stays for effects only the harness can perform (not fenced) | `effect.commit` removed; harnesses that perform registered effects themselves must switch to `effect.execute` |
@@ -180,7 +181,7 @@ Do the nodes one at a time and verify each before the next.
    only in memory and denies effects until the next renewal (at most 10 s). The
    value is configurable per node; keep it at least twice the renew interval and
    no longer than the command lifetime.
-3. Start agentd. It migrates the database to schema 33 on start. Check:
+3. Start agentd. It migrates the database to schema 34 on start. Check:
 
    ```bash
    edgecitadel doctor                              # service, database, transport, Leaf
@@ -307,16 +308,22 @@ referenced by path):
   them: `horizon: 1` with `boundary: "sink"`, `controller_lease_renew_ms:
   10000`, and **M5** `profile: "deployed"`: the rule-based baselines apply their
   rule directly, the three cut strategies run the two-phase protocol with the
-  best-effort guard and taint-aware admission (which Theorem 5 needs). Set them
+  best-effort guard and taint-aware admission (which Theorem 5 needs; **M6**:
+  its labels are egress holds whose events the monitor admits one by one) and,
+  **M6**, the adaptive phase 1. Set them
   explicitly only to deviate (`controller_lease_renew_ms: 0` stops renewing,
   which makes lease-enforcing nodes deny all effects; `profile: "shared"` gives
   every strategy every mechanism, an ablation; `mechanisms: {"<strategy>" |
   "*": {"phase1_freeze" | "best_effort_guard" | "taint_aware_admission":
   bool}}` overrides one strategy's mechanisms).
-- Other settings (defaults shown; set only to deviate): **M5**
-  `phase1_mode: "freeze"` (options under evaluation: `freeze_plus_cut`,
-  `adaptive`; with `phase1_margin_rounds: 2`), `phase1_labels: "frontier"`
-  (or `forward_closure`), `receding_during_waits: false`,
+- Other settings (defaults shown; set only to deviate): **M6**
+  `phase1_mode` unset (the profile's: `adaptive` for the deployed cut
+  strategies, `freeze` in the shared ablation; `freeze` and `freeze_plus_cut`
+  are ablations; with `phase1_margin_rounds: 2`), **M5**
+  `phase1_labels: "frontier"` (or `forward_closure`),
+  `receding_during_waits: false`, **M6** `future_requests: {}` and
+  `future_request_value: 1.0` (a service agent's expected future requests,
+  which revoking its credential or admission forfeits),
   **M4** `ingest_timeout_ms: 5000` (how long a
   release waits for the confirmed journal positions to be ingested; on timeout
   the decision ends `ingest_timeout` and keeps its phase-1 holds),
@@ -396,7 +403,7 @@ new owner (step 6) before the next run.
   they are the experiment record.
 - **Everything:** stop Managed Agents and agentd on every node, restore each
   node's state backup from step 2 as a unit, reinstall the previous runtime, and
-  start the nodes one at a time. A schema 33 database cannot be opened by the
+  start the nodes one at a time. A schema 34 database cannot be opened by the
   previous agentd ("newer than supported"), so restoring the backup is required,
   and tasks and traces recorded after the upgrade are lost with it: export what
   you need first. Reinstall the previous Pi packages with
@@ -408,7 +415,7 @@ new owner (step 6) before the next run.
 ## 10. Adding Raspberry Pis later
 
 Enroll each Pi as an Edge (`edgecitadel install --join ... --messaging-mode
-nats_leaf` keeps local messaging when the Core link drops), install the schema 33
+nats_leaf` keeps local messaging when the Core link drops), install the schema 34
 runtime, set `EDGECITADEL_TRACE_SYNC=1` and `EDGECITADEL_CONTROLLER_LEASE_MS`,
 copy the owner key (step 6), add one of its agents to `agent_nodes`, grant its
 connectors (step 5), extend the root's grant to its agents, and add its node to
@@ -422,7 +429,16 @@ device that already received a command.
 - agentd admin writes such as `connector.register` can fail once with "agentd
   operation failed" (SQLite "database is locked") while the telemetry thread
   writes right after start: they read before writing in a deferred transaction.
-  The write rolled back; repeat the command.
+  The write rolled back; repeat the command. **M6**: on an ordinary store (the
+  experiment nodes of the harness and of `e2e/containment`, which have no
+  provisioned completion workspace) the cause was two write transactions of
+  agentd's own and its telemetry connection each waiting at commit for the
+  other (a session renewal writing the task member and reading the trace
+  member, the exporter's broker-ack checkpoint the reverse), both failing
+  after the 5 s busy timeout with agentd's store lock held. Such stores now
+  serialize their connections' writes with one lock per file, as the
+  workspace lock does on a provisioned store (journal mode and lock order
+  unchanged); deploy schema 34 agentd to the lab nodes to get it.
 
 - No operator command rebuilds a v8 trace projection (step 3).
 - No incident close or release API in the monitor (step 8).
