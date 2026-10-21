@@ -10,11 +10,15 @@ P2. Solve on G_C with the phase-1 holds counted as in force (feasible without
 P3. Reconcile again; if the phase-2 set still separates G_C, release the phase-1
     holds that are not in it. Otherwise solve again with the phase-1 holds kept.
 
-Releases are only ever issued after all phase-2 confirmations, so at every
-instant after P1 converges the actions in force contain a valid cut (Theorem
-7.3). A phase-2 action that is not confirmed in force, whether rejected or
-unconfirmed, keeps every phase-1 hold. Each decision is stamped with a fresh,
-monotone policy version for the owner (agentd's fence).
+Confirm-then-release is also ingest-then-release: an action counts as *fenced*
+only when the monitor has applied its nodes' events up to the journal position
+each confirmation reports (``fence``), and reconciliation, the cut checks and
+every release wait for that. Releases are only ever issued after all phase-2
+actions are confirmed and fenced, so at every instant after P1 converges the
+actions in force contain a valid cut (Theorem 7.3). A phase-2 action that is
+not confirmed in force, whether rejected or unconfirmed, or not fenced in time,
+keeps every phase-1 hold. Each decision is stamped with a fresh, monotone
+policy version for the owner (agentd's fence).
 
 An action is sent to each of its sites (one node, or every node that may hold
 affected work for node-local revocations) and is in force only when every site
@@ -57,9 +61,12 @@ class ActionRecord:
 
     ``sites`` maps a node to its outcome: ``state`` (in_force, failed or
     unconfirmed), ``command_id``, ``t_sent``, ``t_applied`` (that node's clock),
-    ``t_confirmed`` or ``t_returned`` (monitor clock), the rejection ``error`` and
-    the node's ``enforcement`` report. The aggregate is in force only when every
-    site confirmed; ``t_applied`` is then the latest site's application time.
+    ``t_confirmed`` or ``t_returned`` (monitor clock), the rejection ``error``,
+    the node's ``enforcement`` report, its ``journal`` position and
+    ``t_ingested`` (monitor clock, once the monitor applied that node's events
+    up to it). The aggregate is in force only when every site confirmed;
+    ``t_applied`` is then the latest site's application time, and ``t_fenced``
+    the time the last site was ingested.
     """
 
     action: Action
@@ -71,6 +78,7 @@ class ActionRecord:
     t_sent: int | None = None
     t_applied: int | None = None  # node clock, as reported
     t_confirmed: int | None = None
+    t_fenced: int | None = None  # monitor clock: every site's journal ingested
     t_release_sent: int | None = None
     t_release_applied: int | None = None  # node clock
     t_released: int | None = None
@@ -104,6 +112,7 @@ class ActionRecord:
             "t_sent": self.t_sent,
             "t_applied": self.t_applied,
             "t_confirmed": self.t_confirmed,
+            "t_fenced": self.t_fenced,
             "t_release_sent": self.t_release_sent,
             "t_release_applied": self.t_release_applied,
             "t_released": self.t_released,
@@ -179,6 +188,8 @@ class EnforcementDriver:
                     t_applied=confirmation.applied_at_ms,
                     t_confirmed=self.clock(),
                     enforcement=dict(confirmation.enforcement),
+                    journal=confirmation.journal,
+                    t_ingested=None,
                 )
             outcome.setdefault("t_returned", self.clock())
             return record, site, outcome
@@ -261,9 +272,11 @@ class TwoPhaseProtocol:
     """Orchestrates P1-P3 over callbacks owned by the monitor service.
 
     ``project(phase, in_force)`` builds G_C (phase 1: holds only, no solve budget);
-    ``reconcile()`` ingests events that arrived while waiting; ``choose(cg)``
-    returns the phase-2 strategy result. ``in_force`` maps actions to their records
-    and is updated in place.
+    ``fence(records)`` ingests events until every confirmed record's nodes are
+    ingested up to their journal positions (reconciling taint from them) and
+    returns whether that happened in time; ``choose(cg)`` returns the phase-2
+    strategy result. ``in_force`` maps actions to their records and is updated
+    in place.
     """
 
     def __init__(self, driver: EnforcementDriver, *, max_rounds: int = 3):
@@ -276,7 +289,7 @@ class TwoPhaseProtocol:
         *,
         t_alert: int,
         project: Callable[[int, frozenset[Action]], ControlGraph],
-        reconcile: Callable[[], None],
+        fence: Callable[[list[ActionRecord]], bool],
         choose: Callable[[ControlGraph], StrategyResult],
         in_force: dict[Action, ActionRecord],
         two_phase: bool = True,
@@ -296,7 +309,7 @@ class TwoPhaseProtocol:
                 )
                 decision.phase1.extend(records)
                 in_force.update({r.action: r for r in records if r.state == "in_force"})
-                reconcile()
+                fence(records)
                 held, _ = cut_holds(project(1, frozenset(in_force)), in_force)
                 if held:
                     break
@@ -334,7 +347,14 @@ class TwoPhaseProtocol:
                 # Rejected or unconfirmed: keep every phase-1 hold.
                 decision.status = "phase2_unconfirmed"
                 return decision
-            reconcile()
+            confirmed = [
+                r for r in [*decision.phase1, *decision.phase2] if r.state == "in_force"
+            ]
+            if not fence(confirmed) and two_phase:
+                # Not every confirmed decision is in the log the monitor read:
+                # what crossed before it is unknown, so nothing is released.
+                decision.status = "ingest_timeout"
+                return decision
             held, _ = cut_holds(project(2, frozenset(in_force)), chosen)
             decision.cut_valid = held
             if not two_phase:

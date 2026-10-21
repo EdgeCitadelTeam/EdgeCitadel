@@ -1605,9 +1605,17 @@ fence without advancing state.
  "status":"applied","code":null,"received_at_ms":…,"applied_at_ms":…,
  "enforcement":{"gates":["result","dispatch","effect","publication"],
    "task":{"state":"running","claimed":true},
-   "outbound":{"held":1,"pending":0,"in_flight":["<message uuid>"],"published":0}}}
+   "outbound":{"held":1,"pending":0,"in_flight":["<message uuid>"],"published":0}},
+ "journal":{"source_epoch":"<uuid4>","source_seq":1834}}
 ```
 
+`journal` is the node's trace journal position once the decision took effect:
+its active source epoch and the sequence of the latest event journaled by then
+(`0` before the first, `null` for a rejection or a node with no journal yet). It
+is read under the control lock after the decision committed, so every event
+that passed one of the decision's gates before it took effect is at or below
+it. A controller that has ingested the node's events up to that position has
+seen everything the decision did not stop.
 
 `status` is `applied` or `rejected` with a stable `code` (the containment error
 codes above, `task_not_found`, `restore_hold`, `task_terminal`, `invalid_authority`,
@@ -3569,7 +3577,17 @@ type prior; the top candidate's prune level (version, invocation, session, agent
 subtree) defines the roots. The chosen strategy (default Firebreak: exact grouped
 min-cut; experiment baselines are selectable per alert) runs through the
 two-phase protocol: frontier holds first, then the optimal set, and phase-1 holds
-are released only after every phase-2 action is confirmed.
+are released only after every phase-2 action is confirmed and fenced.
+
+**Ingest-then-release.** An action is *fenced* once the monitor has applied its
+nodes' events up to the journal position each confirmation reports. The
+follower keeps, per node and source epoch, a contiguous watermark (from the
+first sequence it saw; events above a gap wait). Reconciliation after each
+phase, the cut checks and every release wait for the fence, polling Core for up
+to `ingest_timeout_ms` (default 5000). If a confirmed action is not fenced in
+time the decision ends `ingest_timeout` and keeps every phase-1 hold. Each
+action records `t_fenced` and each site its `journal` and `t_ingested`; status
+reports the watermarks under `ingest`.
 
 **Solver.** The offered vocabulary is vertex-local: every action removes edges
 of one invocation, one effect, one credential, one grant pair or one agent's

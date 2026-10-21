@@ -263,3 +263,22 @@ limit; per-action masks and in-force masks on random workloads.
   gateway posts it to the harness's actuator ledger, so the ledger is written
   by the destination, never by an agent.
 
+### 3. Confirmations carry the journal position
+
+- agentd: every confirmation has `journal: {source_epoch, source_seq}` (null for
+  rejections): the node's active source epoch and the latest journaled sequence,
+  read under the control lock after the decision committed. Events that passed
+  the decision's gates before it took effect are at or below it (they are
+  decided under the same lock and journaled in the same transaction).
+- Monitor: the follower records, per node and source epoch, a contiguous
+  watermark of applied sequences (`fence.SourceProgress`, table
+  `containment_sources`, in the batch transaction). `ContainmentMonitor.fence`
+  follows Core until every confirmed site's position is covered or
+  `ingest_timeout_ms` (default 5000) passes. The protocol calls it in place of
+  the former one-shot reconcile after phase 1 and before the P3 check; a
+  phase-2 fence timeout ends the decision `ingest_timeout` with every phase-1
+  hold kept. Records carry `t_fenced`, sites `journal` and `t_ingested`;
+  status shows the watermarks under `ingest`.
+- A gap that never closes (an event lost before Core collected it) leaves later
+  decisions on that node unfenced: their phase-1 holds stay (safe, reported).
+  The watermark starts at the first sequence seen per epoch.

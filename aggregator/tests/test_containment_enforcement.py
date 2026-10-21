@@ -500,7 +500,9 @@ def test_a_tainted_scheduled_effect_is_stopped_before_its_commit(tmp_path):
         assert in_force & {"hold:effect", "hold:task"}
         worker.store.effects.run_due("worker-node", now_ms=due)
         (denied,) = [
-            e for e in journal(worker) if e["kind"] == "effect" and e["phase"] == "denied"
+            e
+            for e in journal(worker)
+            if e["kind"] == "effect" and e["phase"] == "denied"
         ]
         assert denied["attributes"]["effect_id"] == effect_id
         assert denied["attributes"]["reason"] in {"effect_held", "execution_held"}
@@ -559,3 +561,80 @@ def test_the_monitor_keeps_the_fail_closed_controller_lease_alive(tmp_path):
     finally:
         worker.close()
 
+
+# ---------------------------------------------------------------------------
+# Ingest-then-release: confirmations carry journal positions
+# ---------------------------------------------------------------------------
+def journaled_after_alert(tmp_path, timeout_ms):
+    """Three tainted invocations on n0; n0 confirms every decision with a journal
+    position one event beyond what Core has ingested."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from containment_support import TraceBuilder
+
+    config = MonitorConfig(
+        grants={"a": frozenset({"w"})},
+        agent_nodes={"a": "n0", "w": "n1"},
+        session_isolated_agents=frozenset({"a"}),
+        min_emission_ms={"a": 1000},
+        ingest_timeout_ms=timeout_ms,
+    )
+    trace = TraceBuilder()
+    tasks = [trace.root("a", "n0", i) for i in range(3)]
+    roots = [inv(trace.start(task_id, 5)) for task_id in tasks]
+    late = trace._event(
+        "n0",
+        "task",
+        "queued",
+        6,
+        agent="operator",
+        task_id=str(uuid4()),
+        context=str(uuid4()),
+        attributes={"source_role": "sender"},
+    )
+    position = {"source_epoch": late["source_epoch"], "source_seq": late["source_seq"]}
+    control = FakeControlClient(journal=lambda node: position if node == "n0" else None)
+    harness = Harness(tmp_path, config, control)
+    harness.feed(trace.events[:-1])
+    return harness, control, roots, late
+
+
+def test_a_release_waits_until_the_confirmed_journal_is_ingested(tmp_path):
+    from containment_support import ingest
+
+    harness, control, roots, late = journaled_after_alert(tmp_path, 5000)
+    polls, ingested_at = [], []
+
+    def wait(seconds):
+        polls.append(seconds)
+        if len(polls) == 3:  # Core receives the event a little later
+            ingest(harness.core, late)
+            ingested_at.append(time.monotonic())
+
+    harness.monitor.wait = wait
+    decision = harness.monitor.respond(
+        operator_alert(roots[0], harness.now), roots=roots
+    )
+    assert decision.status == "contained" and len(polls) >= 3
+    releases = [t for t, op, _ in control.timeline if op == "release"]
+    assert releases and min(releases) >= ingested_at[0]
+    for record in decision.phase1 + decision.phase2:
+        assert record.t_fenced is not None
+        assert record.sites["n0"]["journal"]["source_seq"] == late["source_seq"]
+    status = harness.monitor.status()
+    assert (
+        status["ingest"]["n0"][late["source_epoch"]]["through_seq"]
+        == (late["source_seq"])
+    )
+    harness.close()
+
+
+def test_a_journal_never_ingested_keeps_every_phase_one_hold(tmp_path):
+    harness, control, roots, _ = journaled_after_alert(tmp_path, 100)
+    decision = harness.monitor.respond(
+        operator_alert(roots[0], harness.now), roots=roots
+    )
+    assert decision.status == "ingest_timeout" and decision.released == []
+    assert not [op for _, op, _ in control.timeline if op == "release"]
+    assert {r.action for r in decision.phase1} <= set(harness.monitor.in_force)
+    assert all(r.t_fenced is None for r in decision.phase2)
+    harness.close()

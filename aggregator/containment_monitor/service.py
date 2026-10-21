@@ -43,6 +43,7 @@ from .control import (
     UnconfiguredControlClient,
 )
 from .detectors import detect
+from .fence import SourceProgress
 from .enforcement import (
     ActionRecord,
     Decision,
@@ -61,6 +62,7 @@ MAX_CATCH_UP_BATCHES = 64
 POLL_SECONDS = 0.1
 SHUTDOWN_SECONDS = 10.0
 RECENT_DECISIONS = 20
+INGEST_POLL_SECONDS = 0.01
 
 
 class DecisionLog:
@@ -88,6 +90,7 @@ class ContainmentMonitor:
         decision_log: DecisionLog | None = None,
         clock: Callable[[], int] = now_ms,
         batch: int = BATCH,
+        wait: Callable[[float], None] = time.sleep,
     ):
         self.core = core
         self.db = monitor
@@ -96,12 +99,14 @@ class ContainmentMonitor:
         self.log = decision_log
         self.clock = clock
         self.batch = batch
+        self.wait = wait  # between ingest polls while fencing
         if control.owner != config.owner:
             # agentd fences and authenticates decisions per owner: one identity.
             raise ConfigError("control_owner_mismatch")
         ProvenanceGraph.initialize(monitor)
         self.graph = ProvenanceGraph(monitor, config)
         self.graph.reload()
+        self.sources = SourceProgress(monitor)
         self.driver = EnforcementDriver(
             control, self._next_version, sites=self._sites, clock=clock
         )
@@ -152,24 +157,31 @@ class ContainmentMonitor:
             return 0
         cursor = self.cursor()
         rows = self.core.execute(
-            "SELECT ingest_seq FROM trace_raw_events WHERE ingest_seq>? ORDER BY ingest_seq LIMIT ?",
+            "SELECT ingest_seq,node_id,source_epoch,source_seq FROM trace_raw_events "
+            "WHERE ingest_seq>? ORDER BY ingest_seq LIMIT ?",
             (cursor, self.batch),
         ).fetchall()
         if not rows:
             return 0
-        with self.graph.transaction():
-            for (seq,) in rows:
-                payload = read_payload(self.core, seq)
-                event = payload["event"] if payload else None
-                if event is None:
-                    continue  # expired payload: identity only, nothing to join
-                self.graph.apply(event, seq)
-                for alert in detect(event, self.graph):
-                    self._store_alert(alert)
-            self.db.execute(
-                "UPDATE containment_state SET ingest_cursor=?,collector_epoch=? WHERE singleton=1",
-                (rows[-1][0], epoch),
-            )
+        try:
+            with self.graph.transaction():
+                for seq, node_id, source_epoch, source_seq in rows:
+                    self.sources.observe(node_id, source_epoch, source_seq)
+                    payload = read_payload(self.core, seq)
+                    event = payload["event"] if payload else None
+                    if event is None:
+                        continue  # expired payload: identity only, nothing to join
+                    self.graph.apply(event, seq)
+                    for alert in detect(event, self.graph):
+                        self._store_alert(alert)
+                self.sources.flush()
+                self.db.execute(
+                    "UPDATE containment_state SET ingest_cursor=?,collector_epoch=? WHERE singleton=1",
+                    (rows[-1][0], epoch),
+                )
+        except BaseException:
+            self.sources.reload()
+            raise
         return len(rows)
 
     def catch_up(self) -> None:
@@ -241,6 +253,36 @@ class ContainmentMonitor:
         if ranking:
             return ranking[0].roots, ranking[0].prune_level
         return rootcause.subject_nodes(self.graph, alert.subject), "subject"
+
+    def fence(self, records: list[ActionRecord]) -> bool:
+        """Follow Core until every confirmed record's nodes are ingested up to
+        the journal positions they confirmed (taint is reconciled on the way).
+
+        Marks each site's ``t_ingested`` and each record's ``t_fenced``; returns
+        False when ``ingest_timeout_ms`` passed first.
+        """
+        deadline = time.monotonic() + self.config.ingest_timeout_ms / 1000
+        while True:
+            self.catch_up()
+            waiting = False
+            for record in records:
+                if record.state != "in_force" or record.t_fenced is not None:
+                    continue
+                for site, outcome in record.sites.items():
+                    if outcome.get("t_ingested") is None:
+                        if self.sources.covers(site, outcome.get("journal")):
+                            outcome["t_ingested"] = self.clock()
+                        else:
+                            waiting = True
+                if all(o.get("t_ingested") is not None for o in record.sites.values()):
+                    record.t_fenced = max(
+                        o["t_ingested"] for o in record.sites.values()
+                    )
+            if not waiting:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            self.wait(INGEST_POLL_SECONDS)
 
     def _sites(self, action: Action) -> tuple[str, ...]:
         return ScopeMirror(self.graph, self.config).sites(action)
@@ -338,7 +380,7 @@ class ContainmentMonitor:
             decision,
             t_alert=t_alert,
             project=self._project,
-            reconcile=self.catch_up,
+            fence=self.fence,
             choose=choose,
             in_force=self.in_force,
             two_phase=name in CUT_STRATEGIES,
@@ -527,6 +569,9 @@ class ContainmentMonitor:
             },
             "coverage_gaps": graph.coverage_gaps,
             "blocked_dispatches": graph.blocked_dispatches,
+            # Per node and source epoch: applied through which sequence, and
+            # events waiting above a gap (fence.SourceProgress).
+            "ingest": self.sources.status(),
         }
 
 

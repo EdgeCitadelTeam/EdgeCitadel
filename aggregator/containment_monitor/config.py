@@ -115,6 +115,9 @@ class MonitorConfig:
     # renew:controller; 0 disables. Keep it well under the lease and the command
     # lifetime: a renewal never outlives the command that carried it.
     controller_lease_renew_ms: int = 10_000
+    # How long a decision waits for Core to ingest each confirming node's events
+    # up to the journal position it confirmed before it gives up releasing.
+    ingest_timeout_ms: int = 5_000
 
     # -- lookups ------------------------------------------------------------
     def control_latency(self, node_id: str) -> float:
@@ -204,6 +207,7 @@ class MonitorConfig:
                 "enum_limit",
                 "max_rounds",
                 "horizon",
+                "ingest_timeout_ms",
             }:
                 if type(item) is not int or item < 1:
                     raise ConfigError(f"invalid_{key}")

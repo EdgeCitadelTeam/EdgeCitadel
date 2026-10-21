@@ -25,6 +25,16 @@ sent before. ``effects_in_flight`` lists effects the gateway had committed and
 was still performing. ``applied_at_ms`` is when the gates took effect; a paused
 handler is interrupted by its runtime within its watch interval after that.
 
+``journal`` is this node's trace journal position once the decision took
+effect: its source epoch and the sequence of the latest event journaled by then
+(0 before the first). Every event that passed one of the decision's gates before
+it took effect (a dispatch, a committed effect, a publication) is journaled at
+or below it, so a controller that has ingested this node's events up to the
+position has seen everything the decision did not stop.
+
+Commands serialize on ``store.control_lock`` with the outbox's last check before
+publishing a message and with the effect gateway's commit step, so a command
+applied before either wins, and anything that passed before it is reported.
 """
 
 from __future__ import annotations
@@ -120,7 +130,21 @@ def _rejected(
         "received_at_ms": received_at_ms,
         "applied_at_ms": None,
         "enforcement": None,
+        "journal": None,
     }
+
+
+def _journal_position(store: AgentdStore, node_id: str) -> dict[str, Any] | None:
+    """This node's active source epoch and its latest journaled sequence."""
+    with store._lock:
+        row = store._connection.execute(
+            "SELECT source_epoch,next_source_seq FROM trace_sources "
+            "WHERE node_id=? AND active=1",
+            (node_id,),
+        ).fetchone()
+    if row is None:
+        return None  # nothing journaled under this identity yet
+    return {"source_epoch": str(row[0]), "source_seq": int(row[1]) - 1}
 
 
 def handle_wire(
@@ -228,6 +252,9 @@ def execute(
                 "received_at_ms": received,
                 "applied_at_ms": applied,
                 "enforcement": enforcement,
+                # Read after the decision committed, still under the control
+                # lock: at least the position of everything that preceded it.
+                "journal": _journal_position(store, node_id),
             }
         except ContainmentError as error:
             confirmation = _rejected(node_id, command, error.code, received)

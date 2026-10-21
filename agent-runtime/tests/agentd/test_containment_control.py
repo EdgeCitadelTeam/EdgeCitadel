@@ -309,3 +309,28 @@ def test_credential_filter_through_the_control_path(nodes):
     assert removed["enforcement"]["applied_deliveries"] == 1
     assert worker.store.get_task(child_id)["state"] == "offered"
 
+
+def test_a_confirmation_carries_the_journal_position_it_fences(nodes):
+    """Everything journaled before the decision took effect is at or below the
+    reported position; what the decision then stops is journaled after it."""
+    root, _ = nodes
+    parent_id, binding, _ = delegate(root)
+
+    def latest():
+        return root.store._connection.execute(
+            "SELECT source_epoch,MAX(source_seq) FROM trace_journal_all "
+            "GROUP BY source_epoch"
+        ).fetchone()
+
+    epoch, before = latest()
+    confirmation = send(
+        root, command(root, "hold", {"kind": "egress", "object_id": parent_id})
+    )
+    assert confirmation["journal"] == {"source_epoch": epoch, "source_seq": before}
+    denied = root.dispatch("parent", binding, "child")
+    assert denied["code"] == "egress_held"
+    assert latest()[1] > before  # the denial is journaled after the position
+    rejected = send(
+        root, command(root, "release", {"kind": "task", "object_id": str(uuid4())})
+    )
+    assert rejected["status"] == "rejected" and rejected["journal"] is None

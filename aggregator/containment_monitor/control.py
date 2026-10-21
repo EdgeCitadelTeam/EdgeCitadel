@@ -17,7 +17,8 @@ cancel:task                        ``cancel {task_id}``
 A send has exactly one of three outcomes:
 
 - a ``Confirmation``: the node applied the command at ``applied_at_ms`` (its
-  clock) and reports what it enforced (``enforcement``);
+  clock), reports what it enforced (``enforcement``) and its trace journal
+  position once the command took effect (``journal``, see ``fence``);
 - ``ControlError(code)``: definitely not applied: the node rejected it with a
   stable code (``stale_policy_version``, ``hold_owned_by_another``...), or it
   could not be delivered (``node_unreachable``);
@@ -84,6 +85,8 @@ class Confirmation:
     command_id: str
     applied_at_ms: int  # node clock
     enforcement: Mapping[str, Any]
+    # {source_epoch, source_seq}: the node's journal once the command took effect.
+    journal: Mapping[str, Any] | None = None
 
 
 def command_for(action: Action, *, release: bool = False) -> tuple[str, dict]:
@@ -154,7 +157,11 @@ def confirmation_from(
     if reply["command_id"] != command_id or reply["action"] != action:
         raise ControlUnconfirmed("invalid_confirmation")
     return Confirmation(
-        node_id, command_id, reply["applied_at_ms"], reply["enforcement"] or {}
+        node_id,
+        command_id,
+        reply["applied_at_ms"],
+        reply["enforcement"] or {},
+        reply["journal"],
     )
 
 
@@ -454,6 +461,7 @@ class FakeControlClient:
     its confirmation (the worst case for an unconfirmed action). ``timeline``
     records (monotonic time, command, (node, kind, object, owner)) after a node
     applied a decision, so tests can check what was in force at every instant.
+    ``journal`` gives the journal position a node confirms (default: none).
     """
 
     def __init__(
@@ -466,9 +474,11 @@ class FakeControlClient:
         fail: Callable[[str, str, str], str | None] | None = None,
         lose: Callable[[str, str, str], bool] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        journal: Callable[[str], Mapping[str, Any] | None] | None = None,
     ):
         self.owner = owner
         self._capabilities = capabilities
+        self.journal = journal or (lambda node_id: None)
         self.nodes: dict[str, FakeNode] = {}
         self.delay = delay or (lambda node_id, op: 0.0)
         self.fail = fail or (lambda node_id, op, object_id: None)
@@ -537,7 +547,7 @@ class FakeControlClient:
             )
         if self.lose(node_id, action, object_id):
             raise ControlUnconfirmed("confirmation_timeout")
-        return Confirmation(node_id, command_id, _now_ms(), {})
+        return Confirmation(node_id, command_id, _now_ms(), {}, self.journal(node_id))
 
     def in_force(self) -> set[tuple[str, str, str]]:
         with self._lock:
