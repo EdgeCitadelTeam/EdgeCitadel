@@ -183,7 +183,7 @@ class AgentdStore:
             raise StoreError("task and trace database files must differ")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.parent.chmod(0o700)
-        from .storage_workspace import ReservedConnection
+        from .storage_workspace import ReservedConnection, ordinary_writer
 
         self._connection = sqlite3.connect(
             path.resolve().as_uri(),
@@ -191,6 +191,9 @@ class AgentdStore:
             uri=True,
             factory=ReservedConnection,
         )
+        # Until a completion workspace is installed (a provisioned store), its
+        # connections to this file exclude each other's writes in-process.
+        self._connection.ordinary_writer = ordinary_writer(path)
         try:
             self._connection.row_factory = sqlite3.Row
             configure_scratch(self._connection)

@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import stat
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,24 @@ from typing import Any
 from . import storage_geometry
 
 WORKSPACE_BYTES = 32 * 1024 * 1024
+WRITER_WAIT_SECONDS = 5.0
+
+# A store without the completion workspace (component tests, experiment nodes)
+# gets the writer exclusion that the workspace's lock gives a provisioned store:
+# one lock per database file, shared by every connection to it in this process
+# (agentd's own and its telemetry connection). Without it, two connections'
+# write transactions on the task/trace pair can each wait at commit for a lock
+# the other holds, and both fail with "database is locked" after the busy
+# timeout while agentd's store lock is held.
+_ordinary_writers: dict[str, threading.Lock] = {}
+_ordinary_writers_guard = threading.Lock()
+
+
+def ordinary_writer(path: Path) -> threading.Lock:
+    """The process-wide writer lock of the ordinary store at ``path``."""
+    key = os.path.realpath(path)
+    with _ordinary_writers_guard:
+        return _ordinary_writers.setdefault(key, threading.Lock())
 
 
 class CompletionWorkspace:
@@ -241,6 +260,9 @@ class ReservedConnection(sqlite3.Connection):
     """
 
     workspace: CompletionWorkspace | None = None
+    # Without a workspace: the ordinary store's writer lock (``ordinary_writer``).
+    ordinary_writer: threading.Lock | None = None
+    _ordinary_owned = False
     _initial_pages: int | None = None
     _closed = False
     _ordinary_main_write = False
@@ -344,7 +366,13 @@ class ReservedConnection(sqlite3.Connection):
             workspace.release()
 
     def _acquire(self) -> None:
-        if self.workspace is not None and not self.workspace.owned:
+        if self.workspace is None:
+            if self.ordinary_writer is not None and not self._ordinary_owned:
+                if not self.ordinary_writer.acquire(timeout=WRITER_WAIT_SECONDS):
+                    raise sqlite3.OperationalError("store writer is busy")
+                self._ordinary_owned = True
+            return
+        if not self.workspace.owned:
             self.workspace.acquire()
             try:
                 if self.in_transaction:
@@ -370,6 +398,10 @@ class ReservedConnection(sqlite3.Connection):
                 raise
 
     def _finish(self) -> None:
+        if self._ordinary_owned:
+            self._ordinary_owned = False
+            assert self.ordinary_writer is not None
+            self.ordinary_writer.release()
         if self.workspace is not None and self.workspace.owned:
             try:
                 self.workspace.restore()
