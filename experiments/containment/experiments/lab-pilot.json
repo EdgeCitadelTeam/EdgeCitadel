@@ -1,6 +1,6 @@
 {
   "name": "lab-pilot",
-  "note": "lab-smoke with 3 repetitions per cell: 507 runs.",
+  "note": "lab-smoke with 2 repetitions per cell: 338 runs.",
   "instances": [
     "../workloads/c2.json",
     "../workloads/c3.json",
@@ -34,7 +34,7 @@
       }
     }
   ],
-  "repetitions": 3,
+  "repetitions": 2,
   "time_scale": 2.0,
   "reference": true,
   "profiles": [

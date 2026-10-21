@@ -117,3 +117,15 @@ def test_service_metrics_count_from_the_alert_on():
     svc.added_latency(rows, ["rep"])
     assert rows[1]["svc_added_latency_s"] == 0.25
     assert rows[1]["svc_added_latency_n"] == 1
+
+
+def test_the_svc_grids_have_their_planned_sizes():
+    from harness import runner
+
+    root = WORKLOAD.parents[1] / "experiments"
+    sizes = {
+        name: len(runner.grid(runner.Experiment.load(root / f"{name}.json")))
+        for name in ("svc-smoke", "svc-pilot")
+    }
+    # 10 strategies (none included) x 2 alerts, plus the no-fault reference.
+    assert sizes == {"svc-smoke": 21, "svc-pilot": 3 * 21}

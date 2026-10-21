@@ -272,7 +272,7 @@ def test_the_lab_grids_have_their_planned_sizes():
     # 2 alerts x 9 strategies under the shared profile, plus Firebreak on C2
     # under the freeze and freeze_plus_cut phase 1 (2 alerts each).
     assert sizes["lab-smoke"] == 7 * (1 + 2 * 10) + 2 * 9 + 2 * 2
-    assert sizes["lab-pilot"] == 3 * sizes["lab-smoke"]
+    assert sizes["lab-pilot"] == 2 * sizes["lab-smoke"] == 338
 
 
 def test_a_resumed_experiment_skips_finished_runs_and_their_retries(

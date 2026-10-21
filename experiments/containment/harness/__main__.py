@@ -11,6 +11,8 @@ Run from ``experiments/containment`` (``python -m harness <command>``):
   netem     print (or apply/clear) a lab latency profile's tc commands
   unit      run one of these commands as a transient systemd unit (a runner
             that outlives the login session; its processes stop with it)
+  pipeline  the lab chain: regression, svc-smoke, gate, lab-pilot, svc-pilot
+  commit-cost  median durable SQLite commit (as agentd's) in each directory
 """
 
 from __future__ import annotations
@@ -152,6 +154,19 @@ def unit_command(
     ]
 
 
+def _pipeline(args: argparse.Namespace) -> None:
+    from .pipeline import run_pipeline
+
+    sys.exit(run_pipeline(args.stack, args.out))
+
+
+def _commit_cost(args: argparse.Namespace) -> None:
+    from .pipeline import commit_cost_ms
+
+    for directory in args.dirs:
+        print(json.dumps({"dir": str(directory), **commit_cost_ms(directory)}))
+
+
 def _unit(args: argparse.Namespace) -> None:
     import subprocess
 
@@ -210,6 +225,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--profile", required=True)
     p.add_argument("--clear", action="store_true")
     p.set_defaults(handler=_netem)
+    p = sub.add_parser("pipeline")
+    p.add_argument("--stack", required=True, type=Path)
+    p.add_argument("--out", required=True, type=Path)
+    p.set_defaults(handler=_pipeline)
+    p = sub.add_parser("commit-cost")
+    p.add_argument("dirs", nargs="+", type=Path)
+    p.set_defaults(handler=_commit_cost)
     p = sub.add_parser("unit")
     p.add_argument("--name", default="firebreak-exp-h-runner")
     p.add_argument("--log", required=True, type=Path)

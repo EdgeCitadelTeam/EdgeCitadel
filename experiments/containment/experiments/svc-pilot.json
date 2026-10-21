@@ -1,6 +1,6 @@
 {
   "name": "svc-pilot",
-  "note": "svc-smoke with 5 repetitions per cell: 105 runs.",
+  "note": "svc-smoke with 3 repetitions per cell: 63 runs.",
   "instances": [
     "../workloads/svc.json"
   ],
@@ -46,5 +46,5 @@
   "quiet_s": 8,
   "timeout_factor": 3.0,
   "timeout_extra_s": 90,
-  "repetitions": 5
+  "repetitions": 3
 }

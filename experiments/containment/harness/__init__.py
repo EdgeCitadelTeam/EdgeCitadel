@@ -25,9 +25,9 @@ Layout (``experiments/containment``):
   169 runs: every strategy x scenario x early/late alert once under the
   deployed profile, C2 under the shared profile and the C2 phase-1 ablation
   (Firebreak with ``freeze`` and ``freeze_plus_cut``); ``lab-pilot`` the same
-  with 3 repetitions, 507; ``lab-main`` a draft sized after the pilot;
+  with 2 repetitions, 338; ``lab-main`` a draft sized after the pilot;
   ``lab-stress`` and ``lab-rootcause`` in the ranked-root mode; ``svc-smoke``
-  21 and ``svc-pilot`` 105 runs of ``svc``); ``configs/``: stacks
+  21 and ``svc-pilot`` 63 runs of ``svc``); ``configs/``: stacks
   (``dryrun.json`` local sockets, ``dryrun-nats.json`` the lab's NATS control
   path locally, ``lab.json`` jim-eq + Endurance + Cluster;
   ``*-homeassistant.json`` the physical case)
