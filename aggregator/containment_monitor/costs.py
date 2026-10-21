@@ -18,6 +18,10 @@ where a grant revocation of a protected class does not. Pausing one invocation
 of a service agent, or revoking its egress, forfeits the request it serves
 (one ``future_request_value``); a label (an egress hold) does not, since its
 unprotected events are admitted per event.
+
+A pause is priced by the work it stops, never by when that work would have
+ended: there are no planned ends here, so pausing a queued or held invocation
+is never free.
 """
 
 from __future__ import annotations

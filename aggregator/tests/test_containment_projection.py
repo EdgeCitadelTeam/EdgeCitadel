@@ -736,6 +736,34 @@ def test_a_replacing_action_behind_a_confirmed_hold_is_timely(tmp_path):
     harness.close()
 
 
+def test_pausing_queued_or_held_work_costs_it_whatever_its_planned_end(tmp_path):
+    """The cost model has no planned ends: pausing a queued task or keeping a
+    held invocation paused stops that work (its value and, for a service
+    agent, its request) however soon it would have finished, so a pause is
+    never priced as free (the simulator's v5 mispricing of held and queued
+    invocations has no counterpart here)."""
+    from aggregator.containment_monitor.config import MonitorConfig
+
+    config = MonitorConfig(
+        agent_nodes={"s": "n0"},
+        future_requests={"s": 12.0},
+        future_request_value=2.0,
+        session_isolated_agents=frozenset({"s"}),
+    )
+    harness = Harness(tmp_path, config)
+    trace = TraceBuilder()
+    queued = trace.root("s", "n0", 0)  # accepted, never started
+    held = trace.root("s", "n0", 0)
+    trace.start(held, 1)
+    harness.feed(trace.events)
+    c0 = config.c0
+    for now in (2, 600_000):  # just after, and long after any short turn
+        cost = gc(harness, now, in_force={hold_task("n0", held)}).cost
+        assert cost(hold_task("n0", queued)) == c0 + 1.0 + 2.0
+        assert cost(hold_task("n0", held)) == c0 + 1.0 + 2.0
+    harness.close()
+
+
 def test_stopping_a_service_costs_its_requests_and_a_label_does_not(tmp_path):
     """A service agent (future_requests): revoking its credential or its
     admission forfeits its expected future requests; pausing one invocation or

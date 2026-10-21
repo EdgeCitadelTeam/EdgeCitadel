@@ -304,6 +304,48 @@ def protected_sinks(cg: ControlGraph) -> frozenset[str]:
     return frozenset(n for n in cg.sinks if cg.nodes.get(n, {}).get("kind") == "effect")
 
 
+def context_sinks(cg: ControlGraph) -> frozenset[str]:
+    """The protected classes of every whole-context tainted context (a
+    shared-memory agent whose memory is tainted): the sinks its future
+    invocations reach through its own credential, whatever an action does.
+
+    Such a context has no unit to label (no invocation may be live at the
+    alert), and every later invocation of the agent resumes it: unless these
+    sinks are separated when phase 1 converges, a request arriving after
+    tau_1 commits tainted commands until a re-solve catches it."""
+    out: set[str] = set()
+    for source in cg.sources:
+        attrs = cg.nodes.get(source, {})
+        if attrs.get("kind") != "context" or not attrs.get("whole"):
+            continue
+        prefix = f"K:{attrs['agent']}:"
+        seen, queue = {source}, [source]
+        while queue:
+            node = queue.pop()
+            for edge in cg.successors(node):
+                head = edge.head
+                if head in seen:
+                    continue
+                seen.add(head)
+                if head in cg.sinks:
+                    if head.startswith(prefix):
+                        out.add(head)
+                    continue
+                if cg.nodes.get(head, {}).get("kind") == "arrival" and node != source:
+                    continue  # another agent's new invocation
+                queue.append(head)
+    return frozenset(out)
+
+
+def context_covers(cg: ControlGraph, removed: Iterable[Action] = ()) -> set[Action]:
+    """(C2) for whole-context tainted contexts: the actions on the last hop
+    into each of their protected classes that ``removed`` does not already
+    separate (the revocation of that class for the agent), pushed and
+    confirmed with the labels."""
+    sinks = context_sinks(cg) & cg.closure(removed=set(removed))
+    return {e.action for e in cg.edges if e.head in sinks and e.action is not None}
+
+
 def cut_holds(cg: ControlGraph, actions: Iterable[Action]) -> tuple[bool, list[str]]:
     """Whether the actions separate the sources from every avoidable sink of cg
     and from every protected effect, doomed or not; also the sinks still
@@ -313,11 +355,13 @@ def cut_holds(cg: ControlGraph, actions: Iterable[Action]) -> tuple[bool, list[s
     cut converged: an effect that is still reachable may fire with a tainted
     tail. Only unavoidable boundary sinks (new invocations at the horizon,
     which no action can separate once their creating flow is untimely) are
-    left out, as in the solve.
+    left out, as in the solve. The protected classes of a whole-context
+    tainted context count, doomed or not (``context_sinks``): its future
+    invocations emit after the actions land.
     """
     instance = cg.instance()
     unavoidable = solver.unavoidable_sinks(instance)
-    targets = (instance.sinks - unavoidable) | protected_sinks(cg)
+    targets = (instance.sinks - unavoidable) | protected_sinks(cg) | context_sinks(cg)
     reached = solver.reached_sinks(instance, actions, targets)
     return not reached, sorted(reached)
 
@@ -493,8 +537,11 @@ class TwoPhaseProtocol:
                 else cg.closure(removed=set(removed))
             )
             # Labels, not pauses: a labelled unit runs and its new events are
-            # admitted per event.
-            return admission_freeze(frozen_cg, side, pause_pending=False)
+            # admitted per event. A whole-context tainted context has no unit:
+            # its protected classes are revoked for its agent instead.
+            return admission_freeze(
+                frozen_cg, side, pause_pending=False
+            ) | context_covers(cg, removed)
 
         def freeze() -> set[Action]:
             cg = project(1, frozenset(in_force))

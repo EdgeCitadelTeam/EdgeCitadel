@@ -529,11 +529,18 @@ class _Builder:
         for agent, context in sorted(graph.tainted_sessions):
             # Any future task of this agent in this conversation resumes tainted
             # memory, including tasks not dispatched yet: a new invocation of it.
+            # Under whole-context taint (a shared-memory agent, context "*")
+            # every future invocation of the agent does, whoever requests it:
+            # its next events (one level, whatever the horizon) are modelled,
+            # so the context's protected classes are sinks that (C2) covers
+            # (``enforcement.context_covers``) although it has no unit to label.
+            whole = context == "*"
             source = cg.node(f"ctx:{agent}:{context}", kind="context")
+            cg.nodes[source].update(agent=agent, whole=whole)
             cg.sources.add(source)
             cg.edge(
                 source,
-                self.arrival(f"ctx:{context}", agent, "", 1),
+                self.arrival(f"ctx:{context}", agent, "", 0 if whole else 1),
                 "session",
                 declared=False,
             )

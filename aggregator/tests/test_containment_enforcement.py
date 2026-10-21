@@ -1060,6 +1060,123 @@ def test_a_labelled_dispatch_is_admitted_once_its_new_task_is_labelled(tmp_path)
         unit.close()
 
 
+class Arriving:
+    """A control client through which a new request reaches the assistant
+    while the alert's first actions are in flight (before their confirmation)."""
+
+    def __init__(self, inner, arrive):
+        self.inner, self.arrive = inner, arrive
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def send(self, node_id, action, target, *, policy_version):
+        if self.arrive is not None and action not in ("describe", "renew"):
+            arrive, self.arrive = self.arrive, None
+            arrive()
+        return self.inner.send(node_id, action, target, policy_version=policy_version)
+
+
+@pytest.mark.parametrize("boundary", ["defer", "sink"])
+def test_an_idle_tainted_context_is_covered_before_phase_1_converges(
+    tmp_path, boundary
+):
+    """Whole-context taint (a shared-memory assistant) with no live invocation
+    at the alert: the context has no unit to label, so (C2) covers it with its
+    protected classes' revocation, pushed at the alert and confirmed before
+    phase 1 converges. A request that arrives between the alert and that
+    confirmation, and one that arrives after convergence, run with tainted
+    memory: their device commands are refused, their replies go out."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from containment_test_support import Ledger
+    from edgecitadel_agentd.effect_adapters import LedgerAdapter
+
+    act = {"effect_class": "device.command", "target": "actuator/*"}
+    reply = {"effect_class": "network.http", "target": "reply/*"}
+    node = Node(tmp_path / "k", "site-k")
+    ledger = Ledger()
+    node.managed("assistant", effects=[act, reply])
+    node.store.effects.adapters = {"http": LedgerAdapter(ledger.url)}
+    node.submit("assistant", "reads the corrupted schedule")
+    first, binding = node.start("assistant")
+    node.complete("assistant", first["task_id"], {"body": "noted"})
+    arrived = []
+
+    def arrive():  # in the driver's thread; Core ingests it on the next sync
+        node.submit("assistant", "a request during the first round")
+        arrived.append(node.start("assistant")[1])
+
+    control = Arriving(
+        LocalAgentdControlClient("core-monitor", {"site-k": transport(node)}), arrive
+    )
+    config = MonitorConfig(
+        protected_effect_classes=frozenset({"device.command"}),
+        future_requests={"assistant": 10.0},
+        agent_nodes={"assistant": "site-k"},
+        shared_memory_agents=frozenset({"assistant"}),
+        boundary=boundary,
+    )
+    harness = Harness(tmp_path / "monitor", config, control)
+    harness.now = time.time_ns() // 1_000_000
+    ingested: set[str] = set()
+    catch_up = harness.monitor.catch_up
+
+    def sync():
+        """Trace sync, whenever the monitor reads Core (as while it fences)."""
+        from containment_support import ingest
+        from test_containment_provenance import journal
+
+        for event in journal(node):
+            if event["event_id"] not in ingested:
+                ingest(harness.core, event)
+                ingested.add(event["event_id"])
+        return catch_up()
+
+    harness.monitor.catch_up = sync
+
+    def execute(bound, rule, target):
+        result = node.rpc(
+            "assistant",
+            "effect.execute",
+            schema_version=1,
+            request_id=str(uuid4()),
+            binding_id=bound["binding_id"],
+            adapter="http",
+            effect_class=rule["effect_class"],
+            target=target,
+            data=None,
+            tool_call_id=None,
+            scheduled_at_ms=None,
+        )
+        return result["result"]["state"] if result["status"] == "ok" else result["code"]
+
+    try:
+        sync()
+        root = inv(binding["execution_attempt_id"])
+        decision = harness.monitor.respond(
+            operator_alert(root, harness.now), strategy="firebreak", roots=[root]
+        )
+        assert arrived, "no request arrived during the first round"
+        assert decision.status == "contained"
+        cover = "revoke:grant:assistant>fx:device.command@site-k"
+        phase1 = {r.action.label(): r for r in decision.phase1}
+        assert cover in phase1 and phase1[cover].state == "in_force"
+        assert phase1[cover].t_fenced is not None
+        assert decision.convergence[0]["phase"] == 1
+        assert decision.convergence[0]["converged"]
+        node.submit("assistant", "a request after convergence")
+        later = node.start("assistant")[1]
+        # The request seen before convergence was labelled too: its command is
+        # held (and kept); the later one is refused at the gateway.
+        assert execute(arrived[0], act, "actuator/1") == "held"
+        assert execute(later, act, "actuator/1") == "ingress_filtered"
+        assert execute(later, reply, "reply/1") == "committed"
+    finally:
+        harness.close()
+        ledger.close()
+        node.close()
+
+
 # ---------------------------------------------------------------------------
 # The two baselines added in M4
 # ---------------------------------------------------------------------------
