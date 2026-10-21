@@ -375,21 +375,35 @@ def test_frontier_advance_triggers_a_receding_re_solve(tmp_path):
 
 
 @pytest.mark.parametrize("seed", range(6))
-def test_every_strategy_emits_the_same_vocabulary(tmp_path, seed):
+def test_every_strategy_shares_the_vocabulary_and_mechanisms(
+    tmp_path, seed, monkeypatch
+):
+    """Strategies differ only in their phase-2 rule: the same vocabulary, the
+    same phase-1 freeze, the same best-effort guard, and the same protocol."""
+    from aggregator.containment_monitor import strategies
     from aggregator.containment_monitor.model import HOLD_KINDS, REVOKE_KINDS
-    from aggregator.containment_monitor.strategies import CUT_STRATEGIES, STRATEGIES
 
-    costs = {}
-    for name in STRATEGIES:
-        rng = random.Random(seed)
-        trace, config = workload(rng)
-        t_alert = rng.randint(30, 160)
-        started = [
-            e["execution_attempt_id"]
-            for e in trace.events
-            if e["kind"] == "run" and e["phase"] == "started" and event_ms(e) <= t_alert
-        ]
-        root = inv(rng.choice(started))
+    guarded = []
+    original = strategies.best_effort
+
+    def guard(cg, unavoidable):
+        actions = original(cg, unavoidable)
+        guarded.append(frozenset(actions))
+        return actions
+
+    monkeypatch.setattr(strategies, "best_effort", guard)
+    rng = random.Random(seed)
+    trace, config = workload(rng)
+    t_alert = rng.randint(30, 160)
+    started = [
+        e["execution_attempt_id"]
+        for e in trace.events
+        if e["kind"] == "run" and e["phase"] == "started" and event_ms(e) <= t_alert
+    ]
+    root = inv(rng.choice(started))
+    costs, phase1, guards = {}, {}, {}
+    for name in strategies.STRATEGIES:
+        guarded.clear()
         control = FakeControlClient()
         harness = Harness(tmp_path / f"{name}", config, control)
         harness.feed([e for e in trace.events if event_ms(e) <= t_alert])
@@ -406,12 +420,18 @@ def test_every_strategy_emits_the_same_vocabulary(tmp_path, seed):
                 <= record.t_sent
                 <= record.t_confirmed
             )
-        if name in CUT_STRATEGIES:
-            assert decision.status == "contained" and decision.phase1 is not None
-        else:
-            assert decision.status == "applied" and decision.phase1 == []
-        costs[name] = decision.solve["predicted_cost"]
+        assert decision.status in {"contained", "phase2_check_failed"}, name
+        assert decision.solve["solver"] and "fast_path" in decision.solve
+        phase1[name] = sorted(r.action for r in decision.phase1)
+        # The guard of the first phase-2 round, and it was issued.
+        guards[name] = guarded[0]
+        issued = {r.action for r in decision.phase1 + decision.phase2}
+        assert guards[name] <= issued, name
+        costs[name] = decision.solves[0]["predicted_cost"]
         harness.close()
+    # One phase-1 freeze and one guard for all: neither depends on the strategy.
+    assert len({tuple(actions) for actions in phase1.values()}) == 1
+    assert len(set(guards.values())) == 1
     # Same G_C and cost model: the exact cut is never costlier than the greedy one.
     assert costs["firebreak"] <= costs["greedy_cut"] + 1e-9
 
@@ -749,3 +769,91 @@ def test_a_tainted_invocation_is_admitted_nothing_between_the_phases(
         ledger.close()
         root.close()
         worker.close()
+
+
+# ---------------------------------------------------------------------------
+# The two baselines added in M4
+# ---------------------------------------------------------------------------
+def two_teams(tmp_path):
+    """Root r delegates to a (tainted) and b (healthy); both schedule a
+    protected actuator command; a's sibling result is already back at r."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from containment_support import TraceBuilder
+
+    config = MonitorConfig(
+        grants={"r": frozenset({"a", "b", "c"}), "a": frozenset(), "b": frozenset()},
+        effect_scopes={
+            "r": frozenset(),
+            "a": frozenset({"device.command"}),
+            "b": frozenset({"device.command"}),
+            "c": frozenset(),
+        },
+        protected_effect_classes=frozenset({"device.command"}),
+        agent_nodes={"r": "n0", "a": "n1", "b": "n2", "c": "n2"},
+        session_isolated_agents=frozenset({"r", "a", "b", "c"}),
+        best_effort_guard=False,
+    )
+    trace = TraceBuilder()
+    root = trace.start(trace.root("r", "n0", 0), 1)
+    task_a = trace.dispatch(root, "a", "n1", 2)
+    task_b = trace.dispatch(root, "b", "n2", 2)
+    task_c = trace.dispatch(root, "c", "n2", 2)
+    for task_id in (task_a, task_b, task_c):
+        trace.arrive(task_id, 3)
+    a, b, c = (trace.start(t, 4) for t in (task_a, task_b, task_c))
+    effect_a = trace.effect(a, "device.command", "requested", 5, scheduled=10_000)
+    effect_b = trace.effect(b, "device.command", "requested", 5, scheduled=10_000)
+    trace.complete(c, 6)  # a result r has not read yet
+    harness = Harness(tmp_path, config, FakeControlClient())
+    harness.feed(trace.events)
+    harness.at(20)
+    ids = {
+        "a": task_a,
+        "b": task_b,
+        "c": task_c,
+        "effect_a": effect_a["attributes"]["effect_id"],
+        "effect_b": effect_b["attributes"]["effect_id"],
+    }
+    return harness, inv(a), ids
+
+
+def phase_two(decision):
+    return {Action.from_json(a).label() for a in decision.solves[0]["actions"]}
+
+
+def test_trace_and_quarantine_pauses_and_revokes_the_tainted_region(tmp_path):
+    harness, root, ids = two_teams(tmp_path)
+    decision = harness.monitor.respond(
+        operator_alert(root, harness.now), strategy="trace_and_quarantine", roots=[root]
+    )
+    chosen = phase_two(decision)
+    assert {f"hold:task:{ids['a']}@n1", f"revoke:egress:{ids['a']}@n1"} <= chosen
+    # Only the tainted region: the healthy invocations stay untouched.
+    for healthy in ("b", "c"):
+        assert not any(ids[healthy] in label and "@n2" in label for label in chosen)
+    assert decision.solve["solver"] == "rule" and decision.solve["fast_path"] is False
+    harness.close()
+
+
+def test_sink_guard_guards_every_protected_sink_without_tracing(tmp_path):
+    harness, root, ids = two_teams(tmp_path)
+    decision = harness.monitor.respond(
+        operator_alert(root, harness.now), strategy="sink_guard", roots=[root]
+    )
+    chosen = phase_two(decision)
+    # Every pending scheduled effect, tainted or not, at its gateway.
+    assert {
+        f"hold:effect:{ids['effect_a']}@n1",
+        f"hold:effect:{ids['effect_b']}@n2",
+    } <= chosen
+    # Every agent's protected effect class, revoked at its gateway.
+    assert {
+        "revoke:grant:a>fx:device.command@n1",
+        "revoke:grant:b>fx:device.command@n2",
+    } <= chosen
+    # Every result delivered into the root (r's output), live or already sent.
+    assert {f"hold:task:{ids[t]}@n0" for t in ("a", "b", "c")} <= chosen
+    # No tracing: the tainted invocation itself is neither paused nor revoked.
+    assert f"hold:task:{ids['a']}@n1" not in chosen
+    assert f"revoke:egress:{ids['a']}@n1" not in chosen
+    harness.close()

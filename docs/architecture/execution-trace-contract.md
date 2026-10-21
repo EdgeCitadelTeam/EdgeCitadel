@@ -3575,8 +3575,11 @@ version) is ranked by a time-respecting backward slice with an Ochiai spectrum
 score over failing and `validator_pass` subjects, an untrusted-origin prior and a
 type prior; the top candidate's prune level (version, invocation, session, agent,
 subtree) defines the roots. The chosen strategy (default Firebreak: exact grouped
-min-cut; experiment baselines are selectable per alert) runs through the
-two-phase protocol: frontier holds first, then the optimal set, and phase-1 holds
+min-cut; experiment baselines, including Trace & quarantine and Sink guard, are
+selectable per alert) chooses the phase-2 actions only; the best-effort guard,
+taint-aware admission and the protocol are shared by every strategy
+(`phase1_freeze`, default on, runs the two-phase protocol for all). The
+two-phase protocol places frontier holds first, then the chosen set; phase-1 holds
 are released only after every phase-2 action is confirmed and fenced. Phase 1
 also freezes admission: every unit on the source side that may still emit is
 held (its task, or its egress where the node offers no task hold; a pending

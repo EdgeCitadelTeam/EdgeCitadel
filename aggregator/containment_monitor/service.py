@@ -55,7 +55,7 @@ from .graph import ControlGraph
 from .model import FAILURE_KINDS, Action, Alert, AlertError, parse_external_alert, ver
 from .projection import ScopeMirror, project
 from .provenance import ProvenanceGraph
-from .strategies import CUT_STRATEGIES, DISPLAY, STRATEGIES, Context
+from .strategies import DISPLAY, STRATEGIES, Context, shared_mechanisms
 
 BATCH = 256
 MAX_CATCH_UP_BATCHES = 64
@@ -375,7 +375,7 @@ class ContainmentMonitor:
                 roots,
                 self._supported,
             )
-            return STRATEGIES[name](context)
+            return shared_mechanisms(context, STRATEGIES[name](context))
 
         self.protocol.run(
             decision,
@@ -384,7 +384,7 @@ class ContainmentMonitor:
             fence=self.fence,
             choose=choose,
             in_force=self.in_force,
-            two_phase=name in CUT_STRATEGIES,
+            two_phase=self.config.phase1_freeze,
         )
         self._persist(decision)
         return decision

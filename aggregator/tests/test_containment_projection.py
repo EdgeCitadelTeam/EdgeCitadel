@@ -19,7 +19,11 @@ from aggregator.containment_monitor.model import (
     revoke_egress,
 )
 from aggregator.containment_monitor.projection import live_units, project, ScopeMirror
-from aggregator.containment_monitor.strategies import Context, firebreak
+from aggregator.containment_monitor.strategies import (
+    Context,
+    firebreak,
+    shared_mechanisms,
+)
 from containment_support import BASE_MS, Harness, TraceBuilder, ingest
 
 sys.path.insert(
@@ -512,7 +516,7 @@ def test_best_effort_guard_and_taint_aware_admission(tmp_path):
             [inv(attempt)],
             supported_everywhere,
         )
-        result = firebreak(context)
+        result = shared_mechanisms(context, firebreak(context))
         results[name] = (set(result.actions), result.unavoidable, task_id, attempt)
         harness.close()
     # Pausing the tainted r and blocking its egress both cost c0 after the window.

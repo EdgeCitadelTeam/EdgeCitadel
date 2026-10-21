@@ -106,6 +106,11 @@ class MonitorConfig:
     boundary: str = "sink"
     # After each cut, block new dispatches (egress) of every source-side invocation.
     taint_aware_admission: bool = False
+    # Run every strategy through the two-phase protocol: phase-1 freeze first,
+    # its holds released only after the strategy's actions are confirmed,
+    # fenced and still a cut. False applies each strategy's actions directly.
+    # Either way it is the same for all strategies.
+    phase1_freeze: bool = True
     # Also issue c0-cost actions on the last hop into sinks judged unavoidable
     # (deadlines are lower bounds, so some may still land in time). On by team
     # decision (2026-10-20).
@@ -189,6 +194,7 @@ class MonitorConfig:
                 "external_requests_untrusted",
                 "taint_aware_admission",
                 "best_effort_guard",
+                "phase1_freeze",
             }:
                 if not isinstance(item, bool):
                     raise ConfigError(f"invalid_{key}")

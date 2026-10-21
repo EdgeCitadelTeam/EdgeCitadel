@@ -180,6 +180,8 @@ STRATEGY_NAMES = (
     "stop_team",
     "stop_downstream",
     "trace_and_stop",
+    "trace_and_quarantine",
+    "sink_guard",
     "greedy_cut",
     "cut_without_deadlines",
     "firebreak",

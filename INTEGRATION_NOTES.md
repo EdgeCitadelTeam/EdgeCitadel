@@ -318,3 +318,53 @@ tainted invocation asks a new dispatch and a new `effect.execute`; both are
 denied (paused, or egress-held where the node cannot hold tasks), the ledger
 receives nothing, no request is queued, and phase 2 then contains with every
 action fenced.
+
+### 5. Shared mechanisms and two new baselines
+
+A strategy now chooses only its phase-2 actions. Everything around that choice
+is applied identically to every strategy: the engine wraps each strategy's
+result in `strategies.shared_mechanisms` (best-effort guard on the sinks
+unavoidable in the deadline-aware G_C, then taint-aware admission on the units
+the actions leave on the source side), and the two-phase protocol runs for
+every strategy when `phase1_freeze` is on (new setting, default true; false
+applies every strategy's actions directly). Before, only the three cut
+strategies ran phase 1, the guard and the admission. Consequence for the
+experiments: a rule whose actions are not a cut now ends
+`phase2_check_failed` with the shared phase-1 freeze kept (the same freeze for
+every strategy), so strategies differ in what their rule holds and costs, not in
+whether a freeze was available; set `phase1_freeze: false` to measure the rules
+alone (for all strategies at once).
+
+New baselines (same vocabulary, `--strategy` in the C2 harness):
+
+- **Trace & quarantine** (`trace_and_quarantine`): Trace & stop plus a
+  persistent quarantine of the tainted region: every live unit in the declared
+  taint closure is paused (`hold:task`) and its egress revoked
+  (`revoke:egress`: all new dispatches and effects denied). No optimization.
+- **Sink guard** (`sink_guard`): on alert, without tracing or optimization:
+  hold every pending scheduled effect at its gateway (`hold:effect`), revoke
+  every agent's protected effect classes at its gateway
+  (`revoke:grant a>fx:<class>`), and park every result delivered into a
+  delegation root (`hold:task` of the child at the root's node), i.e. the
+  protected outputs the roots return to their requesters.
+
+Strategy-mechanism matrix (Y: applied, identical for all; config: same setting
+for all; rule: what the strategy itself decides in phase 2):
+
+| Strategy | Phase-2 rule | Uses taint | Deadline-aware | Optimizes | Action vocabulary | Phase-1 freeze + admission freeze | Confirm, fence (ingest), check, then release | Best-effort guard | Taint-aware admission | agentd gates (holds, revocations, filters, leases, commit fence) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Reject source | park the roots' outputs and effects | roots only | no | no | Y | config | Y | config | config | Y |
+| Stop team | hold the root agent's team | roots only | no | no | Y | config | Y | config | config | Y |
+| Stop everything downstream | every action in the full G_C closure | yes | no | no | Y | config | Y | config | config | Y |
+| Trace & stop | every action in the declared closure | yes | no | no | Y | config | Y | config | config | Y |
+| Trace & quarantine | Trace & stop + pause and egress-revoke the tainted units | yes | no | no | Y | config | Y | config | config | Y |
+| Sink guard | hold pending effects, revoke protected classes, park root inputs | no | no | no | Y | config | Y | config | config | Y |
+| Greedy cut | greedy cover | yes | yes | heuristic | Y | config | Y | config | config | Y |
+| Cut without deadlines | exact cut, every element feasible | yes | no | exact | Y | config | Y | config | config | Y |
+| Firebreak | exact deadline-aware cut (checked fast path, else enumeration/ILP) | yes | yes | exact | Y | config | Y | config | config | Y |
+
+Defaults: `phase1_freeze: true`, `best_effort_guard: true`,
+`taint_aware_admission: false`. Test:
+`test_every_strategy_shares_the_vocabulary_and_mechanisms` (the phase-1 set and
+the first round's guard are identical across all nine strategies on one
+workload), plus one test per new baseline.
