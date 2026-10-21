@@ -1585,3 +1585,68 @@ covered for svc.**
   - Revoking the agent's classes would stop its clean conversations, and a
     per-conversation label would be a new agentd actuator.
   - `tainted_after_tau1` now measures whether this happens in the lab.
+
+### Per-event admission reconciles under (J') (theory review D, safety fix)
+
+**Finding** (the theory agent, from the code). `admit_held` decides guarded
+releases of event holds through `_project(2, ...)` with `_phase1_mode` unset,
+so it never applied the conservative reconciliation (J').
+
+**When the view is stale.** (J') taint lives only in the provenance index.
+An adaptive `_enforce` adds it, and `admit_held` usually still sees it there.
+It is missing in two cases:
+- **The index is rebuilt from the roots:** a monitor restart, or a failed
+  ingest batch (`graph.transaction` reloads).
+  - `reload` clears `frontier_advanced`, so `step()` reaches `admit_held`
+    before any re-solve.
+  - The labels in force come back from the database.
+- **A commit whose tail is on a lagging journal:** it advances no frontier,
+  so no re-solve reconciles it before the next admission.
+
+**Test** (two sites, the slow journal arriving after the fast one):
+`test_conservative_reconciliation_keeps_a_stale_view_from_admitting_an_event`.
+- x runs on the slow node; its dispatch of y (fast node) is not yet
+  ingested.
+- (J') taints y at the alert, and Firebreak labels it: its node can neither
+  pause it nor revoke its class.
+- y's next protected effect is held as an event.
+
+Before the fix:
+- live: the event was kept;
+- after a restart: it was admitted as `not_on_source_side`, a leak.
+
+With the fix both stay held, also once the slow journal arrives, and no
+release is sent.
+
+**Chains without a restart, under agentd's semantics:**
+- **A held dispatch:** agentd journals the request version's generation in
+  the same transaction, before the held event. The monitor cannot see the
+  held event without it.
+- **A labelled child's held result:** its version is generated at
+  completion, after the release, on the child's site. However, the egress
+  label does not close the result edge in G_C, so the parent stays on the
+  source side and its events stay held (checked: kept).
+- **A paused child:** it produces no held result (agentd refuses the
+  transition).
+
+So the only leak without a restart found here is the failed-batch reload.
+
+**Fix.** `admit_held` sets the newest active incident's phase-1 mode for its
+projections, as `_enforce` does.
+- `_project` therefore reconciles (J') under the adaptive phase 1.
+- Rule strategies (no phase 1) and the freeze modes are unchanged, as on
+  the enforce path.
+- The reconciliation is conservative: it can only keep more events held,
+  and the taint it adds can trigger a re-solve.
+- No pre-registered run changes unless its view is stale.
+
+**Not changed (FYI from the coordinator): write-ahead logging of releases,
+assumption (D).** The controller persists action records only after
+`TwoPhaseProtocol.run` returns, and the releases are sent inside it. This is
+not trivial to add:
+- writing the records before each release is a small persistence hook;
+- but a restart then needs a recovery rule for a release logged but
+  unconfirmed (re-send it, or keep the hold and decide again), with tests of
+  both.
+
+It stays a stated limitation of the prototype.

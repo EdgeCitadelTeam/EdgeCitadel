@@ -1785,6 +1785,102 @@ def test_conservative_reconciliation_keeps_a_stale_journal_from_releasing(tmp_pa
     harness.close()
 
 
+def held_event(trace, attempt, at, event, subject_id, effect_class=None):
+    """agentd's ``containment/held`` for a labelled invocation's new event."""
+    run = trace.attempts[attempt]
+    task = trace.tasks[run["task"]]
+    return trace._event(
+        run["node"],
+        "containment",
+        "held",
+        at,
+        agent=run["agent"],
+        task_id=run["task"],
+        parent_task_id=task["parent"],
+        context=task["context"],
+        attempt=attempt,
+        attributes={
+            "containment_version": 1,
+            "event": event,
+            "held_event_id": str(uuid4()),
+            "subject_id": subject_id,
+            "policy_version": 1,
+            "effect_class": effect_class,
+            "target": "actuator/1" if effect_class else None,
+            "recipient_id": None,
+        },
+    )
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_conservative_reconciliation_keeps_a_stale_view_from_admitting_an_event(
+    tmp_path, restart
+):
+    """T11 for a per-event admission release, two sites: x runs on a slow node
+    and has dispatched y (fast node); the fast journal (y's start) is ingested,
+    the slow one (x's dispatch of y) is not. Under (J') y is tainted at the
+    alert and labelled (its node can neither pause it nor revoke its class),
+    so its next protected effect is held as an event. The release of that
+    event is decided by ``admit_held``, which must reconcile as the adaptive
+    enforce path does: (J') taint lives in the index only, and an index
+    rebuilt from the roots (a restart, or a failed ingest batch) no longer
+    holds it. Without the reconciliation the effect was admitted as
+    ``not_on_source_side``."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from aggregator.containment_monitor.model import hold_egress
+    from containment_support import TraceBuilder
+
+    config = MonitorConfig(
+        grants={"x": frozenset({"y"}), "y": frozenset()},
+        effect_scopes={"y": frozenset({"device.command"})},
+        protected_effect_classes=frozenset({"device.command"}),
+        agent_nodes={"x": "slow", "y": "fast"},
+        control_latency_ms={"slow": 400, "fast": 5},
+        session_isolated_agents=frozenset({"x", "y"}),
+        phase1_mode="adaptive",
+    )
+    labels_only = frozenset(
+        c for c in AGENTD_CAPABILITIES if c.startswith("hold:") and c != "hold:task"
+    ) | {"renew:controller"}
+    control = FakeControlClient({"slow": AGENTD_CAPABILITIES, "fast": labels_only})
+    trace = TraceBuilder()
+    x = trace.start(trace.root("x", "slow", 0), 1)
+    task_y = trace.dispatch(x, "y", "fast", 5)
+    trace.arrive(task_y, 6)
+    y = trace.start(task_y, 7)
+    slow = [e for e in trace.events if e["node_id"] == "slow" and event_ms(e) >= 5]
+    harness = Harness(tmp_path, config, control)
+    harness.feed([e for e in trace.events if e not in slow])
+    harness.at(20)
+    decision = harness.monitor.respond(
+        operator_alert(inv(x), harness.now), strategy="firebreak", roots=[inv(x)]
+    )
+    assert decision.status == "contained"
+    assert inv(y) in harness.monitor.graph.taint  # (J')
+    assert hold_egress("fast", task_y) in harness.monitor.in_force
+    if restart:
+        harness.reopen()
+        # Rebuilt from the roots: the slow journal is still missing.
+        assert inv(y) not in harness.monitor.graph.taint
+    seen = len(trace.events)
+    held_event(trace, y, 30, "effect", str(uuid4()), "device.command")
+    harness.at(30)
+    harness.feed(trace.events[seen:])
+    harness.monitor.step()  # resolve_frontier, then admit_held
+
+    def states():
+        return [s for (s,) in harness.db.execute("SELECT state FROM containment_held")]
+
+    assert states() == ["kept"]
+    assert inv(y) in harness.monitor.graph.taint
+    # The slow journal arrives: the exact taint agrees, and the event stays held.
+    harness.feed(slow)
+    harness.monitor.step()
+    assert states() == ["kept"]
+    assert not [a for a in control.timeline if a[1] == "release"]
+    harness.close()
+
+
 def test_phase_two_keeps_literal_masks_beside_the_held_edges(tmp_path):
     """Theory 8.6 (2b) / Prop 5.1: only edges held by confirmed in-force
     actions get d = infinity; an unheld source-side edge keeps its deadline,

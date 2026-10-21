@@ -66,7 +66,7 @@ from .model import (
     ver,
 )
 from .projection import ScopeMirror, project
-from .provenance import ProvenanceGraph
+from .provenance import HeldEvent, ProvenanceGraph
 from .strategies import DISPLAY, STRATEGIES, Context, with_mechanisms
 
 BATCH = 256
@@ -647,10 +647,30 @@ class ContainmentMonitor:
         if not pending or not self.config.enforce:
             return []
         incident = self.db.execute(
-            "SELECT incident_id,created_ms FROM containment_incidents "
+            "SELECT incident_id,created_ms,strategy FROM containment_incidents "
             "WHERE state='active' ORDER BY created_ms DESC LIMIT 1"
         ).fetchone()
-        incident_id, t_alert = incident if incident else ("", self.clock())
+        incident_id, t_alert, strategy = (
+            incident if incident else ("", self.clock(), None)
+        )
+        # (J') as on the enforce path: the projections below reconcile known
+        # commits when the incident's strategy runs an adaptive phase 1. Taint
+        # (J') added lives in the index only, which a restart or a failed
+        # ingest batch rebuilds from the roots, and a commit whose tail is on a
+        # slow site's journal advances no frontier, so no re-solve reconciles
+        # it before the next release is decided here.
+        self._phase1_mode = (
+            self.config.phase1_mode_for(strategy) if strategy is not None else None
+        )
+        try:
+            return self._admit(pending, incident_id, t_alert)
+        finally:
+            self._phase1_mode = None
+
+    def _admit(
+        self, pending: list[HeldEvent], incident_id: str, t_alert: int
+    ) -> list[dict]:
+        """``admit_held``'s decisions, with the incident's phase-1 mode set."""
         protected = self.config.protected_effect_classes
         cg = self._project(2, frozenset(self.in_force))
         verdicts = {
