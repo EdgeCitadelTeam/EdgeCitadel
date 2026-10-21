@@ -494,6 +494,7 @@ class ContainmentMonitor:
             phase1_mode=mode,
             phase1_labels=self.config.phase1_labels,
             receding_during_waits=self.config.receding_during_waits,
+            tainted_output_value=self.config.tainted_output_value,
         )
 
         def context(cg: ControlGraph) -> Context:
@@ -771,6 +772,7 @@ class ContainmentMonitor:
             },
             "phase1_labels": self.config.phase1_labels,
             "receding_during_waits": self.config.receding_during_waits,
+            "tainted_output_value": self.config.tainted_output_value,
             "mechanisms": {
                 name: self.config.mechanisms_for(name).to_json() for name in STRATEGIES
             },

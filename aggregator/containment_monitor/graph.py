@@ -19,7 +19,7 @@ descendants' (no tree semantics), and each mask is judged from its own site.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass, field
 
 from .model import Action
@@ -41,6 +41,11 @@ class Edge:
     deadline: float = float("inf")
     t_ap: float | None = None
     feasible: bool = False
+    # A priced outcome, not a flow (``tainted_output_value``): the
+    # model.TaintedOutputs token accepting it and the hold that, landing in
+    # time, stops it instead (None: none can). Uncuttable (``action`` None)
+    # and into no sink, except in the strategies' solve.
+    penalty: tuple[Hashable, Action | None] | None = None
 
 
 @dataclass
@@ -57,6 +62,10 @@ class ControlGraph:
     units: dict = field(default_factory=dict)  # unit key -> projection.Unit
     cost: Callable[[Action], float] | None = None
     stats: dict = field(default_factory=dict)
+    # The loss of each priced outcome (``Edge.penalty``). Only the strategies'
+    # solve sees those edges as removable into sinks (``instance(penalties=
+    # True)``); a check never does.
+    penalty_costs: dict[Hashable, float] = field(default_factory=dict)
 
     def node(self, name: str, **attrs) -> str:
         if name not in self.nodes:
@@ -123,16 +132,31 @@ class ControlGraph:
                 timely.append(index)
         return found
 
-    def instance(self) -> CutInstance:
-        """The cut problem: each action removes its timely mask, at its full cost."""
-        covering: dict[int, tuple[Action, ...]] = {}
-        costs: dict[Action, float] = {}
+    def instance(self, *, penalties: bool = False) -> CutInstance:
+        """The cut problem: each action removes its timely mask, at its full
+        cost; with ``penalties``, also the priced outcomes (always removable,
+        at their loss)."""
+        covering: dict[int, tuple[Hashable, ...]] = {}
+        costs: dict[Hashable, float] = {}
         for action, (_, timely) in self.masks().items():
             if not timely:
                 continue  # cannot land before any of its edges: useless now
             costs[action] = self.cost(action) if self.cost else 1.0
             for index in timely:
                 covering[index] = (*covering.get(index, ()), action)
+        sinks = set(self.sinks)
+        if penalties:
+            for index, edge in enumerate(self.edges):
+                if edge.penalty is None:
+                    continue
+                token, hold = edge.penalty
+                costs[token] = self.penalty_costs[token]
+                covering[index] = (token,)
+                if hold is not None:
+                    covering[index] += (hold,)
+                    if hold not in costs:
+                        costs[hold] = self.cost(hold) if self.cost else 1.0
+                sinks.add(edge.head)
         return CutInstance(
             tuple(
                 (edge.tail, edge.head, covering.get(index, ()))
@@ -140,5 +164,5 @@ class ControlGraph:
             ),
             costs,
             frozenset(self.sources),
-            frozenset(self.sinks),
+            frozenset(sinks),
         )

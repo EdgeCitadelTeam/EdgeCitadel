@@ -6,8 +6,11 @@ latency settings, repetitions, the monitor's mechanism ``profiles``
 mechanism for every strategy), ``phase1_modes`` (unset: the profile's,
 ``adaptive`` for the deployed cut strategies and ``freeze`` in the shared
 ablation; or an ablation setting ``freeze``, ``freeze_plus_cut``),
-``phase1_labels`` (``frontier``, the default, or ``forward_closure``) and
-``receding_during_waits`` settings. ``parts``
+``phase1_labels`` (``frontier``, the default, or ``forward_closure``),
+``receding_during_waits`` settings and ``tainted_output_values`` (the
+monitor's ``tainted_output_value``, a post-hoc cost ablation: 1.0, the
+pre-registered model and the default, keeps plain run ids and configs; another
+value runs as a ``tov<value>`` variant). ``parts``
 adds sub-grids that override any of those (for example one instance under the
 shared profile). The grid is paired: every strategy runs the same instance
 under the same alert trigger, latency setting, repetition, profile and option,
@@ -138,6 +141,9 @@ class Experiment:
     receding_during_waits: tuple[bool, ...] = (False,)
     # The value of one future request of a service agent (svc scenario cost).
     request_value: float | None = None
+    # The monitor's tainted_output_value per cell (a post-hoc cost ablation;
+    # 1.0, the pre-registered model, keeps plain run ids and configs).
+    tainted_output_values: tuple[float, ...] = (1.0,)
     # Sub-grids run after this one, each overriding some of its dimensions.
     parts: tuple[Experiment, ...] = ()
 
@@ -196,6 +202,14 @@ def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any
         out["receding_during_waits"] = tuple(document["receding_during_waits"])
         if not all(isinstance(v, bool) for v in out["receding_during_waits"]):
             raise ValueError("receding_during_waits lists booleans")
+    if "tainted_output_values" in document:
+        values = document["tainted_output_values"]
+        if not values or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1
+            for v in values
+        ):
+            raise ValueError("tainted_output_values lists numbers from 0 to 1")
+        out["tainted_output_values"] = tuple(float(v) for v in values)
     if "measured_rtt_ms" in document:
         out["measured_rtt_ms"] = float(document["measured_rtt_ms"])
     if "latencies" in document:
@@ -249,6 +263,7 @@ class RunCell:
     phase1_mode: str | None = None  # None: the profile's
     receding: bool = False
     phase1_labels: str = "frontier"
+    tainted_output_value: float = 1.0
 
     @property
     def mode(self) -> str:
@@ -262,6 +277,7 @@ class RunCell:
             self.mode == PROFILE_PHASE1_MODES[self.profile]
             and self.phase1_labels == "frontier"
             and not self.receding
+            and self.tainted_output_value == 1.0
         )
 
     @property
@@ -276,6 +292,8 @@ class RunCell:
             variant.append(self.mode)
         variant += [] if self.phase1_labels == "frontier" else [self.phase1_labels]
         variant += ["receding"] if self.receding else []
+        if self.tainted_output_value != 1.0:
+            variant.append(f"tov{self.tainted_output_value:g}")
         parts = [
             self.instance.stem + rogue,
             alert,
@@ -301,10 +319,11 @@ def grid(experiment: Experiment) -> list[RunCell]:
                             RunCell(instance, rate, "reference", None, latency, rep)
                         )
                     for profile in experiment.profiles:
-                        for phase1, receding, labels in itertools.product(
+                        for phase1, receding, labels, value in itertools.product(
                             experiment.phase1_modes,
                             experiment.receding_during_waits,
                             experiment.phase1_labels,
+                            experiment.tainted_output_values,
                         ):
                             for alert in experiment.alerts:
                                 for mode in experiment.root_modes:
@@ -322,6 +341,7 @@ def grid(experiment: Experiment) -> list[RunCell]:
                                                 phase1,
                                                 receding,
                                                 labels,
+                                                value,
                                             )
                                         )
     for part in experiment.parts:
@@ -455,6 +475,7 @@ def run_cell(
         "phase1_modes": None,
         "phase1_labels": cell.phase1_labels,
         "receding_during_waits": cell.receding,
+        "tainted_output_value": cell.tainted_output_value,
         "mechanisms": None,  # the monitor's, for this strategy (from its status)
         # The scenario's own monitor settings (svc: horizon, future requests).
         "monitor_settings": svc.monitor_settings(
@@ -469,6 +490,8 @@ def run_cell(
         "status": "failed_to_start",
         "errors": [],
     }
+    if cell.tainted_output_value != 1.0:
+        meta["monitor_settings"]["tainted_output_value"] = cell.tainted_output_value
     stack = RunStack(stack_config, cell.run_id, run_dir)
     strategy = cell.strategy if cell.strategy in deploy.STRATEGIES else "firebreak"
     netem = False

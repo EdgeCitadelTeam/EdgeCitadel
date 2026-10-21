@@ -296,6 +296,8 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
         {"monitor": {"phase1_labels": "everywhere"}},
         {"monitor": {"phase1_margin_rounds": -1}},
         {"monitor": {"receding_during_waits": "yes"}},
+        {"monitor": {"tainted_output_value": 1.5}},
+        {"monitor": {"tainted_output_value": True}},
         {"control": {"agentd": {"n0": {"socket": "x"}}}},
         {"control": {"nats": {"key_file": str(short)}}},
         {"control": {"nats": {"key_file": str(key), "command_lifetime_ms": 1000}}},
@@ -306,6 +308,10 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
         with pytest.raises(ConfigError):
             service_from_environment(startup / "core.db")
     assert MonitorConfig.from_json({}) == MonitorConfig()
+    assert MonitorConfig().tainted_output_value == 1.0  # pre-registered
+    assert (
+        MonitorConfig.from_json({"tainted_output_value": 0}).tainted_output_value == 0.0
+    )
 
 
 def test_status_of_unconfigured_control_records_unconfirmed_actions(core_db, tmp_path):

@@ -250,6 +250,71 @@ def test_profiles_options_and_parts_extend_the_paired_grid(tmp_path):
         runner.grid(experiment(tmp_path, parts=[{"strategies": ["firebreak"]}]))
 
 
+def test_the_tainted_output_value_ablation_is_named_and_recorded(tmp_path, monkeypatch):
+    """1.0 (pre-registered) keeps plain ids and an unchanged monitor
+    configuration; another value is a named variant, recorded in run.json and
+    passed in the monitor's settings."""
+    loaded = experiment(
+        tmp_path,
+        repetitions=1,
+        rogue_rates=[0.0],
+        latencies=[{"name": "fast", "control_latency_ms": {"*": 2}}],
+        alerts=["early"],
+        strategies=["firebreak"],
+        reference=False,
+        tainted_output_values=[1.0, 0.5],
+    )
+    cells = runner.grid(loaded)
+    assert [c.tainted_output_value for c in cells] == [1.0, 0.5]
+    plain, ablated = cells
+    assert plain.main_design and not ablated.main_design
+    assert plain.run_id.endswith("__r0__firebreak")
+    assert ablated.run_id == plain.run_id.replace("__firebreak", "__tov0.5__firebreak")
+    for bad in ([1.5], [], ["half"], [True]):
+        with pytest.raises(ValueError, match="tainted_output_values"):
+            experiment(tmp_path, tainted_output_values=bad)
+
+    settings = {}
+
+    class Stack:
+        def __init__(self, config, run_id, run_dir):
+            self.run_id = run_id
+
+        def prepare(self):
+            return {}
+
+        def apply_netem(self, profile):
+            return False
+
+        def up(self, *args, monitor=None, **kwargs):
+            settings[self.run_id] = dict(monitor or {})
+            raise runner.StackError("not starting a stack in a unit test")
+
+        def down(self):
+            return []
+
+    monkeypatch.setattr(runner, "RunStack", Stack)
+    monkeypatch.setattr(runner, "_collect", lambda *args, **kwargs: None)
+
+    class Config:
+        mode = "dryrun"
+        effect_sink = {"kind": "ledger"}
+        controller_lease_ms = 30_000
+
+        def netem_rtt_ms(self, profile):
+            return 0.0
+
+        def plan_sink(self):
+            return {"adapter": "http"}
+
+    for cell in cells:
+        run_dir = runner.run_cell(Config(), loaded, cell, tmp_path / "out")  # type: ignore[arg-type]
+        meta = json.loads((run_dir / "run.json").read_text())
+        assert meta["tainted_output_value"] == cell.tainted_output_value
+    assert "tainted_output_value" not in settings[plain.run_id]
+    assert settings[ablated.run_id]["tainted_output_value"] == 0.5
+
+
 def test_the_lab_grids_have_their_planned_sizes():
     root = runner.Path(__file__).resolve().parents[1] / "experiments"
     sizes = {}

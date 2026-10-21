@@ -736,6 +736,86 @@ def test_a_replacing_action_behind_a_confirmed_hold_is_timely(tmp_path):
     harness.close()
 
 
+@pytest.mark.parametrize("alert", ["early", "early_untimely", "late"])
+def test_a_tainted_output_value_below_one_prefers_blocking_the_input(tmp_path, alert):
+    """The svc pattern: a planner hands a shared-memory assistant (a service
+    agent) a corrupted schedule. Early (the hand-off still in transit, a
+    second away), holding it lands before the assistant can start on it: at
+    the pre-registered value 1 the cut lets the taint in and revokes the
+    assistant's device class (the sink cut, c0, with the let-in task's
+    admission label), at 0.5 the loss of 30 future replies from tainted
+    memory (0.5 x 1 each) outweighs the blocked hand-off's request (1). Once
+    the hand-off is queued at the assistant (no start bound), the hold cannot
+    land before it starts: the sink cut at both values. Late (the assistant
+    read it) the context is tainted whatever the cut does: the sink cut at
+    both values, and at 0.5 the accepted loss is reported."""
+    results = {}
+    for value in (1.0, 0.5):
+        config = MonitorConfig(
+            grants={"planner": frozenset({"assistant"}), "assistant": frozenset()},
+            # The planner's tasks command the lamp too (a child's scope never
+            # exceeds its dispatcher's).
+            effect_scopes={
+                "planner": frozenset({"device.command"}),
+                "assistant": frozenset({"device.command"}),
+            },
+            protected_effect_classes=frozenset({"device.command"}),
+            agent_nodes={"planner": "p", "assistant": "k"},
+            shared_memory_agents=frozenset({"assistant"}),
+            future_requests={"assistant": 30.0},
+            boundary="defer",
+            # The assistant emits nothing within a minute of starting (the
+            # sink cut is timely); a hand-off takes at least a second.
+            min_emission_ms={"assistant": 60_000},
+            delivery_ms={"p>k": 1000.0},
+            tainted_output_value=value,
+        )
+        harness = Harness(tmp_path / f"{alert}-{value}", config)
+        trace = TraceBuilder()
+        planner = trace.start(trace.root("planner", "p", 0), 1)
+        handed = trace.dispatch(planner, "assistant", "k", 5)
+        trace.complete(planner, 6)
+        if alert != "early":
+            trace.arrive(handed, 6)
+        if alert == "late":
+            trace.complete(trace.start(handed, 7), 8)
+        harness.feed(trace.events)
+        harness.monitor.graph.mark_roots([inv(planner)])
+        cg = gc(harness, 10)
+        context = Context(
+            harness.monitor.graph,
+            config,
+            cg,
+            lambda: cg,
+            [inv(planner)],
+            supported_everywhere,
+        )
+        result = with_mechanisms(
+            context, firebreak(context), config.mechanisms_for("firebreak")
+        )
+        results[value] = (
+            {a.label().replace(handed, "<handed>") for a in result.actions},
+            result.report.get("tainted_outputs_accepted"),
+            result.predicted_cost,
+        )
+        harness.close()
+    block = "hold:task:<handed>@k"
+    sink_cut = "revoke:grant:assistant>fx:device.command@k"
+    label = "hold:egress:<handed>@k"  # taint-aware admission of the let-in task
+    c0 = MonitorConfig().c0
+    if alert == "early":
+        assert results[1.0][:2] == ({sink_cut, label}, None)
+        assert results[0.5][:2] == ({block, label}, {})
+        assert results[0.5][2] == pytest.approx(c0 + 1.0 + c0)  # block, label
+    elif alert == "early_untimely":
+        assert results[1.0][0] == results[0.5][0] == {sink_cut, label}
+        assert results[0.5][1] == {"assistant": 15.0}
+    else:
+        assert results[1.0][:2] == ({sink_cut}, None)
+        assert results[0.5][:2] == ({sink_cut}, {"assistant": 15.0})
+        assert results[0.5][2] == pytest.approx(c0 + 15.0)
+
+
 def test_pausing_queued_or_held_work_costs_it_whatever_its_planned_end(tmp_path):
     """The cost model has no planned ends: pausing a queued task or keeping a
     held invocation paused stops that work (its value and, for a service

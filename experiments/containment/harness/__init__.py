@@ -49,8 +49,10 @@ its start, also in runs without containment (``none``, ``reference``), which
 configure the monitor with ``enforce: false``. Each run records its mechanism
 ``profile`` (``deployed`` by default, ``shared`` as the ablation) and
 ``phase1_mode`` (by default the profile's: adaptive for the deployed cut
-strategies, freeze under ``shared``), ``phase1_labels`` and
-``receding_during_waits``; experiments set them per grid or part.
+strategies, freeze under ``shared``), ``phase1_labels``,
+``receding_during_waits`` and ``tainted_output_value`` (1.0 unless a post-hoc
+cost ablation sets ``tainted_output_values``); experiments set them per grid
+or part.
 
 Latency settings and netem profiles above the measured LAN round trip
 (1.5-4 ms between sites) must be labelled ``stress``; the runner refuses

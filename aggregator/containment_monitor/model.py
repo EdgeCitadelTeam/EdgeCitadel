@@ -75,6 +75,19 @@ OP_KINDS = {HOLD: HOLD_KINDS, REVOKE: REVOKE_KINDS, CANCEL: CANCEL_KINDS}
 
 
 @dataclass(frozen=True, order=True)
+class TaintedOutputs:
+    """Not a control action: accepting that a service agent's future
+    unprotected outputs come from tainted memory (``tainted_output_value``).
+    The cut solver may remove the edges into that agent's ``T:`` sink at this
+    loss instead of stopping the taint upstream; nothing is sent or enforced."""
+
+    agent: str
+
+    def label(self) -> str:
+        return f"accept:tainted_outputs:{self.agent}"
+
+
+@dataclass(frozen=True, order=True)
 class Action:
     """One enforceable control decision, sited at the node where it must land.
 

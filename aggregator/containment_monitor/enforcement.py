@@ -252,6 +252,8 @@ class Decision:
     phase1_mode: str | None = "adaptive"
     phase1_labels: str = "frontier"
     receding_during_waits: bool = False
+    # The cost model's value of a tainted unprotected output (1: pre-registered).
+    tainted_output_value: float = 1.0
     status: str = "pending"
     rounds: int = 0
     phase1: list[ActionRecord] = field(default_factory=list)
@@ -283,6 +285,7 @@ class Decision:
             "phase1_mode": self.phase1_mode,
             "phase1_labels": self.phase1_labels,
             "receding_during_waits": self.receding_during_waits,
+            "tainted_output_value": self.tainted_output_value,
             "phase1_trigger": self.phase1_trigger,
             "receding": self.receding,
             "convergence": self.convergence,

@@ -169,6 +169,13 @@ class MonitorConfig:
     # action that stops the agent's service forfeits (costs).
     future_requests: Mapping[str, float] = field(default_factory=dict)
     future_request_value: float = 1.0
+    # The value of an unprotected output (a reply or result) produced from
+    # tainted input, relative to a clean one (0 to 1). Below 1, a cut that lets
+    # taint reach a shared-memory service agent's context pays (1 - value) x
+    # future_request_value per expected future request (``future_requests``):
+    # its future outputs are produced from tainted memory. 1 (the default, the
+    # pre-registered model) prices a tainted output as fully answered.
+    tainted_output_value: float = 1.0
     # Root cause and strategy.
     root_cause_window_ms: int = 600_000
     top_k: int = 5
@@ -351,6 +358,14 @@ class MonitorConfig:
                 if item not in {"sink", "defer"}:
                     raise ConfigError("invalid_boundary")
                 kwargs[key] = item
+            elif key == "tainted_output_value":
+                if (
+                    isinstance(item, bool)
+                    or not isinstance(item, (int, float))
+                    or not 0 <= item <= 1
+                ):
+                    raise ConfigError("invalid_tainted_output_value")
+                kwargs[key] = float(item)
             elif key in {
                 "root_cause_window_ms",
                 "top_k",

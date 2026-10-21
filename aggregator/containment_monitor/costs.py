@@ -22,6 +22,14 @@ unprotected events are admitted per event.
 A pause is priced by the work it stops, never by when that work would have
 ended: there are no planned ends here, so pausing a queued or held invocation
 is never free.
+
+Tainted outputs (``tainted_output_value`` v below 1, a post-hoc ablation; 1 by
+default): letting taint reach a shared-memory service agent's context costs
+(1 - v) x ``future_request_value`` per expected future request, since its
+future replies come from tainted memory. That loss is no action's cost: it is
+a priced sink of G_C (``projection._Builder.tainted_outputs``) that the
+strategies' cut either pays (``model.TaintedOutputs``) or avoids by stopping
+the taint before the context in time.
 """
 
 from __future__ import annotations

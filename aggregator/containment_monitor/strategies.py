@@ -45,6 +45,7 @@ from .config import Mechanisms, MonitorConfig
 from .graph import ControlGraph
 from .model import (
     Action,
+    TaintedOutputs,
     hold_effect,
     hold_egress,
     hold_task,
@@ -322,6 +323,9 @@ def with_mechanisms(
     shared = _finish(
         ctx, result.name, actions, started, result.status, result.method, unavoidable
     )
+    shared.predicted_cost += sum(
+        result.report.get("tainted_outputs_accepted", {}).values()
+    )
     shared.solve_ms = result.solve_ms
     shared.report = result.report
     return shared
@@ -329,20 +333,30 @@ def with_mechanisms(
 
 def _cut(ctx: Context, name: str, cg: ControlGraph, method: Callable) -> StrategyResult:
     started = time.perf_counter()
-    result = method(cg.instance())
+    result = method(cg.instance(penalties=True))
+    # A priced outcome the cut accepts (tainted outputs) is no action: its loss
+    # counts in the predicted cost and the report, nothing is sent.
+    accepted = {
+        a.agent: cg.penalty_costs[a]
+        for a in result.actions
+        if isinstance(a, TaintedOutputs)
+    }
     finished = _finish(
         ctx,
         name,
-        result.actions,
+        [a for a in result.actions if not isinstance(a, TaintedOutputs)],
         started,
         result.status,
         result.method,
         result.unavoidable,
     )
+    finished.predicted_cost += sum(accepted.values())
     finished.solve_ms = result.solve_ms
     finished.report = result.report()
     if finished.report["fast_path"] is None:  # the greedy checks nothing
         finished.report.update(fast_path=False, fast_path_reason="heuristic")
+    if cg.penalty_costs:
+        finished.report["tainted_outputs_accepted"] = accepted
     return finished
 
 

@@ -81,6 +81,7 @@ from .graph import ControlGraph, Edge
 from .model import (
     REVOKE,
     Action,
+    TaintedOutputs,
     fx,
     hold_effect,
     hold_egress,
@@ -471,6 +472,48 @@ class _Builder:
                 self.cg.sinks.add(created)
                 self.cg.nodes[created]["boundary"] = True
 
+    def tainted_outputs(self) -> None:
+        """Below ``tainted_output_value`` 1: a shared-memory service agent's
+        future outputs come from tainted memory once taint reaches its
+        context, through any of its units or its tainted context. That outcome
+        is a priced sink ``T:<agent>`` (loss: 1 - value per expected future
+        request, each worth ``future_request_value``), so a cut may pay it or
+        stop the taint before the context (``graph.Edge.penalty``)."""
+        cg, config = self.cg, self.config
+        loss = 1.0 - config.tainted_output_value
+        if loss <= 0:
+            return
+        for agent, expected in sorted(config.future_requests.items()):
+            if expected <= 0 or config.session_of(agent, None) != "*":
+                continue
+            token = TaintedOutputs(agent)
+            sink = cg.node(f"T:{agent}", kind="tainted_outputs", agent=agent)
+            cg.penalty_costs[token] = loss * config.future_request_value * expected
+            # A unit taints the context when it starts with tainted input: a
+            # queued one is stopped in time by its hold if that lands before
+            # it can start; a live one already has.
+            for unit in self.units.values():
+                if unit.agent != agent:
+                    continue
+                hold = (
+                    self.allowed(hold_task(unit.node, unit.task_id))
+                    if unit.pending and unit.node and unit.task_id
+                    else None
+                )
+                edge = cg.edge(
+                    f"in:{unit.key}",
+                    sink,
+                    "tainted_outputs",
+                    fn=("start", unit.key),
+                    declared=False,
+                )
+                edge.penalty = (token, hold)
+            if (agent, "*") in self.graph.tainted_sessions:
+                edge = cg.edge(
+                    f"ctx:{agent}:*", sink, "tainted_outputs", declared=False
+                )
+                edge.penalty = (token, None)
+
     def build(self) -> None:
         cg, graph, units, config = self.cg, self.graph, self.units, self.config
         for unit in units.values():
@@ -544,6 +587,7 @@ class _Builder:
                 "session",
                 declared=False,
             )
+        self.tainted_outputs()
         for result in graph.results.values():
             parent = units.get(result.parent_attempt)
             if parent is None:
@@ -836,6 +880,12 @@ def project(
     n_cuttable = n_infeasible = 0
     for edge in cg.edges:
         edge.deadline = builder.advance(edge.fn, eat.get(edge.tail, INF))
+        if edge.penalty is not None and edge.penalty[1] is not None:
+            token, hold = edge.penalty
+            if not (
+                static or hold in in_force or builder.t_ap(hold.node_id) < edge.deadline
+            ):
+                edge.penalty = (token, None)  # cannot land before it starts
         if edge.action is None:
             continue
         n_cuttable += 1
