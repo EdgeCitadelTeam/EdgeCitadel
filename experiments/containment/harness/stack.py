@@ -565,6 +565,10 @@ class StackConfig:
     # Where the A2A baseline keeps its tasks: a2a-sdk's in-memory store, or
     # SQLite (durable, like EdgeCitadel's journal) for overhead comparisons.
     a2a_task_store: str = "memory"
+    # Extra EDGECITADEL_* settings for agentd and the Managed Agent runtime on
+    # every node (the lab stacks: the M7 fallback re-checks at 1 s; agentd's
+    # own default is 50 ms). The harness's own settings cannot be overridden.
+    runtime_env: dict[str, str] = field(default_factory=dict)
 
     def plan_sink(self) -> dict[str, Any]:
         """The workers' view of the sink (det_worker.effects)."""
@@ -631,6 +635,7 @@ class StackConfig:
             system=_system(document.get("system", "edgecitadel")),
             procstat_interval_ms=_interval(document.get("procstat_interval_ms")),
             a2a_task_store=_task_store(document.get("a2a_task_store", "memory")),
+            runtime_env=_runtime_env(document.get("runtime_env", {})),
         )
 
 
@@ -644,6 +649,33 @@ def _interval(value: object) -> int | None:
     if type(value) is not int or not 50 <= value <= 10_000:
         raise StackError("procstat_interval_ms must be an integer from 50 to 10000")
     return value
+
+
+# Set by the harness per node or run; a stack file cannot override them.
+HARNESS_RUNTIME_ENV = frozenset(
+    {
+        "EDGECITADEL_TRACE_SYNC",
+        "EDGECITADEL_CONTROLLER_LEASE_MS",
+        "EDGECITADEL_EFFECT_ADAPTERS",
+        "EDGECITADEL_STATE_DIR",
+        "EDGECITADEL_CONNECTOR_ID",
+    }
+)
+RUNTIME_ENV_NAME = re.compile(r"^EDGECITADEL_[A-Z0-9_]+$")
+
+
+def _runtime_env(value: object) -> dict[str, str]:
+    if not isinstance(value, dict) or not all(
+        isinstance(k, str)
+        and RUNTIME_ENV_NAME.fullmatch(k)
+        and k not in HARNESS_RUNTIME_ENV
+        and isinstance(v, str)
+        for k, v in value.items()
+    ):
+        raise StackError(
+            "runtime_env maps EDGECITADEL_* names (not the harness's own) to strings"
+        )
+    return dict(value)
 
 
 def _task_store(name: str) -> str:
@@ -1091,6 +1123,7 @@ class RunStack:
             f"agentd-{node}",
             [python, "-m", "harness.nodectl", "serve", "--state", state],
             env={
+                **self.config.runtime_env,
                 # Bare: no export to Core and no controller lease (agentd's
                 # defaults); local journaling stays, it is the dispatch path.
                 "EDGECITADEL_TRACE_SYNC": "0" if self.bare else "1",
@@ -1379,6 +1412,7 @@ class RunStack:
             ],
             cwd=f"{self.config.hosts[host].repo}/agent-packages/det-worker",
             env={
+                **self.config.runtime_env,
                 "EDGECITADEL_STATE_DIR": self.node_state(node),
                 "EDGECITADEL_CONNECTOR_ID": f"managed-{agent}",
                 "DET_WORKER_SERVICES_TOKEN": self.services_token,

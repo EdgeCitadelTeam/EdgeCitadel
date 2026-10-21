@@ -36,5 +36,9 @@
   "effect_sink": {
     "kind": "ledger"
   },
-  "procstat_interval_ms": 200
+  "procstat_interval_ms": 200,
+  "runtime_env": {
+    "EDGECITADEL_TRANSPORT_POLL_MS": "1000",
+    "EDGECITADEL_CLAIM_POLL_MS": "1000"
+  }
 }

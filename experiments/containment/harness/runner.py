@@ -478,6 +478,7 @@ def run_cell(
         ),
         "effect_sink": stack_config.effect_sink["kind"],
         "controller_lease_ms": stack_config.controller_lease_ms,
+        "runtime_env": dict(stack_config.runtime_env),
         "profile": cell.profile,
         # The run's setting; phase1_modes says what each strategy ran (none
         # for a rule applied directly), from the monitor's status.

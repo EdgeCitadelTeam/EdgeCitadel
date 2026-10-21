@@ -300,6 +300,7 @@ def test_the_tainted_output_value_ablation_is_named_and_recorded(tmp_path, monke
     class Config:
         mode = "dryrun"
         system = "edgecitadel"
+        runtime_env: dict = {}
         effect_sink = {"kind": "ledger"}
         controller_lease_ms = 30_000
 

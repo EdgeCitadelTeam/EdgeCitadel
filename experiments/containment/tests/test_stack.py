@@ -417,3 +417,49 @@ def test_procstat_sums_cpu_and_memory_per_process_group():
     assert groups["child"]["rss_kb"] > 1000
     assert groups["child"]["cpu_s"] > 0
     assert groups["gone"] == {"cpu_s": 0.0, "rss_kb": 0, "n": 0}
+
+
+LAB_FALLBACKS = {
+    "EDGECITADEL_TRANSPORT_POLL_MS": "1000",
+    "EDGECITADEL_CLAIM_POLL_MS": "1000",
+}
+
+
+def test_lab_stacks_set_the_m7_fallback_re_checks_on_full_and_bare(monkeypatch):
+    """Every EdgeCitadel lab stack, full or bare, runs agentd's fallback
+    re-checks at 1 s (code default 50 ms), so H11 compares like with like;
+    dry runs and the A2A stacks keep the default."""
+    import re
+
+    configs = stack.HARNESS_ROOT / "configs"
+    for path in sorted(configs.glob("*.json")):
+        for name in re.findall(r"\$\{(\w+)\}", path.read_text()):
+            monkeypatch.setenv(name, f"/x/{name.lower()}")
+        config = stack.StackConfig.load(path)
+        if config.mode == "lab" and config.system != "a2a":
+            assert config.runtime_env == LAB_FALLBACKS, path.name
+        else:
+            assert config.runtime_env == {}, path.name
+
+
+def test_runtime_env_reaches_agentd_and_the_workers_but_not_the_harness_settings(
+    tmp_path, monkeypatch
+):
+    run = local_stack(tmp_path, runtime_env=dict(LAB_FALLBACKS))
+    started = {}
+    monkeypatch.setattr(
+        run, "_start", lambda host, name, argv, **kw: started.update({name: kw["env"]})
+    )
+    monkeypatch.setattr(stack, "wait_until", lambda *args, **kw: None)
+    monkeypatch.setattr(run.hosts["ctl"], "run", lambda *args, **kw: "")
+    run._start_node("core", "nats://127.0.0.1:1")
+    run._start_worker("a", "core", b"{}", 2)
+    for name in ("agentd-core", "worker-a"):
+        assert LAB_FALLBACKS.items() <= started[name].items()
+    for bad in (
+        {"EDGECITADEL_TRACE_SYNC": "0"},
+        {"PATH": "/tmp"},
+        {"EDGECITADEL_CLAIM_POLL_MS": 1000},
+    ):
+        with pytest.raises(stack.StackError, match="runtime_env"):
+            stack._runtime_env(bad)

@@ -91,5 +91,9 @@
       "core"
     ]
   },
-  "controller_lease_ms": 30000
+  "controller_lease_ms": 30000,
+  "runtime_env": {
+    "EDGECITADEL_TRANSPORT_POLL_MS": "1000",
+    "EDGECITADEL_CLAIM_POLL_MS": "1000"
+  }
 }
