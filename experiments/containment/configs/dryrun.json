@@ -17,5 +17,8 @@
     "edge-2": "local"
   },
   "tau_ms": 50,
-  "effect_path": "authorize_perform"
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "controller_lease_ms": 30000
 }

@@ -1,11 +1,17 @@
 """Controller: run a paired grid of experiment runs and collect their records.
 
 An experiment file names instances (spec files), strategies, alert timings,
-latency settings and repetitions. The grid is paired: every strategy runs the
-same instance under the same alert trigger, latency setting and repetition,
+latency settings, repetitions, the monitor's mechanism ``profiles``
+(``deployed``: each strategy as deployed, the default; ``shared``: every
+mechanism for every strategy) and ``phase1_include_cut`` settings. ``parts``
+adds sub-grids that override any of those (for example one instance under the
+shared profile). The grid is paired: every strategy runs the same instance
+under the same alert trigger, latency setting, repetition, profile and option,
 consecutively, so slow drift of the testbed affects all strategies alike. Each
 instance also gets a no-fault reference run per latency setting and repetition
-(strategy ``reference``); strategy ``none`` runs the fault with no alert.
+(strategy ``reference``); strategy ``none`` runs the fault with no alert. Runs
+without containment (``none``, ``reference``) keep the monitor running with
+``enforce: false``, so the nodes' controller leases are renewed in every run.
 
 One run: fresh stack, root task(s) submitted at ``t0``, the alert posted when
 its trigger fires on the workers' events (same trigger for every strategy),
@@ -113,44 +119,79 @@ class Experiment:
     infra_retries: int = 1
     root_modes: tuple[str, ...] = ("given",)
     measured_rtt_ms: float = MEASURED_RTT_MS
+    profiles: tuple[str, ...] = ("deployed",)
+    phase1_include_cut: tuple[bool, ...] = (False,)
+    # Sub-grids run after this one, each overriding some of its dimensions.
+    parts: tuple[Experiment, ...] = ()
 
     @classmethod
     def load(cls, path: str | Path) -> Experiment:
         path = Path(path)
         document = json.loads(path.read_text())
-        base = path.parent
-        strategies = tuple(document["strategies"])
-        for s in strategies:
+        fields = _experiment_fields(document, path.parent)
+        parts = []
+        for index, part in enumerate(document.get("parts", [])):
+            if set(part) & {"name", "parts", "latencies", "measured_rtt_ms"}:
+                raise ValueError(f"part {index}: only grid dimensions can change")
+            parts.append(cls(**{**fields, **_experiment_fields(part, path.parent)}))
+        return cls(**fields, parts=tuple(parts))
+
+
+PROFILES = ("deployed", "shared")
+
+
+def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any]:
+    """The fields an experiment document (or one of its parts) sets."""
+    out: dict[str, Any] = {}
+    if "name" in document:
+        out["name"] = document["name"]
+    if "strategies" in document:
+        out["strategies"] = tuple(document["strategies"])
+        for s in out["strategies"]:
             if s not in deploy.STRATEGIES and s != "none":
                 raise ValueError(f"unknown strategy '{s}'")
-        root_modes = tuple(document.get("root_modes", ["given"]))
-        for mode in root_modes:
+    if "root_modes" in document:
+        out["root_modes"] = tuple(document["root_modes"])
+        for mode in out["root_modes"]:
             if mode not in ROOT_MODES:
                 raise ValueError(f"unknown root mode '{mode}'")
-        measured = float(document.get("measured_rtt_ms", MEASURED_RTT_MS))
-        latencies = tuple(Latency(**latency) for latency in document["latencies"])
-        for latency in latencies:
-            check_stress_label(latency.name, latency.regime(measured), measured)
-        return cls(
-            name=document["name"],
-            instances=tuple((base / p).resolve() for p in document["instances"]),
-            strategies=strategies,
-            alerts=tuple(document["alerts"]),
-            latencies=latencies,
-            repetitions=int(document.get("repetitions", 1)),
-            time_scale=float(document.get("time_scale", 1.0)),
-            rogue_rates=tuple(document["rogue_rates"])
-            if "rogue_rates" in document
-            else None,
-            reference=bool(document.get("reference", True)),
-            quiet_s=float(document.get("quiet_s", 6.0)),
-            timeout_factor=float(document.get("timeout_factor", 3.0)),
-            timeout_extra_s=float(document.get("timeout_extra_s", 60.0)),
-            keep_state=bool(document.get("keep_state", False)),
-            infra_retries=int(document.get("infra_retries", 1)),
-            root_modes=root_modes,
-            measured_rtt_ms=measured,
+    if "profiles" in document:
+        out["profiles"] = tuple(document["profiles"])
+        for profile in out["profiles"]:
+            if profile not in PROFILES:
+                raise ValueError(f"unknown profile '{profile}'")
+    if "phase1_include_cut" in document:
+        out["phase1_include_cut"] = tuple(document["phase1_include_cut"])
+        if not all(isinstance(v, bool) for v in out["phase1_include_cut"]):
+            raise ValueError("phase1_include_cut lists booleans")
+    if "measured_rtt_ms" in document:
+        out["measured_rtt_ms"] = float(document["measured_rtt_ms"])
+    if "latencies" in document:
+        measured = out.get("measured_rtt_ms", MEASURED_RTT_MS)
+        out["latencies"] = tuple(
+            Latency(**latency) for latency in document["latencies"]
         )
+        for latency in out["latencies"]:
+            check_stress_label(latency.name, latency.regime(measured), measured)
+    if "instances" in document:
+        out["instances"] = tuple((base / p).resolve() for p in document["instances"])
+    if "alerts" in document:
+        out["alerts"] = tuple(document["alerts"])
+    if "rogue_rates" in document:
+        out["rogue_rates"] = tuple(document["rogue_rates"])
+    for key, kind in (
+        ("repetitions", int),
+        ("time_scale", float),
+        ("reference", bool),
+        ("quiet_s", float),
+        ("timeout_factor", float),
+        ("timeout_extra_s", float),
+        ("keep_state", bool),
+        ("infra_retries", int),
+    ):
+        if key in document:
+            out[key] = kind(document[key])
+    return out
 
 
 def check_stress_label(name: str, regime: str, measured_rtt_ms: float) -> None:
@@ -171,6 +212,8 @@ class RunCell:
     latency: Latency
     rep: int
     root_mode: str = "given"
+    profile: str = "deployed"
+    include_cut: bool = False
 
     @property
     def run_id(self) -> str:
@@ -178,18 +221,23 @@ class RunCell:
         alert = self.alert or "nofault"
         if self.alert and self.root_mode != "given":
             alert = f"{alert}.{self.root_mode}"
+        # The main design (deployed, no at-alert cut) keeps the plain ids.
+        variant = [] if self.profile == "deployed" else [self.profile]
+        variant += ["cut"] if self.include_cut else []
         parts = [
             self.instance.stem + rogue,
             alert,
             self.latency.name,
             f"r{self.rep}",
+            *variant,
             self.strategy,
         ]
         return re.sub(r"[^A-Za-z0-9_.=-]+", "-", "__".join(parts))
 
 
 def grid(experiment: Experiment) -> list[RunCell]:
-    """Paired cells: strategies adjacent within each (instance, alert, latency, rep)."""
+    """Paired cells: strategies adjacent within each (instance, alert, latency,
+    rep, profile, option); then the cells of each part."""
     cells = []
     rates: tuple[float | None, ...] = experiment.rogue_rates or (None,)
     for instance in experiment.instances:
@@ -200,20 +248,30 @@ def grid(experiment: Experiment) -> list[RunCell]:
                         cells.append(
                             RunCell(instance, rate, "reference", None, latency, rep)
                         )
-                    for alert in experiment.alerts:
-                        for mode in experiment.root_modes:
-                            for strategy in experiment.strategies:
-                                cells.append(
-                                    RunCell(
-                                        instance,
-                                        rate,
-                                        strategy,
-                                        alert,
-                                        latency,
-                                        rep,
-                                        mode,
-                                    )
-                                )
+                    for profile in experiment.profiles:
+                        for cut in experiment.phase1_include_cut:
+                            for alert in experiment.alerts:
+                                for mode in experiment.root_modes:
+                                    for strategy in experiment.strategies:
+                                        cells.append(
+                                            RunCell(
+                                                instance,
+                                                rate,
+                                                strategy,
+                                                alert,
+                                                latency,
+                                                rep,
+                                                mode,
+                                                profile,
+                                                cut,
+                                            )
+                                        )
+    for part in experiment.parts:
+        cells += grid(part)
+    ids = [cell.run_id for cell in cells]
+    duplicated = sorted({i for i in ids if ids.count(i) > 1})
+    if duplicated:
+        raise ValueError(f"the grid repeats runs: {duplicated[:3]}")
     return cells
 
 
@@ -310,7 +368,7 @@ def run_cell(
         spec,
         run_id=cell.run_id,
         time_scale=scale,
-        effect_path=stack_config.effect_path,
+        effect_sink=stack_config.plan_sink(),
     )
     (run_dir / "spec.json").write_text(json.dumps(to_dict(spec), indent=1))
     (run_dir / "plan.json").write_text(json.dumps(plan))
@@ -330,7 +388,11 @@ def run_cell(
         "latency_regime": cell.latency.regime(
             experiment.measured_rtt_ms, stack_config.netem_rtt_ms(cell.latency.netem)
         ),
-        "effect_path": stack_config.effect_path,
+        "effect_sink": stack_config.effect_sink["kind"],
+        "controller_lease_ms": stack_config.controller_lease_ms,
+        "profile": cell.profile,
+        "phase1_include_cut": cell.include_cut,
+        "mechanisms": None,  # the monitor's, for this strategy (from its status)
         "control_latency_ms": cell.latency.per_node(nodes),
         "control_delay_ms": dict(cell.latency.control_delay_ms),
         "rep": cell.rep,
@@ -353,7 +415,11 @@ def run_cell(
             control_latency_ms=meta["control_latency_ms"],
             control_delay_ms=cell.latency.control_delay_ms,
             enforce=cell.strategy in deploy.STRATEGIES,
+            profile=cell.profile,
+            phase1_include_cut=cell.include_cut,
         )
+        if cell.strategy in deploy.STRATEGIES:
+            meta["mechanisms"] = stack.monitor_status()["mechanisms"][cell.strategy]
         _drive(stack, spec, plan, cell, experiment, meta, run_dir)
     except (StackError, OSError, ValueError, KeyError) as error:
         meta["errors"].append(f"{type(error).__name__}: {error}"[:2000])
@@ -592,6 +658,21 @@ def _collect(
     ):
         data = stack.fetch(controller, f"{base}/{name}")
         (run_dir / target).write_bytes(data or b"")
+    try:  # the gateway's decisions, as Core collected them
+        effects = stack.hosts[controller].run(
+            [
+                config.hosts[controller].python,
+                "-m",
+                "harness.coreq",
+                "effects",
+                "--db",
+                f"{base}/core/openclaw.db",
+            ],
+            cwd=config.hosts[controller].runtime_root,
+        )
+    except (StackError, OSError):
+        effects = ""
+    (run_dir / "gateway_effects.jsonl").write_text(effects)
     logs = run_dir / "logs"
     logs.mkdir(exist_ok=True)
     for host in {controller, *config.node_hosts.values()}:

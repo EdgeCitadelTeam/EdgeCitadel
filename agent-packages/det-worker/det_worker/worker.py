@@ -12,7 +12,10 @@ Requests are JSON bodies with ``protocol: det-worker.v1``; ``kind`` selects:
   dispatches the task itself. The task therefore starts after every input
   arrived, which is the order the runtime's lineage records (an agent's later
   invocations follow its earlier ones), and its creator need not wait.
-- ``deliver``: store a pushed item for a later task of this agent.
+- ``deliver``: store a pushed item for a later task of this agent. The task
+  that consumes it reports the use to agentd (``trace.use``, naming the
+  delivery's task), since the item reaches it through this agent's memory and
+  not through its own request; so does a task that absorbs a ``rogue_msg``.
 - ``rogue``: an undeclared new invocation spawned by a malfunctioning task.
 - ``rogue_msg``: an undeclared message that lands in a live task of this agent.
 
@@ -26,9 +29,8 @@ completed steps, outputs, pushes, dispatches and effects are never repeated
 interrupted compute step is redone. A cancel ends the invocation; agentd itself
 refuses dispatches and effects of a held or ended task.
 
-Effects go through ``effect.authorize`` (scheduled ones are committed with
-``effect.commit`` when due) and, once the gateway allows them, to the ledger,
-which is the actuator. A tainted invocation (one whose inputs carry a fault
+Effects are executed by agentd's effect gateway (``effect.execute``), which
+performs them on the run's sink (``det_worker.effects``). A tainted invocation (one whose inputs carry a fault
 label) takes the workload's undeclared in-scope actions at its step boundaries,
 drawn exactly as the simulator draws them.
 """
@@ -56,7 +58,7 @@ from .content import (
     labels_of,
     rogue_draw,
 )
-from .effects import make_effect_path
+from .effects import GatewayExecute
 from .services import ServicesClient, ServicesUnavailable
 
 log = logging.getLogger(__name__)
@@ -110,11 +112,21 @@ class Invocation:
 
 
 @dataclass
+class Delivered:
+    """A pushed item in this agent's memory and the delivery task that brought it."""
+
+    content: Content
+    rt_task: str
+
+
+@dataclass
 class AgentState:
     """This agent's memory, shared by its slots; workload content lives here."""
 
-    delivered: dict[str, dict[str, list[Content]]] = field(default_factory=dict)
+    delivered: dict[str, dict[str, list[Delivered]]] = field(default_factory=dict)
     pollution: dict[str, set[str]] = field(default_factory=dict)
+    # The rogue messages behind each task's pollution (their runtime tasks).
+    polluters: dict[str, list[str]] = field(default_factory=dict)
     computing: set[str] = field(default_factory=set)
     finished: set[str] = field(default_factory=set)
     invocations: dict[str, Invocation] = field(default_factory=dict)
@@ -153,9 +165,7 @@ class DetWorker:
         self.fault = plan["fault"]
         self.rogue = plan["rogue"]
         self.scope = plan["agents"][agent]
-        self.effect_path = make_effect_path(
-            str(plan.get("effect_path", "authorize_perform"))
-        )
+        self.effects = GatewayExecute(plan["effect_sink"])
 
     # -- entry point ----------------------------------------------------------
     async def handle(
@@ -224,7 +234,7 @@ class DetWorker:
         await self._begin(inv)
         await self._sleep_until(t0 + spec["release"] * self.scale * 1000)
         if inv.inputs is None:
-            await self._take_inputs(inv, request)
+            await self._take_inputs(inv, request, context)
         origin = self.fault["origin"] == inv.task
         if origin and self.fault["class"] == "lease_runaway" and not inv.produced:
             self._add_op(inv, "runaway", "runaway", {})
@@ -238,7 +248,7 @@ class DetWorker:
             except asyncio.CancelledError:
                 inv.wasted_s += time.monotonic() - began
                 raise
-            await self._absorb_pollution(inv)
+            await self._absorb_pollution(inv, context)
             inv.steps_done = k
             if inv.labels:
                 await self._malfunction(inv, inv.task, k)
@@ -260,9 +270,12 @@ class DetWorker:
             },
         }, "completed"
 
-    async def _take_inputs(self, inv: Invocation, request: Mapping[str, Any]) -> None:
+    async def _take_inputs(
+        self, inv: Invocation, request: Mapping[str, Any], context: Any
+    ) -> None:
         spec = self.plan["tasks"][inv.task]
         consumed: list[tuple[str, Content]] = []
+        used: list[tuple[str, str]] = []  # (item, delivery task) from memory
         given = request.get("input")
         if given is not None:
             consumed.append((str(given["item"]), dict(given["content"])))
@@ -280,26 +293,48 @@ class DetWorker:
                 continue
             if len(copies) > 1:
                 extra.add(fault_label("message_duplicate", item))
-            consumed.append((item, copies[0]))
+            consumed.append((item, copies[0].content))
+            used.append((item, copies[0].rt_task))
         for item in spec["seeded"]:
             consumed.append((item, external_content(item)))
         inv.inputs = [content for _, content in consumed]
         inv.labels = set(labels_of(inv.inputs)) | extra
         inv.labels |= self.state.pollution.pop(inv.task, set())
+        used += [("rogue_msg", rt) for rt in self.state.polluters.pop(inv.task, [])]
         if self.fault["origin"] == inv.task and self.fault["class"] in CONTENT_FAULTS:
             subject = self.fault["item"] or self.fault["origin"]
             inv.labels.add(fault_label(self.fault["class"], str(subject)))
             await self.emit("fault", inv, fault=self.fault["class"])
         self.state.computing.add(inv.task)
+        for item, delivery in used:
+            await self._use(inv, context, item, delivery)
         for item, content in consumed:
             await self.emit("consume", inv, item=item, labels=list(content["labels"]))
         await self.emit("compute_start", inv, labels=sorted(inv.labels))
 
+    async def _use(
+        self, inv: Invocation, context: Any, item: str, delivery: str
+    ) -> None:
+        """Report to agentd that this invocation used a delivery from memory, so
+        its lineage links it to the producer (``trace.use``)."""
+        reply = await self._call(
+            context,
+            "trace.use",
+            schema_version=1,
+            request_id=stable_uuid(self.run_id, inv.rt_task, "use", delivery),
+            binding_id=context.trace.binding_id,
+            task_id=delivery,
+        )
+        code = None if reply.get("status") == "ok" else str(reply.get("code"))
+        await self.emit("use", inv, item=item, delivery=delivery, code=code)
+
     def _transport_fault(self, item: str, cls: str) -> bool:
         return self.fault["class"] == cls and self.fault["item"] == item
 
-    async def _absorb_pollution(self, inv: Invocation) -> None:
+    async def _absorb_pollution(self, inv: Invocation, context: Any) -> None:
         landed = self.state.pollution.pop(inv.task, set())
+        for delivery in self.state.polluters.pop(inv.task, []):
+            await self._use(inv, context, "rogue_msg", delivery)
         if landed - inv.labels:
             inv.labels |= landed
             await self.emit("polluted", inv, labels=sorted(inv.labels))
@@ -516,6 +551,7 @@ class DetWorker:
                 self.state.pollution.setdefault(receiver, set()).update(
                     request["labels"]
                 )
+                self.state.polluters.setdefault(receiver, []).append(inv.rt_task)
         await self._begin(inv)
         await self.emit("rogue_landed", inv, msg=request["msg"], receiver=receiver)
         return {"det": 1, "landed": receiver}, "completed"
@@ -555,7 +591,7 @@ class DetWorker:
         target, item = str(request["target"]), str(request["item"])
         if not inv.started:
             copies = self.state.delivered.setdefault(target, {}).setdefault(item, [])
-            copies.append(dict(request["content"]))
+            copies.append(Delivered(dict(request["content"]), inv.rt_task))
         await self._begin(inv)
         await self.emit(
             "delivered",
@@ -717,13 +753,12 @@ class DetWorker:
             "labels": list(p["content"]["labels"]),
         }
         p.setdefault("due_ms", now_ms() + p["delay"] * self.scale * 1000)
-        await self.effect_path.run(
+        await self.effects.run(
             self,
             context,
             op,
             record,
             request_id=stable_uuid(self.run_id, inv.rt_task, op.key, "effect"),
-            commit_request_id=stable_uuid(self.run_id, inv.rt_task, op.key, "commit"),
         )
 
     async def _runaway_op(self, inv: Invocation, op: Op, context: Any) -> None:
@@ -768,9 +803,6 @@ class DetWorker:
 
     async def ledger(self, record: Mapping[str, Any]) -> None:
         await self._ledger(record)
-
-    async def sleep_until(self, t_ms: float) -> None:
-        await self._sleep_until(t_ms)
 
     def now_ms(self) -> int:
         return now_ms()

@@ -93,11 +93,15 @@ def test_stack_file_expands_the_environment(tmp_path, monkeypatch):
 
 
 def test_shipped_stack_files_name_hosts_only():
-    for name in ("dryrun.json", "dryrun-nats.json", "lab.json"):
-        text = (stack.HARNESS_ROOT / "configs" / name).read_text()
+    for path in sorted((stack.HARNESS_ROOT / "configs").glob("*.json")):
+        text = path.read_text()
         document = json.loads(text)
-        assert "token" not in text.lower() and "password" not in text.lower()
+        # A Home Assistant token is only ever referenced by its file's path.
+        without_reference = text.replace('"token_file": "${HARNESS_HA_TOKEN_FILE}"', "")
+        assert "token" not in without_reference.lower(), path.name
+        assert "password" not in text.lower(), path.name
         assert set(document["node_hosts"].values()) <= set(document["hosts"])
+        assert document["controller_lease_ms"] == 30000, path.name
 
 
 def test_nats_control_gives_the_monitor_and_every_node_one_private_key(
@@ -129,9 +133,73 @@ def test_unknown_control_transports_are_rejected(tmp_path):
         stack._transport("carrier-pigeon")
 
 
-def test_effect_paths_are_validated_when_the_stack_is_loaded():
-    assert stack._effect_path("authorize_perform") == "authorize_perform"
-    with pytest.raises(stack.StackError, match="not available"):
-        stack._effect_path("gateway_execute")
-    with pytest.raises(stack.StackError, match="unknown"):
-        stack._effect_path("telepathy")
+def test_effect_sinks_are_validated_when_the_stack_is_loaded(monkeypatch):
+    assert stack._effect_sink({"kind": "ledger"}) == {"kind": "ledger"}
+    monkeypatch.setenv("HA_TARGET", "light.turn_on/light.lab_lamp")
+    sink = stack._effect_sink(
+        {"kind": "homeassistant", "targets": {"*": "${HA_TARGET}"}}
+    )
+    assert sink["targets"] == {"*": "light.turn_on/light.lab_lamp"}
+    assert sink["upstream"] is None and sink["token_file"] is None
+    for bad, match in (
+        ({"kind": "authorize_perform"}, "kind"),
+        ({"kind": "homeassistant"}, "targets"),
+        (
+            {"kind": "homeassistant", "targets": {"*": "x"}, "upstream": "http://ha"},
+            "token_file",
+        ),
+        ({"kind": "homeassistant", "targets": {"*": "${NOT_SET_ANYWHERE}"}}, "unset"),
+        ({"kind": "ledger", "upstream": "http://ha"}, "kind"),
+    ):
+        with pytest.raises(stack.StackError, match=match):
+            stack._effect_sink(bad)
+    with pytest.raises(stack.StackError, match="controller_lease_ms"):
+        stack._lease(500)
+
+
+def local_stack(tmp_path, **config) -> stack.RunStack:
+    hosts = {"ctl": host_config(name="ctl", ssh=None, work_root=str(tmp_path / "ctl"))}
+    run = stack.RunStack(
+        stack.StackConfig(
+            mode="dryrun",
+            hosts=hosts,
+            controller="ctl",
+            node_hosts={"core": "ctl"},
+            **config,
+        ),
+        "r1",
+        tmp_path / "out",
+    )
+    run.services_url = "http://127.0.0.1:9"
+    return run
+
+
+def test_nodes_perform_effects_on_the_runs_sink(tmp_path):
+    ledger = local_stack(tmp_path / "ledger")
+    path = ledger._effect_adapters("core")
+    assert stack.Path(path).stat().st_mode & 0o777 == 0o600
+    assert json.loads(stack.Path(path).read_text()) == {
+        "http": {"ledger_url": f"http://127.0.0.1:9/sink/{ledger.sink_token}"}
+    }
+    assert ledger.config.plan_sink() == {"adapter": "http"}
+    targets = {"*": "input_boolean.turn_on/input_boolean.lamp"}
+    physical = local_stack(
+        tmp_path / "ha",
+        effect_sink={
+            "kind": "homeassistant",
+            "targets": targets,
+            "upstream": None,
+            "token_file": None,
+        },
+    )
+    adapters = json.loads(stack.Path(physical._effect_adapters("core")).read_text())
+    ha = adapters["homeassistant"]
+    assert ha["base_url"] == f"http://127.0.0.1:9/ha/{physical.sink_token}"
+    # Dry run: the run's own token stands in for Home Assistant's, in a private file.
+    token = stack.Path(ha["token_file"])
+    assert token.read_text() == physical.ha_token
+    assert token.stat().st_mode & 0o777 == 0o600
+    assert physical.config.plan_sink() == {
+        "adapter": "homeassistant",
+        "targets": targets,
+    }

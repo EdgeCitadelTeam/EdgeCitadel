@@ -1,17 +1,22 @@
 {
   "name": "lab-pilot",
+  "note": "lab-smoke with 3 repetitions per cell: 495 runs.",
   "instances": [
     "../workloads/c2.json",
+    "../workloads/c3.json",
     "../workloads/n2.json",
-    "../workloads/n3.json"
+    "../workloads/n3.json",
+    "../workloads/rand-n7-s0.json",
+    "../workloads/rand-n7-s1.json",
+    "../workloads/rand-n7-s2.json"
   ],
   "strategies": [
     "reject_source",
     "stop_team",
     "stop_downstream",
+    "sink_guard",
     "trace_and_stop",
     "trace_and_quarantine",
-    "sink_guard",
     "greedy_cut",
     "cut_without_deadlines",
     "firebreak",
@@ -29,17 +34,41 @@
       }
     }
   ],
-  "repetitions": 2,
+  "repetitions": 3,
   "time_scale": 2.0,
-  "rogue_rates": [
-    0.0,
-    0.3
-  ],
   "reference": true,
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_include_cut": [
+    false
+  ],
   "quiet_s": 8,
   "timeout_factor": 3.0,
   "timeout_extra_s": 90,
   "root_modes": [
     "given"
+  ],
+  "parts": [
+    {
+      "instances": [
+        "../workloads/c2.json"
+      ],
+      "strategies": [
+        "reject_source",
+        "stop_team",
+        "stop_downstream",
+        "sink_guard",
+        "trace_and_stop",
+        "trace_and_quarantine",
+        "greedy_cut",
+        "cut_without_deadlines",
+        "firebreak"
+      ],
+      "profiles": [
+        "shared"
+      ],
+      "reference": false
+    }
   ]
 }

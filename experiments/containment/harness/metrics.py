@@ -439,7 +439,16 @@ def evaluate(
             for e in effects.values()
             if e["origin"] == "rogue" and e["state"] == "committed"
         ),
+        # Refused when asked (the worker's record) ...
         "effects_denied": sum(1 for e in effects.values() if e["state"] == "denied"),
+        # ... or scheduled in the gateway and never performed (held, revoked,
+        # or the run ended first), and committed but not performed.
+        "effects_not_performed": sum(
+            1 for e in effects.values() if e["state"] == "pending"
+        ),
+        "effects_sink_failed": sum(
+            1 for e in effects.values() if e["state"] == "sink_failed"
+        ),
         "slot_restarts": sum(1 for e in records.events if e["kind"] == "slot_restart"),
         "rpc_retries": sum(1 for e in records.events if e["kind"] == "rpc_retry"),
     }

@@ -12,8 +12,16 @@ same code drives both modes through a ``Host``:
   never touch the hosts' resident EdgeCitadel services.
 
 Processes run from ``runtime_root``, an EdgeCitadel checkout that has the
-integrated agentd and monitor (m3/integration), with this repository's harness
-and det-worker on ``PYTHONPATH``.
+agentd and monitor of this revision (usually this checkout), with this
+repository's harness and det-worker on ``PYTHONPATH``.
+
+Every agentd node enforces the fail-closed controller lease
+(``EDGECITADEL_CONTROLLER_LEASE_MS``, ``controller_lease_ms``, 30 s by default)
+and the monitor renews it from its start in every run, including runs that
+must not contain (``enforce: false``: the monitor decides and logs but sends
+no decision). Effects are performed by agentd's effect gateway through the
+adapter of the stack's ``effect_sink``: the run's ledger (``ledger``) or Home
+Assistant (``homeassistant``, fronted by the run's services).
 """
 
 from __future__ import annotations
@@ -277,10 +285,21 @@ class StackConfig:
     # (remote admin sockets forwarded over SSH, for older monitors).
     control_transport: str = "local"
     netem: dict[str, Any] = field(default_factory=dict)
-    # How workers carry out effects (det_worker.effects): "authorize_perform"
-    # (agentd authorizes and commits, the worker calls the sink) or
-    # "gateway_execute" (agentd's gateway calls the sink; m4/design).
-    effect_path: str = "authorize_perform"
+    # Where agentd's effect gateway performs effects: {"kind": "ledger"} (the
+    # run's services, through the gateway's http adapter) or {"kind":
+    # "homeassistant", "targets": {"<class>" | "*": "<domain>.<service>/<entity>"},
+    # "upstream": <Home Assistant URL> | null, "token_file": <path on every node
+    # host> | null}. Without an upstream (dry run) the services answer as Home
+    # Assistant for a token the run generates; with one they forward the call.
+    effect_sink: dict[str, Any] = field(default_factory=lambda: {"kind": "ledger"})
+    # agentd's fail-closed controller lease on every node, renewed by the monitor.
+    controller_lease_ms: int = 30_000
+
+    def plan_sink(self) -> dict[str, Any]:
+        """The workers' view of the sink (det_worker.effects)."""
+        if self.effect_sink["kind"] == "homeassistant":
+            return {"adapter": "homeassistant", "targets": self.effect_sink["targets"]}
+        return {"adapter": "http"}
 
     def netem_rtt_ms(self, profile: str | None) -> float:
         from .netem import added_rtt_ms
@@ -317,7 +336,8 @@ class StackConfig:
             monitor_overrides=dict(document.get("monitor_overrides", {})),
             control_transport=_transport(document.get("control_transport", "local")),
             netem=_netem(document.get("netem", {})),
-            effect_path=_effect_path(document.get("effect_path", "authorize_perform")),
+            effect_sink=_effect_sink(document.get("effect_sink", {"kind": "ledger"})),
+            controller_lease_ms=_lease(document.get("controller_lease_ms", 30_000)),
         )
 
 
@@ -334,14 +354,51 @@ def _netem(document: Mapping[str, Any]) -> dict[str, Any]:
     return dict(document)
 
 
-def _effect_path(name: str) -> str:
+def _effect_sink(document: Mapping[str, Any]) -> dict[str, Any]:
     from ._worker import effects
 
+    def expand(value: Any) -> Any:
+        if isinstance(value, str):
+            return os.path.expandvars(value)
+        if isinstance(value, Mapping):
+            return {k: expand(v) for k, v in value.items()}
+        return value
+
+    sink = expand(dict(document))
+    kind = sink.get("kind")
+    if kind == "ledger" and set(sink) == {"kind"}:
+        return sink
+    if kind != "homeassistant" or set(sink) - {
+        "kind",
+        "targets",
+        "upstream",
+        "token_file",
+    }:
+        raise StackError("effect_sink: kind ledger, or homeassistant with targets")
+    unresolved = [k for k, v in sink.items() if "${" in json.dumps(v)]
+    if unresolved:
+        raise StackError(f"effect_sink: unset environment variables in {unresolved}")
+    if bool(sink.get("upstream")) != bool(sink.get("token_file")):
+        raise StackError(
+            "effect_sink: a Home Assistant upstream needs the token_file its "
+            "nodes read, and only an upstream does"
+        )
     try:
-        effects.make_effect_path(name)
+        effects.check_sink({"adapter": "homeassistant", "targets": sink.get("targets")})
     except ValueError as error:
-        raise StackError(f"effect_path: {error}") from None
-    return name
+        raise StackError(f"effect_sink: {error}") from None
+    return {
+        "kind": kind,
+        "targets": dict(sink["targets"]),
+        "upstream": sink.get("upstream") or None,
+        "token_file": sink.get("token_file") or None,
+    }
+
+
+def _lease(value: object) -> int:
+    if type(value) is not int or value < 1000:
+        raise StackError("controller_lease_ms must be an integer of at least 1000")
+    return value
 
 
 def _transport(name: str) -> str:
@@ -403,6 +460,10 @@ class RunStack:
         self.hosts = {name: make_host(h) for name, h in config.hosts.items()}
         self.procs: list[Proc] = []
         self.services_token = secrets.token_urlsafe(24)
+        # The gateway's adapters authenticate to the sink with this path token.
+        self.sink_token = secrets.token_urlsafe(24)
+        # Dry-run Home Assistant: the services accept this token in its place.
+        self.ha_token = secrets.token_urlsafe(32)
         self.admin_token = secrets.token_urlsafe(24)
         self.nats_token = secrets.token_urlsafe(24)
         self.services_url = ""
@@ -448,9 +509,12 @@ class RunStack:
         control_latency_ms: Mapping[str, float],
         control_delay_ms: Mapping[str, float],
         enforce: bool = True,
+        profile: str = "deployed",
+        phase1_include_cut: bool = False,
     ) -> None:
-        """Start everything; with ``enforce`` False the monitor gets no control
-        endpoints (it decides and logs, nothing is applied: baseline runs)."""
+        """Start everything. With ``enforce`` False the monitor decides and logs
+        but sends no decision (baseline runs); it still renews every node's
+        controller lease, so effects pass in those runs too."""
         controller = self.config.controller
         for host in {controller, *self.config.node_hosts.values()}:
             self.hosts[host].write(f"{self.host_dir(host)}/.keep", b"")
@@ -461,7 +525,7 @@ class RunStack:
                 raise StackError(
                     f"workload node '{node}' has no host in the stack config"
                 )
-        records = deploy.agent_records(spec)
+        records = deploy.agent_records(spec, plan["effect_sink"])
         for node in deploy.nodes(spec):
             self._start_node(node, nats_url)
         for node in deploy.nodes(spec):
@@ -488,7 +552,9 @@ class RunStack:
             control_delay_ms,
             nats_url,
             enforce,
+            {"profile": profile, "phase1_include_cut": phase1_include_cut},
         )
+        self._await_leases(spec)
         plan_bytes = json.dumps(plan).encode()
         for agent in spec.agents:
             self._start_worker(
@@ -507,6 +573,14 @@ class RunStack:
         self.hosts[host].write(
             f"{directory}/services.token", self.services_token.encode()
         )
+        self.hosts[host].write(f"{directory}/sink.token", self.sink_token.encode())
+        sink = self.config.effect_sink
+        upstream = []
+        if sink["kind"] == "homeassistant":
+            if sink["upstream"]:
+                upstream = ["--ha-upstream", sink["upstream"]]
+            else:
+                self.hosts[host].write(f"{directory}/ha.token", self.ha_token.encode())
         port = self._port("services")
         bind = "127.0.0.1" if self.config.mode == "dryrun" else "0.0.0.0"
         self._start(
@@ -524,6 +598,7 @@ class RunStack:
                 str(port),
                 "--max-spawn",
                 str(spec.rogue.max_dyn),
+                *upstream,
             ],
         )
         ready = f"{directory}/services.ready"
@@ -575,12 +650,44 @@ class RunStack:
             host,
             f"agentd-{node}",
             [python, "-m", "harness.nodectl", "serve", "--state", state],
-            env={"EDGECITADEL_TRACE_SYNC": "1"},
+            env={
+                "EDGECITADEL_TRACE_SYNC": "1",
+                "EDGECITADEL_CONTROLLER_LEASE_MS": str(self.config.controller_lease_ms),
+                "EDGECITADEL_EFFECT_ADAPTERS": self._effect_adapters(node),
+            },
         )
         wait_until(
             lambda: self.hosts[host].exists(f"{state}/agentd/admin.token"),
             f"agentd {node}",
         )
+        # The admin token is written before the socket listens.
+        socket = self._socket(node)
+        wait_until(lambda: self.hosts[host].exists(socket), f"agentd {node} socket")
+
+    def _effect_adapters(self, node: str) -> str:
+        """Write the node's gateway adapter file (no secret in it); its path."""
+        host = self.config.node_hosts[node]
+        state = self.node_state(node)
+        sink = self.config.effect_sink
+        if sink["kind"] == "homeassistant":
+            token_file = sink["token_file"]
+            if token_file is None:  # dry run: the services stand in for HA
+                token_file = f"{state}/agentd/credentials/homeassistant.token"
+                self.hosts[host].write(token_file, self.ha_token.encode())
+            adapters = {
+                "homeassistant": {
+                    "base_url": f"{self.services_url}/ha/{self.sink_token}",
+                    "token_file": token_file,
+                }
+            }
+        else:
+            adapters = {
+                "http": {"ledger_url": f"{self.services_url}/sink/{self.sink_token}"}
+            }
+        path = f"{state}/effect-adapters.json"
+        # The URL carries the sink token: the file is mode 600 like the others.
+        self.hosts[host].write(path, json.dumps(adapters).encode())
+        return path
 
     def _install(self, node: str, records: list[dict[str, Any]]) -> None:
         host = self.config.node_hosts[node]
@@ -614,6 +721,7 @@ class RunStack:
         delay: Mapping[str, float],
         nats_url: str,
         enforce: bool,
+        settings: Mapping[str, Any],
     ) -> None:
         directory = f"{self.host_dir(host)}/core"
         python = self._python(host)
@@ -635,10 +743,13 @@ class RunStack:
             strategy=strategy,
             control_latency_ms=latency,
             tau_ms=self.config.tau_ms,
-            overrides=self.config.monitor_overrides,
+            enforce=enforce,
+            overrides={**settings, **self.config.monitor_overrides},
         )
+        # Control is configured in every run: the monitor renews the nodes'
+        # leases even when it must not contain (enforce false).
         control: dict[str, Any] = {}
-        if enforce and self.config.control_transport == "nats":
+        if self.config.control_transport == "nats":
             owner = str(monitor.get("owner", deploy.MONITOR_OWNER))
             control["nats"] = {
                 "key_file": self._control_key(spec, host, owner),
@@ -646,7 +757,7 @@ class RunStack:
             }
         else:
             sockets = {}
-            for node in deploy.nodes(spec) if enforce else ():
+            for node in deploy.nodes(spec):
                 if self.config.node_hosts[node] == host:
                     sockets[node] = {
                         "socket": self._socket(node),
@@ -654,9 +765,7 @@ class RunStack:
                     }
                 elif self.config.control_transport == "ssh_forward":
                     sockets[node] = self._forward_control(node, host)
-            unreachable = [
-                n for n in deploy.nodes(spec) if enforce and n not in sockets
-            ]
+            unreachable = [n for n in deploy.nodes(spec) if n not in sockets]
             if unreachable:
                 raise StackError(
                     f"the monitor cannot reach agentd on {unreachable}; "
@@ -700,6 +809,22 @@ class RunStack:
         wait_until(
             lambda: self.monitor_status().get("state") == "running", "Core monitor"
         )
+
+    def _await_leases(self, spec: Spec) -> None:
+        """Every node enforces the controller lease: work starts only once the
+        monitor's renewal reached each of them (else every effect is denied)."""
+
+        def renewed() -> bool:
+            leases = (
+                self.monitor_status().get("control", {}).get("controller_leases", {})
+            )
+            now_ms = int(self.services("GET", "/clock")["t_ms"])
+            return all(
+                (leases.get(node) or {}).get("until_ms", 0) > now_ms
+                for node in deploy.nodes(spec)
+            )
+
+        wait_until(renewed, "controller leases on every node")
 
     def _control_key(self, spec: Spec, controller: str, owner: str) -> str:
         """A fresh owner key for this run, given to the monitor and every node.

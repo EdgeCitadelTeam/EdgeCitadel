@@ -1009,11 +1009,12 @@ def compile_plan(
     *,
     run_id: str,
     time_scale: float,
-    effect_path: str = "authorize_perform",
+    effect_sink: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The JSON plan workers execute; derived relations are resolved here only.
 
-    ``effect_path`` names how workers carry out effects (``det_worker.effects``).
+    ``effect_sink`` is where agentd's gateway performs the workers' effects
+    (``det_worker.effects``; default the run's HTTP ledger).
     """
     derived = derive(spec)
     fault = spec.fault
@@ -1071,7 +1072,7 @@ def compile_plan(
     return {
         "plan_version": 1,
         "run_id": run_id,
-        "effect_path": effect_path,
+        "effect_sink": dict(effect_sink or {"adapter": "http"}),
         "spec": spec.name,
         "time_scale": time_scale,
         "root_agent": next(a.id for a in spec.agents if a.parent is None),

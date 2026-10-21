@@ -19,14 +19,15 @@ MAIN = [
     ("Cut without deadlines", FAMILY_FUT, "#CC79A7", "P"),
     ("Firebreak (ours)", FAMILY_FUT, "#D55E00", "*"),
 ]
-# Runtime-only strategies (team-approved 2026-10-21; implemented in the monitor
-# on m4/design). They have no simulator pipeline yet, so they are not part of
-# the simulator's MAIN list; their colours and markers are the Okabe-Ito
-# entries MAIN leaves free. Families are provisional until the monitor's
-# definitions land.
+# Runtime-only strategies (team-approved 2026-10-21; in the monitor since
+# m4/design). They have no simulator pipeline yet, so they are not part of the
+# simulator's MAIN list; their colours and markers are the Okabe-Ito entries
+# MAIN leaves free. Sink guard traces nothing (it guards every protected sink
+# on alert), so it is a no-lineage baseline; Trace & quarantine traces the
+# declared closure like Trace & stop.
 EXTRA = [
     ("Trace & quarantine", FAMILY_PAST, "#56B4E9", "o"),
-    ("Sink guard", FAMILY_PAST, "#009E73", "h"),
+    ("Sink guard", FAMILY_NO, "#009E73", "h"),
 ]
 MAIN_NAMES = [m[0] for m in MAIN]
 PLOTTED = [*MAIN, *EXTRA]

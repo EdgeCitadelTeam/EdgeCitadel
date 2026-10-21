@@ -196,3 +196,53 @@ def test_new_strategies_are_accepted_by_name(tmp_path):
         tmp_path, strategies=["trace_and_quarantine", "sink_guard", "none"]
     )
     assert loaded.strategies == ("trace_and_quarantine", "sink_guard", "none")
+
+
+def test_profiles_options_and_parts_extend_the_paired_grid(tmp_path):
+    loaded = experiment(
+        tmp_path,
+        repetitions=1,
+        rogue_rates=[0.0],
+        latencies=[{"name": "fast", "control_latency_ms": {"*": 2}}],
+        profiles=["deployed"],
+        phase1_include_cut=[False, True],
+        # A part inherits every dimension it does not set.
+        parts=[
+            {
+                "profiles": ["shared"],
+                "phase1_include_cut": [False],
+                "strategies": ["firebreak"],
+                "reference": False,
+            }
+        ],
+    )
+    cells = runner.grid(loaded)
+    # 1 reference + 2 options x 2 alerts x 3 strategies, then 2 alerts x 1 shared.
+    assert len(cells) == 1 + 12 + 2
+    main = [c for c in cells if c.profile == "deployed" and not c.include_cut]
+    assert all("__deployed" not in c.run_id and "__cut" not in c.run_id for c in main)
+    cut = [c for c in cells if c.include_cut]
+    assert len(cut) == 6 and all("__r0__cut__" in c.run_id for c in cut)
+    shared = [c for c in cells if c.profile == "shared"]
+    assert [c.run_id.rsplit("__", 2)[1:] for c in shared] == [
+        ["shared", "firebreak"]
+    ] * 2
+    with pytest.raises(ValueError, match="profile"):
+        experiment(tmp_path, profiles=["everything"])
+    with pytest.raises(ValueError, match="repeats"):
+        runner.grid(experiment(tmp_path, parts=[{"strategies": ["firebreak"]}]))
+
+
+def test_the_lab_grids_have_their_planned_sizes():
+    root = runner.Path(__file__).resolve().parents[1] / "experiments"
+    sizes = {}
+    for name in ("lab-smoke", "lab-pilot", "lab-main"):
+        loaded = runner.Experiment.load(root / f"{name}.json")
+        cells = runner.grid(loaded)
+        sizes[name] = len(cells)
+        assert {c.profile for c in cells} <= {"deployed", "shared"}
+        assert not any(c.include_cut for c in cells)
+    # 7 instances x (reference + 2 alerts x (9 strategies + none)), plus C2's
+    # 2 alerts x 9 strategies under the shared profile.
+    assert sizes["lab-smoke"] == 7 * (1 + 2 * 10) + 2 * 9
+    assert sizes["lab-pilot"] == 3 * sizes["lab-smoke"]

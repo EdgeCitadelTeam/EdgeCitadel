@@ -52,13 +52,22 @@ def wait_for(predicate, what: str, timeout: float = 60.0):
 
 
 @pytest.fixture
-def node(tmp_path):
+def node(tmp_path, services, monkeypatch):
+    """One agentd whose effect gateway performs effects on the run's sink."""
+    _, url = services
     state = tmp_path / "node"
     nodectl.configure(state, "core", None, None)
+    adapters = tmp_path / "effect-adapters.json"
+    adapters.write_text(json.dumps({"http": {"ledger_url": f"{url}/sink/sink"}}))
+    monkeypatch.setenv("EDGECITADEL_EFFECT_ADAPTERS", str(adapters))
     stop = threading.Event()
     daemon = threading.Thread(target=nodectl.serve, args=(state, stop), daemon=True)
     daemon.start()
+    from edgecitadel_agentd.service import socket_path_for
+
+    # The admin token is written before the socket listens: wait for both.
     wait_for(lambda: (state / "agentd" / "admin.token").exists(), "agentd")
+    wait_for(lambda: socket_path_for(state / "agentd").exists(), "agentd socket")
     yield state
     stop.set()
     daemon.join(10)
@@ -67,7 +76,9 @@ def node(tmp_path):
 @pytest.fixture
 def services(tmp_path):
     run = RunServices(tmp_path / "services", max_spawn=10)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(run, "token"))
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), make_handler(run, "token", sink_token="sink")
+    )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield run, f"http://127.0.0.1:{server.server_address[1]}"
     server.shutdown()
@@ -197,7 +208,16 @@ def test_held_task_pauses_resumes_and_the_workload_completes_once(
     assert sorted(committed) == ["E_B", "E_Bn", "FINAL"]
     for record in ledger:
         if record["phase"] == "committed":
+            # Performed by the gateway, attributed to the worker's attempt.
+            assert record["sink"] == "http" and record["attributed"]
+            assert record["gateway"]["node_id"] == "core"
             assert record["value"] == expected[record["effect_id"]]["value"]
+    # Every pushed input reached its reader through the agent's memory, and
+    # the reader reported its use to agentd (B.t0's X@v1, R.agg's results).
+    uses = [e for e in run.events_after(0, 100000)["events"] if e["kind"] == "use"]
+    pushed = {(d.target, d.item) for d in S.derive(spec).deliveries}
+    assert {(e["task"], e["item"]) for e in uses} == pushed
+    assert ("B.t0", "X@v1") in pushed and {e["code"] for e in uses} == {None}
 
 
 def test_gateway_refuses_effects_outside_the_derived_scope(tmp_path, node, services):

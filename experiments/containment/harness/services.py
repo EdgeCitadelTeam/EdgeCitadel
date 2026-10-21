@@ -3,10 +3,19 @@
 One process per run, on the controller's host, so every ground-truth time is
 on one clock (the monitor runs on the same host in both modes):
 
-- ``POST /ledger``: append an effect record (``attempted``, ``held``,
-  ``committed``, ``denied``). The ledger is the actuator: an effect counts as
-  committed when its ``committed`` record is appended. Records are idempotent
-  per (effect, issuer, phase), so a resumed worker cannot actuate twice.
+- ``POST /ledger``: a worker appends an effect record (``attempted``,
+  ``scheduled``, ``denied``, ``sink_failed``). Records are idempotent per
+  (effect, issuer, phase).
+- The sink, which is the actuator: agentd's effect gateway performs every
+  committed effect here, and only here does an effect count as ``committed``.
+  ``POST /sink/<sink token>`` takes the gateway's ledger adapter post (the
+  committed effect and the worker's ``data``); ``POST /ha/<sink token>/api/
+  services/<domain>/<service>`` fronts Home Assistant for its adapter: the call
+  is forwarded to the upstream Home Assistant (``--ha-upstream``) without the
+  worker's ``ec_*`` keys and recorded once Home Assistant accepted it, or, with
+  no upstream (dry run), accepted for the run's own Home Assistant token.
+  Either way the record carries the worker's attempted record and the
+  gateway's commit; a repeated delivery is not recorded twice.
 - ``POST /events``: append a worker event; ``GET /events?after=<seq>`` feeds the
   controller (alert triggers, quiescence).
 - ``GET /ready?task=<id>``: pushed items that landed for a planned task, with
@@ -25,6 +34,8 @@ import hmac
 import json
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -89,6 +100,28 @@ class RunServices:
             self._append("ledger", stamped)
         return {"t_ms": stamped["t_ms"], "repeated": False}
 
+    def committed(
+        self, data: dict[str, Any], sink: str, gateway: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The sink performed an effect: record it against the worker's attempt."""
+        effect, issuer = str(data["ec_effect"]), str(data["ec_issuer"])
+        with self._lock:
+            attempted = self._ledger.get((effect, issuer, "attempted"))
+        base = (
+            {k: v for k, v in attempted.items() if k not in {"phase", "t_ms"}}
+            if attempted is not None
+            else {"run": data.get("ec_run"), "effect_id": effect, "issuer": issuer}
+        )
+        return self.ledger(
+            {
+                **base,
+                "phase": "committed",
+                "sink": sink,
+                "gateway": gateway,
+                "attributed": attempted is not None,
+            }
+        )
+
     def ready(self, task: str) -> dict[str, Any]:
         with self._lock:
             return {
@@ -117,7 +150,44 @@ class RunServices:
         return {"events": chunk, "next": seq + len(chunk), "t_ms": now_ms()}
 
 
-def make_handler(services: RunServices, token: str) -> type[BaseHTTPRequestHandler]:
+GATEWAY_FIELDS = (
+    "effect_id",
+    "node_id",
+    "agent_id",
+    "task_id",
+    "effect_class",
+    "target",
+    "scheduled_at_ms",
+    "committed_at_ms",
+)
+
+
+def forward(upstream: str, path: str, body: dict[str, Any], authorization: str) -> int:
+    """Pass one Home Assistant service call on; returns its HTTP status."""
+    request = urllib.request.Request(
+        upstream.rstrip("/") + path,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "Authorization": authorization},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=10) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as error:
+        return int(error.code)
+    except (urllib.error.URLError, OSError):
+        return 502
+
+
+def make_handler(
+    services: RunServices,
+    token: str,
+    *,
+    sink_token: str = "",
+    ha_token: str | None = None,
+    ha_upstream: str | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -157,8 +227,47 @@ def make_handler(services: RunServices, token: str) -> type[BaseHTTPRequestHandl
             else:
                 self._reply(404, {"error": "not found"})
 
+        def _sink(self, path: str, record: dict[str, Any]) -> None:
+            """The gateway's adapters: they authenticate by the path's token."""
+            parts = path.split("/", 3)  # "", "sink" | "ha", token, rest
+            given = parts[2] if len(parts) > 2 else ""
+            if not sink_token or not hmac.compare_digest(
+                given.encode(), sink_token.encode()
+            ):
+                self._reply(401, {"error": "invalid token"})
+                return
+            if parts[1] == "sink":
+                data = record.get("data") or {}
+                gateway = {k: record.get(k) for k in GATEWAY_FIELDS}
+                self._reply(200, services.committed(data, "http", gateway))
+                return
+            rest = "/" + (parts[3] if len(parts) > 3 else "")
+            if not rest.startswith("/api/services/"):
+                self._reply(404, {"error": "not found"})
+                return
+            authorization = self.headers.get("Authorization", "")
+            data = {k: v for k, v in record.items() if k.startswith("ec_")}
+            call = {k: v for k, v in record.items() if not k.startswith("ec_")}
+            if ha_upstream:
+                status = forward(ha_upstream, rest, call, authorization)
+            elif ha_token is not None and hmac.compare_digest(
+                authorization.encode(), f"Bearer {ha_token}".encode()
+            ):
+                status = 200
+            else:
+                status = 401
+            if 200 <= status < 300 and {"ec_effect", "ec_issuer"} <= set(data):
+                services.committed(
+                    data,
+                    "homeassistant",
+                    {"service": rest.removeprefix("/api/services/"), **call},
+                )
+            self._reply(status, [] if status < 300 else {"error": status})
+
         def do_POST(self) -> None:  # noqa: N802
-            if not self._authorized():
+            path = urlsplit(self.path).path
+            gateway = path.startswith(("/sink/", "/ha/"))
+            if not gateway and not self._authorized():
                 return
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
@@ -168,6 +277,9 @@ def make_handler(services: RunServices, token: str) -> type[BaseHTTPRequestHandl
                 record = json.loads(self.rfile.read(length))
                 if not isinstance(record, dict):
                     raise ValueError("object expected")
+                if gateway:
+                    self._sink(path, record)
+                    return
                 route = {
                     "/events": services.event,
                     "/ledger": services.ledger,
@@ -184,9 +296,26 @@ def make_handler(services: RunServices, token: str) -> type[BaseHTTPRequestHandl
     return Handler
 
 
-def serve(directory: Path, host: str, port: int, token: str, max_spawn: int) -> None:
+def serve(
+    directory: Path,
+    host: str,
+    port: int,
+    token: str,
+    max_spawn: int,
+    *,
+    sink_token: str = "",
+    ha_token: str | None = None,
+    ha_upstream: str | None = None,
+) -> None:
     services = RunServices(directory, max_spawn=max_spawn)
-    server = ThreadingHTTPServer((host, port), make_handler(services, token))
+    handler = make_handler(
+        services,
+        token,
+        sink_token=sink_token,
+        ha_token=ha_token,
+        ha_upstream=ha_upstream,
+    )
+    server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     (directory / "services.ready").write_text(
         json.dumps({"port": server.server_address[1]})
@@ -204,9 +333,24 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--max-spawn", type=int, default=200)
+    parser.add_argument(
+        "--ha-upstream", help="Home Assistant to forward the gateway's calls to"
+    )
     args = parser.parse_args(argv)
     token = (args.dir / "services.token").read_text().strip()
-    serve(args.dir, args.host, args.port, token, args.max_spawn)
+    # Secrets come from mode-600 files in the run directory, never argv.
+    sink_token = (args.dir / "sink.token").read_text().strip()
+    ha_file = args.dir / "ha.token"
+    serve(
+        args.dir,
+        args.host,
+        args.port,
+        token,
+        args.max_spawn,
+        sink_token=sink_token,
+        ha_token=ha_file.read_text().strip() if ha_file.exists() else None,
+        ha_upstream=args.ha_upstream,
+    )
 
 
 if __name__ == "__main__":

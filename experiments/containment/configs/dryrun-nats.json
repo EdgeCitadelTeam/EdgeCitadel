@@ -18,5 +18,8 @@
   },
   "tau_ms": 50,
   "control_transport": "nats",
-  "effect_path": "authorize_perform"
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "controller_lease_ms": 30000
 }

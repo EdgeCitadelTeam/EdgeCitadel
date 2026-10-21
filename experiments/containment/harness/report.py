@@ -52,6 +52,8 @@ IDENTITY = (
     "strategy_code",
     "strategy",
     "family",
+    "profile",
+    "phase1_include_cut",
     "alert",
     "root_mode",
     "latency",
@@ -106,7 +108,11 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "root_mode": meta.get("root_mode") or ("given" if meta.get("alert") else None),
         "latency": meta.get("latency"),
         "latency_regime": meta.get("latency_regime") or _regime(meta),
-        "effect_path": meta.get("effect_path", "authorize_perform"),
+        "effect_sink": meta.get("effect_sink", "ledger"),
+        # The monitor's mechanism profile and option of the run (main design:
+        # deployed, no at-alert cut).
+        "profile": meta.get("profile", "deployed"),
+        "phase1_include_cut": int(bool(meta.get("phase1_include_cut", False))),
         "control_latency_ms": sum(latency.values()) / len(latency)
         if latency
         else math.nan,
@@ -219,6 +225,8 @@ def score(out: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 CELL = [
     "mode",
+    "profile",
+    "phase1_include_cut",
     "rogue_rate",
     "alert",
     "root_mode",
@@ -226,7 +234,16 @@ CELL = [
     "latency_regime",
     "control_latency_ms",
 ]
-PAIR = ["instance", "rogue_rate", "alert", "root_mode", "latency", "rep"]
+PAIR = [
+    "instance",
+    "profile",
+    "phase1_include_cut",
+    "rogue_rate",
+    "alert",
+    "root_mode",
+    "latency",
+    "rep",
+]
 
 
 def bootstrap_ci(values: Any, *, seed: int = 0) -> tuple[float, float]:
@@ -375,7 +392,14 @@ def paired(runs: Any, reference: str = "firebreak") -> Any:
         joined = base.join(other, lsuffix="_fb", rsuffix="_other", how="inner")
         if joined.empty:
             continue
-        cells = ["rogue_rate", "alert", "root_mode", "latency"]
+        cells = [
+            "profile",
+            "phase1_include_cut",
+            "rogue_rate",
+            "alert",
+            "root_mode",
+            "latency",
+        ]
         for cell, j in joined.groupby(cells, dropna=False):
             dk = (
                 j.kept_cfrac_fb.astype(float) - j.kept_cfrac_other.astype(float)
@@ -504,8 +528,13 @@ STRESS_NOTE = "stress settings, above the measured LAN round trip (1.5-4 ms)"
 
 
 def _main_runs(runs: Any, mode: str) -> Any:
-    """Runs of one mode in the main design: plotted strategies, root given."""
+    """Runs of one mode in the main design: plotted strategies, root given, the
+    deployed profile without the at-alert cut."""
     r = runs[(runs["mode"] == mode) & runs.strategy.isin(PLOTTED_NAMES)]
+    if "profile" in r:
+        r = r[r.profile.isna() | (r.profile == "deployed")]
+    if "phase1_include_cut" in r:
+        r = r[r.phase1_include_cut.isna() | (r.phase1_include_cut == 0)]
     if "root_mode" in r:
         r = r[r.root_mode.isna() | (r.root_mode == "given")]
     return r

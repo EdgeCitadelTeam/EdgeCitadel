@@ -12,6 +12,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from typing import Any
 
+from ._worker import effects
 from .names import STRATEGY_CODES
 from .spec import RUNTIME_EFFECT_CLASS, Spec, derive, node_of_agent
 
@@ -22,7 +23,13 @@ STRATEGIES = STRATEGY_CODES
 MONITOR_OWNER = "core-monitor"
 
 
-def effect_rule(cls: str) -> dict[str, str]:
+def effect_rule(cls: str, sink: Mapping[str, Any] | None = None) -> dict[str, str]:
+    """The grant rule of one workload effect class on the run's sink: the
+    ledger's ``actuator://<class>/*``, or the Home Assistant service the
+    class maps to (exactly that target)."""
+    if sink is not None and sink.get("adapter") == "homeassistant":
+        target = effects.runtime_target(sink, cls, "")
+        return {"effect_class": RUNTIME_EFFECT_CLASS, "target": target}
     return {"effect_class": RUNTIME_EFFECT_CLASS, "target": f"actuator://{cls}/*"}
 
 
@@ -30,7 +37,9 @@ def nodes(spec: Spec) -> list[str]:
     return sorted({node_of_agent(spec, a.id) for a in spec.agents})
 
 
-def agent_records(spec: Spec) -> dict[str, list[dict[str, Any]]]:
+def agent_records(
+    spec: Spec, sink: Mapping[str, Any] | None = None
+) -> dict[str, list[dict[str, Any]]]:
     """Per node: the Managed Agent registrations of the agents placed there."""
     derived = derive(spec)
     out: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -39,7 +48,15 @@ def agent_records(spec: Spec) -> dict[str, list[dict[str, Any]]]:
             {
                 "id": a.id,
                 "recipients": list(derived.grants[a.id]),
-                "effects": [effect_rule(c) for c in derived.effect_grant[a.id]],
+                # Classes mapped to one Home Assistant target share its rule.
+                "effects": list(
+                    {
+                        rule["target"]: rule
+                        for rule in (
+                            effect_rule(c, sink) for c in derived.effect_grant[a.id]
+                        )
+                    }.values()
+                ),
             }
         )
     return dict(out)
@@ -66,13 +83,15 @@ def monitor_config(
     strategy: str,
     control_latency_ms: Mapping[str, float],
     tau_ms: float = 50.0,
+    enforce: bool = True,
     overrides: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The monitor's ``MonitorConfig`` JSON for one run.
 
     Timing values are lower bounds (the monitor's deadlines must stay sound):
     control latency is the run's latency setting per node; delivery, start and
-    emission bounds stay 0 unless overridden with measured minimums.
+    emission bounds stay 0 unless overridden with measured minimums. The run's
+    mechanism profile and ``phase1_include_cut`` come in ``overrides``.
     """
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown strategy '{strategy}'")
@@ -92,6 +111,7 @@ def monitor_config(
         },
         "tau_ms": float(tau_ms),
         "strategy": strategy,
+        "enforce": enforce,
     }
     if control_latency_ms:
         config["default_control_latency_ms"] = float(min(control_latency_ms.values()))

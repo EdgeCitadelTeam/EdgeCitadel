@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,13 +62,18 @@ class LocalServices:
 
 
 class FakeRuntime:
-    """agentd's dispatch and effect RPCs with stored receipts per request id."""
+    """agentd's dispatch, trace.use and effect gateway, with stored receipts per
+    request id. The gateway performs each committed effect on the run's sink
+    (the services), a scheduled one when due, as agentd's scheduler does."""
 
-    def __init__(self) -> None:
+    def __init__(self, sink: LocalServices | None = None) -> None:
+        self.sink = sink
         self.dispatches: dict[str, dict[str, Any]] = {}
-        self.authorized: dict[str, str] = {}
-        self.commits: dict[str, set[str]] = {}
-        self.held_effects: set[str] = set()
+        self.uses: dict[str, str] = {}  # request id -> delivery task
+        self.executed: dict[str, dict[str, Any]] = {}  # request id -> reply
+        self.requests: dict[str, dict[str, Any]] = {}  # request id -> request
+        self.held = False  # the issuing task is held: effects are denied
+        self._timers: list[threading.Timer] = []
 
     def call(self, operation: str, **params: Any) -> dict[str, Any]:
         if operation == "trace.dispatch":
@@ -75,21 +82,44 @@ class FakeRuntime:
                 "a repeated request id must carry the same request"
             )
             return {"status": "ok", "result": {"task_id": params["child_task_id"]}}
-        if operation == "effect.authorize":
-            state = "scheduled" if params.get("scheduled_at_ms") else "committed"
-            self.authorized.setdefault(params["request_id"], state)
-            return {
-                "status": "ok",
-                "result": {"state": self.authorized[params["request_id"]]},
-            }
-        if operation == "effect.commit":
-            if params["effect_id"] in self.held_effects:
-                return {"status": "error", "code": "effect_held"}
-            self.commits.setdefault(params["effect_id"], set()).add(
-                params["request_id"]
-            )
-            return {"status": "ok", "result": {"state": "committed"}}
+        if operation == "trace.use":
+            self.uses.setdefault(params["request_id"], params["task_id"])
+            return {"status": "ok", "result": {"event_id": "e", "version_id": "v"}}
+        if operation == "effect.execute":
+            return self._execute(params)
         raise AssertionError(operation)
+
+    def _execute(self, params: dict[str, Any]) -> dict[str, Any]:
+        if params["request_id"] in self.executed:
+            assert self.requests[params["request_id"]] == params
+            return self.executed[params["request_id"]]
+        self.requests[params["request_id"]] = params
+        if self.held:
+            reply = {"status": "error", "code": "execution_held"}
+        elif params["scheduled_at_ms"] is not None:
+            delay = max(0.0, (params["scheduled_at_ms"] - time.time() * 1000) / 1000)
+            timer = threading.Timer(delay, self._perform, (params,))
+            self._timers.append(timer)
+            timer.start()
+            reply = {"status": "ok", "result": {"state": "scheduled"}}
+        else:
+            self._perform(params)
+            reply = {
+                "status": "ok",
+                "result": {"state": "committed", "outcome": {"performed": True}},
+            }
+        self.executed[params["request_id"]] = reply
+        return reply
+
+    def _perform(self, params: dict[str, Any]) -> None:
+        if self.sink is not None:
+            gateway = {"effect_id": params["request_id"], "target": params["target"]}
+            self.sink.services.committed(params["data"], "http", gateway)
+
+    def drain(self) -> None:
+        """Wait until every scheduled effect was performed."""
+        for timer in self._timers:
+            timer.join()
 
 
 def context(runtime: FakeRuntime) -> SimpleNamespace:
@@ -115,12 +145,15 @@ def request(kind: str, **fields: Any) -> dict[str, Any]:
     return {"protocol": PROTOCOL, "run": "run-1", "t0_ms": 0, "kind": kind, **fields}
 
 
-async def land_x(worker: DetWorker, content: dict[str, Any]) -> None:
+async def land_x(worker: DetWorker, content: dict[str, Any]) -> str:
+    """Deliver X@v1 to B.t0's agent; returns the delivery's task."""
+    delivery = str(uuid.uuid4())
     body = request("deliver", item="X@v1", target="B.t0", copy=0, content=content)
     result, state = await worker.handle(
-        envelope(str(uuid.uuid4()), body), context(FakeRuntime())
+        envelope(delivery, body), context(FakeRuntime())
     )
     assert state == "completed", result
+    return delivery
 
 
 def b_request(expected: dict[str, Any]) -> dict[str, Any]:
@@ -141,13 +174,18 @@ async def test_task_consumes_inputs_and_outputs_the_expected_content(
     services = LocalServices(tmp_path)
     expected = G.expected_contents(mini_spec)
     worker = worker_for(mini_spec, "b1", services)
-    await land_x(worker, expected["X@v1"])
-    runtime = FakeRuntime()
+    delivery = await land_x(worker, expected["X@v1"])
+    runtime = FakeRuntime(services)
     result, state = await worker.handle(
         envelope("t-b", b_request(expected)), context(runtime)
     )
+    runtime.drain()
 
     assert state == "completed"
+    # X@v1 came through the agent's memory: the task reports using it.
+    assert list(runtime.uses.values()) == [delivery]
+    [use] = services.events("use")
+    assert (use["item"], use["delivery"], use["code"]) == ("X@v1", delivery, None)
     assert result["outputs"] == {"rB": expected["rB"]["value"]}
     pushes = {json.loads(d["request"])["item"] for d in runtime.dispatches.values()}
     assert pushes == {"rB"}  # rB is pushed to R.agg (R.agg is created by R.plan)
@@ -166,7 +204,9 @@ async def test_faulty_input_labels_every_output_and_effect(mini_spec, tmp_path):
     worker = worker_for(mini_spec, "b1", services)
     label = fault_label("wrong_value", "X@v1")
     await land_x(worker, {"value": "0" * 16, "labels": [label]})
-    await worker.handle(envelope("t-b", b_request(expected)), context(FakeRuntime()))
+    runtime = FakeRuntime(services)
+    await worker.handle(envelope("t-b", b_request(expected)), context(runtime))
+    runtime.drain()
 
     [produced] = services.events("produce")
     assert produced["labels"] == [label]
@@ -181,7 +221,7 @@ async def test_pause_mid_compute_resumes_without_repeating_work(mini_spec, tmp_p
     expected = G.expected_contents(mini_spec)
     worker = worker_for(mini_spec, "b1", services)
     await land_x(worker, expected["X@v1"])
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(services)
     ctx = context(runtime)
     running = asyncio.create_task(
         worker.handle(envelope("t-b", b_request(expected)), ctx)
@@ -207,42 +247,52 @@ async def test_pause_mid_compute_resumes_without_repeating_work(mini_spec, tmp_p
     assert len(services.events("consume")) == 2  # inputs were taken once
     assert len(services.events("produce")) == 1
     assert len(runtime.dispatches) == 1
+    runtime.drain()
     committed = [r for r in services.ledger_records() if r["phase"] == "committed"]
     assert len(committed) == 1
 
 
 @pytest.mark.asyncio
-async def test_pause_while_an_effect_is_held_commits_it_once_after_resume(
+async def test_a_scheduled_effect_is_left_to_the_gateway(mini_spec, tmp_path):
+    """E_B is due after its delay: the gateway keeps it and performs it when
+    due; the worker does not wait for it and never asks twice."""
+    services = LocalServices(tmp_path)
+    expected = G.expected_contents(mini_spec)
+    worker = worker_for(mini_spec, "b1", services)
+    await land_x(worker, expected["X@v1"])
+    runtime = FakeRuntime(services)
+    _, state = await worker.handle(
+        envelope("t-b", b_request(expected)), context(runtime)
+    )
+    assert state == "completed"
+    [sent] = runtime.requests.values()
+    assert sent["scheduled_at_ms"] is not None
+    assert [r["phase"] for r in services.ledger_records()] == ["attempted", "scheduled"]
+    runtime.drain()
+    [committed] = [r for r in services.ledger_records() if r["phase"] == "committed"]
+    assert committed["attributed"] and committed["sink"] == "http"
+    assert committed["value"] == expected["E_B"]["value"]
+
+
+@pytest.mark.asyncio
+async def test_an_effect_the_gateway_refuses_is_recorded_denied_once(
     mini_spec, tmp_path
 ):
     services = LocalServices(tmp_path)
     expected = G.expected_contents(mini_spec)
     worker = worker_for(mini_spec, "b1", services)
     await land_x(worker, expected["X@v1"])
-    runtime = FakeRuntime()
-    ctx = context(runtime)
-    running = asyncio.create_task(
-        worker.handle(envelope("t-b", b_request(expected)), ctx)
+    runtime = FakeRuntime(services)
+    runtime.held = True  # the task is held when it asks
+    _, state = await worker.handle(
+        envelope("t-b", b_request(expected)), context(runtime)
     )
-    await wait_for(lambda: runtime.authorized)
-    runtime.held_effects = set(runtime.authorized)
-    await wait_for(lambda: any(r["phase"] == "held" for r in services.ledger_records()))
-    ctx.interruption = "pause"
-    running.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await running
-    [paused] = services.events("paused")
-    assert paused["produced"]
-
-    runtime.held_effects = set()
-    ctx.interruption, ctx.resumed = None, True
-    result, state = await worker.handle(envelope("t-b", b_request(expected)), ctx)
     assert state == "completed"
-    phases = [r["phase"] for r in services.ledger_records()]
-    assert phases == ["attempted", "held", "committed"]
-    [commits] = runtime.commits.values()
-    assert len(commits) == 1  # the same commit request id across the pause
-    assert len(services.events("produce")) == 1
+    records = services.ledger_records()
+    assert [(r["phase"], r.get("code")) for r in records] == [
+        ("attempted", None),
+        ("denied", "execution_held"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -251,7 +301,7 @@ async def test_cancel_ends_the_invocation_without_outputs(mini_spec, tmp_path):
     expected = G.expected_contents(mini_spec)
     worker = worker_for(mini_spec, "b1", services)
     await land_x(worker, expected["X@v1"])
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(services)
     ctx = context(runtime)
     running = asyncio.create_task(
         worker.handle(envelope("t-b", b_request(expected)), ctx)
@@ -269,8 +319,10 @@ async def test_cancel_ends_the_invocation_without_outputs(mini_spec, tmp_path):
 class FlakyRuntime(FakeRuntime):
     """Drops the first calls of one operation at the transport, or refuses them."""
 
-    def __init__(self, operation: str, failures: int, message: str) -> None:
-        super().__init__()
+    def __init__(
+        self, operation: str, failures: int, message: str, sink: LocalServices
+    ) -> None:
+        super().__init__(sink)
         self.operation, self.failures, self.message = operation, failures, message
         self.attempts = 0
 
@@ -294,13 +346,20 @@ async def test_transport_failures_are_retried_with_the_same_request(
     expected = G.expected_contents(mini_spec)
     worker = worker_for(mini_spec, "b1", services)
     await land_x(worker, expected["X@v1"])
-    runtime = FlakyRuntime("effect.authorize", 2, "agentd is unavailable: timed out")
+    runtime = FlakyRuntime(
+        "effect.execute", 2, "agentd is unavailable: timed out", services
+    )
     _, state = await worker.handle(
         envelope("t-b", b_request(expected)), context(runtime)
     )
+    runtime.drain()
     assert state == "completed"
-    assert runtime.attempts == 3 and len(runtime.authorized) == 1
-    assert [r["phase"] for r in services.ledger_records()] == ["attempted", "committed"]
+    assert runtime.attempts == 3 and len(runtime.executed) == 1
+    assert [r["phase"] for r in services.ledger_records()] == [
+        "attempted",
+        "scheduled",
+        "committed",
+    ]
     assert len(services.events("rpc_retry")) == 2
 
 
@@ -310,7 +369,7 @@ async def test_a_refusal_is_not_retried(mini_spec, tmp_path):
     expected = G.expected_contents(mini_spec)
     worker = worker_for(mini_spec, "b1", services)
     await land_x(worker, expected["X@v1"])
-    runtime = FlakyRuntime("effect.authorize", 1, "effect_scope_denied")
+    runtime = FlakyRuntime("effect.execute", 1, "effect_scope_denied", services)
     await worker.handle(envelope("t-b", b_request(expected)), context(runtime))
     assert runtime.attempts == 1
     denied = [r for r in services.ledger_records() if r["phase"] == "denied"]
@@ -324,7 +383,7 @@ async def test_creator_hands_creating_inputs_to_the_children_agents(tmp_path):
     services = LocalServices(tmp_path)
     expected = G.expected_contents(spec)
     worker = worker_for(spec, "r", services)
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(services)
     body = request("task", task="R.plan", input=None)
     _, state = await worker.handle(envelope("t-r", body), context(runtime))
     assert state == "completed"  # the creator does not wait for its children's inputs
@@ -343,7 +402,7 @@ async def test_pending_creation_starts_the_task_after_its_pushed_inputs_landed(
     services = LocalServices(tmp_path)
     expected = G.expected_contents(spec)
     worker = worker_for(spec, "b1", services)
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(services)
     given = {"item": "dB", "content": expected["dB"]}
     body = request("create", task="B.t0", input=given, lease=None)
     running = asyncio.create_task(
@@ -373,7 +432,7 @@ async def test_tainted_task_takes_the_simulators_undeclared_actions(tmp_path):
     spec = S.from_dict(document)
     services = LocalServices(tmp_path)
     worker = worker_for(spec, "a1", services)
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(services)
     body = request(
         "task",
         task="A.t0",
@@ -402,24 +461,26 @@ async def test_duplicated_item_is_pushed_twice_and_taints_its_reader(tmp_path):
     services = LocalServices(tmp_path)
     producer = worker_for(spec, "b1", services)
     await land_x(producer, expected["X@v1"])
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(services)
     await producer.handle(envelope("t-b", b_request(expected)), context(runtime))
     pushed = [json.loads(d["request"]) for d in runtime.dispatches.values()]
     assert sorted(p["copy"] for p in pushed if p["item"] == "rB") == [0, 1]
 
     consumer = worker_for(spec, "r", services)
     for i, body in enumerate(p for p in pushed if p["item"] == "rB"):
-        await consumer.handle(envelope(f"d-{i}", body), context(FakeRuntime()))
+        await consumer.handle(envelope(f"d-{i}", body), context(FakeRuntime(services)))
     for item in ("rA", "rBn"):
         body = request(
             "deliver", item=item, target="R.agg", copy=0, content=expected[item]
         )
-        await consumer.handle(envelope(f"d-{item}", body), context(FakeRuntime()))
+        await consumer.handle(
+            envelope(f"d-{item}", body), context(FakeRuntime(services))
+        )
     given = {"item": "session:R.plan", "content": expected["session:R.plan"]}
     create = request("create", task="R.agg", input=given, lease=None)
-    await consumer.handle(envelope("p-agg", create), context(FakeRuntime()))
+    await consumer.handle(envelope("p-agg", create), context(FakeRuntime(services)))
     agg = request("task", task="R.agg", input=given)
-    await consumer.handle(envelope("t-agg", agg), context(FakeRuntime()))
+    await consumer.handle(envelope("t-agg", agg), context(FakeRuntime(services)))
     [start] = services.events("compute_start")[-1:]
     assert start["task"] == "R.agg"
     assert start["labels"] == [fault_label("message_duplicate", "rB")]
@@ -441,9 +502,11 @@ async def test_delayed_item_goes_stale_when_the_reader_stops_waiting(tmp_path):
         body = request(
             "deliver", item=item, target="R.agg", copy=0, content=expected[item]
         )
-        await consumer.handle(envelope(f"d-{item}", body), context(FakeRuntime()))
+        await consumer.handle(
+            envelope(f"d-{item}", body), context(FakeRuntime(services))
+        )
     given = {"item": "session:R.plan", "content": expected["session:R.plan"]}
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(services)
     started = asyncio.get_running_loop().time()
     await consumer.handle(
         envelope("p-agg", request("create", task="R.agg", input=given, lease=None)),
@@ -453,7 +516,7 @@ async def test_delayed_item_goes_stale_when_the_reader_stops_waiting(tmp_path):
     assert 1.0 * SCALE <= waited < 4.0 * SCALE  # gave up after stale_after_s
     await consumer.handle(
         envelope("t-agg", request("task", task="R.agg", input=given)),
-        context(FakeRuntime()),
+        context(FakeRuntime(services)),
     )
     [start] = services.events("compute_start")
     assert start["labels"] == [fault_label("message_delay", "rB")]
@@ -472,7 +535,9 @@ async def test_runaway_task_keeps_actuating_while_it_computes(tmp_path):
     services = LocalServices(tmp_path)
     worker = worker_for(spec, "b1", services)
     await land_x(worker, expected["X@v1"])
-    await worker.handle(envelope("t-b", b_request(expected)), context(FakeRuntime()))
+    runtime = FakeRuntime(services)
+    await worker.handle(envelope("t-b", b_request(expected)), context(runtime))
+    runtime.drain()
     runaway = [
         r
         for r in services.ledger_records()
@@ -484,16 +549,38 @@ async def test_runaway_task_keeps_actuating_while_it_computes(tmp_path):
     assert all(r["labels"] == [fault_label("lease_runaway", "B.t0")] for r in runaway)
 
 
-def test_effects_go_through_the_configured_path(mini_spec, tmp_path):
+@pytest.mark.asyncio
+async def test_effects_go_to_the_plans_sink(mini_spec, tmp_path):
     services = LocalServices(tmp_path)
     plan = S.compile_plan(mini_spec, run_id="run-1", time_scale=SCALE)
-    assert plan["effect_path"] == "authorize_perform"
-    worker = DetWorker(plan, "b1", services, node="edge-2")  # type: ignore[arg-type]
-    assert worker.effect_path.name == "authorize_perform"
-    gateway = S.compile_plan(
-        mini_spec, run_id="run-1", time_scale=SCALE, effect_path="gateway_execute"
+    assert plan["effect_sink"] == {"adapter": "http"}
+    target = "input_boolean.turn_on/input_boolean.lamp"
+    physical = S.compile_plan(
+        mini_spec,
+        run_id="run-1",
+        time_scale=SCALE,
+        effect_sink={"adapter": "homeassistant", "targets": {"*": target}},
     )
-    # Until agentd's effect.execute lands (m4/design) the path is refused up
-    # front instead of failing every effect of a run.
-    with pytest.raises(ValueError, match="not available"):
-        DetWorker(gateway, "b1", services, node="edge-2")  # type: ignore[arg-type]
+    worker = DetWorker(physical, "b1", services, node="edge-2")  # type: ignore[arg-type]
+    expected = G.expected_contents(mini_spec)
+    await land_x(worker, expected["X@v1"])
+    runtime = FakeRuntime(services)
+    await worker.handle(envelope("t-b", b_request(expected)), context(runtime))
+    runtime.drain()
+    [sent] = runtime.requests.values()
+    assert (sent["adapter"], sent["effect_class"], sent["target"]) == (
+        "homeassistant",
+        "device.command",
+        target,
+    )
+    assert sent["data"] == {"ec_run": "run-1", "ec_effect": "E_B", "ec_issuer": "B.t0"}
+    # The ledger keeps the workload's own target; the gateway acts on Home Assistant's.
+    [attempted] = [r for r in services.ledger_records() if r["phase"] == "attempted"]
+    assert attempted["target"] == "actuator://act_b/E_B"
+    with pytest.raises(ValueError, match="targets"):
+        DetWorker(
+            {**physical, "effect_sink": {"adapter": "homeassistant"}},
+            "b1",
+            services,  # type: ignore[arg-type]
+            node="edge-2",
+        )

@@ -18,13 +18,26 @@ Layout (``experiments/containment``):
 - ``harness/runner.py``: the paired grid and one run's control loop
 - ``harness/simbackend.py``, ``report.py``, ``names.py``: simulator rows,
   CSVs, statistics and figures; ``netem.py``: lab latency profiles
-- ``workloads/``: exported instances; ``experiments/``: grids (``lab-pilot``
-  252 runs, ``lab-main`` 882 and ``lab-stress`` 504 with the root given, and
-  ``lab-rootcause`` 36 in the ranked-root mode); ``configs/``: stacks
-  (``dryrun.json`` local, ``lab.json`` jim-eq + Endurance + Cluster)
-- ``agent-packages/det-worker``: the deterministic worker; its effect path is
-  pluggable (``det_worker/effects.py``: authorize-then-perform today, the
-  gateway's ``effect.execute`` once m4/design lands; stack ``effect_path``)
+- ``workloads/``: exported instances; ``experiments/``: grids (``lab-smoke``
+  165 runs: every strategy x scenario x early/late alert once under the
+  deployed profile plus C2 under the shared profile; ``lab-pilot`` the same
+  with 3 repetitions, 495; ``lab-main`` a draft sized after the pilot;
+  ``lab-stress`` and ``lab-rootcause`` in the ranked-root mode); ``configs/``:
+  stacks (``dryrun.json`` local sockets, ``dryrun-nats.json`` the lab's NATS
+  control path locally, ``lab.json`` jim-eq + Endurance + Cluster;
+  ``*-homeassistant.json`` the physical case)
+- ``agent-packages/det-worker``: the deterministic worker. agentd's effect
+  gateway performs its effects (``effect.execute``) on the stack's
+  ``effect_sink``: the run's ledger (http adapter) or Home Assistant, fronted
+  by the run's services, which record what reached it. A consuming step that
+  takes a pushed input from the agent's memory reports it (``trace.use``)
+
+Every run: agentd enforces the fail-closed controller lease
+(``controller_lease_ms``, 30 s) on every node and the monitor renews it from
+its start, also in runs without containment (``none``, ``reference``), which
+configure the monitor with ``enforce: false``. Each run records its mechanism
+``profile`` (``deployed`` by default, ``shared`` as the ablation) and
+``phase1_include_cut``; experiments set them per grid or part.
 
 Latency settings and netem profiles above the measured LAN round trip
 (1.5-4 ms between sites) must be labelled ``stress``; the runner refuses
@@ -33,7 +46,7 @@ unlabelled ones and records ``latency_regime`` per run.
 Dry run (everything on this machine; from ``experiments/containment``)::
 
   export HARNESS_PYTHON=<python with the runtime's dependencies>
-  export HARNESS_RUNTIME_ROOT=<EdgeCitadel checkout with agentd + monitor (m3/integration)>
+  export HARNESS_RUNTIME_ROOT=<this checkout (agentd and the monitor of this revision)>
   export HARNESS_WORK_ROOT=<scratch directory> HARNESS_NATS_SERVER=<nats-server binary>
   python -m harness run --stack configs/dryrun.json \\
       --experiment experiments/dryrun-c2.json --out <results>
@@ -43,9 +56,8 @@ Dry run (everything on this machine; from ``experiments/containment``)::
 
 ``configs/dryrun-nats.json`` is the same stack with the lab's control path: the
 monitor signs each command with a per-run owner key and sends it on the run's
-NATS (agentd's ``edgecitadel.control.v1.<node>``), which needs a monitor with
-``NatsControlClient`` (m3/integration ab174ed or later). ``dryrun.json`` uses
-co-located admin sockets and works with earlier monitors too.
+NATS (agentd's ``edgecitadel.control.v1.<node>``). ``dryrun.json`` uses
+co-located admin sockets.
 
 Lab: run the same commands on jim-eq with ``configs/lab.json``; set
 ``HARNESS_SSH_ENDURANCE``/``HARNESS_SSH_CLUSTER`` (``user@host``),
@@ -53,6 +65,11 @@ Lab: run the same commands on jim-eq with ``configs/lab.json``; set
 the edge hosts. Every run uses its own ports, NATS, owner key and
 ``/var/tmp/edgecitadel-containment/<run>`` state on each host and never
 touches the resident EdgeCitadel services. ``control_transport:
-ssh_forward`` forwards remote admin sockets over SSH for monitors without
-NATS control.
+ssh_forward`` forwards remote admin sockets over SSH. The physical case
+(``configs/lab-homeassistant.json``) also needs ``HARNESS_HA_URL`` (the Home
+Assistant the services forward to), ``HARNESS_HA_TOKEN_FILE`` (the path, the
+same on every edge host, of a mode-600 file with its long-lived token, owned by
+the user running the experiment's agentd) and ``HARNESS_HA_TARGET`` (the
+service and entity every effect acts on, ``<domain>.<service>/<entity_id>``,
+for example a test ``input_boolean``).
 """

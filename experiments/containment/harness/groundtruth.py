@@ -7,7 +7,11 @@ Nothing here reads the tracer or the monitor. Two sources:
   fault's seeds under the declared plan, as the simulator's ``declared_taint``);
 - the services' records of the run: worker events (what each invocation
   consumed, produced and dispatched, its fault labels, pauses) and the effect
-  ledger (the actuator: attempted / committed / denied, with content).
+  ledger: the worker's attempted / scheduled / denied / sink_failed records and
+  the sink's committed ones (the actuator, reached only through agentd's effect
+  gateway), with content. An effect the gateway scheduled and later refused
+  stays ``pending`` here; the gateway's own decisions are in
+  ``gateway_effects.jsonl``.
 """
 
 from __future__ import annotations
@@ -222,7 +226,7 @@ def ledger_effects(records: RunRecords) -> dict[str, dict[str, Any]]:
             },
         )
         entry.setdefault(f"t_{r['phase']}", int(r["t_ms"]))
-        if r["phase"] in {"committed", "denied"}:
+        if r["phase"] in {"committed", "denied", "sink_failed"}:
             entry["state"] = r["phase"]
             entry["code"] = r.get("code")
     for entry in out.values():
