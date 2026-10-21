@@ -1,6 +1,6 @@
 {
   "name": "compare-a2a",
-  "note": "System comparison (draft, for H10; set once H10 is registered). Content faults: the 7 smoke workloads x early/late x 3 repetitions. Rogue part: C2 at rogue rate 0.3 and 1.0 (1.0: every step boundary of a tainted invocation acts and messages always spawn, up to the run's 200-invocation cap) x early/late x 5 repetitions, compared as distributions. Run on lab-a2a.",
+  "note": "System comparison, pre-registered as H10 (exec doc, 2026-10-21). Content faults: the 7 smoke workloads x early/late x 3 repetitions. Rogue: C2 at rogue rate 0.3 (H10 (ii)) and saturated rogue at rate 1.0 (spawn cap 200; reported, no prediction) x early/late x 5 repetitions. Run on lab-a2a.",
   "instances": [
     "../workloads/c2.json",
     "../workloads/c3.json",

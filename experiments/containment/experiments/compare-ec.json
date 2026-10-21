@@ -1,14 +1,8 @@
 {
   "name": "compare-ec",
-  "note": "System comparison (draft, for H10; set once H10 is registered). Content faults: the 7 smoke workloads x early/late x 3 repetitions. Rogue part: C2 at rogue rate 0.3 and 1.0 (1.0: every step boundary of a tainted invocation acts and messages always spawn, up to the run's 200-invocation cap) x early/late x 5 repetitions, compared as distributions. Run on the evaluation tag's lab stack (EdgeCitadel with the monitor); the A2A controls' nearest strategies plus Firebreak.",
+  "note": "System comparison, pre-registered as H10 (exec doc, 2026-10-21). Content faults: the 7 smoke workloads x early/late x 3 repetitions. Rogue: C2 at rogue rate 0.3 (H10 (ii)) and saturated rogue at rate 1.0 (spawn cap 200; reported, no prediction) x early/late x 5 repetitions. EdgeCitadel's content-fault cells come from the main runs (time scale 2, deployed, adaptive phase 1, the 7 smoke workloads x early/late x at least 3 repetitions), so this grid holds only the rogue part. Run on the evaluation tag's lab stack.",
   "instances": [
-    "../workloads/c2.json",
-    "../workloads/c3.json",
-    "../workloads/n2.json",
-    "../workloads/n3.json",
-    "../workloads/rand-n7-s0.json",
-    "../workloads/rand-n7-s1.json",
-    "../workloads/rand-n7-s2.json"
+    "../workloads/c2.json"
   ],
   "strategies": [
     "firebreak",
@@ -17,7 +11,7 @@
     "stop_downstream",
     "none"
   ],
-  "repetitions": 3,
+  "repetitions": 5,
   "alerts": [
     "early",
     "late"
@@ -31,7 +25,7 @@
     }
   ],
   "time_scale": 2.0,
-  "reference": true,
+  "reference": false,
   "profiles": [
     "deployed"
   ],
@@ -44,17 +38,9 @@
   "root_modes": [
     "given"
   ],
-  "parts": [
-    {
-      "instances": [
-        "../workloads/c2.json"
-      ],
-      "rogue_rates": [
-        0.3,
-        1.0
-      ],
-      "repetitions": 5,
-      "reference": false
-    }
+  "parts": [],
+  "rogue_rates": [
+    0.3,
+    1.0
   ]
 }

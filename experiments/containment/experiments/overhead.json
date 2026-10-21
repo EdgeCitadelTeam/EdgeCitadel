@@ -1,6 +1,6 @@
 {
   "name": "overhead",
-  "note": "System comparison, no fault: reference runs of the 7 smoke workloads (5 repetitions, the main runs' time scale) and of the overhead benchmarks (six-hop chains per host pair and a 12-task fan-out, 40 repetitions). Run the same file on each system's stack (lab-ec-overhead, lab-bare, lab-a2a, lab-a2a-sqlite); grid dimensions match the comparison runs so rows pair.",
+  "note": "System comparison, no fault, pre-registered as H11 (exec doc, 2026-10-21): reference runs of the 7 smoke workloads (3 repetitions, the main runs' time scale) and of the overhead benchmarks (six-hop chains per host pair and a 12-task fan-out, 20 repetitions; more if the pilot shows high variance). Run the same file on each stack (lab-ec-overhead, lab-bare, lab-a2a, lab-a2a-sqlite); grid dimensions match the comparison runs so rows pair.",
   "instances": [
     "../workloads/c2.json",
     "../workloads/c3.json",
@@ -20,7 +20,7 @@
       }
     }
   ],
-  "repetitions": 5,
+  "repetitions": 3,
   "time_scale": 2.0,
   "reference": true,
   "phase1_modes": [
@@ -37,7 +37,7 @@
         "../workloads/bench/chain-k2k.json",
         "../workloads/bench/fanout-k2e-12.json"
       ],
-      "repetitions": 40,
+      "repetitions": 20,
       "time_scale": 1.0,
       "quiet_s": 4
     }
