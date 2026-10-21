@@ -316,6 +316,45 @@ def test_a_control_latency_failure_skips_the_handoff_fallback(tmp_path, monkeypa
     assert not verdict["handoff_verdict"]["passed"]  # recorded, not run further
 
 
+def test_a_recorded_control_latency_check_lets_the_pilots_run(tmp_path, monkeypatch):
+    # User decision 2026-10-22 00:25 London: tonight the check is recorded only.
+    ran = staged(monkeypatch, [60.0], [50.0])
+    monkeypatch.setattr(pipeline, "_control_latency", lambda out: {"core": [400.0]})
+    monkeypatch.setattr(pipeline, "_handoff_fallback", lambda *a, **k: None)
+    out = tmp_path / "out"
+    code = pipeline.run_pipeline(
+        tmp_path / "ec.json", out, tmp_path / "a.json", control_blocking=False
+    )
+    assert code == 0
+    assert [name for name, _ in ran] == [
+        "regression",
+        "svc-smoke",
+        "lab-pilot",
+        "svc-pilot",
+    ]
+    assert not (out / "GATE-FAILED").exists()
+    verdict = json.loads((out / "gate.json").read_text())
+    assert verdict["passed"]
+    assert verdict["control_latency"] == "recorded_not_blocking"
+    assert not verdict["control_latency_verdict"]["passed"]
+    assert pipeline.CONTROL_REASON in verdict["control_latency_verdict"]["reasons"][0]
+
+
+def test_a_recorded_control_latency_check_still_blocks_other_failures():
+    rows = [
+        {
+            "run_id": "r1",
+            "status": "timeout",
+            "strategy_code": "none",
+            "fault": "none",
+        }
+    ]
+    verdict = pipeline.gate(rows, {"core": [400.0]}, control_blocking=False)
+    assert not verdict["passed"]
+    assert all(pipeline.CONTROL_REASON not in r for r in verdict["reasons"])
+    assert not verdict["control_latency_verdict"]["passed"]
+
+
 def test_every_native_lab_setting_plans_with_the_gated_L():
     from harness import runner
 

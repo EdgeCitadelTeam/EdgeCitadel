@@ -157,7 +157,14 @@ def unit_command(
 def _pipeline(args: argparse.Namespace) -> None:
     from .pipeline import run_pipeline
 
-    sys.exit(run_pipeline(args.stack, args.out, args.a2a_stack))
+    sys.exit(
+        run_pipeline(
+            args.stack,
+            args.out,
+            args.a2a_stack,
+            control_blocking=args.control_latency == "blocking",
+        )
+    )
 
 
 def _commit_cost(args: argparse.Namespace) -> None:
@@ -233,6 +240,13 @@ def main(argv: list[str] | None = None) -> None:
         type=Path,
         help="the A2A-SQLite stack for the hand-off fallback "
         "(configs/lab-a2a-sqlite-gate.json)",
+    )
+    p.add_argument(
+        "--control-latency",
+        choices=("blocking", "recorded"),
+        default="blocking",
+        help="whether a site's sent-to-confirmed p99 above L fails the gate "
+        "(blocking) or is only recorded in gate.json (recorded)",
     )
     p.set_defaults(handler=_pipeline)
     p = sub.add_parser("commit-cost")

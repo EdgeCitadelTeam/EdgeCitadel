@@ -121,13 +121,17 @@ def control_summary(per_site: Mapping[str, Iterable[float]]) -> dict[str, Any]:
 def gate(
     rows: Iterable[Mapping[str, Any]],
     control: Mapping[str, Iterable[float]] | None = None,
+    control_blocking: bool = True,
 ) -> dict[str, Any]:
     """The gate's verdict on scored rows (and, when given, the per-site
     sent-to-confirmed times of the regression stage): ``passed`` and its
-    ``reasons``."""
+    ``reasons``. With ``control_blocking`` False (user decision 2026-10-22,
+    00:25 London) the control-latency check is recorded in
+    ``control_latency_verdict`` but does not fail the gate."""
     rows = list(rows)
     reasons: list[str] = []
     handoff_reasons: list[str] = []
+    control_reasons: list[str] = []
     bad_status = [
         f"{r['run_id']}: {r.get('status')}"
         for r in rows
@@ -174,15 +178,17 @@ def gate(
     if summary is not None:
         over = {s: v["p99"] for s, v in summary.items() if v["p99"] > bound}
         if not summary:
-            reasons.append(
+            control_reasons.append(
                 f"{CONTROL_REASON}: no control command was confirmed in the "
                 f"{CONTROL_STAGE} stage, so L = {bound:.0f} ms is unchecked"
             )
         elif over:
-            reasons.append(
+            control_reasons.append(
                 f"{CONTROL_REASON}: sent-to-confirmed p99 above L = {bound:.0f} ms "
                 f"at {over} (ms), so L is no longer an upper bound"
             )
+    if control_blocking:
+        reasons += control_reasons
     return {
         "passed": not reasons,
         "reasons": reasons,
@@ -196,6 +202,11 @@ def gate(
         "handoff": "recorded_not_blocking",
         "handoff_verdict": {"passed": not handoff_reasons, "reasons": handoff_reasons},
         "control_latency_ms": bound,
+        "control_latency": "blocking" if control_blocking else "recorded_not_blocking",
+        "control_latency_verdict": {
+            "passed": not control_reasons,
+            "reasons": control_reasons,
+        },
         "control_sent_to_confirmed_ms": summary,
         "runs_with_errors": [r["run_id"] for r in rows if _number(r.get("n_errors"))],
         # Not a condition: whether svc's early alert still came before the
@@ -340,13 +351,18 @@ def _handoff_fallback(
     verdict["handoff_verdict"] = {"passed": not reasons, "reasons": reasons}
 
 
-def run_pipeline(stack_path: Path, out: Path, a2a_stack: Path | None = None) -> int:
+def run_pipeline(
+    stack_path: Path,
+    out: Path,
+    a2a_stack: Path | None = None,
+    control_blocking: bool = True,
+) -> int:
     out.mkdir(parents=True, exist_ok=True)
     (out / "GATE-FAILED").unlink(missing_ok=True)
     gated: list[dict[str, Any]] = []
     for name, experiment in GATED:
         gated += _stage(stack_path, name, experiment, out)
-    verdict = gate(gated, _control_latency(out))
+    verdict = gate(gated, _control_latency(out), control_blocking=control_blocking)
     if verdict["passed"] and not verdict["handoff_verdict"]["passed"]:
         # The approved fallback decides the recorded hand-off verdict.
         _handoff_fallback(verdict, stack_path, a2a_stack, out)
@@ -356,11 +372,27 @@ def run_pipeline(stack_path: Path, out: Path, a2a_stack: Path | None = None) -> 
         (out / "GATE-FAILED").write_text("\n".join(verdict["reasons"]) + "\n")
         _say("gate FAILED: " + "; ".join(verdict["reasons"]))
         return 1
-    p99 = max(v["p99"] for v in verdict["control_sent_to_confirmed_ms"].values())
+    p99 = max(
+        (v["p99"] for v in (verdict["control_sent_to_confirmed_ms"] or {}).values()),
+        default=float("nan"),
+    )
+    control = verdict["control_latency_verdict"]
     handoff = verdict["handoff_verdict"]
     _say(
         f"gate passed: {verdict['runs']} runs, {verdict['slot_restarts']} slot "
-        f"restarts, control p99 at most {p99:.0f} ms; hand-offs recorded, not "
+        f"restarts, control p99 at most {p99:.0f} ms"
+        + (
+            ""
+            if control_blocking
+            else " (control latency recorded, not gated: would have "
+            + (
+                "passed"
+                if control["passed"]
+                else "failed: " + "; ".join(control["reasons"])
+            )
+            + ")"
+        )
+        + "; hand-offs recorded, not "
         f"gated: median {verdict['handoff_ms_median']} ms, would have "
         f"{'passed' if handoff['passed'] else 'failed'} "
         f"({verdict['handoff_criterion']} criterion)"
