@@ -130,3 +130,45 @@ def test_the_ec_selection_can_differ_per_part():
         (0.3, "adaptive"),
     ]
     assert _setting("phase1_mode=adaptive") == (None, "phase1_mode", "adaptive")
+
+
+def test_makespan_ratio_is_against_the_same_systems_reference():
+    import pandas as pd
+
+    from harness.compare import with_makespan_ratio
+
+    runs = pd.DataFrame(
+        [
+            {
+                "system": "langgraph",
+                "instance": "c2",
+                "time_scale": 2.0,
+                "strategy_code": "reference",
+                "makespan_s": 40.0,
+            },
+            {
+                "system": "langgraph",
+                "instance": "c2",
+                "time_scale": 2.0,
+                "strategy_code": "lg_time_travel",
+                "makespan_s": 60.0,
+            },
+            {
+                "system": "a2a",
+                "instance": "c2",
+                "time_scale": 2.0,
+                "strategy_code": "reference",
+                "makespan_s": 25.0,
+            },
+            {
+                "system": "a2a",
+                "instance": "n2",
+                "time_scale": 2.0,
+                "strategy_code": "none",
+                "makespan_s": 30.0,
+            },
+        ]
+    )
+    ratio = with_makespan_ratio(runs)["makespan_ratio"].tolist()
+    assert ratio[:3] == [1.0, 1.5, 1.0]
+    assert ratio[3] != ratio[3]  # no A2A reference of n2

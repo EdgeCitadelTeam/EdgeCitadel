@@ -30,9 +30,11 @@ writes:
 - ``compare_paired.csv``: ``report.paired`` (Firebreak against every other
   strategy on matched runs of the same system and mechanism settings);
 - ``h10.csv``: per strategy, the content-fault part (rogue rate 0), the rogue
-  part (rate 0.3) and saturated rogue (1.0): runs, clean-after-alert rate,
-  median and lower quartile of kept work, makespan, timeouts, consumed at
-  alert, leaks by class, and the one-sided tests of H10 (b): exact McNemar on
+  part (rate 0.3) and saturated rogue (1.0): runs, clean-after-alert rate
+  (also per alert), median and lower quartile of kept work, makespan and its
+  ratio to the same system's reference of the workload (``makespan_ratio``,
+  also per alert), the share of runs that re-executed a task, timeouts,
+  consumed at alert, leaks by class, and the one-sided tests of H10 (b): exact McNemar on
   content runs paired with Firebreak's, with the paired kept-work difference
   of (c), and Fisher exact at rate 0.3 against Firebreak's runs of the same
   cells. Saturated rogue is summarized, never tested.
@@ -234,6 +236,24 @@ def load(outs: Iterable[Path]) -> Any:
     runs["clean"] = (
         runs["clean_after_alert"].fillna(0).astype(bool) & (runs["repeat_leaks"] == 0)
     ).astype(int)
+    return with_makespan_ratio(runs)
+
+
+def with_makespan_ratio(runs: Any) -> Any:
+    """``makespan_ratio``: a run's makespan over the median makespan of the same
+    system's reference runs of the same workload and time scale (NaN without one)."""
+    key = ["system", "instance", "time_scale"]
+    ref = (
+        runs[runs.strategy_code == "reference"]
+        .groupby(key, dropna=False)["makespan_s"]
+        .median()
+        .rename("reference_makespan_s")
+    )
+    runs = runs.drop(columns=["reference_makespan_s"], errors="ignore")
+    runs = runs.join(ref, on=key)
+    runs["makespan_ratio"] = runs["makespan_s"].astype(float) / runs[
+        "reference_makespan_s"
+    ].astype(float)
     return runs
 
 
@@ -307,12 +327,20 @@ def h10_table(runs: Any) -> Any:
                 "kept_median": kept.median(),
                 "kept_q1": kept.quantile(0.25),
                 "makespan_median_s": _median(g, "makespan_s"),
+                "makespan_ratio_median": _median(g, "makespan_ratio"),
                 "consumed_at_alert_median": _median(g, "consumed_at_alert"),
                 "timeouts": int(g["timeout"].fillna(0).astype(int).sum()),
             }
             for column in (*EXTRA, *LEAK_CLASSES, "repeat_leaks"):
                 if column in g:
                     row[column] = int(g[column].sum())
+            if "reexecuted_tasks" in g:
+                row["reexecuting_runs_rate"] = float((g["reexecuted_tasks"] > 0).mean())
+            # Per alert: H10-LG (b) and (c) predict the late alert's clean rate and
+            # makespan ratio.
+            for alert, ga in g.groupby("alert"):
+                row[f"clean_rate_{alert}"] = ga[clean_column(ga)].astype(float).mean()
+                row[f"makespan_ratio_median_{alert}"] = _median(ga, "makespan_ratio")
             if code == FIREBREAK and system == EDGECITADEL:
                 rows.append(row)
                 continue
