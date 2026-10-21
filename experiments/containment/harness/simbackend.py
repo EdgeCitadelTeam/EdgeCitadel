@@ -63,7 +63,12 @@ def run_grid(
             continue  # a runtime-only strategy (names.EXTRA)
         if cell.root_mode != "given":
             continue  # the simulator always starts from the known source
-        if cell.profile != "deployed" or cell.phase1_mode != "freeze" or cell.receding:
+        if (
+            cell.profile != "deployed"
+            or cell.phase1_mode != "freeze"
+            or cell.phase1_labels != "frontier"
+            or cell.receding
+        ):
             continue  # the simulator's own pipelines are the main design
         blocks[(cell.instance, cell.rogue_rate, cell.alert, cell.latency.name)].append(
             cell

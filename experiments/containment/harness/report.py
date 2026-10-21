@@ -54,6 +54,7 @@ IDENTITY = (
     "family",
     "profile",
     "phase1_mode",
+    "phase1_labels",
     "receding_during_waits",
     "alert",
     "root_mode",
@@ -114,6 +115,7 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         # deployed, no at-alert cut).
         "profile": meta.get("profile", "deployed"),
         "phase1_mode": meta.get("phase1_mode", "freeze"),
+        "phase1_labels": meta.get("phase1_labels", "frontier"),
         "receding_during_waits": int(bool(meta.get("receding_during_waits", False))),
         "control_latency_ms": sum(latency.values()) / len(latency)
         if latency
@@ -229,6 +231,7 @@ CELL = [
     "mode",
     "profile",
     "phase1_mode",
+    "phase1_labels",
     "receding_during_waits",
     "rogue_rate",
     "alert",
@@ -241,6 +244,7 @@ PAIR = [
     "instance",
     "profile",
     "phase1_mode",
+    "phase1_labels",
     "receding_during_waits",
     "rogue_rate",
     "alert",
@@ -399,6 +403,7 @@ def paired(runs: Any, reference: str = "firebreak") -> Any:
         cells = [
             "profile",
             "phase1_mode",
+            "phase1_labels",
             "receding_during_waits",
             "rogue_rate",
             "alert",
@@ -540,6 +545,8 @@ def _main_runs(runs: Any, mode: str) -> Any:
         r = r[r.profile.isna() | (r.profile == "deployed")]
     if "phase1_mode" in r:
         r = r[r.phase1_mode.isna() | (r.phase1_mode == "freeze")]
+    if "phase1_labels" in r:
+        r = r[r.phase1_labels.isna() | (r.phase1_labels == "frontier")]
     if "receding_during_waits" in r:
         r = r[r.receding_during_waits.isna() | (r.receding_during_waits == 0)]
     if "root_mode" in r:

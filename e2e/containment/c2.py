@@ -176,6 +176,7 @@ class Deployment:
     strategy: str
     profile: str = "deployed"
     phase1_mode: str = "freeze"
+    phase1_labels: str = "frontier"
     processes: list[tuple[str, subprocess.Popen]] = field(default_factory=list)
     ledger: ActuatorLedger | None = None
     nodes: dict[str, Node] = field(default_factory=dict)
@@ -334,6 +335,7 @@ class Deployment:
                         "strategy": self.strategy,
                         "profile": self.profile,
                         "phase1_mode": self.phase1_mode,
+                        "phase1_labels": self.phase1_labels,
                     },
                     "control": {
                         "nats": {
@@ -886,6 +888,7 @@ def summarize(deployment: Deployment, outcome: dict) -> dict:
         "profile": decision["profile"],
         "mechanisms": decision["mechanisms"],
         "phase1_mode": decision["phase1_mode"],
+        "phase1_labels": decision["phase1_labels"],
         "phase1_trigger": decision["phase1_trigger"],
         "status": decision["status"],
         "cut_valid": decision["cut_valid"],
@@ -947,6 +950,9 @@ def main() -> int:
         choices=["freeze", "freeze_plus_cut", "adaptive"],
         default="freeze",
     )
+    parser.add_argument(
+        "--phase1-labels", choices=["frontier", "forward_closure"], default="frontier"
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--root", type=Path, default=None, help="directory for run directories"
@@ -964,6 +970,7 @@ def main() -> int:
         args.strategy,
         profile=args.profile,
         phase1_mode=args.phase1_mode,
+        phase1_labels=args.phase1_labels,
     )
     try:
         deployment.start()

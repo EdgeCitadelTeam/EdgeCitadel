@@ -50,6 +50,7 @@ class ConfigError(ValueError):
 
 PROFILES = ("deployed", "shared")
 PHASE1_MODES = ("freeze", "freeze_plus_cut", "adaptive")
+PHASE1_LABELS = ("frontier", "forward_closure")
 # The strategies that solve a cut on G_C (the others apply a rule).
 CUT_STRATEGIES = frozenset({"greedy_cut", "cut_without_deadlines", "firebreak"})
 
@@ -186,6 +187,9 @@ class MonitorConfig:
     # are the same in every mode.
     phase1_mode: str = "freeze"
     phase1_margin_rounds: int = 2
+    # Phase-1 labels (admission holds): "frontier" covers U (freeze modes) or
+    # S(B_a) (adaptive); "forward_closure" covers the sources' forward closure.
+    phase1_labels: str = "frontier"
     # Let the receding trigger (a taint advance) add actions while the
     # protocol waits for ingest; additions only, never releases.
     receding_during_waits: bool = False
@@ -295,6 +299,10 @@ class MonitorConfig:
             elif key == "phase1_mode":
                 if item not in PHASE1_MODES:
                     raise ConfigError("invalid_phase1_mode")
+                kwargs[key] = item
+            elif key == "phase1_labels":
+                if item not in PHASE1_LABELS:
+                    raise ConfigError("invalid_phase1_labels")
                 kwargs[key] = item
             elif key == "mechanisms":
                 kwargs[key] = _mechanism_overrides(item)

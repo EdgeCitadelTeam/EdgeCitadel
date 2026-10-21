@@ -917,12 +917,21 @@ def test_sink_guard_guards_every_protected_sink_without_tracing(tmp_path):
     harness.close()
 
 
-def test_phase_one_labels_the_source_side_not_only_the_taint(tmp_path):
-    """Theory A.6 (b), counter-scenario of section 8.3 step 2: the parent has
-    not read its child's tainted result yet (not tainted) but is reachable from
-    the taint because the result reached its node before a park could land.
-    Phase 1 must hold it: labelling only tainted invocations would let it
-    dispatch, and then consume the result, with nothing stopping either."""
+@pytest.mark.parametrize(
+    "mode, labels",
+    [
+        ("freeze", "frontier"),
+        ("adaptive", "frontier"),
+        ("adaptive", "forward_closure"),
+    ],
+)
+def test_phase_one_labels_the_source_side_not_only_the_taint(tmp_path, mode, labels):
+    """Theory A.6 (b), counter-scenario of section 8.3 step 2 (and 8.6 (2a)
+    for the adaptive phase 1): the parent has not read its child's tainted
+    result yet (not tainted) but is reachable from the taint because the
+    result reached its node before a park could land. Phase 1 must label it,
+    in the adaptive mode as part of S(B_a): labelling only tainted invocations
+    (or only U) would let it dispatch between the phases, unheld."""
     from aggregator.containment_monitor.config import MonitorConfig
     from containment_support import ingest
     from test_containment_provenance import journal
@@ -944,7 +953,8 @@ def test_phase_one_labels_the_source_side_not_only_the_taint(tmp_path):
             "core-monitor",
             {"root-node": transport(root), "worker-node": transport(worker)},
         )
-        harness = Harness(tmp_path / "monitor", MonitorConfig(), control)
+        config = MonitorConfig(phase1_mode=mode, phase1_labels=labels)
+        harness = Harness(tmp_path / "monitor", config, control)
         for event in journal(root) + journal(worker):
             ingest(harness.core, event)
         harness.monitor.catch_up()
@@ -969,9 +979,13 @@ def test_phase_one_labels_the_source_side_not_only_the_taint(tmp_path):
             operator_alert(root_cause, harness.now), roots=[root_cause]
         )
         assert observed["parent_tainted"] is False  # reachable, not tainted
-        assert f"hold:task:{parent['task_id']}@root-node" in observed["phase1"]
-        assert observed["dispatch"]["code"] == "execution_held"
+        held = {
+            f"hold:{kind}:{parent['task_id']}@root-node" for kind in ("task", "egress")
+        }
+        assert held & observed["phase1"], observed["phase1"]
+        assert observed["dispatch"]["code"] in {"execution_held", "egress_held"}
         assert decision.status == "contained" and decision.cut_valid
+        assert decision.phase1_mode == mode and decision.phase1_labels == labels
         harness.close()
     finally:
         root.close()
@@ -1102,8 +1116,6 @@ def test_adaptive_phase_one_freezes_only_when_the_cut_is_not_safely_timely(
     """Adaptive: a timely at-alert cut goes out alone with the labels of its
     source side; an effect due before any control can land (untimely) adds
     the frontier freeze."""
-    from aggregator.containment_monitor.model import REVOKE_KINDS
-
     harness, _, timely, _ = late_effect(tmp_path / "timely", "adaptive")
     trigger = timely.phase1_trigger
     assert trigger["freeze"] is False and trigger["untimely_effects"] == []
@@ -1112,9 +1124,12 @@ def test_adaptive_phase_one_freezes_only_when_the_cut_is_not_safely_timely(
     )
     at_alert = {Action.from_json(a) for a in timely.solves[0]["actions"]}
     issued = {r.action for r in timely.phase1}
-    # B_a and its labels (egress revocations), nothing of the freeze besides.
+    # B_a and the labels of its source side (admission holds), no freeze.
     assert at_alert <= issued
-    assert all(a.op == "revoke" and a.kind in REVOKE_KINDS for a in issued - at_alert)
+    assert all(
+        a.op == "hold" and a.kind in {"egress", "task"} for a in issued - at_alert
+    )
+    assert timely.phase1_trigger["checks"] == [{"C1": True, "C2": True, "C4": True}]
     harness.close()
     harness, _, untimely, effect_id = late_effect(
         tmp_path / "untimely", "adaptive", due=25, latency_ms=200.0
@@ -1179,4 +1194,189 @@ def test_receding_additions_during_the_waits_are_fenced_before_any_release(
     assert decision.status == "contained"
     latest = max(r.t_confirmed for r in [*decision.phase2, *added])
     assert all(r.t_release_sent >= latest for r in decision.released)
+    harness.close()
+
+
+# ---------------------------------------------------------------------------
+# Adaptive phase 1: the convergence check (C1)-(C4) and (J') (theory 8.6)
+# ---------------------------------------------------------------------------
+def test_a_failed_convergence_check_adds_the_frontier_freeze(tmp_path):
+    from aggregator.containment_monitor.model import hold_effect
+
+    """(C4): before B_a landed, the tainted root dispatched once more and the
+    new task scheduled a protected effect and ended; once that is ingested,
+    the in-force set is no longer a cut (no label can cover a pending effect
+    whose issuer ended), so the freeze is added and the check repeated. (C1):
+    a fence that times out fails the check too."""
+    harness, _, trace, ids = late_effect_setup(
+        tmp_path / "c4", "adaptive", 0, 60_000, 50.0
+    )
+    original = harness.monitor.fence
+    late: dict[str, str] = {}
+
+    def fence(records, **options):
+        if not late:  # r's new dispatch raced B_a; its journal arrives now
+            seen = len(trace.events)
+            late["task"] = trace.dispatch(ids["root"], "c", "n2", 21)
+            trace.arrive(late["task"], 22)
+            attempt = trace.start(late["task"], 23)
+            late["effect"] = trace.effect(
+                attempt, "device.command", "requested", 24, scheduled=60_000
+            )["attributes"]["effect_id"]
+            trace.complete(attempt, 25)
+            for event in trace.events[seen:]:
+                ingest(harness.core, event)
+        return original(records, **options)
+
+    harness.monitor.fence = fence
+    decision = harness.monitor.respond(
+        operator_alert(ids["a"], harness.now), strategy="firebreak", roots=[ids["a"]]
+    )
+    first, *later = decision.phase1_trigger["checks"]
+    assert first == {"C1": True, "C2": True, "C4": False}
+    assert decision.phase1_trigger["freeze_after_check"] and later
+    assert all(later[-1].values())
+    assert hold_effect("n2", late["effect"]) in {r.action for r in decision.phase1}
+    assert decision.status == "contained"
+    harness.close()
+
+    harness, _, _, ids = late_effect_setup(tmp_path / "c1", "adaptive", 0, 60_000, 50.0)
+    original = harness.monitor.fence
+    calls = {"n": 0}
+
+    def slow(records, **options):
+        calls["n"] += 1
+        return original(records, **options) and calls["n"] > 1
+
+    harness.monitor.fence = slow
+    decision = harness.monitor.respond(
+        operator_alert(ids["a"], harness.now), strategy="firebreak", roots=[ids["a"]]
+    )
+    first = decision.phase1_trigger["checks"][0]
+    assert first["C1"] is False and decision.phase1_trigger["freeze_after_check"]
+    harness.close()
+
+
+def test_conservative_reconciliation_keeps_a_stale_journal_from_releasing(tmp_path):
+    """Theory 8.6 (2d) / T11 with injected ingest delays: x runs on a slow node
+    and has dispatched y (fast node), which dispatched z (fast node), which
+    scheduled a protected effect. The fast nodes' journals are ingested, the
+    slow node's (x's dispatch of y) is not. Under (J') the known use of y's
+    request, whose producer is x, taints y and so z: B_a holds z's effect at
+    the alert and no phase-2 release lifts it, before or after the slow journal
+    arrives."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from aggregator.containment_monitor.model import hold_effect, hold_task
+    from containment_support import TraceBuilder
+
+    config = MonitorConfig(
+        grants={"x": frozenset({"y"}), "y": frozenset({"z"}), "z": frozenset()},
+        effect_scopes={"z": frozenset({"device.command"})},
+        protected_effect_classes=frozenset({"device.command"}),
+        agent_nodes={"x": "slow", "y": "fast-1", "z": "fast-2"},
+        control_latency_ms={"slow": 400, "fast-1": 5, "fast-2": 5},
+        session_isolated_agents=frozenset({"x", "y", "z"}),
+        phase1_mode="adaptive",
+    )
+    trace = TraceBuilder()
+    x = trace.start(trace.root("x", "slow", 0), 1)
+    task_y = trace.dispatch(x, "y", "fast-1", 5)
+    trace.arrive(task_y, 6)
+    y = trace.start(task_y, 7)
+    task_z = trace.dispatch(y, "z", "fast-2", 8)
+    trace.arrive(task_z, 9)
+    z = trace.start(task_z, 10)
+    effect = trace.effect(z, "device.command", "requested", 11, scheduled=60_000)
+    effect_id = effect["attributes"]["effect_id"]
+    x_dispatch = [
+        e for e in trace.events if e["node_id"] == "slow" and event_ms(e) >= 5
+    ]
+    harness = Harness(tmp_path, config, FakeControlClient(delay=jittered(1)))
+    harness.feed([e for e in trace.events if e not in x_dispatch])
+    graph = harness.monitor.graph
+    graph.mark_roots([inv(x)])
+    # The stale view: y's request has no known producer yet, nothing below x
+    # is tainted.
+    assert inv(y) not in graph.taint and inv(z) not in graph.taint
+    harness.at(20)
+    decision = harness.monitor.respond(
+        operator_alert(inv(x), harness.now), strategy="firebreak", roots=[inv(x)]
+    )
+    assert {inv(y), inv(z)} <= set(graph.taint)  # (J')
+    # B_a cuts z's effect at the alert (its own hold, or the hold of z, which
+    # the gateway honours at commit), and nothing that cuts it is released.
+    cuts = {hold_effect("fast-2", effect_id), hold_task("fast-2", task_z)}
+    at_alert = {Action.from_json(a) for a in decision.solves[0]["actions"]}
+    assert cuts & at_alert and cuts & {r.action for r in decision.phase1}
+    assert decision.status == "contained"
+    assert cuts & set(harness.monitor.in_force)
+    assert not cuts & {r.action for r in decision.released}
+    # The slow journal arrives: the exact taint agrees; a re-solve keeps it.
+    harness.feed(x_dispatch)
+    assert {inv(y), inv(z)} <= set(graph.taint)
+    harness.monitor.resolve_frontier()
+    assert cuts & set(harness.monitor.in_force)
+    harness.close()
+
+
+def test_phase_two_keeps_literal_masks_beside_the_held_edges(tmp_path):
+    """Theory 8.6 (2b) / Prop 5.1: only edges held by confirmed in-force
+    actions get d = infinity; an unheld source-side edge keeps its deadline,
+    and an action untimely for it stays untimely (the mask binds)."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from aggregator.containment_monitor.model import hold_task
+    from aggregator.containment_monitor.projection import project
+    from containment_support import TraceBuilder
+
+    config = MonitorConfig(
+        grants={"a": frozenset({"w"}), "b": frozenset({"w"})},
+        agent_nodes={"a": "n0", "b": "n1", "w": "n2"},
+        session_isolated_agents=frozenset({"a", "b"}),
+        default_control_latency_ms=1000,
+    )
+    harness = Harness(tmp_path, config)
+    trace = TraceBuilder()
+    task_a, task_b = trace.root("a", "n0", 0), trace.root("b", "n1", 0)
+    a, b = trace.start(task_a, 1), trace.start(task_b, 1)
+    harness.feed(trace.events)
+    harness.monitor.graph.mark_roots([inv(a), inv(b)])
+    harness.at(100)
+    held = hold_task("n0", task_a)
+    cg = project(
+        harness.monitor.graph,
+        config,
+        now_ms=harness.now,
+        capabilities=lambda node: AGENTD_CAPABILITIES,
+        in_force=[held],
+    )
+    behind_a = [
+        e for e in cg.edges if e.action is not None and e.tail.startswith(f"out:{a}")
+    ]
+    assert behind_a and all(e.deadline == float("inf") for e in behind_a)
+    assert not any(e.tail.startswith(f"early:{a}") for e in cg.edges)
+    # b emits before any control lands: its immediate emissions keep finite
+    # deadlines, and the actions on them stay untimely.
+    early_b = [
+        e for e in cg.edges if e.action is not None and e.tail.startswith(f"early:{b}")
+    ]
+    assert early_b and all(e.deadline < float("inf") for e in early_b)
+    assert not any(e.feasible for e in early_b)
+    harness.close()
+
+
+def test_forward_closure_labels_cover_every_unit_the_taint_can_reach(tmp_path):
+    """phase1_labels="forward_closure": admission holds on the forward closure
+    of the sources (a superset of the frontier labels), released like the rest
+    of phase 1 only after the confirmed phase-2 cut."""
+    harness, _, frontier, _ = late_effect(tmp_path / "frontier", "freeze")
+    harness.close()
+    harness, _, closure, _ = late_effect(
+        tmp_path / "closure", "freeze", phase1_labels="forward_closure"
+    )
+    assert closure.phase1_labels == "forward_closure"
+    assert frontier.phase1_labels == "frontier"
+    assert not frontier_shape(frontier) - frontier_shape(closure)
+    last = max(r.t_confirmed for r in closure.phase2)
+    assert all(r.t_release_sent >= last for r in closure.released)
+    assert closure.status == "contained"
     harness.close()

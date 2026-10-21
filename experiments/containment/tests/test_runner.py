@@ -233,6 +233,12 @@ def test_profiles_options_and_parts_extend_the_paired_grid(tmp_path):
         experiment(tmp_path, profiles=["everything"])
     with pytest.raises(ValueError, match="phase-1 mode"):
         experiment(tmp_path, phase1_modes=["eager"])
+    with pytest.raises(ValueError, match="phase-1 labels"):
+        experiment(tmp_path, phase1_labels=["everywhere"])
+    closure = runner.grid(
+        experiment(tmp_path, phase1_labels=["forward_closure"], rogue_rates=[0.0])
+    )
+    assert all("__forward_closure__" in c.run_id for c in closure if c.alert)
     with pytest.raises(ValueError, match="repeats"):
         runner.grid(experiment(tmp_path, parts=[{"strategies": ["firebreak"]}]))
 
@@ -246,6 +252,7 @@ def test_the_lab_grids_have_their_planned_sizes():
         sizes[name] = len(cells)
         assert {c.profile for c in cells} <= {"deployed", "shared"}
         assert {c.phase1_mode for c in cells} == {"freeze"}
+        assert {c.phase1_labels for c in cells} == {"frontier"}
         assert not any(c.receding for c in cells)
     # 7 instances x (reference + 2 alerts x (9 strategies + none)), plus C2's
     # 2 alerts x 9 strategies under the shared profile.

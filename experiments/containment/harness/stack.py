@@ -511,6 +511,7 @@ class RunStack:
         enforce: bool = True,
         profile: str = "deployed",
         phase1_mode: str = "freeze",
+        phase1_labels: str = "frontier",
         receding_during_waits: bool = False,
     ) -> None:
         """Start everything. With ``enforce`` False the monitor decides and logs
@@ -556,6 +557,7 @@ class RunStack:
             {
                 "profile": profile,
                 "phase1_mode": phase1_mode,
+                "phase1_labels": phase1_labels,
                 "receding_during_waits": receding_during_waits,
             },
         )

@@ -49,7 +49,7 @@ from .control import (
     release,
 )
 from .graph import ControlGraph
-from .config import PHASE1_MODES
+from .config import PHASE1_LABELS, PHASE1_MODES
 from .model import Action
 from .projection import admission_freeze, frontier_block
 
@@ -241,6 +241,7 @@ class Decision:
     profile: str = "deployed"
     mechanisms: dict = field(default_factory=dict)
     phase1_mode: str = "freeze"
+    phase1_labels: str = "frontier"
     receding_during_waits: bool = False
     status: str = "pending"
     rounds: int = 0
@@ -255,7 +256,8 @@ class Decision:
     # and each phase-2 solve; "phase" says which.
     solves: list[dict] = field(default_factory=list)
     graph: dict = field(default_factory=dict)
-    # Adaptive phase 1: why the freeze was (not) added (freeze_trigger).
+    # Adaptive phase 1: why the freeze was (not) added (freeze_trigger) and
+    # each round's convergence check (C1, C2, C4).
     phase1_trigger: dict = field(default_factory=dict)
     # Actions the receding trigger added while the protocol waited.
     receding: list[str] = field(default_factory=list)
@@ -267,6 +269,7 @@ class Decision:
             "profile": self.profile,
             "mechanisms": self.mechanisms,
             "phase1_mode": self.phase1_mode,
+            "phase1_labels": self.phase1_labels,
             "receding_during_waits": self.receding_during_waits,
             "phase1_trigger": self.phase1_trigger,
             "receding": self.receding,
@@ -344,11 +347,17 @@ class TwoPhaseProtocol:
     - ``freeze``: the frontier freeze B_1 (frontier holds and admission freeze).
     - ``freeze_plus_cut``: B_1 and, in the first round, ``cut_at_alert``, the
       strategy's own cut solved on the phase-2 G_C at the alert (B_a), at once.
-    - ``adaptive``: B_a and the taint-aware labels of its source side
-      (``labels``); the freeze only when ``trigger`` says B_a is not safely
-      timely, or when, once B_a is confirmed and fenced, the actions in force
-      are not a cut on the reconciled state (then the freeze is added and the
-      check repeated).
+    - ``adaptive``: B_a and labels covering its source side S(B_a) (admission
+      holds on every unit reachable from the sources through edges B_a does
+      not remove in time); the freeze only when ``trigger`` says B_a is not
+      safely timely, or when the convergence check (C1)-(C4) fails at tau_1
+      (then the freeze is added and the check repeated). The service's
+      projection reconciles taint under (J') in this mode.
+
+    Labels (``phase1_labels``): ``frontier`` covers U (freeze modes) or
+    S(B_a) (adaptive); ``forward_closure`` covers the forward closure of the
+    sources in every mode, which removes the benign refused releases of the
+    post-release label race (theory 8.6 (2c)).
 
     Every at-alert solve is recorded as a ``phase: 1`` entry of ``solves``.
     Phase 2 is the same in every mode: what it does not keep of the phase-1
@@ -373,13 +382,15 @@ class TwoPhaseProtocol:
         in_force: dict[Action, ActionRecord],
         two_phase: bool = True,
         phase1_mode: str = "freeze",
+        phase1_labels: str = "frontier",
         cut_at_alert: Callable[[ControlGraph], StrategyResult] | None = None,
-        labels: Callable[[ControlGraph, list[Action]], list[Action]] | None = None,
         trigger: Callable[[ControlGraph, StrategyResult], dict] | None = None,
         receding: Callable[[], set[Action]] | None = None,
     ) -> Decision:
         if phase1_mode not in PHASE1_MODES:
             raise ValueError(f"unknown phase-1 mode {phase1_mode!r}")
+        if phase1_labels not in PHASE1_LABELS:
+            raise ValueError(f"unknown phase-1 labels {phase1_labels!r}")
         clock = self.driver.clock
         phase = [1]
 
@@ -432,10 +443,47 @@ class TwoPhaseProtocol:
             decision.solves.append(self._solve(decision, result, started, cg, phase=1))
             return cg, result
 
+        def labels(cg: ControlGraph, removed: Iterable[Action]) -> set[Action]:
+            """Admission holds (reversible) on every unit of the source side of
+            ``removed`` on ``cg`` (theory A.6: Q covers S), or on the forward
+            closure of the sources (``phase1_labels="forward_closure"``)."""
+            frozen_cg = project(1, frozenset(in_force))
+            if phase1_labels == "forward_closure":
+                return admission_freeze(frozen_cg, frozen_cg.closure())
+            return admission_freeze(frozen_cg, cg.closure(removed=set(removed)))
+
         def freeze() -> set[Action]:
             cg = project(1, frozenset(in_force))
             block, _, closure = frontier_block(cg)
-            return block | admission_freeze(cg, closure)
+            side = cg.closure() if phase1_labels == "forward_closure" else closure
+            return block | admission_freeze(cg, side)
+
+        def converged(fenced: bool) -> dict:
+            """The convergence check at tau_1 for an adaptive phase 1, literally
+            (theory 8.6): (C1) every relied-on action confirmed and its journals
+            ingested through the fence positions; (C2) labels confirmed at every
+            site hosting a vertex of S(A(tau_1)), pushing what is missing; (C3)
+            taint reconciled under (J') (the service's projection); (C4) A(tau_1)
+            a cut on the reconciled graph, every admitted edge included."""
+            check = {"C1": fenced, "C2": None, "C4": None}
+            if not fenced:
+                return check
+            for _ in range(self.max_rounds):
+                missing = labels(project(2, frozenset(in_force)), in_force)
+                missing -= in_force.keys()
+                if not missing:
+                    check["C2"] = True
+                    break
+                records = apply(missing)
+                if any(r.state != "in_force" for r in records) or not wait(records):
+                    check["C2"] = False
+                    return check
+            else:
+                check["C2"] = False
+                return check
+            held, _ = cut_holds(project(2, frozenset(in_force)), in_force)
+            check["C4"] = held
+            return check
 
         if two_phase:
             frozen = phase1_mode != "adaptive"
@@ -446,22 +494,24 @@ class TwoPhaseProtocol:
                     cg, cut = at_alert()
                     block |= set(cut.actions)
                     if phase1_mode == "adaptive":
-                        block |= set(labels(cg, list(cut.actions)))
+                        # Q covers S(B_a), pushed with B_a.
+                        block |= labels(cg, cut.actions)
                         decision.phase1_trigger = trigger(cg, cut)
                         if decision.phase1_trigger["freeze"]:
                             frozen = True
                             block |= freeze()
                 records = apply(block)
-                wait(records)
-                if frozen:
-                    held, _ = cut_holds(project(1, frozenset(in_force)), in_force)
-                else:
-                    # Reconcile B_a: still a cut on the deadline-aware G_C of
-                    # the reconciled state? If not, add the freeze and repeat.
-                    held, _ = cut_holds(project(2, frozenset(in_force)), in_force)
-                    if not held:
+                fenced = wait(records)
+                if phase1_mode == "adaptive":
+                    check = converged(fenced)
+                    decision.phase1_trigger.setdefault("checks", []).append(check)
+                    held = all(check.values())
+                    if not held and not frozen:
+                        # On failure, add the frontier freeze and repeat.
                         frozen = True
-                        decision.phase1_trigger["freeze_after_reconcile"] = True
+                        decision.phase1_trigger["freeze_after_check"] = True
+                else:
+                    held, _ = cut_holds(project(1, frozenset(in_force)), in_force)
                 if held:
                     break
         phase[0] = 2

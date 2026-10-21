@@ -43,6 +43,9 @@
   "phase1_modes": [
     "freeze"
   ],
+  "phase1_labels": [
+    "frontier"
+  ],
   "receding_during_waits": [
     false
   ],

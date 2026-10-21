@@ -4,7 +4,8 @@ An experiment file names instances (spec files), strategies, alert timings,
 latency settings, repetitions, the monitor's mechanism ``profiles``
 (``deployed``: each strategy as deployed, the default; ``shared``: every
 mechanism for every strategy), ``phase1_modes`` (``freeze``, the default,
-``freeze_plus_cut`` or ``adaptive``) and ``receding_during_waits`` settings. ``parts``
+``freeze_plus_cut`` or ``adaptive``), ``phase1_labels`` (``frontier``, the
+default, or ``forward_closure``) and ``receding_during_waits`` settings. ``parts``
 adds sub-grids that override any of those (for example one instance under the
 shared profile). The grid is paired: every strategy runs the same instance
 under the same alert trigger, latency setting, repetition, profile and option,
@@ -123,6 +124,7 @@ class Experiment:
     measured_rtt_ms: float = MEASURED_RTT_MS
     profiles: tuple[str, ...] = ("deployed",)
     phase1_modes: tuple[str, ...] = ("freeze",)
+    phase1_labels: tuple[str, ...] = ("frontier",)
     receding_during_waits: tuple[bool, ...] = (False,)
     # Sub-grids run after this one, each overriding some of its dimensions.
     parts: tuple[Experiment, ...] = ()
@@ -142,6 +144,7 @@ class Experiment:
 
 PROFILES = ("deployed", "shared")
 PHASE1_MODES = ("freeze", "freeze_plus_cut", "adaptive")
+PHASE1_LABELS = ("frontier", "forward_closure")
 
 
 def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any]:
@@ -169,6 +172,11 @@ def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any
         for mode in out["phase1_modes"]:
             if mode not in PHASE1_MODES:
                 raise ValueError(f"unknown phase-1 mode '{mode}'")
+    if "phase1_labels" in document:
+        out["phase1_labels"] = tuple(document["phase1_labels"])
+        for labels in out["phase1_labels"]:
+            if labels not in PHASE1_LABELS:
+                raise ValueError(f"unknown phase-1 labels '{labels}'")
     if "receding_during_waits" in document:
         out["receding_during_waits"] = tuple(document["receding_during_waits"])
         if not all(isinstance(v, bool) for v in out["receding_during_waits"]):
@@ -224,6 +232,7 @@ class RunCell:
     profile: str = "deployed"
     phase1_mode: str = "freeze"
     receding: bool = False
+    phase1_labels: str = "frontier"
 
     @property
     def run_id(self) -> str:
@@ -234,6 +243,7 @@ class RunCell:
         # The main design (deployed profile, freeze phase 1) keeps plain ids.
         variant = [] if self.profile == "deployed" else [self.profile]
         variant += [] if self.phase1_mode == "freeze" else [self.phase1_mode]
+        variant += [] if self.phase1_labels == "frontier" else [self.phase1_labels]
         variant += ["receding"] if self.receding else []
         parts = [
             self.instance.stem + rogue,
@@ -260,8 +270,10 @@ def grid(experiment: Experiment) -> list[RunCell]:
                             RunCell(instance, rate, "reference", None, latency, rep)
                         )
                     for profile in experiment.profiles:
-                        for phase1, receding in itertools.product(
-                            experiment.phase1_modes, experiment.receding_during_waits
+                        for phase1, receding, labels in itertools.product(
+                            experiment.phase1_modes,
+                            experiment.receding_during_waits,
+                            experiment.phase1_labels,
                         ):
                             for alert in experiment.alerts:
                                 for mode in experiment.root_modes:
@@ -278,6 +290,7 @@ def grid(experiment: Experiment) -> list[RunCell]:
                                                 profile,
                                                 phase1,
                                                 receding,
+                                                labels,
                                             )
                                         )
     for part in experiment.parts:
@@ -406,6 +419,7 @@ def run_cell(
         "controller_lease_ms": stack_config.controller_lease_ms,
         "profile": cell.profile,
         "phase1_mode": cell.phase1_mode,
+        "phase1_labels": cell.phase1_labels,
         "receding_during_waits": cell.receding,
         "mechanisms": None,  # the monitor's, for this strategy (from its status)
         "control_latency_ms": cell.latency.per_node(nodes),
@@ -432,6 +446,7 @@ def run_cell(
             enforce=cell.strategy in deploy.STRATEGIES,
             profile=cell.profile,
             phase1_mode=cell.phase1_mode,
+            phase1_labels=cell.phase1_labels,
             receding_during_waits=cell.receding,
         )
         if cell.strategy in deploy.STRATEGIES:

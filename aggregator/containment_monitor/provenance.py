@@ -27,7 +27,7 @@ import heapq
 import json
 import math
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -753,6 +753,57 @@ class ProvenanceGraph:
         if added and any(self.tainted_request(item) for item in self.pending.values()):
             self.frontier_advanced = True
         return added
+
+    def reconcile_known_commits(self, source_side: Mapping[str, float]) -> set[str]:
+        """Conservative reconciliation (J'): a known commit taints its head
+        whenever its tail is on the controller's source side, whatever order
+        the per-site journals arrived in. Returns the newly tainted nodes.
+
+        ``source_side`` maps the source side's invocations to the earliest time
+        they can be tainted. Two kinds of commits are known with their tail
+        missing or not yet tainted:
+
+        - a version some invocation used while its producer's journal has not
+          arrived (no ``generated`` edge yet): its producer is the dispatching
+          invocation for a request, the child's invocation for a result; if
+          that producer is tainted or on the source side, the version is;
+        - a commit (data or session edge) of a source-side invocation at or
+          after the earliest time it can be tainted.
+
+        Taint added this way is conservative (it may over-taint) and lives in
+        the index only: ``reload`` rebuilds the index from the roots, and the
+        next reconciliation adds it again.
+        """
+        seeds: list[tuple[str, int]] = []
+        for version_id, entity, entity_task in self.db.execute(
+            "SELECT version_id,entity,entity_task_id FROM containment_versions "
+            "WHERE producer_attempt IS NULL AND external=0"
+        ).fetchall():
+            node = ver(version_id)
+            if node in self.taint or entity_task is None:
+                continue
+            producer_task = entity_task
+            if entity == "request":
+                row = self.task_row(entity_task)
+                producer_task = row["parent_task_id"] if row else None
+            if producer_task is None:
+                continue
+            times = [
+                self.taint[candidate]
+                if candidate in self.taint
+                else source_side.get(candidate)
+                for candidate in map(inv, self.invocations_of_task(producer_task))
+            ]
+            known = [t for t in times if t is not None]
+            if known:
+                seeds.append((node, int(min(known))))
+        for node, earliest in source_side.items():
+            if node in self.taint:
+                continue
+            for child, _, at in self.successors_timed(node, TAINT_EDGE_TYPES):
+                if at >= earliest and child not in self.taint:
+                    seeds.append((child, at))
+        return self._spread(seeds)
 
     def closure(self, roots: Iterable[str]) -> dict[str, int]:
         """The taint ``mark_roots`` would add, without changing the index."""

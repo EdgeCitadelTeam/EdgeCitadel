@@ -3605,17 +3605,23 @@ mechanism added; Greedy cut, Cut without deadlines and Firebreak run the
 two-phase protocol with the guard and taint-aware admission (Theorem 5).
 `shared`: everything on for every strategy, an ablation that isolates the
 phase-2 rule. Confirmation, fencing and agentd's gates apply either way. Each
-decision records `profile`, `mechanisms`, `phase1_mode` and
+decision records `profile`, `mechanisms`, `phase1_mode`, `phase1_labels` and
 `receding_during_waits`; status lists every strategy's mechanisms. The
 two-phase protocol places frontier holds first, then the chosen set; phase-1 holds
 are released only after every phase-2 action is confirmed and fenced.
 `phase1_mode` (options; the default is `freeze`) chooses what phase 1 issues:
 `freeze` (the frontier freeze B_1), `freeze_plus_cut` (B_1 and the strategy's
-own cut solved on G_C at the alert, B_a, at once) or `adaptive` (B_a and the
-taint-aware labels of its source side; the freeze is added only when B_a
-leaves a pending effect untimely, when the earliest tainted-effect deadline
-is within `phase1_margin_rounds` (2) control rounds of B_a's landing, or when
-B_a in force is not a cut once reconciled; `phase1_trigger` records why).
+own cut solved on G_C at the alert, B_a, at once) or `adaptive` (B_a and
+admission-hold labels on its whole source side S(B_a); the freeze is added
+only when B_a leaves a pending effect untimely, when the earliest
+tainted-effect deadline is within `phase1_margin_rounds` (2) control rounds of
+B_a's landing, or when the literal convergence check fails at tau_1: relied-on
+actions fenced (C1), labels confirmed for S(A) (C2), taint reconciled
+conservatively, a known commit tainting its head whenever its tail is tainted
+or on the source side, whatever order journals arrived in (C3), and the
+actions in force a cut on that graph (C4); `phase1_trigger` records why).
+`phase1_labels` (`frontier`, default: U or S(B_a); `forward_closure`: the
+sources' forward closure) chooses the phase-1 labels in every mode.
 At-alert solves are the `phase: 1` entries of `solves`; phase 2 is the same in
 every mode, and the holds of phase 1 it does not keep are released under the
 same guarded release (revocations stay). With `receding_during_waits`

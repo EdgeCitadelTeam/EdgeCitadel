@@ -280,6 +280,7 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
         {"monitor": {"mechanisms": {"firebreak": {"freeze": True}}}},
         {"monitor": {"mechanisms": {"telepathy": {"phase1_freeze": True}}}},
         {"monitor": {"phase1_mode": "eager"}},
+        {"monitor": {"phase1_labels": "everywhere"}},
         {"monitor": {"phase1_margin_rounds": -1}},
         {"monitor": {"receding_during_waits": "yes"}},
         {"control": {"agentd": {"n0": {"socket": "x"}}}},

@@ -464,8 +464,8 @@ for every strategy; `mechanisms` overrides them per strategy (or `"*"`):
 Theory A.6 obligation (c) therefore holds by default for the three cut
 strategies (the only ones Theorem 5 is claimed for). Confirmation, fencing
 (ingest-then-release) and agentd's gates stay on for every strategy in both.
-Each decision records `profile`, `mechanisms`, `phase1_mode` and
-`receding_during_waits` (decision log, status `last_decision`; status also
+Each decision records `profile`, `mechanisms`, `phase1_mode`,
+`phase1_labels` and `receding_during_waits` (decision log, status `last_decision`; status also
 lists every strategy's mechanisms), and the C2 run output and the harness's
 `run.json` carry them.
 
@@ -501,17 +501,47 @@ checks. They apply to the strategies that run the two-phase protocol
   strategy's own solve on the phase-2 G_C at the alert (Firebreak: its
   deadline-aware cut), both in the first round. More phase-1 actions only
   shrink the source side, so Theorem 5 is unaffected.
-- `adaptive` (V3): at the alert only B_a and the taint-aware labels of its
-  source side (egress revocations of every unit B_a leaves there). The freeze
-  is added when the at-alert solve leaves a protected sink (a pending effect)
-  untimely or doomed, or when the earliest tainted-effect deadline lies within
-  `phase1_margin_rounds` (default 2) control rounds of B_a's landing (a round
-  is the largest control latency of B_a's sites), or when, once B_a is
-  confirmed and fenced, the actions in force are not a cut on the reconciled
-  deadline-aware G_C; then the freeze is added and the check repeated. The
-  decision records why under `phase1_trigger` (`freeze`, `untimely_effects`,
-  `earliest_effect_deadline_ms`, `landing_ms`, `margin_ms`,
-  `freeze_after_reconcile`).
+- `adaptive` (V3): at the alert only B_a and labels covering its source side
+  S(B_a) = every vertex reachable from the taint through edges B_a does not
+  remove in time (its timely masks), not only U: admission holds (hold:egress
+  on running units, hold:task on pending ones, released like the rest of phase
+  1) pushed with B_a. The frontier freeze is added when the at-alert solve
+  leaves a protected sink (a pending effect) untimely or doomed, or when the
+  earliest tainted-effect deadline lies within `phase1_margin_rounds`
+  (default 2) control rounds of B_a's landing (a round is the largest control
+  latency of B_a's sites), or when the convergence check fails.
+
+  Convergence at tau_1 is checked literally (theory grouped_cut_v2 8.6,
+  appendix (J)): (C1) every relied-on action is confirmed and its nodes'
+  journals are ingested through the confirmed positions; (C2) labels are
+  confirmed at every site hosting a vertex of S(A(tau_1)) on the reconciled
+  graph (missing labels are pushed and the check repeated); (C3) taint is
+  reconciled under (J'): before every solve and check the projection marks
+  as tainted the head of every known commit whose tail is tainted or on the
+  source side, whatever order the per-site journals arrived in (a version
+  used while its producer's journal is missing is attributed to its producer:
+  the dispatcher for a request, the child for a result; and commits of
+  source-side invocations at or after their earliest possible taint); (C4)
+  the actions in force are a cut on the reconciled graph, every admitted edge
+  included. On failure the freeze is added and the check repeated. Each
+  round's check is recorded under `phase1_trigger.checks`; the trigger's
+  `freeze`, `untimely_effects`, `earliest_effect_deadline_ms`, `landing_ms`,
+  `margin_ms` and `freeze_after_check` say why the freeze was (not) added.
+  Phase 2 keeps the literal masks: d is infinite only behind edges held by
+  confirmed in-force actions (M4 fix (a)); elsewhere the deadlines and timely
+  masks bind as at the alert. (J') over-taints (cost) and is applied only in
+  this mode; under the freeze every edge that can move taint is covered and
+  the fence makes the reconciliation exact. Limitation: vertices with no
+  agentd identity (a tainted conversation's future tasks, invocations beyond
+  the horizon) cannot carry a label; their creating edges come from labelled
+  units, or they are unavoidable sinks.
+
+`phase1_labels` (every mode; default `frontier`): `frontier` labels U (freeze
+modes) or S(B_a) (adaptive); `forward_closure` labels every unit of the
+forward closure of the sources, which removes the benign refused releases of
+the post-release label race (theory 8.6 (2c); about 0.1 % of simulated runs)
+at the price of more phase-1 holds on normal work. Decisions record
+`phase1_mode` and `phase1_labels`.
 
 In every mode every at-alert solve is the `phase: 1` entry of `solves`, phase
 2 is unchanged, and the guarded release releases the phase-1 holds the
@@ -523,6 +553,16 @@ protocol waits for ingest (during either phase) re-solves at once and applies
 whatever the strategy adds, never a release. Those additions (listed under
 `receding`) are fenced before any release, and an addition made during phase
 1 is a phase-1 action like the freeze's.
+
+Tests (adaptive safety): `test_phase_one_labels_the_source_side_not_only_the_taint`
+(real agentd, freeze and adaptive with both label settings: a reachable,
+untainted parent is labelled in phase 1 and its dispatch between the phases is
+denied), `test_a_failed_convergence_check_adds_the_frontier_freeze` ((C4): a
+task and its scheduled effect raced B_a; (C1): a fence timeout),
+`test_conservative_reconciliation_keeps_a_stale_journal_from_releasing`
+(T11 with injected ingest delays on a slow and two fast nodes: fails without
+(J')), `test_phase_two_keeps_literal_masks_beside_the_held_edges` and
+`test_forward_closure_labels_cover_every_unit_the_taint_can_reach`.
 
 Tests: `test_every_phase_one_mode_blocks_the_late_effect_and_releases_after_phase_two`
 (in-process, late alert, each mode: the effect hold is in the first round,

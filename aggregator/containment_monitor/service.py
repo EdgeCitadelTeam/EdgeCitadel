@@ -54,16 +54,18 @@ from .enforcement import (
     now_ms,
 )
 from .graph import ControlGraph
-from .model import FAILURE_KINDS, Action, Alert, AlertError, parse_external_alert, ver
+from .model import (
+    FAILURE_KINDS,
+    Action,
+    Alert,
+    AlertError,
+    inv,
+    parse_external_alert,
+    ver,
+)
 from .projection import ScopeMirror, project
 from .provenance import ProvenanceGraph
-from .strategies import (
-    DISPLAY,
-    STRATEGIES,
-    Context,
-    taint_admission,
-    with_mechanisms,
-)
+from .strategies import DISPLAY, STRATEGIES, Context, with_mechanisms
 
 BATCH = 256
 MAX_CATCH_UP_BATCHES = 64
@@ -396,18 +398,40 @@ class ContainmentMonitor:
                     if c.startswith("hold:")
                 )
 
-        cg = project(
-            self.graph,
-            self.config,
-            now_ms=self.clock(),
-            capabilities=capabilities,
-            static=static,
-            in_force=in_force,
-            tau_ms=0.0 if phase == 1 else None,
-            freeze=phase == 1,
-        )
+        def build() -> ControlGraph:
+            return project(
+                self.graph,
+                self.config,
+                now_ms=self.clock(),
+                capabilities=capabilities,
+                static=static,
+                in_force=in_force,
+                tau_ms=0.0 if phase == 1 else None,
+                freeze=phase == 1,
+            )
+
+        cg = build()
+        if self.config.phase1_mode == "adaptive" and not static:
+            # (J'): with an adaptive phase 1 the source side holds uncovered
+            # edges whose commits arrive from journals with different delays;
+            # reconcile conservatively before every solve and check.
+            while self._reconcile_known_commits(cg, in_force):
+                cg = build()
         self.last_graph = dict(cg.stats)
         return cg
+
+    def _reconcile_known_commits(
+        self, cg: ControlGraph, in_force: frozenset[Action]
+    ) -> set[str]:
+        """Taint what (J') says a known commit taints; returns the new taint."""
+        side: dict[str, float] = {}
+        for name in cg.closure(removed=set(in_force)):
+            unit = cg.nodes.get(name, {}).get("unit")
+            if unit is None or unit.startswith("task:"):
+                continue
+            arrival = cg.eat.get(f"in:{unit}", cg.t_now)
+            side[inv(unit)] = min(side.get(inv(unit), arrival), arrival)
+        return self.graph.reconcile_known_commits(side)
 
     def respond(
         self,
@@ -463,6 +487,7 @@ class ContainmentMonitor:
             profile=self.config.profile,
             mechanisms=mechanisms.to_json(),
             phase1_mode=mode,
+            phase1_labels=self.config.phase1_labels,
             receding_during_waits=self.config.receding_during_waits,
         )
 
@@ -507,8 +532,8 @@ class ContainmentMonitor:
             in_force=self.in_force,
             two_phase=mechanisms.phase1_freeze,
             phase1_mode=mode,
+            phase1_labels=self.config.phase1_labels,
             cut_at_alert=rule,
-            labels=taint_admission,
             trigger=trigger,
             receding=receding if self.config.receding_during_waits else None,
         )
@@ -600,6 +625,7 @@ class ContainmentMonitor:
             "fault": self.fault,
             "profile": self.config.profile,
             "phase1_mode": self.config.phase1_mode,
+            "phase1_labels": self.config.phase1_labels,
             "receding_during_waits": self.config.receding_during_waits,
             "mechanisms": {
                 name: self.config.mechanisms_for(name).to_json() for name in STRATEGIES
