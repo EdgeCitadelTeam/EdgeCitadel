@@ -8,6 +8,7 @@ import pytest
 
 import edgecitadel_agentd.trace_sync_service as lifecycle
 from edgecitadel_agentd.store import AgentdStore
+from edgecitadel_agentd.trace_exporter import EXPORT_IDLE_MS
 from edgecitadel_plugin_runtime.telemetry_stream import TelemetryConfigurationError
 
 
@@ -82,9 +83,9 @@ def test_separate_thread_store_and_connection_do_not_block_command_handle(
     captures = []
 
     class Manager:
-        def __init__(self, store, js, nc):
+        def __init__(self, store, js, nc, *, idle_ms):
             self.state, self.fault, self.active = "running", None, {}
-            captures.append((store, threading.get_ident()))
+            captures.append((store, threading.get_ident(), idle_ms))
 
         async def run(self, stop):
             entered.set()
@@ -107,6 +108,7 @@ def test_separate_thread_store_and_connection_do_not_block_command_handle(
         assert len(captures) == 1 and len(clients) == 1
         assert captures[0][0]._connection is not command_store._connection
         assert captures[0][1] != threading.get_ident()
+        assert captures[0][2] == EXPORT_IDLE_MS
         started = time.monotonic()
         command_store.create_task(
             sender_id="caller", recipient_id="worker", payload={"body": "work"}
