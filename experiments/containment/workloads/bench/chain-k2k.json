@@ -1,0 +1,116 @@
+{
+ "spec_version": 1,
+ "name": "chain-k2k",
+ "agents": [
+  {
+   "id": "r",
+   "parent": null,
+   "site": "s-r"
+  },
+  {
+   "id": "b",
+   "parent": "r",
+   "site": "s-b"
+  }
+ ],
+ "placement": {
+  "s-r": "core",
+  "s-b": "core"
+ },
+ "effect_classes": [],
+ "external_inputs": [
+  "task"
+ ],
+ "tasks": [
+  {
+   "id": "t000",
+   "agent": "r",
+   "session": "s000",
+   "compute": 0.001,
+   "step_len": 1.0,
+   "reads": [
+    "task"
+   ]
+  },
+  {
+   "id": "t001",
+   "agent": "b",
+   "session": "s001",
+   "compute": 0.001,
+   "step_len": 1.0
+  },
+  {
+   "id": "t002",
+   "agent": "r",
+   "session": "s002",
+   "compute": 0.001,
+   "step_len": 1.0
+  },
+  {
+   "id": "t003",
+   "agent": "b",
+   "session": "s003",
+   "compute": 0.001,
+   "step_len": 1.0
+  },
+  {
+   "id": "t004",
+   "agent": "r",
+   "session": "s004",
+   "compute": 0.001,
+   "step_len": 1.0
+  },
+  {
+   "id": "t005",
+   "agent": "b",
+   "session": "s005",
+   "compute": 0.001,
+   "step_len": 1.0
+  },
+  {
+   "id": "t006",
+   "agent": "r",
+   "session": "s006",
+   "compute": 0.001,
+   "step_len": 1.0
+  }
+ ],
+ "artifacts": [],
+ "messages": [
+  {
+   "id": "m001",
+   "sender": "t000",
+   "receiver": "t001"
+  },
+  {
+   "id": "m002",
+   "sender": "t001",
+   "receiver": "t002"
+  },
+  {
+   "id": "m003",
+   "sender": "t002",
+   "receiver": "t003"
+  },
+  {
+   "id": "m004",
+   "sender": "t003",
+   "receiver": "t004"
+  },
+  {
+   "id": "m005",
+   "sender": "t004",
+   "receiver": "t005"
+  },
+  {
+   "id": "m006",
+   "sender": "t005",
+   "receiver": "t006"
+  }
+ ],
+ "effects": [],
+ "fault": {
+  "class": "none"
+ },
+ "alerts": {}
+}

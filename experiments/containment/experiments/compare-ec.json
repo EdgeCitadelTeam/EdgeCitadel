@@ -1,0 +1,46 @@
+{
+  "name": "compare-ec",
+  "note": "System comparison, pre-registered as H10 (exec doc, 2026-10-21). Content faults: the 7 smoke workloads x early/late x 3 repetitions. Rogue: C2 at rogue rate 0.3 (H10 (ii)) and saturated rogue at rate 1.0 (spawn cap 200; reported, no prediction) x early/late x 5 repetitions. EdgeCitadel's content-fault cells come from the main runs (time scale 2, deployed, adaptive phase 1, the 7 smoke workloads x early/late x at least 3 repetitions), so this grid holds only the rogue part. Run on the evaluation tag's lab stack.",
+  "instances": [
+    "../workloads/c2.json"
+  ],
+  "strategies": [
+    "firebreak",
+    "reject_source",
+    "stop_team",
+    "stop_downstream",
+    "none"
+  ],
+  "repetitions": 5,
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    }
+  ],
+  "time_scale": 2.0,
+  "reference": false,
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90,
+  "root_modes": [
+    "given"
+  ],
+  "parts": [],
+  "rogue_rates": [
+    0.3,
+    1.0
+  ]
+}

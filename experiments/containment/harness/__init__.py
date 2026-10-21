@@ -21,6 +21,14 @@ Layout (``experiments/containment``):
   CSVs, statistics and figures; ``netem.py``: lab latency profiles
 - ``harness/svc.py``: the pre-registered service-continuity scenario (its
   generator, monitor settings and metrics)
+- system baselines (the stack file's ``system``): ``a2a_stack.py``,
+  ``a2a_agent.py``, ``a2a_control.py``, ``a2a_common.py`` run the same plan
+  and det-worker on Google's A2A protocol (a2a-sdk) with only its own
+  controls; ``edgecitadel_bare`` runs agentd without trace export, controller
+  lease or monitor; ``procstat.py`` samples CPU and memory per process,
+  ``overhead.py`` turns fault-free runs into completion time, handoff
+  latency, throughput and resources, ``benchspec.py`` writes the overhead
+  workloads (``workloads/bench``)
 - ``workloads/``: exported instances; ``experiments/``: grids (``lab-smoke``
   169 runs: every strategy x scenario x early/late alert once under the
   deployed profile, C2 under the shared profile and the C2 phase-1 ablation

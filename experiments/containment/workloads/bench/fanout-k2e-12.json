@@ -1,0 +1,190 @@
+{
+ "spec_version": 1,
+ "name": "fanout-k2e-12",
+ "agents": [
+  {
+   "id": "r",
+   "parent": null,
+   "site": "s-r"
+  },
+  {
+   "id": "b0",
+   "parent": "r",
+   "site": "s-b"
+  },
+  {
+   "id": "b1",
+   "parent": "r",
+   "site": "s-b"
+  },
+  {
+   "id": "b2",
+   "parent": "r",
+   "site": "s-b"
+  },
+  {
+   "id": "b3",
+   "parent": "r",
+   "site": "s-b"
+  }
+ ],
+ "placement": {
+  "s-r": "core",
+  "s-b": "edge-1"
+ },
+ "effect_classes": [],
+ "external_inputs": [
+  "task"
+ ],
+ "tasks": [
+  {
+   "id": "root",
+   "agent": "r",
+   "session": "sr",
+   "compute": 0.001,
+   "reads": [
+    "task"
+   ]
+  },
+  {
+   "id": "w0.0",
+   "agent": "b0",
+   "session": "s0.0",
+   "compute": 0.001
+  },
+  {
+   "id": "w0.1",
+   "agent": "b0",
+   "session": "s0.1",
+   "compute": 0.001
+  },
+  {
+   "id": "w0.2",
+   "agent": "b0",
+   "session": "s0.2",
+   "compute": 0.001
+  },
+  {
+   "id": "w1.0",
+   "agent": "b1",
+   "session": "s1.0",
+   "compute": 0.001
+  },
+  {
+   "id": "w1.1",
+   "agent": "b1",
+   "session": "s1.1",
+   "compute": 0.001
+  },
+  {
+   "id": "w1.2",
+   "agent": "b1",
+   "session": "s1.2",
+   "compute": 0.001
+  },
+  {
+   "id": "w2.0",
+   "agent": "b2",
+   "session": "s2.0",
+   "compute": 0.001
+  },
+  {
+   "id": "w2.1",
+   "agent": "b2",
+   "session": "s2.1",
+   "compute": 0.001
+  },
+  {
+   "id": "w2.2",
+   "agent": "b2",
+   "session": "s2.2",
+   "compute": 0.001
+  },
+  {
+   "id": "w3.0",
+   "agent": "b3",
+   "session": "s3.0",
+   "compute": 0.001
+  },
+  {
+   "id": "w3.1",
+   "agent": "b3",
+   "session": "s3.1",
+   "compute": 0.001
+  },
+  {
+   "id": "w3.2",
+   "agent": "b3",
+   "session": "s3.2",
+   "compute": 0.001
+  }
+ ],
+ "artifacts": [],
+ "messages": [
+  {
+   "id": "m0.0",
+   "sender": "root",
+   "receiver": "w0.0"
+  },
+  {
+   "id": "m0.1",
+   "sender": "root",
+   "receiver": "w0.1"
+  },
+  {
+   "id": "m0.2",
+   "sender": "root",
+   "receiver": "w0.2"
+  },
+  {
+   "id": "m1.0",
+   "sender": "root",
+   "receiver": "w1.0"
+  },
+  {
+   "id": "m1.1",
+   "sender": "root",
+   "receiver": "w1.1"
+  },
+  {
+   "id": "m1.2",
+   "sender": "root",
+   "receiver": "w1.2"
+  },
+  {
+   "id": "m2.0",
+   "sender": "root",
+   "receiver": "w2.0"
+  },
+  {
+   "id": "m2.1",
+   "sender": "root",
+   "receiver": "w2.1"
+  },
+  {
+   "id": "m2.2",
+   "sender": "root",
+   "receiver": "w2.2"
+  },
+  {
+   "id": "m3.0",
+   "sender": "root",
+   "receiver": "w3.0"
+  },
+  {
+   "id": "m3.1",
+   "sender": "root",
+   "receiver": "w3.1"
+  },
+  {
+   "id": "m3.2",
+   "sender": "root",
+   "receiver": "w3.2"
+  }
+ ],
+ "effects": [],
+ "fault": {
+  "class": "none"
+ },
+ "alerts": {}
+}

@@ -1,0 +1,40 @@
+{
+  "mode": "lab",
+  "system": "edgecitadel_bare",
+  "control_transport": "nats",
+  "_note": "EdgeCitadel with trace export, controller lease and monitor off, for overhead runs (reference and none only). Ports from the A2A design note.",
+  "controller": "jim-eq",
+  "hosts": {
+    "jim-eq": {
+      "address": "${HARNESS_JIM_ADDRESS}",
+      "python": "${HARNESS_PYTHON}",
+      "repo": "${HARNESS_REPO}",
+      "runtime_root": "${HARNESS_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_WORK_ROOT}",
+      "nats_server": "${HARNESS_NATS_SERVER}"
+    },
+    "netsys-endurance": {
+      "ssh": "${HARNESS_SSH_ENDURANCE}",
+      "address": "${HARNESS_ENDURANCE_ADDRESS}",
+      "python": "${HARNESS_REMOTE_PYTHON}",
+      "repo": "${HARNESS_REMOTE_REPO}",
+      "runtime_root": "${HARNESS_REMOTE_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_REMOTE_WORK_ROOT}"
+    }
+  },
+  "node_hosts": {
+    "core": "jim-eq",
+    "edge-1": "netsys-endurance",
+    "edge-2": "netsys-endurance"
+  },
+  "ports": {
+    "nats": 19422,
+    "nats_monitor": 19423,
+    "services": 19390
+  },
+  "tau_ms": 50,
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "procstat_interval_ms": 200
+}

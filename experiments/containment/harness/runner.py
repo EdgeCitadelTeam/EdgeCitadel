@@ -69,7 +69,8 @@ from .spec import (
     makespan,
     to_dict,
 )
-from .stack import RunStack, StackConfig, StackError
+from .names import NATIVE_CODES
+from .stack import RunStack, StackConfig, StackError, make_stack
 
 POLL_S = 0.2
 START_MARGIN_MS = 1500
@@ -434,7 +435,12 @@ class TriggerWatch:
 # One run
 # ---------------------------------------------------------------------------
 def run_cell(
-    stack_config: StackConfig, experiment: Experiment, cell: RunCell, out: Path
+    stack_config: StackConfig,
+    experiment: Experiment,
+    cell: RunCell,
+    out: Path,
+    *,
+    checkouts: Mapping[str, Any] | None = None,
 ) -> Path:
     run_dir = out / "runs" / cell.run_id
     if (run_dir / "run.json").exists():
@@ -455,6 +461,10 @@ def run_cell(
         "run_id": cell.run_id,
         "experiment": experiment.name,
         "mode": stack_config.mode,
+        "system": stack_config.system,
+        "a2a_task_store": stack_config.a2a_task_store
+        if stack_config.system == "a2a"
+        else None,
         "instance": cell.instance.stem,
         "spec_name": spec.name,
         "fault": spec.fault.cls,
@@ -485,6 +495,8 @@ def run_cell(
         "control_delay_ms": dict(cell.latency.control_delay_ms),
         "rep": cell.rep,
         "time_scale": scale,
+        # The commits this run executed, per host (harness checkout and runtime).
+        "checkouts": dict(checkouts or {}),
         "t0_ms": None,
         "t_alert_ms": None,
         "status": "failed_to_start",
@@ -492,7 +504,7 @@ def run_cell(
     }
     if cell.tainted_output_value != 1.0:
         meta["monitor_settings"]["tainted_output_value"] = cell.tainted_output_value
-    stack = RunStack(stack_config, cell.run_id, run_dir)
+    stack = make_stack(stack_config, cell.run_id, run_dir)
     strategy = cell.strategy if cell.strategy in deploy.STRATEGIES else "firebreak"
     netem = False
     try:
@@ -576,7 +588,11 @@ def submitted_requests(run_dir: Path) -> dict[str, Any]:
     }
 
 
-TRANSPORT_CODES = ("rpc:agentd is unavailable", "rpc:agentd closed the connection")
+TRANSPORT_CODES = (
+    "rpc:agentd is unavailable",
+    "rpc:agentd closed the connection",
+    "rpc:a2a unavailable",  # the A2A baseline's port (harness.a2a_agent)
+)
 
 
 def testbed_counts(run_dir: Path) -> dict[str, int]:
@@ -816,6 +832,9 @@ def _collect(
     logs.mkdir(exist_ok=True)
     for host in {controller, *config.node_hosts.values()}:
         directory = stack.host_dir(host)
+        samples = stack.fetch(host, f"{directory}/procstat.jsonl")
+        if samples:
+            (run_dir / f"procstat__{host}.jsonl").write_bytes(samples)
         for proc_log in _remote_logs(stack, host, directory):
             data = stack.fetch(host, proc_log)
             if data is not None:
@@ -851,6 +870,50 @@ def infrastructure_failure(meta: Mapping[str, Any]) -> str | None:
     return None
 
 
+def checkouts(stack_config: StackConfig) -> dict[str, Any]:
+    """HEAD and dirty state of the harness checkout (``repo``) and the runtime
+    checkout (``runtime_root``) on every host, read once per experiment. After
+    the evaluation tag, baseline-only modules may move on while EdgeCitadel's
+    code stays at the tag; every run records both."""
+    from .stack import make_host
+
+    out: dict[str, Any] = {}
+    hosts = {stack_config.controller, *stack_config.node_hosts.values()}
+    for name in sorted(hosts):
+        config = stack_config.hosts[name]
+        host = make_host(config)
+        entry = {}
+        for role, path in (
+            ("repo", config.repo),
+            ("runtime_root", config.runtime_root),
+        ):
+            try:
+                commit = host.run(["git", "-C", path, "rev-parse", "HEAD"]).strip()
+                dirty = host.run(
+                    ["git", "-C", path, "status", "--porcelain", "--untracked-files=no"]
+                ).strip()
+                entry[role] = {"commit": commit, "dirty": bool(dirty)}
+            except (StackError, OSError) as error:
+                entry[role] = {"error": str(error)[:200]}
+        out[name] = entry
+    return out
+
+
+def check_system(system: str, strategies: set[str]) -> None:
+    """Each system runs only its own controls: the monitor's strategies on
+    EdgeCitadel, the protocol's own on A2A, and none on the bare runtime."""
+    contained = strategies - {"none", "reference"}
+    if system == "a2a":
+        allowed = set(NATIVE_CODES)
+    elif system == "edgecitadel_bare":
+        allowed = set()
+    else:
+        allowed = set(deploy.STRATEGIES) - set(NATIVE_CODES)
+    wrong = sorted(contained - allowed)
+    if wrong:
+        raise ValueError(f"system {system} cannot run strategies {wrong}")
+
+
 def run_experiment(
     stack_config: StackConfig,
     experiment: Experiment,
@@ -859,8 +922,11 @@ def run_experiment(
     limit: int | None = None,
 ) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
+    cells = grid(experiment)
+    check_system(stack_config.system, {cell.strategy for cell in cells})
+    commits = checkouts(stack_config)
     done = []
-    for i, cell in enumerate(grid(experiment)):
+    for i, cell in enumerate(cells):
         if limit is not None and i >= limit:
             break
         if (out / "runs" / cell.run_id / "run.json").exists():
@@ -869,7 +935,7 @@ def run_experiment(
             continue
         started = time.monotonic()
         for attempt in range(experiment.infra_retries + 1):
-            run_dir = run_cell(stack_config, experiment, cell, out)
+            run_dir = run_cell(stack_config, experiment, cell, out, checkouts=commits)
             meta = json.loads((run_dir / "run.json").read_text())
             failure = infrastructure_failure(meta)
             if failure is None or attempt == experiment.infra_retries:

@@ -1,0 +1,34 @@
+{
+  "name": "dryrun-a2a-c2",
+  "note": "The A2A baseline on C2: its three native controls and no containment, early and late alert, plus the no-fault reference. Grid dimensions match the EdgeCitadel comparison runs (deployed profile, adaptive phase 1) so rows pair.",
+  "instances": [
+    "../workloads/c2.json"
+  ],
+  "strategies": [
+    "a2a_block_input",
+    "a2a_cancel_agent",
+    "a2a_cancel_all",
+    "none"
+  ],
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    }
+  ],
+  "repetitions": 1,
+  "time_scale": 1.0,
+  "rogue_rates": [
+    0.0
+  ],
+  "reference": true,
+  "phase1_modes": [
+    "adaptive"
+  ]
+}

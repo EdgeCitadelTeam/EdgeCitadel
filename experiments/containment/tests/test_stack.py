@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
+from pathlib import Path
 
 import pytest
 
@@ -103,7 +105,10 @@ def test_shipped_stack_files_name_hosts_only():
         assert "token" not in without_reference.lower(), path.name
         assert "password" not in text.lower(), path.name
         assert set(document["node_hosts"].values()) <= set(document["hosts"])
-        assert document["controller_lease_ms"] == 30000, path.name
+        # The fail-closed lease belongs to EdgeCitadel with its monitor; the
+        # bare runtime turns it off and the A2A baseline has none.
+        if document.get("system", "edgecitadel") == "edgecitadel":
+            assert document["controller_lease_ms"] == 30000, path.name
 
 
 def test_nats_control_gives_the_monitor_and_every_node_one_private_key(
@@ -390,3 +395,25 @@ def test_the_runner_unit_carries_the_harness_environment(monkeypatch, tmp_path):
     assert command[-5:] == ["-m", "harness", "run", "--out", "o"][-5:]
     with pytest.raises(SystemExit):
         unit_command("u", tmp_path / "l", [])
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs Linux /proc")
+def test_procstat_sums_cpu_and_memory_per_process_group():
+    import sys
+
+    from harness import procstat
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; sum(range(3_000_000)); time.sleep(5)"],
+        start_new_session=True,
+    )
+    try:
+        time.sleep(0.5)
+        groups = procstat.sample({"child": child.pid, "gone": 2**22 + 7})
+    finally:
+        child.kill()
+        child.wait()
+    assert groups["child"]["n"] == 1
+    assert groups["child"]["rss_kb"] > 1000
+    assert groups["child"]["cpu_s"] > 0
+    assert groups["gone"] == {"cpu_s": 0.0, "rss_kb": 0, "n": 0}
