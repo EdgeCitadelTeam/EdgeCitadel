@@ -157,7 +157,7 @@ def unit_command(
 def _pipeline(args: argparse.Namespace) -> None:
     from .pipeline import run_pipeline
 
-    sys.exit(run_pipeline(args.stack, args.out))
+    sys.exit(run_pipeline(args.stack, args.out, args.a2a_stack))
 
 
 def _commit_cost(args: argparse.Namespace) -> None:
@@ -228,6 +228,12 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("pipeline")
     p.add_argument("--stack", required=True, type=Path)
     p.add_argument("--out", required=True, type=Path)
+    p.add_argument(
+        "--a2a-stack",
+        type=Path,
+        help="the A2A-SQLite stack for the hand-off fallback "
+        "(configs/lab-a2a-sqlite-gate.json)",
+    )
     p.set_defaults(handler=_pipeline)
     p = sub.add_parser("commit-cost")
     p.add_argument("dirs", nargs="+", type=Path)

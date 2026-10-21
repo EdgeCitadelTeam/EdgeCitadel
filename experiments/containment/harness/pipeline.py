@@ -1,7 +1,8 @@
 """The lab's chained grids with a gate before the pilots.
 
-``python -m harness pipeline --stack <stack file> --out <root>`` runs, from
-``experiments/containment`` and each into its own directory under ``<root>``:
+``python -m harness pipeline --stack <stack file> --out <root> [--a2a-stack
+<A2A-SQLite stack file>]`` runs, from ``experiments/containment`` and each
+into its own directory under ``<root>``:
 
 1. ``regression`` (``experiments/regression.json``: the lab-smoke cells of C2,
    N2 and rand-n7-s1, 69 runs), then scores it;
@@ -13,9 +14,18 @@
 The gate (``GATE``) asks of every run of steps 1 and 2: it ended ``complete``
 or ``quiescent``; the scorer's integrity counts (``commits_unlabelled``,
 ``commits_unresolved``, ``commits_label_mismatch``) are 0; and of all of them
-together: Firebreak was clean after the alert in every faulted run, at most 3
-worker slots were lost, and the median hand-off latency (every hand-off of
-every run, ``metrics.handoff_latencies``) is below 100 ms.
+together: Firebreak was clean after the alert in every faulted run and at most
+3 worker slots were lost. Hand-offs (approved 2026-10-21): the per-hop median
+(every hop of every run, ``metrics.handoff_latencies``) passes at 100 ms or
+less. Otherwise, when everything else passed, the six-hop chain between
+jim-eq and Endurance (``experiments/handoff-chain.json``, 10 repetitions)
+runs on this stack (``handoff-ec``) and on the durability-matched A2A stack,
+A2A with its SQLite task store (``--a2a-stack``, e.g.
+``configs/lab-a2a-sqlite-gate.json``; ``handoff-a2a-sqlite``), and the gate
+passes if EdgeCitadel's per-hop median on the chain is at most 3 times
+A2A-SQLite's (H11's pre-registered criterion). ``gate.json`` records the
+criterion used and every median; an A2A measurement that cannot run fails
+the gate with that reason.
 
 A rerun resumes: finished runs are skipped, and every finished part is scored
 again. Progress lines go to standard output (``PIPELINE ...``); run it as the
@@ -53,7 +63,11 @@ GATE: dict[str, Any] = {
     "integrity": ("commits_unlabelled", "commits_unresolved", "commits_label_mismatch"),
     "max_slot_restarts": 3,
     "max_handoff_ms_median": 100.0,
+    # The fallback: EdgeCitadel's chain hop median over A2A-SQLite's (H11).
+    "max_handoff_ratio": 3.0,
 }
+HANDOFF_CHAIN = "experiments/handoff-chain.json"
+HANDOFF_REASON = "median hand-off latency"
 
 
 def _number(value: Any) -> float:
@@ -93,12 +107,12 @@ def gate(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         reasons.append(
             f"{restarts} worker slot restarts (at most {GATE['max_slot_restarts']})"
         )
-    handoffs = [float(h) for r in rows for h in json.loads(r.get("handoff_ms") or "[]")]
+    handoffs = hops(rows)
     median = statistics.median(handoffs) if handoffs else None
-    if median is None or median >= GATE["max_handoff_ms_median"]:
+    if median is None or median > GATE["max_handoff_ms_median"]:
         reasons.append(
-            f"median hand-off latency {median} ms over {len(handoffs)} hand-offs "
-            f"(below {GATE['max_handoff_ms_median']:.0f} ms needed)"
+            f"{HANDOFF_REASON} {median} ms over {len(handoffs)} hand-offs "
+            f"(at most {GATE['max_handoff_ms_median']:.0f} ms needed)"
         )
     return {
         "passed": not reasons,
@@ -107,8 +121,46 @@ def gate(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "slot_restarts": restarts,
         "handoffs": len(handoffs),
         "handoff_ms_median": median,
+        "handoff_criterion": "absolute",
         "runs_with_errors": [r["run_id"] for r in rows if _number(r.get("n_errors"))],
     }
+
+
+def hops(rows: Iterable[Mapping[str, Any]]) -> list[float]:
+    """Every per-hop hand-off of the scored runs (ms)."""
+    return [float(h) for r in rows for h in json.loads(r.get("handoff_ms") or "[]")]
+
+
+def handoff_ratio(
+    ec_rows: Iterable[Mapping[str, Any]], a2a_rows: Iterable[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """The fallback criterion on the chain sample of both systems."""
+    ec, a2a = hops(ec_rows), hops(a2a_rows)
+    if not ec or not a2a:
+        raise ValueError(
+            f"no hand-offs measured on the chain ({len(ec)} EdgeCitadel, "
+            f"{len(a2a)} A2A-SQLite)"
+        )
+    ec_median, a2a_median = statistics.median(ec), statistics.median(a2a)
+    ratio = ec_median / a2a_median if a2a_median > 0 else float("inf")
+    return {
+        "passed": ratio <= GATE["max_handoff_ratio"],
+        "chain_handoffs": {"edgecitadel": len(ec), "a2a_sqlite": len(a2a)},
+        "chain_handoff_ms_median": {"edgecitadel": ec_median, "a2a_sqlite": a2a_median},
+        "chain_handoff_ratio": ratio,
+    }
+
+
+def _a2a_sqlite_stack(path: Path) -> None:
+    """Refuse a stack that is not the durability-matched A2A one."""
+    from .stack import StackConfig
+
+    config = StackConfig.load(path)
+    if config.system != "a2a" or config.a2a_task_store != "sqlite":
+        raise ValueError(
+            f"{path} is not an A2A stack with the SQLite task store "
+            f"(system {config.system}, task store {config.a2a_task_store})"
+        )
 
 
 def commit_cost_ms(directory: Path, commits: int = 30) -> dict[str, float]:
@@ -165,13 +217,50 @@ def _stage(
     return rows
 
 
-def run_pipeline(stack_path: Path, out: Path) -> int:
+def _handoff_fallback(
+    verdict: dict[str, Any], stack_path: Path, a2a_stack: Path | None, out: Path
+) -> None:
+    """Replace a failed absolute hand-off check by the A2A-SQLite ratio."""
+    verdict["handoff_criterion"] = "a2a_sqlite_ratio"
+    reasons = [r for r in verdict["reasons"] if not r.startswith(HANDOFF_REASON)]
+    try:
+        if a2a_stack is None:
+            raise ValueError("no A2A-SQLite stack given (--a2a-stack)")
+        _a2a_sqlite_stack(a2a_stack)
+        ec_rows = _stage(stack_path, "handoff-ec", HANDOFF_CHAIN, out)
+        a2a_rows = _stage(a2a_stack, "handoff-a2a-sqlite", HANDOFF_CHAIN, out)
+        ratio = handoff_ratio(ec_rows, a2a_rows)
+    except Exception as error:  # noqa: BLE001 - the gate fails with the cause
+        reasons.append(
+            f"the per-hop median is above "
+            f"{GATE['max_handoff_ms_median']:.0f} ms and the A2A-SQLite "
+            f"measurement could not run: {type(error).__name__}: {error}"[:2000]
+        )
+    else:
+        verdict.update({k: v for k, v in ratio.items() if k != "passed"})
+        if not ratio["passed"]:
+            medians = ratio["chain_handoff_ms_median"]
+            reasons.append(
+                f"chain hand-off median {medians['edgecitadel']:.1f} ms is "
+                f"{ratio['chain_handoff_ratio']:.2f} times A2A-SQLite's "
+                f"{medians['a2a_sqlite']:.1f} ms (at most "
+                f"{GATE['max_handoff_ratio']:g} times needed)"
+            )
+    verdict["reasons"] = reasons
+    verdict["passed"] = not reasons
+
+
+def run_pipeline(stack_path: Path, out: Path, a2a_stack: Path | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     (out / "GATE-FAILED").unlink(missing_ok=True)
     gated: list[dict[str, Any]] = []
     for name, experiment in GATED:
         gated += _stage(stack_path, name, experiment, out)
     verdict = gate(gated)
+    others = [r for r in verdict["reasons"] if not r.startswith(HANDOFF_REASON)]
+    if not verdict["passed"] and not others:
+        # Only the hand-off check failed: the approved fallback decides it.
+        _handoff_fallback(verdict, stack_path, a2a_stack, out)
     verdict["commit_cost_ms"] = commit_cost_ms(out)
     (out / "gate.json").write_text(json.dumps(verdict, indent=1))
     if not verdict["passed"]:
@@ -180,7 +269,8 @@ def run_pipeline(stack_path: Path, out: Path) -> int:
         return 1
     _say(
         f"gate passed: {verdict['runs']} runs, {verdict['slot_restarts']} slot "
-        f"restarts, median hand-off {verdict['handoff_ms_median']:.0f} ms"
+        f"restarts, median hand-off {verdict['handoff_ms_median']:.0f} ms "
+        f"({verdict['handoff_criterion']} criterion)"
     )
     for name, experiment in PILOTS:
         _stage(stack_path, name, experiment, out)

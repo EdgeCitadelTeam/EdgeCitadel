@@ -1,0 +1,23 @@
+{
+  "name": "handoff-chain",
+  "note": "The pipeline gate's hand-off fallback: the six-hop chain between jim-eq (core) and Endurance (edge-1), no fault, 10 repetitions, run on the EdgeCitadel lab stack and on the durability-matched A2A stack (A2A with its SQLite task store); the per-hop medians are compared (EdgeCitadel at most 3x A2A-SQLite, H11's criterion).",
+  "instances": [
+    "../workloads/bench/chain-k2e.json"
+  ],
+  "strategies": [],
+  "alerts": [],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    }
+  ],
+  "repetitions": 10,
+  "time_scale": 1.0,
+  "reference": true,
+  "quiet_s": 4,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 60
+}
