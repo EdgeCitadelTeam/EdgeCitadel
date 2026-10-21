@@ -130,6 +130,14 @@ def start_workers(
     return procs
 
 
+def performed(run: RunServices) -> set[str]:
+    """Effects the sink performed so far (the gateway performs a scheduled one
+    when it is due, possibly after its issuer ended)."""
+    path = run.directory / "ledger.jsonl"
+    lines = path.read_text().splitlines() if path.exists() else []
+    return {r["effect_id"] for r in map(json.loads, lines) if r["phase"] == "committed"}
+
+
 def events(run: RunServices, kind: str, task: str | None = None) -> list[dict]:
     """Events of planned tasks (not of deliveries or pending creations)."""
     feed = run.events_after(0, 100000)["events"]
@@ -185,6 +193,9 @@ def test_held_task_pauses_resumes_and_the_workload_completes_once(
         wait_for(lambda: events(run, "resumed", "B.t0"), "B.t0 resumed")
         wait_for(
             lambda: len(events(run, "end")) == len(spec.tasks), "every task ended", 90
+        )
+        wait_for(
+            lambda: performed(run) >= {"E_B", "E_Bn", "FINAL"}, "effects performed", 30
         )
     finally:
         for proc in workers:
@@ -247,6 +258,7 @@ def test_gateway_refuses_effects_outside_the_derived_scope(tmp_path, node, servi
         }
         nodectl.submit(node, "r", body)
         wait_for(lambda: events(run, "end", "B.n"), "B.n ended", 60)
+        wait_for(lambda: "E_Bn" in performed(run), "E_Bn performed", 30)
     finally:
         for proc in workers:
             proc.terminate()
