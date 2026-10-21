@@ -106,9 +106,11 @@ def monitor_config(
 ) -> dict[str, Any]:
     """The monitor's ``MonitorConfig`` JSON for one run.
 
-    Timing values are lower bounds (the monitor's deadlines must stay sound):
-    control latency is the run's latency setting per node; delivery, start and
-    emission bounds stay 0 unless overridden with measured minimums. The run's
+    Control latency is the run's planning L per node, an upper bound on a
+    control action's decide-to-enforced time in the native regime
+    (``runner.MEASURED_CONTROL_MS``); the deadline inputs are lower bounds
+    (the monitor's deadlines must stay sound): delivery, start and emission
+    bounds stay 0 unless overridden with measured minimums. The run's
     mechanism profile, ``phase1_mode``, ``phase1_labels`` and
     ``receding_during_waits`` come in ``overrides``.
     """

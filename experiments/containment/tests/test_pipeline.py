@@ -49,8 +49,12 @@ def test_each_gate_condition_fails_on_its_own():
     assert not pipeline.gate([row(slot_restarts=2), row(slot_restarts=2)])["passed"]
 
 
+CONFIRMED = {"core": [18.0], "edge-1": [40.0]}
+
+
 def test_a_failed_gate_stops_before_the_pilots(tmp_path, monkeypatch):
     ran = []
+    monkeypatch.setattr(pipeline, "_control_latency", lambda out: CONFIRMED)
 
     def stage(stack_path, name, experiment, out):
         ran.append(name)
@@ -103,6 +107,7 @@ def staged(monkeypatch, chain_ec, chain_a2a, *, gated_hops=(150.0,), fail=None):
 
     monkeypatch.setattr(pipeline, "_stage", stage)
     monkeypatch.setattr(pipeline, "_a2a_sqlite_stack", lambda path: None)
+    monkeypatch.setattr(pipeline, "_control_latency", lambda out: CONFIRMED)
     return ran
 
 
@@ -180,3 +185,124 @@ def test_only_the_sqlite_a2a_stack_can_decide_the_fallback(monkeypatch):
     for name in ("lab-a2a.json", "lab.json"):
         with pytest.raises(ValueError, match="SQLite task store"):
             pipeline._a2a_sqlite_stack(configs / name)
+
+
+def decision(t_decided, *records, kind="decision"):
+    return {
+        "type": kind,
+        "incident_id": "inc-1",
+        "t_decided": t_decided,
+        "phase1": list(records),
+        "phase2": [],
+        "released": [],
+    }
+
+
+def record(label, **sites):
+    """An action record sent to ``sites`` (node: (t_sent, t_confirmed or None))."""
+    return {
+        "action": {"op": "hold", "kind": "task", "object_id": label, "node_id": "core"},
+        "incident_id": "inc-1",
+        "phase": 1,
+        "state": "in_force",
+        "sites": {
+            node: {
+                "state": "in_force" if confirmed is not None else "unconfirmed",
+                "command_id": f"{label}@{node}",
+                "t_sent": sent,
+                "t_confirmed": confirmed,
+            }
+            for node, (sent, confirmed) in sites.items()
+        },
+    }
+
+
+def write_run(stage, run_id, decisions, t_end_ms=10_000):
+    run = stage / "runs" / run_id
+    run.mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run_id, "t_end_ms": t_end_ms}))
+    (run / "decisions.jsonl").write_text(
+        "".join(json.dumps(d) + "\n" for d in decisions)
+    )
+
+
+def test_control_latency_is_read_per_site_from_the_regression_decision_logs(
+    tmp_path,
+):
+    stage = tmp_path / "regression"
+    hold = record("a", core=(1000, 1018), **{"edge-1": (1000, 1082)})
+    write_run(
+        stage,
+        "c2__early__native__r0__firebreak",
+        [
+            decision(1000, hold),
+            # A re-solve lists the hold again: one command, counted once.
+            decision(1500, hold, record("b", core=(1500, 1520)), kind="resolve"),
+            # Never confirmed: no time.
+            decision(1600, record("c", core=(1600, None))),
+            # The monitor's answer to the teardown is not part of the run.
+            decision(20_000, record("d", core=(20_000, 25_000))),
+        ],
+    )
+    # A failed testbed attempt is kept for inspection only.
+    write_run(
+        stage,
+        "c2__early__native__r0__firebreak.infra1",
+        [decision(1000, record("e", core=(1000, 9000)))],
+    )
+    assert pipeline._control_latency(tmp_path) == {
+        "core": [18.0, 20.0],
+        "edge-1": [82.0],
+    }
+
+
+def test_the_gate_fails_when_a_sites_p99_is_above_L():
+    fast = [float(ms) for ms in range(1, 100)] + [124.0]
+    verdict = pipeline.gate([row()], {"core": fast, "edge-1": [30.0]})
+    assert verdict["passed"]
+    assert verdict["control_latency_ms"] == 150.0
+    assert verdict["control_sent_to_confirmed_ms"]["core"] == {
+        "n": 100,
+        "p50": 50.0,
+        "p95": 95.0,
+        "p99": 99.0,
+        "max": 124.0,
+    }
+    slow = fast[:-2] + [151.0, 300.0]
+    verdict = pipeline.gate([row()], {"core": [10.0], "edge-1": slow})
+    assert not verdict["passed"]
+    assert verdict["reasons"] == [
+        "control latency: sent-to-confirmed p99 above L = 150 ms at "
+        "{'edge-1': 151.0} (ms), so L is no longer an upper bound"
+    ]
+    verdict = pipeline.gate([row()], {})
+    assert not verdict["passed"] and "unchecked" in verdict["reasons"][0]
+
+
+def test_a_control_latency_failure_skips_the_handoff_fallback(tmp_path, monkeypatch):
+    ran = staged(monkeypatch, [60.0], [50.0])
+    monkeypatch.setattr(pipeline, "_control_latency", lambda out: {"core": [400.0]})
+    out = tmp_path / "out"
+    assert pipeline.run_pipeline(tmp_path / "ec.json", out, tmp_path / "a.json") == 1
+    assert [name for name, _ in ran] == ["regression", "svc-smoke"]
+    failed = (out / "GATE-FAILED").read_text()
+    assert pipeline.CONTROL_REASON in failed and pipeline.HANDOFF_REASON in failed
+
+
+def test_every_native_lab_setting_plans_with_the_gated_L():
+    from harness import runner
+
+    assert runner.MEASURED_CONTROL_MS == pipeline.GATE["max_control_p99_ms"]
+    experiments = pipeline.Path(pipeline.__file__).resolve().parents[1] / "experiments"
+    native = 0
+    for path in sorted(experiments.glob("*.json")):
+        loaded = runner.Experiment.load(path)
+        for latency in loaded.latencies:
+            if latency.name == "native":
+                native += 1
+                assert dict(latency.control_latency_ms) == {"*": 150}, path.name
+                assert not latency.control_delay_ms, path.name
+                assert latency.regime(loaded.measured_rtt_ms) == "measured"
+            else:
+                assert latency.regime(loaded.measured_rtt_ms) == "stress", path.name
+    assert native == 16

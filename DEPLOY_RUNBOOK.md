@@ -290,7 +290,7 @@ referenced by path):
     "owner": "core-monitor",
     "protected_effect_classes": ["device.command", "fs.write"],
     "agent_nodes": {"jim-eq-pi": "jim-eq", "endurance-pi": "endurance"},
-    "control_latency_ms": {"jim-eq": 5, "endurance": 40, "cluster": 40},
+    "control_latency_ms": {"jim-eq": 150, "endurance": 150, "cluster": 150},
     "strategy": "firebreak"
   },
   "control": {
@@ -305,9 +305,13 @@ referenced by path):
 
 - Node names are the `node.json` `agent_id` values from step 1 (the example
   names are placeholders).
-- `control_latency_ms` and every timing value are **lower bounds**: use the
-  smallest control round trip you measured, never a typical one, or the
-  projection becomes unsound.
+- `control_latency_ms` is an **upper bound** on a control action's
+  decide-to-enforced time: the monitor plans an action to land at
+  now + tau + L, so a smaller L makes a late cut look feasible. Use at least
+  the largest sent-to-confirmed time you measured (the lab uses 150 ms at
+  every node; pre-M7 p50 18 ms, p95 82 ms, max 124 ms). The other timing
+  values (delivery, start, emission) are **lower bounds**: use the smallest
+  you measured, never a typical one, or the projection becomes unsound.
 - Grants come from the authority agentd exports on `run/started`; `grants` and
   `effect_scopes` are only a fallback and can stay unset.
 - In the Core environment (`/etc/edgecitadel/env` or the compose `.env`):
@@ -429,7 +433,8 @@ nats_leaf` keeps local messaging when the Core link drops), install the schema 3
 runtime, set `EDGECITADEL_TRACE_SYNC=1` and `EDGECITADEL_CONTROLLER_LEASE_MS`,
 copy the owner key (step 6), add one of its agents to `agent_nodes`, grant its
 connectors (step 5), extend the root's grant to its agents, and add its node to
-`control_latency_ms` with a measured lower bound. Check that the monitor lists
+`control_latency_ms` with a measured upper bound on its sent-to-confirmed
+time. Check that the monitor lists
 its capabilities. Effects on real devices must be reversible and
 interlocked locally: holding an effect stops a commit through agentd, not a
 device that already received a command.

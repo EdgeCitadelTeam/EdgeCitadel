@@ -62,9 +62,11 @@ strategies, freeze under ``shared``), ``phase1_labels``,
 cost ablation sets ``tainted_output_values``); experiments set them per grid
 or part.
 
-Latency settings and netem profiles above the measured LAN round trip
-(1.5-4 ms between sites) must be labelled ``stress``; the runner refuses
-unlabelled ones and records ``latency_regime`` per run.
+Latency settings and netem profiles that inject more than the measured LAN
+round trip (1.5-4 ms between sites), or plan with a control latency L above
+the measured bound on sent-to-confirmed (150 ms, the native L of every lab
+grid since 2026-10-21; the gate checks it), must be labelled ``stress``; the
+runner refuses unlabelled ones and records ``latency_regime`` per run.
 
 Dry run (everything on this machine; from ``experiments/containment``)::
 

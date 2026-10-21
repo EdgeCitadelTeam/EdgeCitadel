@@ -150,7 +150,11 @@ class MonitorConfig:
     # conversation (an inbox of pushed inputs, a shared store): each invocation
     # continues the previous one of the agent, across contexts.
     shared_memory_agents: frozenset[str] = frozenset()
-    # Timing model (milliseconds, lower bounds).
+    # Timing model (milliseconds). An action is planned to land at
+    # now + tau + L(site), so the control latency L must bound a control
+    # action's decide-to-enforced time from above (an underestimate makes a
+    # late cut look feasible); the delivery, start and emission values are
+    # lower bounds (deadlines are earliest arrivals).
     tau_ms: float = 50.0
     control_latency_ms: Mapping[str, float] = field(default_factory=dict)
     default_control_latency_ms: float = 50.0

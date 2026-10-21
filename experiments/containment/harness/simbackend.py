@@ -99,7 +99,10 @@ def run_grid(
                 "alert": cell.alert,
                 "root_mode": cell.root_mode,
                 "latency": cell.latency.name,
-                "latency_regime": cell.latency.regime(experiment.measured_rtt_ms),
+                "latency_regime": cell.latency.regime(
+                    experiment.measured_rtt_ms,
+                    measured_control_ms=experiment.measured_control_ms,
+                ),
                 "control_latency_ms": mean_ms,
                 "rep": 0,
                 "time_scale": experiment.time_scale,

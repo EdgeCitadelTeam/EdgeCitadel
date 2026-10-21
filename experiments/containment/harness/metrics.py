@@ -183,6 +183,27 @@ def _sites(record: Mapping[str, Any]) -> list[tuple[str, str, Mapping[str, Any]]
     return [(record["action"]["node_id"], f"{label}@{record.get('t_sent')}", record)]
 
 
+def sent_to_confirmed(
+    decisions: Iterable[Mapping[str, Any]],
+) -> dict[str, list[float]]:
+    """Per site, every control command's time from sent to confirmed (ms, both
+    on the monitor's clock), over every incident of a decision log. A command
+    listed again by later records counts once; one never confirmed (failed or
+    unconfirmed) has no time."""
+    seen: dict[tuple[str, str], float] = {}
+    for d in decisions:
+        for record in [*_records(d), *d.get("released", ())]:
+            for node, key, outcome in _sites(record):
+                sent, confirmed = outcome.get("t_sent"), outcome.get("t_confirmed")
+                if sent is None or confirmed is None:
+                    continue
+                seen.setdefault((node, key), float(confirmed) - float(sent))
+    out: dict[str, list[float]] = {}
+    for (node, _), ms in seen.items():
+        out.setdefault(node, []).append(ms)
+    return out
+
+
 def control_accounting(responses: list[Mapping[str, Any]]) -> dict[str, Any]:
     """Logical actions, control messages per node and confirmations.
 

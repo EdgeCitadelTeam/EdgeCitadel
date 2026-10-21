@@ -37,8 +37,11 @@ as the root; in the smaller ``ranked`` mode the alert names only the symptom
 for a trigger without a reader) and the monitor's root-cause ranking picks.
 
 Latency settings that inject more than the measured LAN round trip between
-sites (``measured_rtt_ms``, 4 ms on the lab testbed) are stress settings and
-must say so in their name; ``latency_regime`` records it per run.
+sites (``measured_rtt_ms``, 4 ms on the lab testbed), or plan with a control
+latency L above the measured bound on a control action's sent-to-confirmed
+time (``measured_control_ms``, 150 ms on the lab testbed: the native L of
+every lab grid), are stress settings and must say so in their name;
+``latency_regime`` records it per run.
 Collected into ``<out>/runs/<run_id>/``: ``run.json`` (identity, times,
 status, alert), ``spec.json``, ``plan.json``, ``events.jsonl``,
 ``ledger.jsonl``, ``marks.jsonl``, ``decisions.jsonl`` (the monitor's
@@ -82,6 +85,13 @@ ATTEMPT_LOOKUP_S = 1.0
 SYMPTOM_LOOKUP_S = 5.0
 ROOT_MODES = ("given", "ranked")
 MEASURED_RTT_MS = netem.MEASURED_RTT_MS
+# The monitor's planning control latency L must bound a control action's
+# decide-to-enforced time (theory). Approved 2026-10-21: 150 ms for every site
+# in the native regime, over the pre-M7 lab's sent_to_confirmed (p50 18 ms,
+# p95 82 ms, max 124 ms); the pipeline's gate checks every site's p99 against
+# it on the regression stage. The earlier 4 ms (the LAN round trip) was below
+# all of them.
+MEASURED_CONTROL_MS = 150.0
 
 
 @dataclass(frozen=True)
@@ -100,18 +110,25 @@ class Latency:
     netem: str | None = None
 
     def per_node(self, nodes: Iterable[str]) -> dict[str, float]:
-        default = float(self.control_latency_ms.get("*", MEASURED_RTT_MS))
+        default = float(self.control_latency_ms.get("*", MEASURED_CONTROL_MS))
         return {n: float(self.control_latency_ms.get(n, default)) for n in nodes}
 
-    def regime(self, measured_rtt_ms: float, netem_rtt_ms: float = 0.0) -> str:
-        """``stress`` when the setting assumes or injects more control latency
-        than the measured round trip, or its netem profile adds more."""
-        values = [
-            *map(float, self.control_latency_ms.values()),
-            *map(float, self.control_delay_ms.values()),
-            float(netem_rtt_ms),
-        ]
-        return "stress" if max(values, default=0.0) > measured_rtt_ms else "measured"
+    def regime(
+        self,
+        measured_rtt_ms: float,
+        netem_rtt_ms: float = 0.0,
+        measured_control_ms: float = MEASURED_CONTROL_MS,
+    ) -> str:
+        """``stress`` when the setting injects more control latency than the
+        measured round trip (or its netem profile adds more), or plans with an
+        L above the measured control bound."""
+        injected = [*map(float, self.control_delay_ms.values()), float(netem_rtt_ms)]
+        assumed = [float(v) for v in self.control_latency_ms.values()]
+        stress = (
+            max(injected, default=0.0) > measured_rtt_ms
+            or max(assumed, default=0.0) > measured_control_ms
+        )
+        return "stress" if stress else "measured"
 
 
 @dataclass(frozen=True)
@@ -135,6 +152,7 @@ class Experiment:
     infra_retries: int = 1
     root_modes: tuple[str, ...] = ("given",)
     measured_rtt_ms: float = MEASURED_RTT_MS
+    measured_control_ms: float = MEASURED_CONTROL_MS
     profiles: tuple[str, ...] = ("deployed",)
     # None: the profile's phase-1 mode (PROFILE_PHASE1_MODES).
     phase1_modes: tuple[str | None, ...] = (None,)
@@ -155,7 +173,13 @@ class Experiment:
         fields = _experiment_fields(document, path.parent)
         parts = []
         for index, part in enumerate(document.get("parts", [])):
-            if set(part) & {"name", "parts", "latencies", "measured_rtt_ms"}:
+            if set(part) & {
+                "name",
+                "parts",
+                "latencies",
+                "measured_rtt_ms",
+                "measured_control_ms",
+            }:
                 raise ValueError(f"part {index}: only grid dimensions can change")
             parts.append(cls(**{**fields, **_experiment_fields(part, path.parent)}))
         return cls(**fields, parts=tuple(parts))
@@ -213,13 +237,21 @@ def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any
         out["tainted_output_values"] = tuple(float(v) for v in values)
     if "measured_rtt_ms" in document:
         out["measured_rtt_ms"] = float(document["measured_rtt_ms"])
+    if "measured_control_ms" in document:
+        out["measured_control_ms"] = float(document["measured_control_ms"])
     if "latencies" in document:
         measured = out.get("measured_rtt_ms", MEASURED_RTT_MS)
+        control = out.get("measured_control_ms", MEASURED_CONTROL_MS)
         out["latencies"] = tuple(
             Latency(**latency) for latency in document["latencies"]
         )
         for latency in out["latencies"]:
-            check_stress_label(latency.name, latency.regime(measured), measured)
+            check_stress_label(
+                latency.name,
+                latency.regime(measured, measured_control_ms=control),
+                measured,
+                control,
+            )
     if "instances" in document:
         out["instances"] = tuple((base / p).resolve() for p in document["instances"])
     if "alerts" in document:
@@ -242,12 +274,20 @@ def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any
     return out
 
 
-def check_stress_label(name: str, regime: str, measured_rtt_ms: float) -> None:
-    """A latency setting above the measured round trip must be labelled stress."""
+def check_stress_label(
+    name: str,
+    regime: str,
+    measured_rtt_ms: float,
+    measured_control_ms: float = MEASURED_CONTROL_MS,
+) -> None:
+    """A latency setting above the measured round trip (injected) or the
+    measured control bound (planned L) must be labelled stress."""
     if regime == "stress" and "stress" not in name.lower():
         raise ValueError(
-            f"latency '{name}' is above the measured LAN round trip "
-            f"({measured_rtt_ms:g} ms): label it as a stress setting (e.g. 'stress-{name}')"
+            f"latency '{name}' injects more than the measured LAN round trip "
+            f"({measured_rtt_ms:g} ms) or plans with an L above the measured "
+            f"control bound ({measured_control_ms:g} ms): label it as a stress "
+            f"setting (e.g. 'stress-{name}')"
         )
 
 
@@ -474,7 +514,9 @@ def run_cell(
         "root_mode": cell.root_mode if cell.alert else None,
         "latency": cell.latency.name,
         "latency_regime": cell.latency.regime(
-            experiment.measured_rtt_ms, stack_config.netem_rtt_ms(cell.latency.netem)
+            experiment.measured_rtt_ms,
+            stack_config.netem_rtt_ms(cell.latency.netem),
+            experiment.measured_control_ms,
         ),
         "effect_sink": stack_config.effect_sink["kind"],
         "controller_lease_ms": stack_config.controller_lease_ms,

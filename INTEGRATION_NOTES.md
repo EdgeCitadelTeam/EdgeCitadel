@@ -1356,6 +1356,81 @@ Otherwise, and only if every other condition passed, the fallback runs:
 A missing A2A stack, one that is not A2A with SQLite, a failing A2A run or a
 chain without hand-offs fails the gate, giving that reason.
 
+The gate also checks the control latency L; see the next section.
+
+### Control latency L = 150 ms (decided 2026-10-21)
+
+**Decision** (the user, 2026-10-21 21:40 London). The monitor's planning
+control latency is `"*": 150` ms in the native regime of every experiment
+file:
+- regression, svc-smoke, lab-pilot, svc-pilot, lab-main, compare-ec;
+- lab-stress's native regime;
+- the other native settings too, so nothing plans with the old value:
+  lab-smoke, lab-rootcause, overhead, compare-a2a, handoff-chain and the
+  dry runs.
+
+The stress regimes (L = injected delay = 1000, 3000 or 4000 ms) are
+unchanged. The monitor's code default (50 ms) is unchanged.
+
+**Why.** The monitor plans an action to land at now + tau + L, and an edge's
+action counts as feasible only if that is before the edge's deadline
+(`projection.t_ap`, `edge.feasible`). The theory therefore needs L to be an
+upper bound on decide→enforced. Below the real latency, a cut that lands
+late looks timely.
+- Pre-M7 lab sent→confirmed: p50 18 ms, p95 82 ms, max 124 ms.
+- The 4 ms used so far (the LAN round trip) was below all of them.
+
+`MonitorConfig`'s comment, `deploy.monitor_config` and the runbook called
+L a lower bound. They now say upper bound. No code path treats it as
+one: a larger L only moves more emissions into early windows and more
+arrivals to doomed hubs.
+
+**Pre-registration amendment.**
+- L = 150 ms is a measured upper bound: above the pre-M7 maximum, and
+  re-checked by the gate on this branch's regression stage.
+- The G1/m6 lab runs with L = 4 ms are pre-calibration evidence, not pooled
+  with the evaluation runs. Their run ids are the same (the setting is still
+  named `native`), so the evaluation pipeline needs a fresh output root.
+- **Expected effect:** more conservative timeliness.
+  - More pending effects are untimely or doomed at the alert, and the
+    adaptive phase 1's margin is now 2 rounds × 150 ms = 300 ms (8 ms
+    before), so the freeze is added more often.
+  - Possibly a little less kept work.
+  - The safety predictions are unchanged.
+
+**Regime label.** The runner's stress check used to compare every value
+with the 4 ms round trip, which would have made native L = 150 a stress
+setting. It now compares:
+- the planned L with the measured control bound (`measured_control_ms`,
+  default `runner.MEASURED_CONTROL_MS` = 150);
+- injected delay and netem with the round trip (4 ms), as before.
+
+Old runs keep their recorded regime, and the report's fallback for runs
+that predate it uses the same split. A latency setting that leaves a site
+unset now plans with 150 ms.
+
+**Simulator backend.** It uses the planning L as the simulated latency, so
+its rows of these grids now simulate 150 ms.
+
+**Gate check.**
+- From the regression stage's decision logs (scored runs only, without the
+  monitor's teardown answers), `gate.json` records each site's
+  sent→confirmed n, p50, p95, p99 and maximum
+  (`control_sent_to_confirmed_ms`; nearest rank; monitor clock at both
+  ends; a command repeated by later records counts once) and the bound
+  (`control_latency_ms`).
+- The gate fails if any site's p99 is above 150 ms (L is then no longer an
+  upper bound), or if no command was confirmed (the bound is unchecked).
+- Such a failure is not a hand-off failure, so the A2A fallback does not
+  run.
+
+Tests:
+- `test_control_latency_is_read_per_site_from_the_regression_decision_logs`;
+- `test_the_gate_fails_when_a_sites_p99_is_above_L`;
+- `test_a_control_latency_failure_skips_the_handoff_fallback`;
+- `test_every_native_lab_setting_plans_with_the_gated_L` (all 16 files);
+- `test_planned_L_is_measured_up_to_the_control_bound_injection_up_to_the_rtt`.
+
 `gate.json` also reports `svc_early_consumed_at_alert` (information, not a
 condition). `configs/lab-a2a-sqlite-gate.json`:
 - is `lab-a2a-sqlite` with the A2A virtual environments in

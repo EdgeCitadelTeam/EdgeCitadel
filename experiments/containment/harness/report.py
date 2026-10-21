@@ -35,11 +35,16 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .metrics import evaluate
+from .metrics import evaluate, sent_to_confirmed
 from .names import CODE_NAME, COLOR, FAMILY, MARKER, PLOTTED_NAMES
 from . import svc
 from .netem import MEASURED_RTT_MS
-from .runner import PROFILE_PHASE1_MODES, infrastructure_failure, testbed_counts
+from .runner import (
+    MEASURED_CONTROL_MS,
+    PROFILE_PHASE1_MODES,
+    infrastructure_failure,
+    testbed_counts,
+)
 from .spec import from_dict
 
 IDENTITY = (
@@ -85,13 +90,15 @@ def _optional_json(path: Path) -> Any:
 
 
 def _regime(meta: Mapping[str, Any]) -> str:
-    """The latency regime of a run recorded before runs carried it."""
-    values = [
-        float(v)
-        for key in ("control_latency_ms", "control_delay_ms")
-        for v in (meta.get(key) or {}).values()
-    ]
-    return "stress" if max(values, default=0.0) > MEASURED_RTT_MS else "measured"
+    """The latency regime of a run recorded before runs carried it (as
+    ``runner.Latency.regime``)."""
+    assumed = [float(v) for v in (meta.get("control_latency_ms") or {}).values()]
+    injected = [float(v) for v in (meta.get("control_delay_ms") or {}).values()]
+    stress = (
+        max(injected, default=0.0) > MEASURED_RTT_MS
+        or max(assumed, default=0.0) > MEASURED_CONTROL_MS
+    )
+    return "stress" if stress else "measured"
 
 
 def _decision_time(record: Mapping[str, Any]) -> float:
@@ -227,6 +234,24 @@ def _write_csv(
         writer = csv.DictWriter(handle, fieldnames=columns, restval="")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def control_latency(out: Path) -> dict[str, list[float]]:
+    """Per site, the sent-to-confirmed times (ms) of every control command in
+    the scored runs under ``out`` (as ``score``: failed testbed attempts and
+    the monitor's answers to the teardown left out)."""
+    per_site: dict[str, list[float]] = {}
+    for run_dir in sorted((out / "runs").glob("*/run.json")):
+        if ".infra" in run_dir.parent.name:
+            continue
+        meta = json.loads(run_dir.read_text())
+        decisions = _jsonl(run_dir.parent / "decisions.jsonl")
+        t_end = meta.get("t_end_ms")
+        if t_end is not None:
+            decisions = [d for d in decisions if _decision_time(d) <= t_end]
+        for site, times in sent_to_confirmed(decisions).items():
+            per_site.setdefault(site, []).extend(times)
+    return per_site
 
 
 def score(out: Path) -> list[dict[str, Any]]:
@@ -558,7 +583,10 @@ METRICS = {
     "established": ("established", "runs with containment\nestablished (%)"),
     "kept": ("kept_cfrac", "normal work kept (%)"),
 }
-STRESS_NOTE = "stress settings, above the measured LAN round trip (1.5-4 ms)"
+STRESS_NOTE = (
+    "stress settings, above the measured control latency "
+    "(L 150 ms; LAN round trip 1.5-4 ms)"
+)
 
 
 def _main_runs(runs: Any, mode: str) -> Any:

@@ -25,7 +25,12 @@ A2A with its SQLite task store (``--a2a-stack``, e.g.
 passes if EdgeCitadel's per-hop median on the chain is at most 3 times
 A2A-SQLite's (H11's pre-registered criterion). ``gate.json`` records the
 criterion used and every median; an A2A measurement that cannot run fails
-the gate with that reason.
+the gate with that reason. Control latency (approved 2026-10-21): the
+monitor plans with L = 150 ms at every site, which theory needs to bound a
+control action's decide-to-enforced time; from the regression stage's
+decision logs the gate records every site's sent-to-confirmed p50, p95, p99
+and maximum (``control_sent_to_confirmed_ms``) and fails when a site's p99 is
+above L (or when no command was confirmed, so the bound is unchecked).
 
 A rerun resumes: finished runs are skipped, and every finished part is scored
 again. Progress lines go to standard output (``PIPELINE ...``); run it as the
@@ -41,6 +46,7 @@ measures it in each node's work root beforehand.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import statistics
@@ -65,9 +71,14 @@ GATE: dict[str, Any] = {
     "max_handoff_ms_median": 100.0,
     # The fallback: EdgeCitadel's chain hop median over A2A-SQLite's (H11).
     "max_handoff_ratio": 3.0,
+    # The native planning L (runner.MEASURED_CONTROL_MS): every site's p99
+    # sent-to-confirmed on the regression stage must be at most this.
+    "max_control_p99_ms": 150.0,
 }
+CONTROL_STAGE = "regression"
 HANDOFF_CHAIN = "experiments/handoff-chain.json"
 HANDOFF_REASON = "median hand-off latency"
+CONTROL_REASON = "control latency"
 
 
 def _number(value: Any) -> float:
@@ -78,8 +89,36 @@ def _number(value: Any) -> float:
     return 0.0 if number != number else number  # NaN counts as 0
 
 
-def gate(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """The gate's verdict on scored rows: ``passed`` and its ``reasons``."""
+def quantile(values: Iterable[float], q: float) -> float:
+    """Nearest-rank quantile (the maximum for q = 1)."""
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
+
+
+def control_summary(per_site: Mapping[str, Iterable[float]]) -> dict[str, Any]:
+    """Per site: the count, p50, p95, p99 and maximum (ms)."""
+    out = {}
+    for site in sorted(per_site):
+        times = list(per_site[site])
+        if times:
+            out[site] = {
+                "n": len(times),
+                **{
+                    name: round(quantile(times, q), 1)
+                    for name, q in (("p50", 0.5), ("p95", 0.95), ("p99", 0.99))
+                },
+                "max": round(max(times), 1),
+            }
+    return out
+
+
+def gate(
+    rows: Iterable[Mapping[str, Any]],
+    control: Mapping[str, Iterable[float]] | None = None,
+) -> dict[str, Any]:
+    """The gate's verdict on scored rows (and, when given, the per-site
+    sent-to-confirmed times of the regression stage): ``passed`` and its
+    ``reasons``."""
     rows = list(rows)
     reasons: list[str] = []
     bad_status = [
@@ -114,6 +153,20 @@ def gate(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             f"{HANDOFF_REASON} {median} ms over {len(handoffs)} hand-offs "
             f"(at most {GATE['max_handoff_ms_median']:.0f} ms needed)"
         )
+    bound = GATE["max_control_p99_ms"]
+    summary = control_summary(control) if control is not None else None
+    if summary is not None:
+        over = {s: v["p99"] for s, v in summary.items() if v["p99"] > bound}
+        if not summary:
+            reasons.append(
+                f"{CONTROL_REASON}: no control command was confirmed in the "
+                f"{CONTROL_STAGE} stage, so L = {bound:.0f} ms is unchecked"
+            )
+        elif over:
+            reasons.append(
+                f"{CONTROL_REASON}: sent-to-confirmed p99 above L = {bound:.0f} ms "
+                f"at {over} (ms), so L is no longer an upper bound"
+            )
     return {
         "passed": not reasons,
         "reasons": reasons,
@@ -122,6 +175,8 @@ def gate(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "handoffs": len(handoffs),
         "handoff_ms_median": median,
         "handoff_criterion": "absolute",
+        "control_latency_ms": bound,
+        "control_sent_to_confirmed_ms": summary,
         "runs_with_errors": [r["run_id"] for r in rows if _number(r.get("n_errors"))],
         # Not a condition: whether svc's early alert still came before the
         # assistant read the corrupted schedule (1: the early/late distinction
@@ -225,6 +280,13 @@ def _stage(
     return rows
 
 
+def _control_latency(out: Path) -> dict[str, list[float]]:
+    """Per site, the regression stage's sent-to-confirmed times (ms)."""
+    from .report import control_latency
+
+    return control_latency(out / CONTROL_STAGE)
+
+
 def _handoff_fallback(
     verdict: dict[str, Any], stack_path: Path, a2a_stack: Path | None, out: Path
 ) -> None:
@@ -264,7 +326,7 @@ def run_pipeline(stack_path: Path, out: Path, a2a_stack: Path | None = None) -> 
     gated: list[dict[str, Any]] = []
     for name, experiment in GATED:
         gated += _stage(stack_path, name, experiment, out)
-    verdict = gate(gated)
+    verdict = gate(gated, _control_latency(out))
     others = [r for r in verdict["reasons"] if not r.startswith(HANDOFF_REASON)]
     if not verdict["passed"] and not others:
         # Only the hand-off check failed: the approved fallback decides it.
@@ -275,10 +337,12 @@ def run_pipeline(stack_path: Path, out: Path, a2a_stack: Path | None = None) -> 
         (out / "GATE-FAILED").write_text("\n".join(verdict["reasons"]) + "\n")
         _say("gate FAILED: " + "; ".join(verdict["reasons"]))
         return 1
+    p99 = max(v["p99"] for v in verdict["control_sent_to_confirmed_ms"].values())
     _say(
         f"gate passed: {verdict['runs']} runs, {verdict['slot_restarts']} slot "
         f"restarts, median hand-off {verdict['handoff_ms_median']:.0f} ms "
-        f"({verdict['handoff_criterion']} criterion)"
+        f"({verdict['handoff_criterion']} criterion), control p99 at most "
+        f"{p99:.0f} ms"
     )
     for name, experiment in PILOTS:
         _stage(stack_path, name, experiment, out)
