@@ -1,0 +1,29 @@
+{
+  "mode": "lab",
+  "system": "langgraph_functional",
+  "controller": "netsys-endurance",
+  "_note": "Timing only: the LangGraph workload in the functional API (harness.lg_func) on the same single host, ports and venv as lab-langgraph; run in a slot of its own, never alongside lab-langgraph (same ports). Its reference runs against lab-langgraph's give the StateGraph-vs-functional completion-time difference.",
+  "hosts": {
+    "netsys-endurance": {
+      "ssh": "${HARNESS_SSH_ENDURANCE}",
+      "address": "${HARNESS_ENDURANCE_ADDRESS}",
+      "python": "${HARNESS_REMOTE_PYTHON}",
+      "repo": "${HARNESS_REMOTE_REPO}",
+      "runtime_root": "${HARNESS_REMOTE_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_REMOTE_WORK_ROOT}"
+    }
+  },
+  "node_hosts": {
+    "core": "netsys-endurance",
+    "edge-1": "netsys-endurance",
+    "edge-2": "netsys-endurance"
+  },
+  "ports": {
+    "services": 19390,
+    "langgraph": 19500
+  },
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "procstat_interval_ms": 200
+}

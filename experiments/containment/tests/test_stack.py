@@ -428,7 +428,8 @@ LAB_FALLBACKS = {
 def test_lab_stacks_set_the_m7_fallback_re_checks_on_full_and_bare(monkeypatch):
     """Every EdgeCitadel lab stack, full or bare, runs agentd's fallback
     re-checks at 1 s (code default 50 ms), so H11 compares like with like;
-    dry runs and the A2A stacks keep the default."""
+    dry runs and the stacks without agentd (A2A, LangGraph) keep the
+    default."""
     import re
 
     configs = stack.HARNESS_ROOT / "configs"
@@ -436,7 +437,10 @@ def test_lab_stacks_set_the_m7_fallback_re_checks_on_full_and_bare(monkeypatch):
         for name in re.findall(r"\$\{(\w+)\}", path.read_text()):
             monkeypatch.setenv(name, f"/x/{name.lower()}")
         config = stack.StackConfig.load(path)
-        if config.mode == "lab" and config.system != "a2a":
+        if config.mode == "lab" and config.system in {
+            "edgecitadel",
+            "edgecitadel_bare",
+        }:
             assert config.runtime_env == LAB_FALLBACKS, path.name
         else:
             assert config.runtime_env == {}, path.name

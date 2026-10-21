@@ -39,6 +39,10 @@ SYSTEM_BASELINES = [
     ("A2A: block bad input", FAMILY_NO, "#d9d9d9", "1"),
     ("A2A: cancel faulty agent", FAMILY_NO, "#a6a6a6", "2"),
     ("A2A: cancel all", FAMILY_NO, "#3a3a3a", "3"),
+    # LangGraph Server's own controls (harness.lg_control), single host.
+    ("LangGraph: cancel run", FAMILY_NO, "#3a3a3a", "4"),
+    ("LangGraph: block and resume", FAMILY_NO, "#d9d9d9", "+"),
+    ("LangGraph: time travel", FAMILY_NO, "#a6a6a6", "x"),
 ]
 MAIN_NAMES = [m[0] for m in MAIN]
 PLOTTED = [*MAIN, *EXTRA, *SYSTEM_BASELINES]
@@ -61,13 +65,18 @@ CODE_NAME = {
     "a2a_block_input": "A2A: block bad input",
     "a2a_cancel_agent": "A2A: cancel faulty agent",
     "a2a_cancel_all": "A2A: cancel all",
+    "lg_cancel_run": "LangGraph: cancel run",
+    "lg_block_resume": "LangGraph: block and resume",
+    "lg_time_travel": "LangGraph: time travel",
     "none": "No containment",
     "reference": "No fault (reference)",
 }
 # Monitor strategy codes the harness can run (``none`` is no alert at all).
 STRATEGY_CODES = tuple(c for c in CODE_NAME if c not in {"none", "reference"})
-# Codes the A2A stack runs (and the EdgeCitadel monitor does not).
-NATIVE_CODES = ("a2a_block_input", "a2a_cancel_agent", "a2a_cancel_all")
+# Codes each baseline stack runs (and the EdgeCitadel monitor does not).
+A2A_CODES = ("a2a_block_input", "a2a_cancel_agent", "a2a_cancel_all")
+LG_CODES = ("lg_cancel_run", "lg_block_resume", "lg_time_travel")
+NATIVE_CODES = (*A2A_CODES, *LG_CODES)
 # The simulator's internal codes of the same strategies (its v2 registry);
 # strategies without one are skipped by the simulator backend.
 SIM_CODE = {

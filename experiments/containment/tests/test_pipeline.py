@@ -332,4 +332,4 @@ def test_every_native_lab_setting_plans_with_the_gated_L():
                 assert latency.regime(loaded.measured_rtt_ms) == "measured"
             else:
                 assert latency.regime(loaded.measured_rtt_ms) == "stress", path.name
-    assert native == 16
+    assert native == 19

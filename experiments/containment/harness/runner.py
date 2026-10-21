@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any
 
 from . import deploy, netem, svc
+from .names import A2A_CODES, LG_CODES, NATIVE_CODES
 from .spec import (
     AlertTrigger,
     Fault,
@@ -72,7 +73,6 @@ from .spec import (
     makespan,
     to_dict,
 )
-from .names import NATIVE_CODES
 from .stack import RunStack, StackConfig, StackError, make_stack
 
 POLL_S = 0.2
@@ -793,11 +793,17 @@ def _drive(
                 decision_seen = True
                 (run_dir / "status_at_decision.json").write_text(json.dumps(status))
         finished = (
-            len(ended) == len(spec.tasks) and time.monotonic() - last_change > 1.0
+            len(ended) == len(spec.tasks)
+            and time.monotonic() - last_change > 1.0
+            # Every task ended once, but a LangGraph fork may be redoing some.
+            and not stack.busy()
         )
         idle = (
             time.monotonic() - last_change > quiet
             and (now_ms - t0) / 1000 > makespan(spec) * scale
+            # A baseline that redoes work (a LangGraph fork) can be silent
+            # while it computes; its stack says so. EdgeCitadel's never is.
+            and not stack.busy()
         )
         if (finished or idle) and not _effects_settled(stack):
             pass  # a scheduled effect may still commit
@@ -1026,11 +1032,13 @@ def checkouts(stack_config: StackConfig) -> dict[str, Any]:
 
 def check_system(system: str, strategies: set[str]) -> None:
     """Each system runs only its own controls: the monitor's strategies on
-    EdgeCitadel, the protocol's own on A2A, and none on the bare runtime."""
+    EdgeCitadel, A2A's and LangGraph's own on theirs, none on the bare runtime."""
     contained = strategies - {"none", "reference"}
     if system == "a2a":
-        allowed = set(NATIVE_CODES)
-    elif system == "edgecitadel_bare":
+        allowed = set(A2A_CODES)
+    elif system == "langgraph":
+        allowed = set(LG_CODES)
+    elif system in {"edgecitadel_bare", "langgraph_functional"}:
         allowed = set()
     else:
         allowed = set(deploy.STRATEGIES) - set(NATIVE_CODES)

@@ -15,6 +15,7 @@ pytest.importorskip("a2a")
 
 from a2a.types import a2a_pb2 as pb
 from a2a.utils.errors import TaskNotCancelableError
+
 from harness import a2a_agent, a2a_common, a2a_control
 from harness.metrics import decision_metrics
 
@@ -196,3 +197,14 @@ def test_the_a2a_stack_submits_external_requests_at_their_times():
         ("/mark", "refused", "Q2"),
     ]
     assert marks[0][2]["rt"] == "rt-Q1" and "server gone" in marks[1][2]["code"]
+
+
+def test_only_the_langgraph_stack_can_be_busy():
+    """The runner's end-of-run rules ask ``busy()``: always False for
+    EdgeCitadel (full or bare) and A2A, so their runs end as before."""
+    from harness.a2a_stack import A2ARunStack
+    from harness.stack import RunStack
+
+    assert RunStack.busy(None) is False
+    assert A2ARunStack.busy is RunStack.busy
+    assert A2ARunStack.alert_endpoint(None) is None

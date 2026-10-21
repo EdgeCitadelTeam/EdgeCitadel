@@ -1,0 +1,29 @@
+{
+  "mode": "lab",
+  "system": "langgraph",
+  "controller": "netsys-endurance",
+  "_note": "LangGraph baseline, single host (Endurance): services and langgraph dev on Endurance, the runner on jim-eq over the approved SSH route. Ports from the A2A design note: LangGraph 19500, services 19390; listeners on Endurance's tailnet address. Overhead numbers from this stack are labelled single-host.",
+  "hosts": {
+    "netsys-endurance": {
+      "ssh": "${HARNESS_SSH_ENDURANCE}",
+      "address": "${HARNESS_ENDURANCE_ADDRESS}",
+      "python": "${HARNESS_REMOTE_PYTHON}",
+      "repo": "${HARNESS_REMOTE_REPO}",
+      "runtime_root": "${HARNESS_REMOTE_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_REMOTE_WORK_ROOT}"
+    }
+  },
+  "node_hosts": {
+    "core": "netsys-endurance",
+    "edge-1": "netsys-endurance",
+    "edge-2": "netsys-endurance"
+  },
+  "ports": {
+    "services": 19390,
+    "langgraph": 19500
+  },
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "procstat_interval_ms": 200
+}
