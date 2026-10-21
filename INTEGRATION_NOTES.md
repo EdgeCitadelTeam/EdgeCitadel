@@ -645,3 +645,20 @@ this branch's runtime and monitor (`HARNESS_RUNTIME_ROOT` is this checkout):
   under the deployed profile, plus C2 under the shared profile: 165 runs),
   `lab-pilot` (3 repetitions: 495 runs), `lab-main` a draft (size after the
   pilot).
+
+Local dry run (`configs/dryrun-nats.json`: every process on one 2-CPU
+container, NATS control path; nats-server 2.14.6; shared with simulator jobs
+of other agents, load average about 4): `lab-smoke` ran 113 of its 165 runs
+(every scenario: c2, c3, n2, n3 complete, rand-n7-s0 early alert complete,
+rand-n7-s1/s2 sampled; C2 under the shared profile complete) and `lab-pilot`
+its first 4 runs. One attempt takes 67-85 s for c2, c3, n2, n3 and 93-120 s
+for rand-n7 at `time_scale` 2 (stack start, workload, quiet period, collection).
+On this machine 37 of 113 runs needed the harness's testbed retry: worker slots
+lost agentd (RPC timeouts of 5 s under CPU starvation; 91 % of rand-n7 runs,
+whose many slots each poll `task.claim` every 0.5 s), and two rand-n7-s1 runs
+never reached their alert. At one attempt per run, `lab-smoke` takes about
+4.1 h and `lab-pilot` 12.4 h; the lab spreads the nodes over three hosts.
+Scores of the dry run: Firebreak clean and established in 13 of 13 runs, the
+three cut strategies and Trace & stop/quarantine clean in every run, Reject
+source clean in 2 of 9 under the deployed profile (its rule alone) and 2 of 2
+under the shared one; `none` leaked in 12 of 13.
