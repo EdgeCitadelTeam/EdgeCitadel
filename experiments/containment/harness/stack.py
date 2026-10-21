@@ -510,7 +510,8 @@ class RunStack:
         control_delay_ms: Mapping[str, float],
         enforce: bool = True,
         profile: str = "deployed",
-        phase1_include_cut: bool = False,
+        phase1_mode: str = "freeze",
+        receding_during_waits: bool = False,
     ) -> None:
         """Start everything. With ``enforce`` False the monitor decides and logs
         but sends no decision (baseline runs); it still renews every node's
@@ -552,7 +553,11 @@ class RunStack:
             control_delay_ms,
             nats_url,
             enforce,
-            {"profile": profile, "phase1_include_cut": phase1_include_cut},
+            {
+                "profile": profile,
+                "phase1_mode": phase1_mode,
+                "receding_during_waits": receding_during_waits,
+            },
         )
         self._await_leases(spec)
         plan_bytes = json.dumps(plan).encode()

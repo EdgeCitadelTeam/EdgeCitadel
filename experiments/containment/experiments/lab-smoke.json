@@ -40,7 +40,10 @@
   "profiles": [
     "deployed"
   ],
-  "phase1_include_cut": [
+  "phase1_modes": [
+    "freeze"
+  ],
+  "receding_during_waits": [
     false
   ],
   "quiet_s": 8,

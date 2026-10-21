@@ -49,6 +49,7 @@ class ConfigError(ValueError):
 
 
 PROFILES = ("deployed", "shared")
+PHASE1_MODES = ("freeze", "freeze_plus_cut", "adaptive")
 # The strategies that solve a cut on G_C (the others apply a rule).
 CUT_STRATEGIES = frozenset({"greedy_cut", "cut_without_deadlines", "firebreak"})
 
@@ -175,11 +176,19 @@ class MonitorConfig:
     # overrides {"<strategy>" | "*": {"<mechanism>": bool}}.
     profile: str = "deployed"
     mechanisms: Mapping[str, Mapping[str, bool]] = field(default_factory=dict)
-    # Phase 1 also issues the strategy's own cut solved at the alert on G_C
-    # (B_a) together with the freeze; phase 2 is unchanged, and whatever of
-    # B_1 and B_a the refined cut does not keep is released under the guarded
-    # release (holds only: revocations stay).
-    phase1_include_cut: bool = False
+    # What phase 1 issues (enforcement.TwoPhaseProtocol): "freeze" (the
+    # frontier freeze B_1), "freeze_plus_cut" (B_1 and the strategy's own cut
+    # solved at the alert, B_a, at once) or "adaptive" (B_a with the
+    # taint-aware labels of its source side; the freeze only when B_a leaves a
+    # protected sink untimely, when the earliest tainted-effect deadline is
+    # within phase1_margin_rounds control rounds of B_a's landing, or when B_a
+    # in force is not a cut once reconciled). Phase 2 and the guarded release
+    # are the same in every mode.
+    phase1_mode: str = "freeze"
+    phase1_margin_rounds: int = 2
+    # Let the receding trigger (a taint advance) add actions while the
+    # protocol waits for ingest; additions only, never releases.
+    receding_during_waits: bool = False
     # Renew agentd's fail-closed controller lease (EDGECITADEL_CONTROLLER_LEASE_MS
     # on the nodes) this often, on every known node that describes
     # renew:controller; 0 disables. Keep it well under the lease and the command
@@ -283,17 +292,25 @@ class MonitorConfig:
                 if item not in PROFILES:
                     raise ConfigError("invalid_profile")
                 kwargs[key] = item
+            elif key == "phase1_mode":
+                if item not in PHASE1_MODES:
+                    raise ConfigError("invalid_phase1_mode")
+                kwargs[key] = item
             elif key == "mechanisms":
                 kwargs[key] = _mechanism_overrides(item)
             elif key in {
                 "external_requests_untrusted",
-                "phase1_include_cut",
+                "receding_during_waits",
                 "enforce",
             }:
                 if not isinstance(item, bool):
                     raise ConfigError(f"invalid_{key}")
                 kwargs[key] = item
-            elif key in {"stop_team_level", "controller_lease_renew_ms"}:
+            elif key in {
+                "stop_team_level",
+                "controller_lease_renew_ms",
+                "phase1_margin_rounds",
+            }:
                 if type(item) is not int or item < 0:
                     raise ConfigError(f"invalid_{key}")
                 kwargs[key] = item

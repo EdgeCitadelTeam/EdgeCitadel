@@ -175,7 +175,7 @@ class Deployment:
     run_dir: Path
     strategy: str
     profile: str = "deployed"
-    phase1_include_cut: bool = False
+    phase1_mode: str = "freeze"
     processes: list[tuple[str, subprocess.Popen]] = field(default_factory=list)
     ledger: ActuatorLedger | None = None
     nodes: dict[str, Node] = field(default_factory=dict)
@@ -333,7 +333,7 @@ class Deployment:
                         },
                         "strategy": self.strategy,
                         "profile": self.profile,
-                        "phase1_include_cut": self.phase1_include_cut,
+                        "phase1_mode": self.phase1_mode,
                     },
                     "control": {
                         "nats": {
@@ -885,7 +885,8 @@ def summarize(deployment: Deployment, outcome: dict) -> dict:
         "strategy": deployment.strategy,
         "profile": decision["profile"],
         "mechanisms": decision["mechanisms"],
-        "phase1_include_cut": decision["phase1_include_cut"],
+        "phase1_mode": decision["phase1_mode"],
+        "phase1_trigger": decision["phase1_trigger"],
         "status": decision["status"],
         "cut_valid": decision["cut_valid"],
         "follow_up_statuses": [d["status"] for d in outcome["follow_ups"]],
@@ -941,7 +942,11 @@ def main() -> int:
     )
     parser.add_argument("--variant", choices=["early", "late"], default="late")
     parser.add_argument("--profile", choices=["deployed", "shared"], default="deployed")
-    parser.add_argument("--phase1-include-cut", action="store_true")
+    parser.add_argument(
+        "--phase1-mode",
+        choices=["freeze", "freeze_plus_cut", "adaptive"],
+        default="freeze",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--root", type=Path, default=None, help="directory for run directories"
@@ -958,7 +963,7 @@ def main() -> int:
         run_dir,
         args.strategy,
         profile=args.profile,
-        phase1_include_cut=args.phase1_include_cut,
+        phase1_mode=args.phase1_mode,
     )
     try:
         deployment.start()
@@ -975,7 +980,7 @@ def main() -> int:
                         "variant",
                         "strategy",
                         "profile",
-                        "phase1_include_cut",
+                        "phase1_mode",
                         "status",
                         "cut_valid",
                         "effect_performed",

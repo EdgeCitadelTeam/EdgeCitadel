@@ -3,7 +3,8 @@
 An experiment file names instances (spec files), strategies, alert timings,
 latency settings, repetitions, the monitor's mechanism ``profiles``
 (``deployed``: each strategy as deployed, the default; ``shared``: every
-mechanism for every strategy) and ``phase1_include_cut`` settings. ``parts``
+mechanism for every strategy), ``phase1_modes`` (``freeze``, the default,
+``freeze_plus_cut`` or ``adaptive``) and ``receding_during_waits`` settings. ``parts``
 adds sub-grids that override any of those (for example one instance under the
 shared profile). The grid is paired: every strategy runs the same instance
 under the same alert trigger, latency setting, repetition, profile and option,
@@ -35,6 +36,7 @@ snapshots), and ``logs/``. A run whose ``run.json`` exists is not repeated.
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import shutil
@@ -120,7 +122,8 @@ class Experiment:
     root_modes: tuple[str, ...] = ("given",)
     measured_rtt_ms: float = MEASURED_RTT_MS
     profiles: tuple[str, ...] = ("deployed",)
-    phase1_include_cut: tuple[bool, ...] = (False,)
+    phase1_modes: tuple[str, ...] = ("freeze",)
+    receding_during_waits: tuple[bool, ...] = (False,)
     # Sub-grids run after this one, each overriding some of its dimensions.
     parts: tuple[Experiment, ...] = ()
 
@@ -138,6 +141,7 @@ class Experiment:
 
 
 PROFILES = ("deployed", "shared")
+PHASE1_MODES = ("freeze", "freeze_plus_cut", "adaptive")
 
 
 def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any]:
@@ -160,10 +164,15 @@ def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any
         for profile in out["profiles"]:
             if profile not in PROFILES:
                 raise ValueError(f"unknown profile '{profile}'")
-    if "phase1_include_cut" in document:
-        out["phase1_include_cut"] = tuple(document["phase1_include_cut"])
-        if not all(isinstance(v, bool) for v in out["phase1_include_cut"]):
-            raise ValueError("phase1_include_cut lists booleans")
+    if "phase1_modes" in document:
+        out["phase1_modes"] = tuple(document["phase1_modes"])
+        for mode in out["phase1_modes"]:
+            if mode not in PHASE1_MODES:
+                raise ValueError(f"unknown phase-1 mode '{mode}'")
+    if "receding_during_waits" in document:
+        out["receding_during_waits"] = tuple(document["receding_during_waits"])
+        if not all(isinstance(v, bool) for v in out["receding_during_waits"]):
+            raise ValueError("receding_during_waits lists booleans")
     if "measured_rtt_ms" in document:
         out["measured_rtt_ms"] = float(document["measured_rtt_ms"])
     if "latencies" in document:
@@ -213,7 +222,8 @@ class RunCell:
     rep: int
     root_mode: str = "given"
     profile: str = "deployed"
-    include_cut: bool = False
+    phase1_mode: str = "freeze"
+    receding: bool = False
 
     @property
     def run_id(self) -> str:
@@ -221,9 +231,10 @@ class RunCell:
         alert = self.alert or "nofault"
         if self.alert and self.root_mode != "given":
             alert = f"{alert}.{self.root_mode}"
-        # The main design (deployed, no at-alert cut) keeps the plain ids.
+        # The main design (deployed profile, freeze phase 1) keeps plain ids.
         variant = [] if self.profile == "deployed" else [self.profile]
-        variant += ["cut"] if self.include_cut else []
+        variant += [] if self.phase1_mode == "freeze" else [self.phase1_mode]
+        variant += ["receding"] if self.receding else []
         parts = [
             self.instance.stem + rogue,
             alert,
@@ -249,7 +260,9 @@ def grid(experiment: Experiment) -> list[RunCell]:
                             RunCell(instance, rate, "reference", None, latency, rep)
                         )
                     for profile in experiment.profiles:
-                        for cut in experiment.phase1_include_cut:
+                        for phase1, receding in itertools.product(
+                            experiment.phase1_modes, experiment.receding_during_waits
+                        ):
                             for alert in experiment.alerts:
                                 for mode in experiment.root_modes:
                                     for strategy in experiment.strategies:
@@ -263,7 +276,8 @@ def grid(experiment: Experiment) -> list[RunCell]:
                                                 rep,
                                                 mode,
                                                 profile,
-                                                cut,
+                                                phase1,
+                                                receding,
                                             )
                                         )
     for part in experiment.parts:
@@ -391,7 +405,8 @@ def run_cell(
         "effect_sink": stack_config.effect_sink["kind"],
         "controller_lease_ms": stack_config.controller_lease_ms,
         "profile": cell.profile,
-        "phase1_include_cut": cell.include_cut,
+        "phase1_mode": cell.phase1_mode,
+        "receding_during_waits": cell.receding,
         "mechanisms": None,  # the monitor's, for this strategy (from its status)
         "control_latency_ms": cell.latency.per_node(nodes),
         "control_delay_ms": dict(cell.latency.control_delay_ms),
@@ -416,7 +431,8 @@ def run_cell(
             control_delay_ms=cell.latency.control_delay_ms,
             enforce=cell.strategy in deploy.STRATEGIES,
             profile=cell.profile,
-            phase1_include_cut=cell.include_cut,
+            phase1_mode=cell.phase1_mode,
+            receding_during_waits=cell.receding,
         )
         if cell.strategy in deploy.STRATEGIES:
             meta["mechanisms"] = stack.monitor_status()["mechanisms"][cell.strategy]

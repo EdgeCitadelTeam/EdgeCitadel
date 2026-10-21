@@ -53,7 +53,8 @@ IDENTITY = (
     "strategy",
     "family",
     "profile",
-    "phase1_include_cut",
+    "phase1_mode",
+    "receding_during_waits",
     "alert",
     "root_mode",
     "latency",
@@ -112,7 +113,8 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         # The monitor's mechanism profile and option of the run (main design:
         # deployed, no at-alert cut).
         "profile": meta.get("profile", "deployed"),
-        "phase1_include_cut": int(bool(meta.get("phase1_include_cut", False))),
+        "phase1_mode": meta.get("phase1_mode", "freeze"),
+        "receding_during_waits": int(bool(meta.get("receding_during_waits", False))),
         "control_latency_ms": sum(latency.values()) / len(latency)
         if latency
         else math.nan,
@@ -226,7 +228,8 @@ def score(out: Path) -> list[dict[str, Any]]:
 CELL = [
     "mode",
     "profile",
-    "phase1_include_cut",
+    "phase1_mode",
+    "receding_during_waits",
     "rogue_rate",
     "alert",
     "root_mode",
@@ -237,7 +240,8 @@ CELL = [
 PAIR = [
     "instance",
     "profile",
-    "phase1_include_cut",
+    "phase1_mode",
+    "receding_during_waits",
     "rogue_rate",
     "alert",
     "root_mode",
@@ -394,7 +398,8 @@ def paired(runs: Any, reference: str = "firebreak") -> Any:
             continue
         cells = [
             "profile",
-            "phase1_include_cut",
+            "phase1_mode",
+            "receding_during_waits",
             "rogue_rate",
             "alert",
             "root_mode",
@@ -529,12 +534,14 @@ STRESS_NOTE = "stress settings, above the measured LAN round trip (1.5-4 ms)"
 
 def _main_runs(runs: Any, mode: str) -> Any:
     """Runs of one mode in the main design: plotted strategies, root given, the
-    deployed profile without the at-alert cut."""
+    deployed profile with the freeze phase 1 and no receding additions."""
     r = runs[(runs["mode"] == mode) & runs.strategy.isin(PLOTTED_NAMES)]
     if "profile" in r:
         r = r[r.profile.isna() | (r.profile == "deployed")]
-    if "phase1_include_cut" in r:
-        r = r[r.phase1_include_cut.isna() | (r.phase1_include_cut == 0)]
+    if "phase1_mode" in r:
+        r = r[r.phase1_mode.isna() | (r.phase1_mode == "freeze")]
+    if "receding_during_waits" in r:
+        r = r[r.receding_during_waits.isna() | (r.receding_during_waits == 0)]
     if "root_mode" in r:
         r = r[r.root_mode.isna() | (r.root_mode == "given")]
     return r

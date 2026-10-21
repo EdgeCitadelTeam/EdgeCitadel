@@ -463,9 +463,10 @@ for every strategy; `mechanisms` overrides them per strategy (or `"*"`):
 
 Theory A.6 obligation (c) therefore holds by default for the three cut
 strategies (the only ones Theorem 5 is claimed for). Confirmation, fencing
-(ingest-then-release) and agentd's gates stay on for every strategy in both. Each decision records `profile`, `mechanisms` and
-`phase1_include_cut` (decision log, status `last_decision`; status also lists
-every strategy's mechanisms), and the C2 run output and the harness's
+(ingest-then-release) and agentd's gates stay on for every strategy in both.
+Each decision records `profile`, `mechanisms`, `phase1_mode` and
+`receding_during_waits` (decision log, status `last_decision`; status also
+lists every strategy's mechanisms), and the C2 run output and the harness's
 `run.json` carry them.
 
 | Strategy | Family | Phase-2 rule | `deployed`: freeze / guard / taint-aware admission | `shared` |
@@ -488,18 +489,49 @@ ends `applied` (with `cut_valid` reported); a two-phase decision ends
 Tests: `test_the_deployed_profile_adds_mechanisms_only_to_the_cut_strategies`
 and `test_the_shared_profile_isolates_the_phase_two_rule`.
 
-### `phase1_include_cut` (default false)
+### Phase-1 modes (`phase1_mode`) and receding additions during the waits
 
-Phase 1 issues the frontier freeze B_1 together with the at-alert cut B_a: the
-strategy's own solve on the phase-2 G_C at the alert (for Firebreak, its
-deadline-aware cut), applied at once in the first round and recorded as the
-`phase: 1` entry of `solves`. Phase 2 is unchanged: it solves with B_1 and B_a
-in force and, once its cut is confirmed, fenced and checked, releases the holds
-of B_1 ∪ B_a it does not keep (a revocation in B_a cannot be released and stays
-in force). More phase-1 actions only shrink the source side, so Theorem 5 is
-unaffected. Only strategies that run the two-phase protocol use it. Tests:
-`test_phase_one_with_the_at_alert_cut_blocks_the_late_effect_at_once`
-(in-process, late alert: the effect hold is in the first round, the effect's
-sink is separated at every instant the nodes applied from then on, releases
-follow the last phase-2 confirmation) and, opt-in on the multi-process C2,
+Options only; the team decides the default after the simulator and theory
+checks. They apply to the strategies that run the two-phase protocol
+(`phase1_freeze`); a rule applied directly has no phase 1.
+
+- `freeze` (default, current): the frontier freeze B_1 (frontier holds and
+  admission freeze).
+- `freeze_plus_cut` (V2): B_1 together with the at-alert cut B_a, the
+  strategy's own solve on the phase-2 G_C at the alert (Firebreak: its
+  deadline-aware cut), both in the first round. More phase-1 actions only
+  shrink the source side, so Theorem 5 is unaffected.
+- `adaptive` (V3): at the alert only B_a and the taint-aware labels of its
+  source side (egress revocations of every unit B_a leaves there). The freeze
+  is added when the at-alert solve leaves a protected sink (a pending effect)
+  untimely or doomed, or when the earliest tainted-effect deadline lies within
+  `phase1_margin_rounds` (default 2) control rounds of B_a's landing (a round
+  is the largest control latency of B_a's sites), or when, once B_a is
+  confirmed and fenced, the actions in force are not a cut on the reconciled
+  deadline-aware G_C; then the freeze is added and the check repeated. The
+  decision records why under `phase1_trigger` (`freeze`, `untimely_effects`,
+  `earliest_effect_deadline_ms`, `landing_ms`, `margin_ms`,
+  `freeze_after_reconcile`).
+
+In every mode every at-alert solve is the `phase: 1` entry of `solves`, phase
+2 is unchanged, and the guarded release releases the phase-1 holds the
+refined cut does not keep, only after it is confirmed, fenced and checked; a
+revocation (in B_a or among the labels) cannot be released and stays.
+
+`receding_during_waits` (default false): a taint advance seen while the
+protocol waits for ingest (during either phase) re-solves at once and applies
+whatever the strategy adds, never a release. Those additions (listed under
+`receding`) are fenced before any release, and an addition made during phase
+1 is a phase-1 action like the freeze's.
+
+Tests: `test_every_phase_one_mode_blocks_the_late_effect_and_releases_after_phase_two`
+(in-process, late alert, each mode: the effect hold is in the first round,
+the effect's sink is separated at every instant the nodes applied from then
+on, releases are holds sent after the last phase-2 confirmation),
+`test_the_cut_modes_add_the_at_alert_cut_to_the_frontier_freeze`,
+`test_adaptive_phase_one_freezes_only_when_the_cut_is_not_safely_timely`
+(no freeze for a timely cut; the freeze for an untimely effect and for one
+within the margin), `test_receding_additions_during_the_waits_are_fenced_before_any_release`
+and, opt-in on the multi-process C2 (late variant, `freeze_plus_cut` and
+`adaptive`),
 `test_phase1_with_the_at_alert_cut_blocks_the_late_effect_from_the_first_round`.

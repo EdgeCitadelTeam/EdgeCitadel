@@ -50,13 +50,20 @@ from .enforcement import (
     Decision,
     EnforcementDriver,
     TwoPhaseProtocol,
+    freeze_trigger,
     now_ms,
 )
 from .graph import ControlGraph
 from .model import FAILURE_KINDS, Action, Alert, AlertError, parse_external_alert, ver
 from .projection import ScopeMirror, project
 from .provenance import ProvenanceGraph
-from .strategies import DISPLAY, STRATEGIES, Context, with_mechanisms
+from .strategies import (
+    DISPLAY,
+    STRATEGIES,
+    Context,
+    taint_admission,
+    with_mechanisms,
+)
 
 BATCH = 256
 MAX_CATCH_UP_BATCHES = 64
@@ -330,9 +337,14 @@ class ContainmentMonitor:
             return ranking[0].roots, ranking[0].prune_level
         return rootcause.subject_nodes(self.graph, alert.subject), "subject"
 
-    def fence(self, records: list[ActionRecord]) -> bool:
+    def fence(
+        self,
+        records: list[ActionRecord],
+        on_poll: Callable[[], None] | None = None,
+    ) -> bool:
         """Follow Core until every confirmed record's nodes are ingested up to
-        the journal positions they confirmed (taint is reconciled on the way).
+        the journal positions they confirmed (taint is reconciled on the way),
+        calling ``on_poll`` after each pass while it waits.
 
         Marks each site's ``t_ingested`` and each record's ``t_fenced``; returns
         False when ``ingest_timeout_ms`` passed first.
@@ -340,6 +352,8 @@ class ContainmentMonitor:
         deadline = time.monotonic() + self.config.ingest_timeout_ms / 1000
         while True:
             self.catch_up()
+            if on_poll is not None:
+                on_poll()
             waiting = False
             for record in records:
                 if record.state != "in_force" or record.t_fenced is not None:
@@ -441,13 +455,15 @@ class ContainmentMonitor:
         self, incident_id: str, name: str, t_alert: int, roots: list[str]
     ) -> Decision:
         mechanisms = self.config.mechanisms_for(name)
-        include_cut = self.config.phase1_include_cut and mechanisms.phase1_freeze
+        # Only a strategy that runs the two-phase protocol has a phase 1.
+        mode = self.config.phase1_mode if mechanisms.phase1_freeze else "freeze"
         decision = Decision(
             incident_id,
             name,
             profile=self.config.profile,
             mechanisms=mechanisms.to_json(),
-            phase1_include_cut=include_cut,
+            phase1_mode=mode,
+            receding_during_waits=self.config.receding_during_waits,
         )
 
         def context(cg: ControlGraph) -> Context:
@@ -467,6 +483,21 @@ class ContainmentMonitor:
             ctx = context(cg)
             return with_mechanisms(ctx, STRATEGIES[name](ctx), mechanisms)
 
+        def trigger(cg: ControlGraph, cut) -> dict:
+            return freeze_trigger(
+                cg,
+                cut,
+                margin_rounds=self.config.phase1_margin_rounds,
+                control_latency=self.config.control_latency,
+            )
+
+        def receding() -> set[Action]:
+            """A taint advance during a wait: what the strategy adds now."""
+            if not self.graph.frontier_advanced:
+                return set()
+            self.graph.frontier_advanced = False
+            return set(choose(self._project(2, frozenset(self.in_force))).actions)
+
         self.protocol.run(
             decision,
             t_alert=t_alert,
@@ -475,7 +506,11 @@ class ContainmentMonitor:
             choose=choose,
             in_force=self.in_force,
             two_phase=mechanisms.phase1_freeze,
-            cut_at_alert=rule if include_cut else None,
+            phase1_mode=mode,
+            cut_at_alert=rule,
+            labels=taint_admission,
+            trigger=trigger,
+            receding=receding if self.config.receding_during_waits else None,
         )
         self._persist(decision)
         return decision
@@ -564,7 +599,8 @@ class ContainmentMonitor:
         return {
             "fault": self.fault,
             "profile": self.config.profile,
-            "phase1_include_cut": self.config.phase1_include_cut,
+            "phase1_mode": self.config.phase1_mode,
+            "receding_during_waits": self.config.receding_during_waits,
             "mechanisms": {
                 name: self.config.mechanisms_for(name).to_json() for name in STRATEGIES
             },

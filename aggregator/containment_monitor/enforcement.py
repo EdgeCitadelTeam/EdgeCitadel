@@ -33,6 +33,7 @@ the action issues it again under a newer version.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
@@ -48,6 +49,7 @@ from .control import (
     release,
 )
 from .graph import ControlGraph
+from .config import PHASE1_MODES
 from .model import Action
 from .projection import admission_freeze, frontier_block
 
@@ -238,7 +240,8 @@ class Decision:
     # The mechanisms the strategy ran with (config.Mechanisms) and their profile.
     profile: str = "deployed"
     mechanisms: dict = field(default_factory=dict)
-    phase1_include_cut: bool = False
+    phase1_mode: str = "freeze"
+    receding_during_waits: bool = False
     status: str = "pending"
     rounds: int = 0
     phase1: list[ActionRecord] = field(default_factory=list)
@@ -247,10 +250,15 @@ class Decision:
     unavoidable: list[str] = field(default_factory=list)
     cut_valid: bool | None = None
     solve: dict = field(default_factory=dict)  # the last phase-2 solve
-    # Every solve, in order: the at-alert cut of phase 1 (phase1_include_cut)
+    # Every solve, in order: the at-alert cut of phase 1 (phase1_mode other
+    # than freeze)
     # and each phase-2 solve; "phase" says which.
     solves: list[dict] = field(default_factory=list)
     graph: dict = field(default_factory=dict)
+    # Adaptive phase 1: why the freeze was (not) added (freeze_trigger).
+    phase1_trigger: dict = field(default_factory=dict)
+    # Actions the receding trigger added while the protocol waited.
+    receding: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {
@@ -258,7 +266,10 @@ class Decision:
             "strategy": self.strategy,
             "profile": self.profile,
             "mechanisms": self.mechanisms,
-            "phase1_include_cut": self.phase1_include_cut,
+            "phase1_mode": self.phase1_mode,
+            "receding_during_waits": self.receding_during_waits,
+            "phase1_trigger": self.phase1_trigger,
+            "receding": self.receding,
             "status": self.status,
             "rounds": self.rounds,
             "phase1": [r.to_json() for r in self.phase1],
@@ -281,19 +292,70 @@ def cut_holds(cg: ControlGraph, actions: Iterable[Action]) -> tuple[bool, list[s
     )
 
 
+def freeze_trigger(
+    cg: ControlGraph,
+    cut: StrategyResult,
+    *,
+    margin_rounds: int,
+    control_latency: Callable[[str], float],
+) -> dict:
+    """Whether the adaptive phase 1 must add the frontier freeze to B_a.
+
+    Yes when the at-alert solve leaves a protected sink (a pending effect)
+    untimely or doomed, or when the earliest tainted-effect deadline falls
+    within ``margin_rounds`` control rounds of B_a's landing (deadlines are
+    lower bounds, so a cut that lands just in time is a guess).
+    """
+    effects = {n for n in cg.sinks if cg.nodes.get(n, {}).get("kind") == "effect"}
+    untimely = sorted(set(cut.unavoidable) & effects)
+    chosen = set(cut.actions)
+    landing = max(
+        (e.t_ap for e in cg.edges if e.action in chosen and e.t_ap is not None),
+        default=float(cg.t_now),
+    )
+    rounds = [control_latency(a.node_id) for a in chosen] or [0.0]
+    margin = margin_rounds * max(rounds)
+    deadline = min(
+        (e.deadline for e in cg.edges if e.head in effects and e.deadline < math.inf),
+        default=math.inf,
+    )
+    near = deadline <= landing + margin
+    return {
+        "freeze": bool(untimely) or near,
+        "untimely_effects": untimely,
+        "earliest_effect_deadline_ms": None if deadline == math.inf else deadline,
+        "landing_ms": landing,
+        "margin_ms": margin,
+    }
+
+
 class TwoPhaseProtocol:
     """Orchestrates P1-P3 over callbacks owned by the monitor service.
 
     ``project(phase, in_force)`` builds G_C (phase 1: holds only, no solve budget);
     ``fence(records)`` ingests events until every confirmed record's nodes are
     ingested up to their journal positions (reconciling taint from them) and
-    returns whether that happened in time; ``choose(cg)`` returns the phase-2
-    strategy result. ``in_force`` maps actions to their records and is updated
-    in place. With ``cut_at_alert`` (phase1_include_cut), the first phase-1
-    round also issues that cut, solved on the phase-2 G_C at the alert (B_a),
-    with the freeze; phase 2 is unchanged, and what it does not keep of B_1 and
-    B_a is released under the same guarded release (holds only: a revocation
-    cannot be released and stays).
+    returns whether that happened in time (with ``receding``, it is called with
+    ``on_poll``, which it calls while it waits); ``choose(cg)`` returns the phase-2 strategy result. ``in_force``
+    maps actions to their records and is updated in place.
+
+    Phase 1 (``phase1_mode``):
+
+    - ``freeze``: the frontier freeze B_1 (frontier holds and admission freeze).
+    - ``freeze_plus_cut``: B_1 and, in the first round, ``cut_at_alert``, the
+      strategy's own cut solved on the phase-2 G_C at the alert (B_a), at once.
+    - ``adaptive``: B_a and the taint-aware labels of its source side
+      (``labels``); the freeze only when ``trigger`` says B_a is not safely
+      timely, or when, once B_a is confirmed and fenced, the actions in force
+      are not a cut on the reconciled state (then the freeze is added and the
+      check repeated).
+
+    Every at-alert solve is recorded as a ``phase: 1`` entry of ``solves``.
+    Phase 2 is the same in every mode: what it does not keep of the phase-1
+    holds is released under the guarded release (a revocation cannot be
+    released and stays). With ``receding``, a taint advance seen while the
+    protocol waits for ingest adds the actions ``receding()`` returns (never a
+    release); they are fenced before any release.
     """
 
     def __init__(self, driver: EnforcementDriver, *, max_rounds: int = 3):
@@ -306,40 +368,103 @@ class TwoPhaseProtocol:
         *,
         t_alert: int,
         project: Callable[[int, frozenset[Action]], ControlGraph],
-        fence: Callable[[list[ActionRecord]], bool],
+        fence: Callable[..., bool],
         choose: Callable[[ControlGraph], StrategyResult],
         in_force: dict[Action, ActionRecord],
         two_phase: bool = True,
+        phase1_mode: str = "freeze",
         cut_at_alert: Callable[[ControlGraph], StrategyResult] | None = None,
+        labels: Callable[[ControlGraph, list[Action]], list[Action]] | None = None,
+        trigger: Callable[[ControlGraph, StrategyResult], dict] | None = None,
+        receding: Callable[[], set[Action]] | None = None,
     ) -> Decision:
+        if phase1_mode not in PHASE1_MODES:
+            raise ValueError(f"unknown phase-1 mode {phase1_mode!r}")
         clock = self.driver.clock
+        phase = [1]
+
+        def apply(actions: set[Action]) -> list[ActionRecord]:
+            records = self.driver.apply(
+                actions - in_force.keys(),
+                incident_id=decision.incident_id,
+                phase=phase[0],
+                t_alert=t_alert,
+                t_decision=clock(),
+            )
+            (decision.phase1 if phase[0] == 1 else decision.phase2).extend(records)
+            in_force.update({r.action: r for r in records if r.state == "in_force"})
+            return records
+
+        def add_receding() -> None:
+            added = receding() - in_force.keys() if receding is not None else set()
+            if added:
+                records = apply(added)
+                decision.receding.extend(r.action.label() for r in records)
+
+        def wait(records: list[ActionRecord]) -> bool:
+            """Fence the records, then whatever the receding trigger added."""
+            done: set[int] = set()
+            while True:
+                pending = [r for r in records if id(r) not in done]
+                fenced = (
+                    fence(pending, on_poll=add_receding)
+                    if receding is not None
+                    else fence(pending)
+                )
+                if not fenced:
+                    return False
+                done |= {id(r) for r in pending}
+                added = [
+                    r
+                    for r in [*decision.phase1, *decision.phase2]
+                    if r.state == "in_force"
+                    and id(r) not in done
+                    and r.t_fenced is None
+                ]
+                if not added:
+                    return True
+                records = added
+
+        def at_alert() -> tuple[ControlGraph, StrategyResult]:
+            cg = project(2, frozenset(in_force))
+            started = time.perf_counter()
+            result = cut_at_alert(cg)
+            decision.solves.append(self._solve(decision, result, started, cg, phase=1))
+            return cg, result
+
+        def freeze() -> set[Action]:
+            cg = project(1, frozenset(in_force))
+            block, _, closure = frontier_block(cg)
+            return block | admission_freeze(cg, closure)
+
         if two_phase:
+            frozen = phase1_mode != "adaptive"
             for round_ in range(self.max_rounds):
                 decision.rounds += 1
-                cg = project(1, frozenset(in_force))
-                block, _, closure = frontier_block(cg)
-                block |= admission_freeze(cg, closure)
-                if cut_at_alert is not None and round_ == 0:
-                    at_alert = project(2, frozenset(in_force))
-                    started = time.perf_counter()
-                    result = cut_at_alert(at_alert)
-                    decision.solves.append(
-                        self._solve(decision, result, started, at_alert, phase=1)
-                    )
-                    block |= set(result.actions)
-                records = self.driver.apply(
-                    block - in_force.keys(),
-                    incident_id=decision.incident_id,
-                    phase=1,
-                    t_alert=t_alert,
-                    t_decision=clock(),
-                )
-                decision.phase1.extend(records)
-                in_force.update({r.action: r for r in records if r.state == "in_force"})
-                fence(records)
-                held, _ = cut_holds(project(1, frozenset(in_force)), in_force)
+                block: set[Action] = freeze() if frozen else set()
+                if round_ == 0 and phase1_mode != "freeze":
+                    cg, cut = at_alert()
+                    block |= set(cut.actions)
+                    if phase1_mode == "adaptive":
+                        block |= set(labels(cg, list(cut.actions)))
+                        decision.phase1_trigger = trigger(cg, cut)
+                        if decision.phase1_trigger["freeze"]:
+                            frozen = True
+                            block |= freeze()
+                records = apply(block)
+                wait(records)
+                if frozen:
+                    held, _ = cut_holds(project(1, frozenset(in_force)), in_force)
+                else:
+                    # Reconcile B_a: still a cut on the deadline-aware G_C of
+                    # the reconciled state? If not, add the freeze and repeat.
+                    held, _ = cut_holds(project(2, frozenset(in_force)), in_force)
+                    if not held:
+                        frozen = True
+                        decision.phase1_trigger["freeze_after_reconcile"] = True
                 if held:
                     break
+        phase[0] = 2
         phase1 = {r.action: r for r in decision.phase1 if r.state == "in_force"}
         for _ in range(self.max_rounds):
             decision.rounds += 1
@@ -351,15 +476,7 @@ class TwoPhaseProtocol:
             decision.graph = dict(cg.stats)
             decision.unavoidable = sorted(getattr(result, "unavoidable", ()))
             chosen = set(result.actions)
-            records = self.driver.apply(
-                chosen - in_force.keys(),
-                incident_id=decision.incident_id,
-                phase=2,
-                t_alert=t_alert,
-                t_decision=clock(),
-            )
-            decision.phase2.extend(records)
-            in_force.update({r.action: r for r in records if r.state == "in_force"})
+            records = apply(chosen)
             if any(r.state != "in_force" for r in records):
                 # Rejected or unconfirmed: keep every phase-1 hold.
                 decision.status = "phase2_unconfirmed"
@@ -367,7 +484,7 @@ class TwoPhaseProtocol:
             confirmed = [
                 r for r in [*decision.phase1, *decision.phase2] if r.state == "in_force"
             ]
-            if not fence(confirmed) and two_phase:
+            if not wait(confirmed) and two_phase:
                 # Not every confirmed decision is in the log the monitor read:
                 # what crossed before it is unknown, so nothing is released.
                 decision.status = "ingest_timeout"

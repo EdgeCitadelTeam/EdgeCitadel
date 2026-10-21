@@ -1,6 +1,7 @@
 """Two-phase enforcement, fencing and the control clients."""
 
 import random
+from collections import Counter
 import sys
 import time
 from dataclasses import replace
@@ -19,7 +20,7 @@ from aggregator.containment_monitor.control import (
     release,
 )
 from aggregator.containment_monitor.model import Action, Alert, inv
-from containment_support import Harness
+from containment_support import Harness, ingest
 from edgecitadel_agentd.service import dispatch as rpc
 from test_containment_projection import event_ms, workload
 
@@ -978,12 +979,22 @@ def test_phase_one_labels_the_source_side_not_only_the_taint(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# phase1_include_cut: phase 1 also issues the at-alert cut
+# phase1_mode: freeze, freeze_plus_cut and adaptive phase 1
 # ---------------------------------------------------------------------------
-def late_effect(tmp_path, include_cut, seed=0):
+def late_effect(tmp_path, mode, seed=0, due=60_000, latency_ms=50.0, **config):
     """C2's late alert in miniature: a's tainted result reached the root r,
     which fanned out to b (tainted) and c (healthy); b scheduled a protected
-    actuator command and ended before the alert."""
+    actuator command (due at ``due``) and ended before the alert at 20."""
+    harness, control, trace, ids = late_effect_setup(
+        tmp_path, mode, seed, due, latency_ms, **config
+    )
+    decision = harness.monitor.respond(
+        operator_alert(ids["a"], harness.now), strategy="firebreak", roots=[ids["a"]]
+    )
+    return harness, control, decision, ids["effect"]
+
+
+def late_effect_setup(tmp_path, mode, seed, due, latency_ms, **settings):
     from aggregator.containment_monitor.config import MonitorConfig
     from containment_support import TraceBuilder
 
@@ -998,7 +1009,9 @@ def late_effect(tmp_path, include_cut, seed=0):
         protected_effect_classes=frozenset({"device.command"}),
         agent_nodes={"r": "n0", "a": "n1", "b": "n2", "c": "n2"},
         session_isolated_agents=frozenset({"a", "b", "c"}),
-        phase1_include_cut=include_cut,
+        default_control_latency_ms=latency_ms,
+        phase1_mode=mode,
+        **settings,
     )
     trace = TraceBuilder()
     root = trace.start(trace.root("r", "n0", 0), 1)
@@ -1012,34 +1025,42 @@ def late_effect(tmp_path, include_cut, seed=0):
     for task_id in (task_b, task_c):
         trace.arrive(task_id, 10)
     b, _ = (trace.start(t, 11) for t in (task_b, task_c))
-    effect = trace.effect(b, "device.command", "requested", 12, scheduled=60_000)
+    effect = trace.effect(b, "device.command", "requested", 12, scheduled=due)
     trace.complete(b, 13)
     control = FakeControlClient(delay=jittered(seed))
     harness = Harness(tmp_path, config, control)
     harness.feed(trace.events)
     harness.at(20)
-    decision = harness.monitor.respond(
-        operator_alert(inv(a), harness.now), strategy="firebreak", roots=[inv(a)]
+    ids = {"a": inv(a), "root": root, "effect": effect["attributes"]["effect_id"]}
+    return harness, control, trace, ids
+
+
+def frontier_shape(decision) -> Counter:
+    return Counter(
+        (r.action.op, r.action.node_id, r.action.kind) for r in decision.phase1
     )
-    return harness, control, decision, effect["attributes"]["effect_id"]
 
 
-@pytest.mark.parametrize("seed", range(4))
-def test_phase_one_with_the_at_alert_cut_blocks_the_late_effect_at_once(tmp_path, seed):
-    """phase1_include_cut: the first round issues Firebreak's own cut solved at
-    the alert with the freeze. The scheduled effect is blocked from that round
-    on, at every instant the nodes applied, and every release still waits for
-    the confirmed phase-2 cut."""
-    from collections import Counter
-
+@pytest.mark.parametrize("mode", ["freeze", "freeze_plus_cut", "adaptive"])
+@pytest.mark.parametrize("seed", range(3))
+def test_every_phase_one_mode_blocks_the_late_effect_and_releases_after_phase_two(
+    tmp_path, mode, seed
+):
+    """In every mode the scheduled effect is blocked from the first round on,
+    at every instant the nodes applied, and every release (holds only) still
+    waits for the confirmed phase-2 cut."""
     from aggregator.containment_monitor.model import fx, hold_effect
 
-    harness, control, decision, effect_id = late_effect(tmp_path / "cut", True, seed)
-    at_alert, *refined = decision.solves
-    assert at_alert["phase"] == 1 and {s["phase"] for s in refined} == {2}
+    harness, control, decision, effect_id = late_effect(tmp_path, mode, seed)
+    assert decision.phase1_mode == mode and decision.status == "contained"
+    phases = [s["phase"] for s in decision.solves]
+    assert phases[0] == (2 if mode == "freeze" else 1) and phases[-1] == 2
+    assert set(phases[1:]) <= {2}
     first_round = {r.action for r in decision.phase1}
-    assert {Action.from_json(a) for a in at_alert["actions"]} <= first_round
-    assert decision.phase1_include_cut and decision.status == "contained"
+    if mode != "freeze":
+        at_alert = {Action.from_json(a) for a in decision.solves[0]["actions"]}
+        assert at_alert <= first_round
+    assert hold_effect("n2", effect_id) in first_round
     # Replay what the nodes applied: from the first round's convergence on,
     # the effect's sink is separated from the sources at every instant.
     placed = {r.action for r in decision.phase1 + decision.phase2}
@@ -1060,17 +1081,102 @@ def test_phase_one_with_the_at_alert_cut_blocks_the_late_effect_at_once(tmp_path
         if converged:
             assert solver.separated(instance, in_force, sink), (seed, op, action)
     assert converged
-    assert hold_effect("n2", effect_id) in first_round
-    # Releases: holds only, none before the last phase-2 confirmation.
     last_confirmation = max(r.t_confirmed for r in decision.phase2)
     assert all(r.action.op == "hold" for r in decision.released)
     assert all(r.t_release_sent >= last_confirmation for r in decision.released)
     harness.close()
-    # Without the option phase 1 is the freeze alone, and no at-alert solve runs.
-    harness, _, plain, _ = late_effect(tmp_path / "plain", False, seed)
-    assert [s["phase"] for s in plain.solves] == [2] * len(plain.solves)
-    def shape(actions):  # the two runs differ in identifiers only
-        return Counter((a.op, a.node_id, a.kind) for a in actions)
 
-    assert not shape(r.action for r in plain.phase1) - shape(first_round)
+
+def test_the_cut_modes_add_the_at_alert_cut_to_the_frontier_freeze(tmp_path):
+    harness, _, freeze, _ = late_effect(tmp_path / "freeze", "freeze")
+    harness.close()
+    harness, _, both, _ = late_effect(tmp_path / "both", "freeze_plus_cut")
+    harness.close()
+    # The two runs differ in identifiers only: compare what the actions are.
+    assert not frontier_shape(freeze) - frontier_shape(both)
+
+
+def test_adaptive_phase_one_freezes_only_when_the_cut_is_not_safely_timely(
+    tmp_path,
+):
+    """Adaptive: a timely at-alert cut goes out alone with the labels of its
+    source side; an effect due before any control can land (untimely) adds
+    the frontier freeze."""
+    from aggregator.containment_monitor.model import REVOKE_KINDS
+
+    harness, _, timely, _ = late_effect(tmp_path / "timely", "adaptive")
+    trigger = timely.phase1_trigger
+    assert trigger["freeze"] is False and trigger["untimely_effects"] == []
+    assert trigger["earliest_effect_deadline_ms"] > (
+        trigger["landing_ms"] + trigger["margin_ms"]
+    )
+    at_alert = {Action.from_json(a) for a in timely.solves[0]["actions"]}
+    issued = {r.action for r in timely.phase1}
+    # B_a and its labels (egress revocations), nothing of the freeze besides.
+    assert at_alert <= issued
+    assert all(a.op == "revoke" and a.kind in REVOKE_KINDS for a in issued - at_alert)
+    harness.close()
+    harness, _, untimely, effect_id = late_effect(
+        tmp_path / "untimely", "adaptive", due=25, latency_ms=200.0
+    )
+    trigger = untimely.phase1_trigger
+    assert trigger["freeze"] is True
+    assert trigger["untimely_effects"] == [f"fx:{effect_id}"]
+    harness.close()
+    # The freeze it added is the frontier freeze of the plain mode.
+    harness, _, plain, _ = late_effect(
+        tmp_path / "plain", "freeze", due=25, latency_ms=200.0
+    )
+    assert not frontier_shape(plain) - frontier_shape(untimely)
+    harness.close()
+    # Near the margin: an effect due within two control rounds of the landing.
+    harness, _, near, _ = late_effect(
+        tmp_path / "near", "adaptive", due=20 + 50 + 60, latency_ms=50.0
+    )
+    assert near.phase1_trigger["freeze"] is True
+    assert near.phase1_trigger["untimely_effects"] == []
+    harness.close()
+
+
+def test_receding_additions_during_the_waits_are_fenced_before_any_release(
+    tmp_path,
+):
+    """receding_during_waits: a taint advance seen while the protocol waits
+    for ingest (the tainted root dispatched once more before its hold landed)
+    adds the strategy's new actions at once, additions only; they are fenced
+    before the phase-2 release, which still follows every confirmation."""
+    harness, _, decision, _ = late_effect(tmp_path / "off", "freeze")
+    assert decision.receding == [] and not decision.receding_during_waits
+    harness.close()
+
+    harness, _, trace, ids = late_effect_setup(
+        tmp_path / "on", "freeze", 0, 60_000, 50.0, receding_during_waits=True
+    )
+    original = harness.monitor.fence
+    late: dict[str, str] = {}
+
+    def fence(records, on_poll=None):
+        if not late:  # the first wait: r's dispatch raced its hold
+            seen = len(trace.events)
+            late["task"] = trace.dispatch(ids["root"], "c", "n2", 21)
+            trace.arrive(late["task"], 22)
+            for event in trace.events[seen:]:
+                ingest(harness.core, event)
+        return original(records, on_poll=on_poll)
+
+    harness.monitor.fence = fence
+    decision = harness.monitor.respond(
+        operator_alert(ids["a"], harness.now), strategy="firebreak", roots=[ids["a"]]
+    )
+    assert decision.receding_during_waits and decision.receding
+    assert any(late["task"] in label for label in decision.receding)
+    added = [
+        r
+        for r in decision.phase1 + decision.phase2
+        if r.action.label() in decision.receding
+    ]
+    assert added and all(r.state == "in_force" and r.t_fenced for r in added)
+    assert decision.status == "contained"
+    latest = max(r.t_confirmed for r in [*decision.phase2, *added])
+    assert all(r.t_release_sent >= latest for r in decision.released)
     harness.close()

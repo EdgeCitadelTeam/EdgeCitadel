@@ -314,7 +314,8 @@ referenced by path):
   "*": {"phase1_freeze" | "best_effort_guard" | "taint_aware_admission":
   bool}}` overrides one strategy's mechanisms).
 - Other settings (defaults shown; set only to deviate): **M5**
-  `phase1_include_cut: false` (phase 1 also issues the strategy's at-alert cut),
+  `phase1_mode: "freeze"` (options under evaluation: `freeze_plus_cut`,
+  `adaptive`; with `phase1_margin_rounds: 2`), `receding_during_waits: false`,
   **M4** `ingest_timeout_ms: 5000` (how long a
   release waits for the confirmed journal positions to be ingested; on timeout
   the decision ends `ingest_timeout` and keeps its phase-1 holds),

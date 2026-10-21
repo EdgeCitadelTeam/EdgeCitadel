@@ -91,7 +91,8 @@ def monitor_config(
     Timing values are lower bounds (the monitor's deadlines must stay sound):
     control latency is the run's latency setting per node; delivery, start and
     emission bounds stay 0 unless overridden with measured minimums. The run's
-    mechanism profile and ``phase1_include_cut`` come in ``overrides``.
+    mechanism profile, ``phase1_mode`` and ``receding_during_waits`` come in
+    ``overrides``.
     """
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown strategy '{strategy}'")

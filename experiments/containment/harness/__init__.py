@@ -37,7 +37,8 @@ Every run: agentd enforces the fail-closed controller lease
 its start, also in runs without containment (``none``, ``reference``), which
 configure the monitor with ``enforce: false``. Each run records its mechanism
 ``profile`` (``deployed`` by default, ``shared`` as the ablation) and
-``phase1_include_cut``; experiments set them per grid or part.
+``phase1_mode`` and ``receding_during_waits``; experiments set them per
+grid or part.
 
 Latency settings and netem profiles above the measured LAN round trip
 (1.5-4 ms between sites) must be labelled ``stress``; the runner refuses
