@@ -288,6 +288,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.append",
         "trace.finish",
         "trace.dispatch",
+        "trace.use",
         "trace.history",
         "trace.loss",
         "effect.authorize",
@@ -310,6 +311,7 @@ def _authorize_connector_operation(connector: sqlite3.Row, operation: str) -> No
         "trace.append": "edgecitadel_trace",
         "trace.finish": "edgecitadel_trace",
         "trace.dispatch": "edgecitadel_trace",
+        "trace.use": "edgecitadel_trace",
         "effect.authorize": "edgecitadel_trace",
         "effect.execute": "edgecitadel_trace",
     }
@@ -352,6 +354,7 @@ def _trace_operation(
     from functools import partial
 
     from .trace_import import import_trace
+    from .trace_lineage import record_delivery_used
     from .trace_loss import report_loss
 
     request_id = params.get(
@@ -372,6 +375,7 @@ def _trace_operation(
         "trace.append": store.append_trace,
         "trace.finish": store.finish_trace,
         "trace.dispatch": store.dispatch_trace,
+        "trace.use": partial(record_delivery_used, store),
         "trace.loss": partial(report_loss, store),
         "effect.authorize": store.authorize_effect,
         "effect.execute": store.execute_effect,
@@ -399,6 +403,7 @@ def _trace_operation(
             "execution_not_owned",
             "trace_not_authorized",
             "import_not_authorized",
+            "delivery_not_owned",
         }:
             code = "not_authorized"
         elif error.code in {
@@ -568,6 +573,7 @@ def dispatch(
         "trace.append",
         "trace.finish",
         "trace.dispatch",
+        "trace.use",
         "trace.loss",
         "effect.authorize",
         "effect.execute",

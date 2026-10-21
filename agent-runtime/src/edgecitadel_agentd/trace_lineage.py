@@ -11,7 +11,12 @@ Boundaries recorded here (all on the node that observes them):
 - bind: an invocation ``used`` its task's request, ``external`` for a root task;
 - completion: an invocation ``generated`` its task's result;
 - first read of a completed child by its sender: the parent invocation ``used``
-  that result.
+  that result;
+- ``trace.use``: an invocation declares it used the request content another
+  task delivered to its agent earlier (a pushed input the agent kept in its
+  memory), and ``used`` that task's request version. Without it the content's
+  path through agent memory leaves no lineage, and a backward slice from the
+  consumer stops at its own session instead of reaching the producer.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -304,3 +310,108 @@ def record_result_used(
                 occurred_at=_timestamp(now_ms),
                 event_id=event_id,
             )
+
+
+def record_delivery_used(
+    store: AgentdStore,
+    *,
+    node_id: str,
+    connector_id: str,
+    token: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """``trace.use``: the bound invocation used a delivered task's request.
+
+    The delivered task must have been addressed to the invocation's agent on
+    this node (its content is in that agent's inbox or memory) and must not be
+    the invocation's own task, whose request bind already records. Idempotent:
+    a repeated use of the same version returns the recorded event.
+    """
+    import hashlib
+
+    from .trace_binding_access import authorized_binding_locked
+    from .trace_contract import (
+        canonical_bytes,
+        validate_rpc_reply,
+        validate_use_request,
+    )
+
+    digest = hashlib.sha256(validate_use_request(params)).hexdigest()
+    db = store._connection
+    with store._lock, db:
+        db.execute("BEGIN IMMEDIATE")
+        now = time.time_ns() // 1_000_000
+        binding, _ = authorized_binding_locked(
+            store,
+            connector_id=connector_id,
+            token=token,
+            binding_id=params["binding_id"],
+            now=now,
+            operation="append",
+        )
+        previous = db.execute(
+            "SELECT request_sha256,result_json FROM trace_requests_all WHERE "
+            "connector_id=? AND operation='use' AND scope=? AND request_id=?",
+            (connector_id, binding["binding_id"], params["request_id"]),
+        ).fetchone()
+        if previous is not None:
+            if previous[0] != digest:
+                raise TraceContractError("idempotency_conflict")
+            return json.loads(previous[1])
+        delivered = db.execute(
+            "SELECT recipient_id,trace_id,payload_json FROM tasks WHERE task_id=?",
+            (params["task_id"],),
+        ).fetchone()
+        if (
+            delivered is None
+            or delivered["recipient_id"] != binding["agent_id"]
+            or params["task_id"] == binding["task_id"]
+        ):
+            raise TraceContractError("delivery_not_owned")
+        invocation = _invocation(db, binding)
+        if invocation is None:
+            raise TraceContractError("binding_evidence_missing")
+        version = version_id(
+            "request",
+            params["task_id"],
+            store._decode_content(delivered["payload_json"]),
+        )
+        event_id = _stable_event_id(binding["execution_attempt_id"], "used", version)
+        if not _recorded(db, binding["trace_id"], event_id):
+            # The local evidence that the content arrived here.
+            arrival = task_event(db, delivered["trace_id"], params["task_id"])
+            record(
+                db,
+                node_id,
+                invocation,
+                phase="used",
+                entity="request",
+                entity_task_id=params["task_id"],
+                version=version,
+                external=False,
+                causes=[reference(arrival)] if arrival else [],
+                occurred_at=_timestamp(now),
+                event_id=event_id,
+            )
+        reply = {
+            "schema_version": 1,
+            "operation": "use",
+            "request_id": params["request_id"],
+            "status": "ok",
+            "result": {"event_id": event_id, "version_id": version},
+        }
+        validate_rpc_reply(reply, operation="use", request_id=params["request_id"])
+        db.execute(
+            "INSERT INTO trace_requests(connector_id,operation,scope,request_id,"
+            "request_sha256,binding_id,result_json) VALUES (?,?,?,?,?,?,?)",
+            (
+                connector_id,
+                "use",
+                binding["binding_id"],
+                params["request_id"],
+                digest,
+                binding["binding_id"],
+                canonical_bytes(reply).decode(),
+            ),
+        )
+        return reply

@@ -55,6 +55,7 @@ def _validators() -> dict[str, Draft202012Validator]:
             "dispatch-request",
             "effect-request",
             "effect-execute-request",
+            "use-request",
             "import-request",
             "rpc-reply",
             "event",
@@ -332,6 +333,10 @@ def validate_dispatch_request(request: dict[str, Any]) -> bytes:
 
 def validate_effect_request(request: dict[str, Any]) -> bytes:
     return _validate("effect-request", request, 2048)
+
+
+def validate_use_request(request: dict[str, Any]) -> bytes:
+    return _validate("use-request", request, 1024)
 
 
 def validate_effect_execute_request(request: dict[str, Any]) -> bytes:

@@ -243,7 +243,8 @@
             "import",
             "dispatch",
             "loss",
-            "effect"
+            "effect",
+            "use"
           ]
         },
         "status": {
@@ -538,6 +539,50 @@
               ]
             }
           }
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "operation",
+        "status",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "operation": {
+          "const": "use"
+        },
+        "status": {
+          "const": "ok"
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "event_id": {
+              "type": "string",
+              "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "version_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "event_id",
+            "version_id"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edgecitadel.dev/schemas/trace-use-request.v1.json",
+  "title": "trace.use request v1",
+  "description": "Declares that the bound invocation used the request content another task delivered to its agent earlier (a pushed input kept in agent memory): agentd records lineage used of that task's request version on the invocation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "binding_id",
+    "task_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "binding_id": {
+      "type": "string",
+      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^(?!.*[\\r\\n])[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  }
+}

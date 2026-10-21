@@ -174,3 +174,61 @@ def test_contract_requires_child_on_allowed_dispatch_and_internal_producers(
     without = {k: v for k, v in allowed["attributes"].items() if k != "child_task_id"}
     with pytest.raises(TraceContractError, match="invalid_dispatch_child"):
         validate_event({**allowed, "attributes": without})
+
+
+def test_trace_use_records_a_delivered_request_used_from_memory(tmp_path):
+    """An invocation declares it used a request delivered to its agent earlier:
+    lineage links it to that version (hence to its producer); only deliveries to
+    the same agent qualify, and a repeat returns the recorded event."""
+    import json
+    from uuid import uuid4
+
+    from containment_test_support import Node
+
+    node = Node(tmp_path / "node", "node-a")
+    node.managed("producer", outbound=["consumer", "other"])
+    node.managed("consumer")
+    node.managed("other")
+    try:
+        node.submit("producer")
+        _, producer = node.start("producer")
+        pushed = node.dispatch("producer", producer, "consumer", request="item v1")
+        foreign = node.dispatch("producer", producer, "other", request="not yours")
+        delivery = pushed["result"]["task_id"]
+        stored, _ = node.start("consumer")
+        node.complete("consumer", stored["task_id"], {"body": "kept"})
+        node.submit("consumer", "later work")
+        task, consumer = node.start("consumer")
+
+        def use(task_id, request_id=None):
+            return node.rpc(
+                "consumer",
+                "trace.use",
+                schema_version=1,
+                request_id=request_id or str(uuid4()),
+                binding_id=consumer["binding_id"],
+                task_id=task_id,
+            )
+
+        request_id = str(uuid4())
+        reply = use(delivery, request_id)
+        generated = [
+            e
+            for e in node.events("lineage", "generated")
+            if e["attributes"]["entity_task_id"] == delivery
+        ]
+        assert reply["result"]["version_id"] == generated[0]["attributes"]["version_id"]
+        (used,) = [
+            e
+            for e in node.events("lineage", "used")
+            if e["execution_attempt_id"] == consumer["execution_attempt_id"]
+            and e["attributes"]["entity_task_id"] == delivery
+        ]
+        assert used["event_id"] == reply["result"]["event_id"]
+        assert use(delivery, request_id) == reply
+        assert use(delivery)["result"]["event_id"] == reply["result"]["event_id"]
+        assert use(foreign["result"]["task_id"])["code"] == "not_authorized"
+        assert use(task["task_id"])["code"] == "not_authorized"  # bind records it
+        assert json.dumps(reply)  # a plain RPC reply
+    finally:
+        node.close()

@@ -477,13 +477,9 @@ class _Builder:
                     )
                     cg.sources.add(request)
                     cg.edge(request, entry, "request", fn=("start", unit.key))
-                if (
-                    unit.context
-                    and (unit.agent, unit.context) in graph.tainted_sessions
-                ):
-                    context = cg.node(
-                        f"ctx:{unit.agent}:{unit.context}", kind="context"
-                    )
+                session = config.session_of(unit.agent, unit.context)
+                if session and (unit.agent, session) in graph.tainted_sessions:
+                    context = cg.node(f"ctx:{unit.agent}:{session}", kind="context")
                     cg.sources.add(context)
                     cg.edge(context, entry, "session", fn=("start", unit.key))
             elif unit.tainted:
@@ -505,15 +501,13 @@ class _Builder:
             self.spoke(unit, exit_, "")
         followers: dict[tuple[str, str], list[Unit]] = {}
         for unit in units.values():
-            if (
-                unit.pending
-                and unit.context
-                and unit.agent not in config.session_isolated_agents
-            ):
-                followers.setdefault((unit.agent, unit.context), []).append(unit)
+            session = config.session_of(unit.agent, unit.context)
+            if unit.pending and session:
+                followers.setdefault((unit.agent, session), []).append(unit)
         for unit in units.values():
-            if not unit.pending:
-                for follower in followers.get((unit.agent, unit.context), ()):
+            session = config.session_of(unit.agent, unit.context)
+            if not unit.pending and session:
+                for follower in followers.get((unit.agent, session), ()):
                     cg.edge(
                         f"out:{unit.key}",
                         f"in:{follower.key}",

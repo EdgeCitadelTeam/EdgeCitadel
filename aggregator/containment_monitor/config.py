@@ -75,6 +75,10 @@ class MonitorConfig:
     external_requests_untrusted: bool = False
     # Agents whose invocations keep no conversation state across tasks.
     session_isolated_agents: frozenset[str] = frozenset()
+    # Agents whose memory is shared by all their invocations, whatever the
+    # conversation (an inbox of pushed inputs, a shared store): each invocation
+    # continues the previous one of the agent, across contexts.
+    shared_memory_agents: frozenset[str] = frozenset()
     # Timing model (milliseconds, lower bounds).
     tau_ms: float = 50.0
     control_latency_ms: Mapping[str, float] = field(default_factory=dict)
@@ -128,6 +132,15 @@ class MonitorConfig:
     ingest_timeout_ms: int = 5_000
 
     # -- lookups ------------------------------------------------------------
+    def session_of(self, agent_id: str, context_id: str | None) -> str | None:
+        """The memory an invocation continues: its conversation, ``*`` (all of
+        a shared-memory agent's invocations), or None (no carried state)."""
+        if agent_id in self.session_isolated_agents:
+            return None
+        if agent_id in self.shared_memory_agents:
+            return "*"
+        return context_id
+
     def control_latency(self, node_id: str) -> float:
         return self.control_latency_ms.get(node_id, self.default_control_latency_ms)
 
@@ -177,7 +190,11 @@ class MonitorConfig:
                 ):
                     raise ConfigError(f"invalid_{key}")
                 kwargs[key] = dict(item)
-            elif key in {"untrusted_agents", "session_isolated_agents"}:
+            elif key in {
+                "untrusted_agents",
+                "session_isolated_agents",
+                "shared_memory_agents",
+            }:
                 kwargs[key] = _agents(item, key)
             elif key == "protected_effect_classes":
                 kwargs[key] = _names(item, key)

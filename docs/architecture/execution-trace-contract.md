@@ -737,6 +737,16 @@ agentd already observes:
 | bind of a task | invocation `used` its task's `request`; `external: true` only for a root task (no parent task or run) | the task's arrival |
 | recipient completion with a result | invocation `generated` its task's `result` | the local completion |
 | first `task.get` of a completed child by its sender | parent invocation `used` that `result` | the local completion or ingested result |
+| `trace.use` by a bound invocation | invocation `used` the `request` of an earlier task delivered to its agent | that task's arrival |
+
+`trace.use` (`schemas/trace-use-request.v1.json`, `{schema_version, request_id,
+binding_id, task_id}`, reply `{event_id, version_id}`) covers inputs that reach
+a consumer through agent memory instead of its own task: a producer pushes an
+item as a delivery task, the agent keeps it, and a later invocation uses it.
+The named task must have been addressed to the invocation's agent and must not
+be its own task (`not_authorized` otherwise). A repeated use of one version
+returns the recorded event. Without it the item's path leaves no lineage and a
+backward slice from the consumer never reaches its producer.
 
 `version_id` is the SHA-256 of `{entity, task_id, content}`, where content excludes
 the daemon-stamped `trace_id`, `parent_task_id`, `execution_context`, `skill_id` and
@@ -3552,7 +3562,8 @@ schema is not changed. Decisions are also appended to
 versions and effects, joined across nodes by `child_task_id`, task ids and lineage
 `version_id`. Edges carry influence: `generated`/`used` data, conversation
 `session` continuation (per agent and `context_id`, unless the agent is configured
-session-isolated), dispatch and execution `authority`. Taint is time-respecting:
+session-isolated; across contexts for agents in `shared_memory_agents`, whose
+memory every invocation shares), dispatch and execution `authority`. Taint is time-respecting:
 an invocation taints an output only if it was tainted when it generated it (same
 node clock); a version taints its consumers. Only the live frontier (running
 invocations, dispatched tasks not yet started, unread results, pending effects)

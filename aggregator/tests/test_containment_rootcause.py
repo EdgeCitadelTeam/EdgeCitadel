@@ -228,3 +228,119 @@ def test_admission_denial_slice_follows_authority(harness):
     ranking = rank(harness, value)
     assert ranking[0].node == inv(leaf)
     assert inv(kipp) in {c.node for c in ranking}  # reached through the grant chain
+
+
+# ---------------------------------------------------------------------------
+# Pushed inputs through agent memory (the harness's C2 realization)
+# ---------------------------------------------------------------------------
+def pushed_artifact(tmp_path, *, declare_use: bool, shared_memory=frozenset()):
+    """a1 (its own conversation) pushes an artifact to a2 as a delivery task;
+    a2's delivery invocation keeps it in memory; later a2 consumes it in a task
+    tars sends from another conversation. Returns the consumer's result version
+    and the producer's invocation."""
+    import json
+    import sys
+    from pathlib import Path
+    from uuid import uuid4
+
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parents[2] / "agent-runtime/tests/agentd")
+    )
+    from containment_support import ingest
+    from containment_test_support import Node
+    from test_containment_provenance import journal
+
+    node = Node(tmp_path / "cluster", "cluster")
+    node.managed("a1", outbound=["a2"])
+    node.managed("a2")
+    node.managed("tars", outbound=["a2"])
+    try:
+        node.submit("a1", "produce the calibration table")
+        _, producer = node.start("a1")
+        delivery = node.dispatch(
+            "a1", producer, "a2", request=json.dumps({"artifact": "gain=1.85"})
+        )["result"]["task_id"]
+        node.complete("a1", producer["task_id"], {"body": "pushed"})
+        stored, _ = node.start("a2")
+        assert stored["task_id"] == delivery
+        node.complete("a2", delivery, {"body": "stored"})
+        node.submit("tars", "analyse")
+        _, analyst = node.start("tars")
+        consume = node.dispatch("tars", analyst, "a2", request="use the table")
+        task, consumer = node.start("a2")
+        assert task["task_id"] == consume["result"]["task_id"]
+        if declare_use:
+            used = node.rpc(
+                "a2",
+                "trace.use",
+                schema_version=1,
+                request_id=str(uuid4()),
+                binding_id=consumer["binding_id"],
+                task_id=delivery,
+            )
+            assert used["status"] == "ok", used
+        node.complete("a2", task["task_id"], {"body": "setpoint from gain=1.85"})
+        events = journal(node)
+    finally:
+        node.close()
+    harness = Harness(
+        tmp_path / "monitor",
+        MonitorConfig(top_k=20, shared_memory_agents=frozenset(shared_memory)),
+    )
+    for event in events:
+        ingest(harness.core, event)
+    harness.monitor.catch_up()
+    result = next(
+        e["attributes"]["version_id"]
+        for e in events
+        if e["kind"] == "lineage"
+        and e["phase"] == "generated"
+        and e["attributes"]["entity"] == "result"
+        and e["attributes"]["entity_task_id"] == task["task_id"]
+    )
+    return harness, result, producer["execution_attempt_id"], events
+
+
+def candidates(harness, version):
+    import time
+
+    harness.now = time.time_ns() // 1_000_000  # the agentd events are real-time
+    value = parse_external_alert(
+        {"kind": "validator_failure", "version_id": version},
+        now_ms=harness.now,
+    )
+    return {
+        c.node
+        for c in rootcause.rank(
+            harness.monitor.graph, harness.config, value, now_ms=harness.now
+        )
+    }
+
+
+def test_a_pushed_input_used_from_memory_reaches_its_producer(tmp_path):
+    harness, result, producer, _ = pushed_artifact(tmp_path / "gap", declare_use=False)
+    # Without lineage through memory the true source is not even a candidate.
+    found = candidates(harness, result)
+    assert found and inv(producer) not in found
+    harness.close()
+    harness, result, producer, events = pushed_artifact(
+        tmp_path / "use", declare_use=True
+    )
+    used = [
+        e
+        for e in events
+        if e["kind"] == "lineage" and e["phase"] == "used" and e["agent_id"] == "a2"
+    ]
+    assert len(used) == 3  # two bind-time requests and the declared delivery
+    assert inv(producer) in candidates(harness, result)
+    harness.close()
+
+
+def test_shared_agent_memory_continues_across_conversations(tmp_path):
+    """Declared shared memory links a2's invocations across conversations, so
+    the slice reaches the delivery and its producer even without trace.use."""
+    harness, result, producer, _ = pushed_artifact(
+        tmp_path, declare_use=False, shared_memory={"a2"}
+    )
+    assert inv(producer) in candidates(harness, result)
+    harness.close()

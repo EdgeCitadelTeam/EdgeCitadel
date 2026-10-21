@@ -16,6 +16,7 @@ Edges (influence direction):
 - ``ver -> inv`` data: the invocation used it;
 - ``inv -> inv`` session: consecutive invocations of one agent in one conversation
   context (conversation memory carries over), unless the agent is session-isolated;
+  for a shared-memory agent, consecutive invocations whatever their context;
 - ``inv -> task`` and ``task -> inv`` authority: a dispatch grant and its execution;
 - ``inv -> fx`` data: an observed tool call or an effect.
 """
@@ -674,17 +675,21 @@ class ProvenanceGraph:
     def _session_edges(
         self, attempt: str, agent: str, context: str | None, at: int, seq: int
     ) -> None:
-        if context is None or agent in self.config.session_isolated_agents:
+        session = self.config.session_of(agent, context)
+        if session is None:
             return
+        # A shared-memory agent's invocations continue each other across contexts.
+        scope = "" if session == "*" else "AND context_id=? "
+        values = () if session == "*" else (context,)
         previous = self.db.execute(
-            "SELECT attempt_id FROM containment_invocations WHERE agent_id=? AND context_id=? "
+            f"SELECT attempt_id FROM containment_invocations WHERE agent_id=? {scope}"  # noqa: S608
             "AND attempt_id<>? AND started_ms<=? ORDER BY started_ms DESC,attempt_id DESC LIMIT 1",
-            (agent, context, attempt, at),
+            (agent, *values, attempt, at),
         ).fetchone()
         following = self.db.execute(
-            "SELECT attempt_id FROM containment_invocations WHERE agent_id=? AND context_id=? "
+            f"SELECT attempt_id FROM containment_invocations WHERE agent_id=? {scope}"  # noqa: S608
             "AND attempt_id<>? AND started_ms>? ORDER BY started_ms,attempt_id LIMIT 1",
-            (agent, context, attempt, at),
+            (agent, *values, attempt, at),
         ).fetchone()
         if previous:
             self._edge(inv(previous[0]), inv(attempt), SESSION, at, seq)
@@ -736,8 +741,9 @@ class ProvenanceGraph:
                     "SELECT agent_id,context_id FROM containment_invocations WHERE attempt_id=?",
                     (identity,),
                 ).fetchone()
-                if row and row[1] and row[0] not in self.config.session_isolated_agents:
-                    self.tainted_sessions.add((row[0], row[1]))
+                session = self.config.session_of(row[0], row[1]) if row else None
+                if session is not None:
+                    self.tainted_sessions.add((row[0], session))
                 if identity in self.running:
                     self.frontier_advanced = True
             elif kind == "ver" and identity in self.results:
