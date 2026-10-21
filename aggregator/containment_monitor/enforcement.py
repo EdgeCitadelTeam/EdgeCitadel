@@ -2,9 +2,13 @@
 
 Protocol (theory note section 7.3):
 P1. Hold the frontier of the tainted region at once (Lemma 7.1: every feasible
-    hold on an edge leaving the uncuttable closure U of the sources), wait for every
-    node to confirm, reconcile taint from the events that arrived meanwhile, and
-    repeat while the block is no longer a cut.
+    hold on an edge leaving the uncuttable closure U of the sources) together
+    with the admission freeze (every unit inside U that may still emit: its
+    egress held, or a pending task held before it starts), wait for every node to
+    confirm, reconcile taint from the events that arrived meanwhile, and repeat
+    while the block is no longer a cut. From the confirmation on, agentd denies
+    every new dispatch, effect and result of a source-side invocation until phase
+    2 confirms a cut that covers it.
 P2. Solve on G_C with the phase-1 holds counted as in force (feasible without
     latency), apply the new actions and wait for EVERY target node to confirm.
 P3. Reconcile again; if the phase-2 set still separates G_C, release the phase-1
@@ -45,7 +49,7 @@ from .control import (
 )
 from .graph import ControlGraph
 from .model import Action
-from .projection import frontier_block
+from .projection import admission_freeze, frontier_block
 
 if TYPE_CHECKING:
     from .strategies import StrategyResult
@@ -299,7 +303,8 @@ class TwoPhaseProtocol:
             for _ in range(self.max_rounds):
                 decision.rounds += 1
                 cg = project(1, frozenset(in_force))
-                block, _ = frontier_block(cg)
+                block, _, closure = frontier_block(cg)
+                block |= admission_freeze(cg, closure)
                 records = self.driver.apply(
                     block - in_force.keys(),
                     incident_id=decision.incident_id,

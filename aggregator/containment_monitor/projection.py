@@ -26,6 +26,9 @@ target), which is how agentd scopes a credential: the agent's grant, checked at
 the sender's node when it dispatches. Inherited scopes narrow which targets a hub
 reaches but have no separate actuator, so all of an agent's hubs share its gates.
 
+In the phase-1 projection (``freeze``) the egress edge carries the reversible
+``hold:egress`` instead of ``revoke:egress``: phase 1 places holds only.
+
 Horizon ``h``: ``Fout:a>b`` is a new invocation of b requested by a. With h = 1 it
 is the horizon boundary (a sink for ``boundary="sink"``, a dead end for
 ``"defer"``); with h = k new invocations reached through k-1 levels are expanded
@@ -78,6 +81,7 @@ from .model import (
     Action,
     fx,
     hold_effect,
+    hold_egress,
     hold_task,
     inv,
     revoke_admission,
@@ -289,6 +293,7 @@ class _Builder:
         tau,
         static,
         in_force,
+        freeze=False,
     ):
         self.graph, self.config, self.units, self.scopes, self.cg = (
             graph,
@@ -299,6 +304,7 @@ class _Builder:
         )
         self.capabilities, self.now, self.tau = capabilities, now_ms, tau
         self.static, self.in_force = static, in_force
+        self.freeze = freeze  # phase 1: reversible holds only
         # (flow, target, tag) -> horizon depth of that new-invocation boundary
         self.depth: dict[tuple[str, str, str], int] = {}
         self.expanded: set[tuple[str, str, str]] = set()
@@ -328,10 +334,9 @@ class _Builder:
             return
         cg, site = self.cg, unit.node
         egress = cg.node(f"Eg:{unit.key}{tag}", kind="egress", unit=unit.key)
+        stop = hold_egress if self.freeze else revoke_egress
         block = (
-            self.allowed(revoke_egress(site, unit.task_id))
-            if site and unit.task_id
-            else None
+            self.allowed(stop(site, unit.task_id)) if site and unit.task_id else None
         )
         cg.edge(tail, egress, "egress", action=block, declared=False)
         self.credential_edge(egress, unit.credential, tag, depth=1)
@@ -742,7 +747,9 @@ def project(
     static: bool = False,
     in_force: Iterable[Action] = (),
     tau_ms: float | None = None,
+    freeze: bool = False,
 ) -> ControlGraph:
+    """G_C at ``now_ms``; ``freeze`` builds the phase-1 graph (egress holds)."""
     started = time.perf_counter()
     tau = config.tau_ms if tau_ms is None else tau_ms
     in_force = frozenset(in_force)
@@ -760,6 +767,7 @@ def project(
         tau,
         static,
         in_force,
+        freeze,
     )
     builder.build()
     builder.expand()
@@ -829,12 +837,12 @@ def project(
 
 def frontier_block(
     cg: ControlGraph, ops: frozenset[str] = frozenset({"hold"})
-) -> tuple[set[Action], set[str]]:
+) -> tuple[set[Action], set[str], set[str]]:
     """Phase-1 block (theory Lemma 7.1): the uncuttable closure U of the sources
     and every feasible action of the allowed ops on an edge leaving U.
 
-    Returns (actions, sinks inside U). Sinks inside U are unreachable by any phase-1
-    block; the block still stops everything else that leaves U."""
+    Returns (actions, sinks inside U, U). Sinks inside U are unreachable by any
+    phase-1 block; the block still stops everything else that leaves U."""
 
     def removable(edge: Edge) -> bool:
         return edge.action is not None and edge.feasible and edge.action.op in ops
@@ -853,4 +861,30 @@ def frontier_block(
         for edge in cg.successors(node)
         if edge.head not in closure and removable(edge)
     }
-    return block, closure & cg.sinks
+    return block, closure & cg.sinks, closure
+
+
+def admission_freeze(cg: ControlGraph, closure: set[str]) -> set[Action]:
+    """Hold every source-side unit that may still emit, whatever the deadlines.
+
+    Admission (theory 7.4, open world): a unit whose output ``out:u`` lies in the
+    uncuttable closure U is on the source side of the phase-1 cut. Its emissions
+    before the hold lands are crossings that reconciliation finds; every new
+    dispatch, effect or result it requests after the hold is denied by agentd
+    until phase 2 confirms a cut covering it. A running unit keeps running with
+    its egress held; a pending task is held before it can start (no spawn).
+    The actions are the ones G_C offers on those edges (``freeze`` projection).
+    """
+    frozen: set[Action] = set()
+    for key, unit in cg.units.items():
+        if f"out:{key}" not in closure:
+            continue
+        tail, kind = (
+            (f"in:{key}", "split") if unit.pending else (f"out:{key}", "egress")
+        )
+        frozen.update(
+            edge.action
+            for edge in cg.successors(tail)
+            if edge.kind == kind and edge.action is not None
+        )
+    return frozen

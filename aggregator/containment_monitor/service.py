@@ -314,6 +314,7 @@ class ContainmentMonitor:
             static=static,
             in_force=in_force,
             tau_ms=0.0 if phase == 1 else None,
+            freeze=phase == 1,
         )
         self.last_graph = dict(cg.stats)
         return cg

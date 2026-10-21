@@ -282,3 +282,39 @@ limit; per-action masks and in-force masks on random workloads.
 - A gap that never closes (an event lost before Core collected it) leaves later
   decisions on that node unfenced: their phase-1 holds stay (safe, reported).
   The watermark starts at the first sequence seen per epoch.
+
+### 4. Admission invariant between the phases
+
+Invariant: any new dispatch, effect or spawn requested by an invocation on the
+source side of the cut in force is held or denied before it can propagate or
+act, until a cut covering it is confirmed.
+
+How it is realized (checked, then completed):
+
+- agentd denies, at its node, every dispatch, effect (`effect.authorize` and
+  `effect.execute`), result and claim of a held task (`execution_held`), and
+  every dispatch, effect and result of an egress-held one (`egress_held`).
+  Effects are re-checked under the control lock at commit (item 2).
+- Phase 1 already pauses every source-side unit whose input lies in the
+  uncuttable closure U: the early-window split moves its emissions before the
+  hold lands to private copies, so its task hold is always feasible for what
+  follows and is in the frontier block. Its emissions before the landing are
+  crossings found by reconciliation (fence logs, item 3). Pending tasks in U
+  are held before they can be claimed (no spawn).
+- Gap found: a unit whose node does not offer `hold:task` stayed unheld in
+  phase 1 (its spokes carry only revocations), so its new dispatches and
+  effects passed until phase 2 landed. Fix: the phase-1 projection (`freeze`)
+  puts the reversible `hold:egress` on egress edges, and `admission_freeze`
+  adds, for every unit whose output lies in U, the hold G_C offers on its
+  egress (running) or start (pending), regardless of deadlines.
+- After phase 2: phase-1 holds are released only once a confirmed and fenced
+  B_2 separates the sources (closed world: B_2 covers the unit's modelled
+  dispatches and effects). `taint_aware_admission` (egress revocations of every
+  unit B_2 leaves on the source side) covers the open world.
+
+Test: `test_a_tainted_invocation_is_admitted_nothing_between_the_phases`
+(real agentd nodes, admin RPC): right after the phase-1 confirmations the
+tainted invocation asks a new dispatch and a new `effect.execute`; both are
+denied (paused, or egress-held where the node cannot hold tasks), the ledger
+receives nothing, no request is queued, and phase 2 then contains with every
+action fenced.

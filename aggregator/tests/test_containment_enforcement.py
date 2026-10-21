@@ -638,3 +638,114 @@ def test_a_journal_never_ingested_keeps_every_phase_one_hold(tmp_path):
     assert {r.action for r in decision.phase1} <= set(harness.monitor.in_force)
     assert all(r.t_fenced is None for r in decision.phase2)
     harness.close()
+
+
+# ---------------------------------------------------------------------------
+# Admission invariant between phase 1 and phase 2
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("worker_holds_tasks", [True, False])
+def test_a_tainted_invocation_is_admitted_nothing_between_the_phases(
+    tmp_path, worker_holds_tasks
+):
+    """Once phase 1 is confirmed, every new dispatch and effect a source-side
+    invocation requests is denied at its node until phase 2 confirms a cut
+    covering it: it neither propagates nor acts. Phase 1 pauses it (its hold
+    lands before any emission after the landing, thanks to the early-window
+    split); where its node cannot hold tasks, the admission freeze holds its
+    egress instead."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from containment_support import ingest
+    from containment_test_support import Ledger
+    from edgecitadel_agentd.effect_adapters import LedgerAdapter
+    from test_containment_provenance import journal
+
+    actuator = {"effect_class": "device.command", "target": "actuator/*"}
+    root = Node(tmp_path / "root", "root-node")
+    worker = Node(tmp_path / "worker", "worker-node")
+    ledger = Ledger()
+    root.managed("parent", outbound=["child", "other"], effects=[actuator])
+    worker.managed("child", outbound=["other"], effects=[actuator])
+    worker.managed("other")
+    worker.store.effects.adapters = {"http": LedgerAdapter(ledger.url)}
+    try:
+        root.submit("parent")
+        _, binding = root.start("parent")
+        root.dispatch("parent", binding, "child")
+        deliver(root, worker)
+        _, child = worker.start("child")
+        control = LocalAgentdControlClient(
+            "core-monitor",
+            {"root-node": transport(root), "worker-node": transport(worker)},
+        )
+        if not worker_holds_tasks:
+            described = control.capabilities
+            control.capabilities = lambda node: (
+                described(node) - {"hold:task"}
+                if node == "worker-node"
+                else described(node)
+            )
+        config = MonitorConfig(protected_effect_classes=frozenset({"device.command"}))
+        harness = Harness(tmp_path / "monitor", config, control)
+        ingested = set()
+        for event in journal(root) + journal(worker):
+            ingest(harness.core, event)
+            ingested.add(event["event_id"])
+        harness.monitor.catch_up()
+        (attempt,) = [
+            a
+            for a, live in harness.monitor.graph.running.items()
+            if live.agent_id == "child"
+        ]
+        attempts: dict[str, dict] = {}
+        fence = harness.monitor.fence
+
+        def between_phases(records):
+            if not attempts:  # right after phase 1 is confirmed
+                attempts["dispatch"] = worker.dispatch("child", child, "other")
+                attempts["effect"] = worker.rpc(
+                    "child",
+                    "effect.execute",
+                    schema_version=1,
+                    request_id=str(uuid4()),
+                    binding_id=child["binding_id"],
+                    adapter="http",
+                    effect_class="device.command",
+                    target="actuator/1",
+                    data=None,
+                    tool_call_id=None,
+                    scheduled_at_ms=None,
+                )
+                attempts["phase1"] = sorted(r.action.label() for r in records)
+                # Trace sync carries the denials to Core; phase 2 waits for them.
+                for event in journal(worker):
+                    if event["event_id"] not in ingested:
+                        ingest(harness.core, event)
+            return fence(records)
+
+        harness.monitor.fence = between_phases
+        decision = harness.monitor.respond(
+            operator_alert(inv(attempt), harness.now), roots=[inv(attempt)]
+        )
+        child_task = child["task_id"]
+        kind, code = (
+            ("task", "execution_held")
+            if worker_holds_tasks
+            else ("egress", "egress_held")
+        )
+        assert f"hold:{kind}:{child_task}@worker-node" in attempts["phase1"]
+        assert attempts["dispatch"]["code"] == code
+        assert attempts["effect"]["code"] == code
+        assert ledger.requests == []  # the effect never acted
+        # The dispatch created no child and nothing was queued for publication.
+        assert not [
+            m
+            for m in worker.store.pending_transport()
+            if m["envelope"].get("recipient_id") == "other"
+        ]
+        assert decision.status == "contained" and decision.cut_valid
+        assert all(r.t_fenced is not None for r in decision.phase2)
+        harness.close()
+    finally:
+        ledger.close()
+        root.close()
+        worker.close()

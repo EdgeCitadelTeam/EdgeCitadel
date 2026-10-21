@@ -127,6 +127,10 @@ def hold_effect(node_id: str, effect_id: str) -> Action:
     return Action(HOLD, node_id, "effect", effect_id)
 
 
+def hold_egress(node_id: str, task_id: str) -> Action:
+    return Action(HOLD, node_id, "egress", task_id)
+
+
 def revoke_egress(node_id: str, task_id: str) -> Action:
     return Action(REVOKE, node_id, "egress", task_id)
 

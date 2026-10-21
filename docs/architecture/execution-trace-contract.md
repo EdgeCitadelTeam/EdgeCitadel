@@ -3577,7 +3577,11 @@ type prior; the top candidate's prune level (version, invocation, session, agent
 subtree) defines the roots. The chosen strategy (default Firebreak: exact grouped
 min-cut; experiment baselines are selectable per alert) runs through the
 two-phase protocol: frontier holds first, then the optimal set, and phase-1 holds
-are released only after every phase-2 action is confirmed and fenced.
+are released only after every phase-2 action is confirmed and fenced. Phase 1
+also freezes admission: every unit on the source side that may still emit is
+held (its task, or its egress where the node offers no task hold; a pending
+task before it starts), so agentd denies every new dispatch, effect and result
+it requests until phase 2 confirms a cut covering it.
 
 **Ingest-then-release.** An action is *fenced* once the monitor has applied its
 nodes' events up to the journal position each confirmation reports. The
