@@ -608,6 +608,14 @@ class _Builder:
         raise ValueError(kind)
 
     def arrival_times(self) -> dict[str, float]:
+        """Earliest arrivals; nothing crosses an edge removed by an action in force.
+
+        A confirmed action keeps its edges closed until it is released, and a
+        release follows the confirmation of the cut that replaces it, so flows
+        behind it have d = infinity for the replacing actions (theory A.6):
+        without this, an unheld immediate emission behind a held invocation
+        would make every action that could replace the hold look untimely.
+        """
         eat = {source: float(self.now) for source in self.cg.sources}
         queue = [(float(self.now), source) for source in self.cg.sources]
         heapq.heapify(queue)
@@ -618,6 +626,8 @@ class _Builder:
                 continue
             done.add(node)
             for edge in self.cg.successors(node):
+                if edge.action is not None and edge.action in self.in_force:
+                    continue
                 arrival = self.advance(edge.fn, t)
                 if arrival < eat.get(edge.head, INF):
                     eat[edge.head] = arrival

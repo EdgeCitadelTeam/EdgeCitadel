@@ -705,3 +705,32 @@ def test_an_authority_revocation_is_never_offered(tmp_path):
         builder.allowed(Action("revoke", "n0", "authority", task_id))
     assert builder.allowed(revoke_egress("n0", task_id)) is not None
     harness.close()
+
+
+def test_a_replacing_action_behind_a_confirmed_hold_is_timely(tmp_path):
+    """Theory A.6 (a): an edge removed by a confirmed action in force cannot be
+    crossed before its release, which follows the replacing cut's confirmation,
+    so the flows behind it have d = infinity. Without that, the immediate
+    emissions of a held invocation make every replacing action untimely."""
+    config = MonitorConfig(
+        grants={"r": frozenset({"w"})},
+        agent_nodes={"r": "n0", "w": "n1"},
+        session_isolated_agents=frozenset({"r"}),
+    )
+    harness = Harness(tmp_path, config)
+    trace = TraceBuilder()
+    task_id = trace.root("r", "n0", 0)
+    attempt = trace.start(task_id, 1)
+    harness.feed(trace.events)
+    harness.monitor.graph.mark_roots([inv(attempt)])
+    free = gc(harness, 100)
+    held = gc(harness, 100, in_force=[hold_task("n0", task_id)])
+    # Not held: the unit can emit at once, so its immediate copy is untimely.
+    assert any(e.action is not None and not e.feasible for e in free.edges)
+    split = next(e for e in held.edges if e.kind == "split")
+    assert split.action == hold_task("n0", task_id)
+    behind = [e for e in held.edges if e.action is not None and e is not split]
+    assert {e.action for e in behind} >= {revoke_egress("n0", task_id)}
+    assert all(e.deadline == float("inf") and e.feasible for e in behind)
+    assert not any(e.tail.startswith("early") for e in held.edges)
+    harness.close()

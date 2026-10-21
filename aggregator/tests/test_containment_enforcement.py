@@ -86,8 +86,11 @@ def test_releases_only_after_every_phase_two_confirmation(tmp_path):
         last_confirmation = max((r.t_confirmed for r in decision.phase2), default=0)
         assert all(r.t_release_sent >= last_confirmation for r in decision.released)
         releases += len(decision.released)
-        # Replay what the nodes applied, in order.
-        phase1 = {r.action for r in decision.phase1 if r.state == "in_force"}
+        # Replay what the nodes applied, in order. Phase 1 converges once every
+        # phase-1 action confirmed is in force, including those released later.
+        phase1 = {
+            r.action for r in decision.phase1 if r.state in {"in_force", "released"}
+        }
         in_force: set[Action] = set()
         converged = not phase1
         for _, op, (node, kind, object_id, _) in sorted(control.timeline):
@@ -857,3 +860,64 @@ def test_sink_guard_guards_every_protected_sink_without_tracing(tmp_path):
     assert f"hold:task:{ids['a']}@n1" not in chosen
     assert f"revoke:egress:{ids['a']}@n1" not in chosen
     harness.close()
+
+
+def test_phase_one_labels_the_source_side_not_only_the_taint(tmp_path):
+    """Theory A.6 (b), counter-scenario of section 8.3 step 2: the parent has
+    not read its child's tainted result yet (not tainted) but is reachable from
+    the taint because the result reached its node before a park could land.
+    Phase 1 must hold it: labelling only tainted invocations would let it
+    dispatch, and then consume the result, with nothing stopping either."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from containment_support import ingest
+    from test_containment_provenance import journal
+
+    root = Node(tmp_path / "root", "root-node")
+    worker = Node(tmp_path / "worker", "worker-node")
+    root.managed("parent", outbound=["child", "other"])
+    root.managed("other")
+    worker.managed("child")
+    try:
+        root.submit("parent")
+        _, parent = root.start("parent")
+        child_id = root.dispatch("parent", parent, "child")["result"]["task_id"]
+        deliver(root, worker)
+        _, child = worker.start("child")
+        worker.complete("child", child_id, {"body": "suspect"})
+        deliver(worker, root)  # the tainted result is at the parent's node
+        control = LocalAgentdControlClient(
+            "core-monitor",
+            {"root-node": transport(root), "worker-node": transport(worker)},
+        )
+        harness = Harness(tmp_path / "monitor", MonitorConfig(), control)
+        for event in journal(root) + journal(worker):
+            ingest(harness.core, event)
+        harness.monitor.catch_up()
+        graph = harness.monitor.graph
+        observed: dict[str, object] = {}
+        fence = harness.monitor.fence
+
+        def between_phases(records):
+            if not observed:
+                observed["parent_tainted"] = inv(parent["execution_attempt_id"]) in (
+                    graph.taint
+                )
+                observed["phase1"] = {r.action.label() for r in records}
+                observed["dispatch"] = root.dispatch("parent", parent, "other")
+                for event in journal(root):
+                    ingest(harness.core, event)
+            return fence(records)
+
+        harness.monitor.fence = between_phases
+        root_cause = inv(child["execution_attempt_id"])
+        decision = harness.monitor.respond(
+            operator_alert(root_cause, harness.now), roots=[root_cause]
+        )
+        assert observed["parent_tainted"] is False  # reachable, not tainted
+        assert f"hold:task:{parent['task_id']}@root-node" in observed["phase1"]
+        assert observed["dispatch"]["code"] == "execution_held"
+        assert decision.status == "contained" and decision.cut_valid
+        harness.close()
+    finally:
+        root.close()
+        worker.close()

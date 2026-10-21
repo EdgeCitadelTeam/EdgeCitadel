@@ -3620,7 +3620,12 @@ of one invocation, one effect, one credential, one grant pair or one agent's
 admission. `revoke:authority` (a whole delegation subtree) is mapped but never
 offered. Deadlines enter only through per-action timely masks
 `R_tau(a) = {e in R(a) : now + tau + L(site(a)) < d(e)}`; an action in force
-keeps all of `R(a)`, and no action implies another's removal. Before each solve
+keeps all of `R(a)`, and no action implies another's removal. An edge removed
+by an action in force cannot be crossed before that action is released, and a
+release follows the confirmation of the replacing cut, so nothing arrives
+behind it: deadlines downstream of an in-force action are infinite (theory
+A.6), and the phase-2 solve can replace a phase-1 hold by actions that would be
+untimely without it. Before each solve
 the solver checks, on the instance, that every grouped action is gated (its
 members share a tail or a head, or one member lies on every path meeting it)
 and that the gate sets at each port are laminar. Only then does it use the

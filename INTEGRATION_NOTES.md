@@ -319,6 +319,43 @@ denied (paused, or egress-held where the node cannot hold tasks), the ledger
 receives nothing, no request is queued, and phase 2 then contains with every
 action fenced.
 
+Theorem 5 obligations (theory appendix v2, A.6), checked against the monitor
+and agentd:
+
+- **(a) Phase 2 treats edges removed by confirmed in-force actions as
+  d = infinity: fixed.** The projection propagated arrival times through
+  edges whose action was in force, so the immediate emissions of a
+  phase-1-held unit gave every replacing action behind it a deadline of now
+  (untimely), and phase 2 could only keep the hold. `arrival_times` now stops
+  at edges whose action is in force; deadlines behind them are infinite and
+  the replacing actions timely. Test:
+  `test_a_replacing_action_behind_a_confirmed_hold_is_timely` (fails without
+  the fix). The fix exposed a weak convergence definition in
+  `test_releases_only_after_every_phase_two_confirmation` (it counted only
+  phase-1 actions still in force at the end, not those released later), now
+  corrected.
+- **(b) Q covers the source side S, not only the confirmed taint:
+  satisfied.** Labels are computed by reachability, not from the taint set: in
+  phase 1 the frontier block and `admission_freeze` hold every unit of the
+  closure U reachable from the taint through edges no action removes (which
+  includes units not yet tainted), and taint-aware admission in phase 2 uses
+  the G_C closure with the actions of B_2 removed, which contains S. Test (the
+  counter-scenario of grouped_cut_v2 section 8.3 step 2):
+  `test_phase_one_labels_the_source_side_not_only_the_taint` (real agentd
+  nodes): a parent whose tainted child result has reached its node but is
+  unread is not tainted, yet phase 1 holds it and its new dispatch between the
+  phases is denied (`execution_held`).
+- **(c) A label push that enlarges S is confirmed before the release that
+  enlarges it: satisfied only with `taint_aware_admission: true`.** The
+  labels of phase 2 are ordinary phase-2 actions (egress revocations of the
+  units B_2 leaves on the source side), so they are confirmed and fenced
+  before any phase-1 release. With the default (`false`), releasing the
+  phase-1 holds enlarges S with no label pushed; that is safe only under the
+  closed-world assumption that B_2 covers every dispatch and effect a released
+  unit can make (the G_C model). Runs that claim Theorem 5 must set
+  `taint_aware_admission: true`. A native root with no agentd task cannot be
+  labelled (agentd's labels are task holds and egress revocations).
+
 ### 5. Shared mechanisms and two new baselines
 
 A strategy now chooses only its phase-2 actions. Everything around that choice
