@@ -27,7 +27,8 @@ import heapq
 import json
 import math
 import sqlite3
-from collections.abc import Iterable, Iterator, Mapping
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -131,6 +132,22 @@ CREATE TABLE IF NOT EXISTS containment_actions (
     policy_version INTEGER NOT NULL,
     record_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS containment_held (
+    event_id TEXT PRIMARY KEY,
+    event TEXT NOT NULL CHECK(event IN ('effect', 'dispatch', 'result')),
+    node_id TEXT NOT NULL,
+    attempt_id TEXT,
+    task_id TEXT,
+    subject_id TEXT NOT NULL,
+    effect_class TEXT,
+    target TEXT,
+    recipient_id TEXT,
+    held_ms INTEGER NOT NULL,
+    seen_ms INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('held', 'kept', 'admitted', 'failed')),
+    decided_version INTEGER
+);
 """
 
 ROOT_TIME = 0
@@ -211,6 +228,36 @@ class PendingResult:
 
 
 @dataclass
+class HeldEvent:
+    """A new event agentd holds for a labelled invocation (``containment/held``).
+
+    ``held_ms`` is the node's clock; ``seen_ms`` the monitor's when it was
+    applied. ``state``: held (undecided), kept (decided to stay held at
+    ``decided_version``), admitted or failed (the release was refused).
+    """
+
+    event_id: str
+    event: str
+    node_id: str
+    attempt_id: str | None
+    task_id: str | None
+    subject_id: str
+    effect_class: str | None
+    target: str | None
+    recipient_id: str | None
+    held_ms: int
+    seen_ms: int
+    state: str = "held"
+    decided_version: int | None = None
+
+
+HELD_COLUMNS = (
+    "event_id,event,node_id,attempt_id,task_id,subject_id,effect_class,target,"
+    "recipient_id,held_ms,seen_ms,state,decided_version"
+)
+
+
+@dataclass
 class PendingEffect:
     """A scheduled effect agentd authorized but has not committed yet.
 
@@ -229,13 +276,22 @@ class PendingEffect:
 class ProvenanceGraph:
     """G_P over one monitor connection. Mutations require an open transaction."""
 
-    def __init__(self, db: sqlite3.Connection, config: MonitorConfig):
+    def __init__(
+        self,
+        db: sqlite3.Connection,
+        config: MonitorConfig,
+        *,
+        clock: Callable[[], int] = lambda: time.time_ns() // 1_000_000,
+    ):
         self.db = db
         self.config = config
+        self.now_ms = clock  # the monitor's clock (when a held event was seen)
         self.running: dict[str, Invocation] = {}
         self.pending: dict[str, PendingTask] = {}
         self.results: dict[str, PendingResult] = {}
         self.effects: dict[str, PendingEffect] = {}
+        # Held events still to admit: held (undecided) or kept.
+        self.held: dict[str, HeldEvent] = {}
         self.agent_nodes: dict[str, str] = {}
         # Agents named as recipients by exported authority (they may be unseen).
         self.granted_agents: set[str] = set()
@@ -307,6 +363,13 @@ class ProvenanceGraph:
                 "FROM containment_effects WHERE state='pending' AND scheduled_ms IS NOT NULL"
             )
         }
+        self.held = {
+            row[0]: HeldEvent(*row)
+            for row in db.execute(
+                f"SELECT {HELD_COLUMNS} FROM containment_held "
+                "WHERE state IN ('held','kept')"
+            )
+        }
         self.revoked = {
             split(row[0])[1]
             for row in db.execute(
@@ -361,6 +424,46 @@ class ProvenanceGraph:
             handler(event, seq, occurred_ms(event["occurred_at"]))
         elif kind == "coverage" and event["phase"] == "lost":
             self.coverage_gaps += 1
+        elif kind == "containment" and event["phase"] == "held":
+            self._held(event, seq, occurred_ms(event["occurred_at"]))
+
+    def _held(self, event: dict, seq: int, at: int) -> None:
+        """agentd held a new event of a labelled invocation (admission)."""
+        attributes = event["attributes"]
+        held = HeldEvent(
+            attributes["held_event_id"],
+            attributes["event"],
+            event["node_id"],
+            event["execution_attempt_id"],
+            event["task_id"],
+            attributes["subject_id"],
+            attributes["effect_class"],
+            attributes["target"],
+            attributes["recipient_id"],
+            at,
+            self.now_ms(),
+        )
+        inserted = self.db.execute(
+            f"INSERT OR IGNORE INTO containment_held({HELD_COLUMNS},seq) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (*held.__dict__.values(), seq),
+        ).rowcount
+        if inserted:
+            self.held[held.event_id] = held
+
+    def decide_held(self, event_id: str, state: str, version: int | None) -> None:
+        """Record a per-event admission decision (``admission``)."""
+        self.db.execute(
+            "UPDATE containment_held SET state=?,decided_version=? WHERE event_id=?",
+            (state, version, event_id),
+        )
+        held = self.held.get(event_id)
+        if held is None:
+            return
+        if state in {"held", "kept"}:
+            held.state, held.decided_version = state, version
+        else:
+            del self.held[event_id]
 
     def _run(self, event: dict, seq: int, at: int) -> None:
         attempt = event["execution_attempt_id"]

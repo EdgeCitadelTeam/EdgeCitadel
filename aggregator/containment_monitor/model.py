@@ -57,10 +57,12 @@ def split(node: str) -> tuple[str, str]:
 # Actions
 # ---------------------------------------------------------------------------
 HOLD, REVOKE, CANCEL = "hold", "revoke", "cancel"
-# Reversible (released by the monitor): task (a pause), egress (the invocation
-# runs and receives but nothing leaves it, its result included), transport (one
-# outbox message), effect (a scheduled effect stays uncommitted).
-HOLD_KINDS = frozenset({"task", "egress", "transport", "effect"})
+# Reversible (released by the monitor): task (a pause), egress (an admission
+# label: the invocation runs and receives, and agentd holds each new event it
+# produces, its result included, until admitted), transport (one outbox
+# message), effect (a scheduled effect stays uncommitted), event (one held
+# event of a label: placed by agentd, released by the monitor to admit it).
+HOLD_KINDS = frozenset({"task", "egress", "transport", "effect", "event"})
 # Irreversible. egress: new dispatches and effects of one invocation (object: its
 #   task id), which may still complete; authority: a delegation (task id) and all
 #   its descendants; grant: one (agent, recipient-or-effect-class) pair of the
@@ -129,6 +131,10 @@ def hold_effect(node_id: str, effect_id: str) -> Action:
 
 def hold_egress(node_id: str, task_id: str) -> Action:
     return Action(HOLD, node_id, "egress", task_id)
+
+
+def hold_event(node_id: str, event_id: str) -> Action:
+    return Action(HOLD, node_id, "event", event_id)
 
 
 def revoke_egress(node_id: str, task_id: str) -> Action:

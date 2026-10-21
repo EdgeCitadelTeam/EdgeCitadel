@@ -569,8 +569,14 @@ class _Builder:
             # issuer ended; then only the effect hold is modelled. Immediate
             # effects are decided at request time and are never pending.
             issuer = units.get(effect.attempt_id)
-            pending = cg.node(f"pe:{effect.effect_id}", kind="pending_effect")
+            requested = cg.node(f"pe:{effect.effect_id}", kind="pending_effect")
             target = cg.node(f"fx:{effect.effect_id}", kind="effect")
+            pending = requested
+            gate = self.commit_gate(effect)
+            if gate is not None:
+                # Already refused at its commit by a decision in force.
+                pending = cg.node(f"pc:{effect.effect_id}", kind="pending_effect")
+                cg.edge(requested, pending, "effect", action=gate)
             hold = self.allowed(hold_effect(effect.node_id, effect.effect_id))
             if issuer is None or not (issuer.node and issuer.task_id):
                 cg.edge(
@@ -598,7 +604,25 @@ class _Builder:
             if effect.protected:
                 cg.sinks.add(target)
             if fx(effect.effect_id) in graph.taint:
-                cg.sources.add(pending)
+                cg.sources.add(requested)
+
+    def commit_gate(self, effect) -> Action | None:
+        """A decision in force that the gateway's commit re-check applies to a
+        pending effect: its class revoked for the issuing agent, the agent's
+        credential revoked, or the issuer's label (the effect is then held at
+        its time, and a protected one is never admitted from the source side).
+        Only decisions already in force are modelled here, never offered."""
+        row = self.graph.invocation(effect.attempt_id)
+        if row is None:
+            return None
+        agent, node = row["agent_id"], effect.node_id
+        gates = [
+            revoke_grant(node, agent, f"fx:{effect.effect_class}"),
+            revoke_credential(node, agent),
+        ]
+        if row["task_id"] is not None:
+            gates.append(hold_egress(row["node_id"], row["task_id"]))
+        return next((gate for gate in gates if gate in self.in_force), None)
 
     # -- timing ---------------------------------------------------------------------
     def advance(self, fn: tuple, t: float) -> float:
@@ -880,23 +904,29 @@ def frontier_block(
     return block, closure & cg.sinks, closure
 
 
-def admission_freeze(cg: ControlGraph, closure: set[str]) -> set[Action]:
+def admission_freeze(
+    cg: ControlGraph, closure: set[str], *, pause_pending: bool = True
+) -> set[Action]:
     """Hold every source-side unit that may still emit, whatever the deadlines.
 
     Admission (theory 7.4, open world): a unit whose output ``out:u`` lies in the
     uncuttable closure U is on the source side of the phase-1 cut. Its emissions
     before the hold lands are crossings that reconciliation finds; every new
-    dispatch, effect or result it requests after the hold is denied by agentd
-    until phase 2 confirms a cut covering it. A running unit keeps running with
-    its egress held; a pending task is held before it can start (no spawn).
-    The actions are the ones G_C offers on those edges (``freeze`` projection).
+    dispatch, effect or result it requests after the hold is held by agentd as
+    an event, admitted only per event (``admission``). A running unit keeps
+    running under its egress label; a pending task is held before it can
+    start (no spawn) for the freeze, or labelled too (``pause_pending`` False,
+    the adaptive phase 1's labels Q). The actions are the ones G_C offers on
+    those edges (``freeze`` projection).
     """
     frozen: set[Action] = set()
     for key, unit in cg.units.items():
         if f"out:{key}" not in closure:
             continue
         tail, kind = (
-            (f"in:{key}", "split") if unit.pending else (f"out:{key}", "egress")
+            (f"in:{key}", "split")
+            if unit.pending and pause_pending
+            else (f"out:{key}", "egress")
         )
         frozen.update(
             edge.action

@@ -208,13 +208,17 @@ class EnforcementDriver:
         return records
 
     def release(self, records: Iterable[ActionRecord]) -> list[ActionRecord]:
-        """Release confirmed holds; one that does not confirm stays in force."""
-        records = [r for r in records if r.state == "in_force"]
+        """Release confirmed holds; one that does not confirm stays in force.
+
+        An unconfirmed hold is released as well: one its node never applied
+        (``hold_not_found``) was never in force and counts as released."""
+        records = [r for r in records if r.state in {"in_force", "unconfirmed"}]
         if not records:
             return []
         version = self.next_version()
 
         def run(record: ActionRecord) -> ActionRecord:
+            unconfirmed = record.state == "unconfirmed"
             record.t_release_sent = self.clock()
             try:
                 confirmation = release(
@@ -223,6 +227,10 @@ class EnforcementDriver:
             except ControlUnconfirmed as error:
                 record.state, record.error = "release_unconfirmed", error.code
             except ControlError as error:
+                if unconfirmed and error.code == "hold_not_found":
+                    record.state = "released"
+                    record.t_released = self.clock()
+                    return record
                 record.state, record.error = "release_failed", error.code
             else:
                 record.state = "released"
@@ -479,9 +487,14 @@ class TwoPhaseProtocol:
             ``removed`` on ``cg`` (theory A.6: Q covers S), or on the forward
             closure of the sources (``phase1_labels="forward_closure"``)."""
             frozen_cg = project(1, frozenset(in_force))
-            if phase1_labels == "forward_closure":
-                return admission_freeze(frozen_cg, frozen_cg.closure())
-            return admission_freeze(frozen_cg, cg.closure(removed=set(removed)))
+            side = (
+                frozen_cg.closure()
+                if phase1_labels == "forward_closure"
+                else cg.closure(removed=set(removed))
+            )
+            # Labels, not pauses: a labelled unit runs and its new events are
+            # admitted per event.
+            return admission_freeze(frozen_cg, side, pause_pending=False)
 
         def freeze() -> set[Action]:
             cg = project(1, frozenset(in_force))
@@ -644,6 +657,17 @@ class TwoPhaseProtocol:
             if held:
                 releasable = [
                     r for a, r in phase1.items() if a not in chosen and a.op == "hold"
+                ]
+                # A phase-1 hold sent without a confirmation may be in force at
+                # its node: released too (the cut holds without it), so no
+                # pause or label outlives the decision unseen.
+                releasable += [
+                    r
+                    for r in decision.phase1
+                    if r.state == "unconfirmed"
+                    and r.action.op == "hold"
+                    and r.action not in chosen
+                    and r.action not in in_force
                 ]
                 decision.released = self.driver.release(releasable)
                 for record in decision.released:

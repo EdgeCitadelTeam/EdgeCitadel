@@ -8,6 +8,8 @@ The monitor drives agentd nodes with versioned, owner-fenced commands
 monitor action                     agentd command
 =================================  =============================================
 hold:task|egress|transport|effect  ``hold`` (``release``) ``{kind, object_id}``
+hold:event                         ``release {kind: event, object_id}`` (agentd
+                                   holds events; the monitor admits them)
 revoke:egress|authority            ``revoke {kind, object_id: <task>}``
 revoke:credential|admission        ``revoke {kind, object_id: <agent>}``
 revoke:grant                       ``revoke {kind: grant, object_id: a>b|a>fx:c}``
@@ -548,6 +550,16 @@ class FakeControlClient:
         if self.lose(node_id, action, object_id):
             raise ControlUnconfirmed("confirmation_timeout")
         return Confirmation(node_id, command_id, _now_ms(), {}, self.journal(node_id))
+
+    def held_event(self, node_id: str, event_id: str) -> None:
+        """What agentd does for a labelled unit's new event: hold it under an
+        event hold of the label's owner, which the monitor may release."""
+        with self._lock:
+            node = self.nodes.setdefault(node_id, FakeNode())
+            node.holds[("event", event_id)] = (
+                self.owner,
+                node.fences.get(self.owner, 0),
+            )
 
     def in_force(self) -> set[tuple[str, str, str]]:
         with self._lock:

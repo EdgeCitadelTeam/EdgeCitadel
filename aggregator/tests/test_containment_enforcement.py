@@ -1,5 +1,6 @@
 """Two-phase enforcement, fencing and the control clients."""
 
+import math
 import random
 from collections import Counter
 import sys
@@ -22,6 +23,7 @@ from aggregator.containment_monitor.control import (
 from aggregator.containment_monitor.model import Action, Alert, inv
 from containment_support import Harness, ingest
 from edgecitadel_agentd.service import dispatch as rpc
+from edgecitadel_agentd.store import StoreError
 from test_containment_projection import event_ms, workload
 
 sys.path.insert(
@@ -193,6 +195,39 @@ def test_a_lost_confirmation_is_neither_in_force_nor_released(tmp_path):
     assert [a["action"]["kind"] for a in status["in_force"]] == ["task"] * 3
     assert [a["action"]["kind"] for a in status["unconfirmed"]] == ["credential"]
     harness.close()
+
+
+def test_a_released_decision_also_releases_its_unconfirmed_holds():
+    """A hold sent without a confirmation may be in force at its node: the
+    guarded release releases it with the others, and one its node never
+    applied counts as released (nothing was in force)."""
+    from aggregator.containment_monitor.enforcement import (
+        ActionRecord,
+        EnforcementDriver,
+    )
+    from aggregator.containment_monitor.model import hold_task
+
+    applied, never = str(uuid4()), str(uuid4())
+    control = FakeControlClient(lose=lambda node, op, object_id: op == "hold")
+    versions = iter(range(1, 100))
+    driver = EnforcementDriver(control, lambda: next(versions))
+    try:
+        (lost,) = driver.apply(
+            [hold_task("n0", applied)],
+            incident_id="i",
+            phase=1,
+            t_alert=0,
+            t_decision=0,
+        )
+        assert lost.state == "unconfirmed"
+        assert ("n0", "task", applied) in control.in_force()  # it did land
+        unsent = ActionRecord(hold_task("n0", never), "i", 1, 1, 0, 0)
+        unsent.state = "unconfirmed"
+        released = driver.release([lost, unsent])
+        assert [r.state for r in released] == ["released", "released"]
+        assert control.in_force() == set()
+    finally:
+        driver.close()
 
 
 def test_projection_offers_only_what_each_node_describes(tmp_path):
@@ -664,6 +699,7 @@ def journaled_after_alert(tmp_path, timeout_ms):
         session_isolated_agents=frozenset({"a"}),
         min_emission_ms={"a": 1000},
         ingest_timeout_ms=timeout_ms,
+        phase1_mode="freeze",  # frontier holds, released after phase 2
     )
     trace = TraceBuilder()
     tasks = [trace.root("a", "n0", i) for i in range(3)]
@@ -734,12 +770,12 @@ def test_a_journal_never_ingested_keeps_every_phase_one_hold(tmp_path):
 def test_a_tainted_invocation_is_admitted_nothing_between_the_phases(
     tmp_path, worker_holds_tasks
 ):
-    """Once phase 1 is confirmed, every new dispatch and effect a source-side
-    invocation requests is denied at its node until phase 2 confirms a cut
-    covering it: it neither propagates nor acts. Phase 1 pauses it (its hold
-    lands before any emission after the landing, thanks to the early-window
-    split); where its node cannot hold tasks, the admission freeze holds its
-    egress instead."""
+    """Once the frontier-freeze phase 1 is confirmed, every new dispatch and
+    effect a source-side invocation requests is stopped at its node: it neither
+    propagates nor acts. Phase 1 pauses it (its hold lands before any emission
+    after the landing, thanks to the early-window split): both are denied.
+    Where its node cannot hold tasks, the admission freeze labels its egress
+    instead: both are held as events, to be admitted one by one."""
     from aggregator.containment_monitor.config import MonitorConfig
     from containment_support import ingest
     from containment_test_support import Ledger
@@ -771,7 +807,10 @@ def test_a_tainted_invocation_is_admitted_nothing_between_the_phases(
                 if node == "worker-node"
                 else described(node)
             )
-        config = MonitorConfig(protected_effect_classes=frozenset({"device.command"}))
+        config = MonitorConfig(
+            protected_effect_classes=frozenset({"device.command"}),
+            phase1_mode="freeze",
+        )
         harness = Harness(tmp_path / "monitor", config, control)
         ingested = set()
         for event in journal(root) + journal(worker):
@@ -814,14 +853,20 @@ def test_a_tainted_invocation_is_admitted_nothing_between_the_phases(
             operator_alert(inv(attempt), harness.now), roots=[inv(attempt)]
         )
         child_task = child["task_id"]
-        kind, code = (
-            ("task", "execution_held")
-            if worker_holds_tasks
-            else ("egress", "egress_held")
-        )
+        kind = "task" if worker_holds_tasks else "egress"
         assert f"hold:{kind}:{child_task}@worker-node" in attempts["phase1"]
-        assert attempts["dispatch"]["code"] == code
-        assert attempts["effect"]["code"] == code
+        if worker_holds_tasks:
+            assert attempts["dispatch"]["code"] == "execution_held"
+            assert attempts["effect"]["code"] == "execution_held"
+        else:
+            assert attempts["dispatch"]["status"] == "ok"
+            assert attempts["effect"]["result"]["state"] == "held"
+            held = dict(
+                worker.store._connection.execute(
+                    "SELECT kind,state FROM held_events"
+                ).fetchall()
+            )
+            assert held == {"dispatch": "held", "effect": "held"}
         assert ledger.requests == []  # the effect never acted
         # The dispatch created no child and nothing was queued for publication.
         assert not [
@@ -836,6 +881,183 @@ def test_a_tainted_invocation_is_admitted_nothing_between_the_phases(
         ledger.close()
         root.close()
         worker.close()
+
+
+# ---------------------------------------------------------------------------
+# Per-event admission of labelled units (admission.py)
+# ---------------------------------------------------------------------------
+class LabelledAssistant:
+    """An assistant on one node with three tainted live invocations, contained
+    by Firebreak (deployed: adaptive phase 1, taint-aware labels). Its replies
+    to users are unprotected (network.http), its device commands protected;
+    stopping its service (credential, admission) forfeits its future requests
+    and pausing the three costs more than revoking its grants, so the cut
+    revokes its device class (and, with ``boundary="sink"``, its grant to the
+    helper, whose new invocations are horizon sinks) and labels all three."""
+
+    ACT = {"effect_class": "device.command", "target": "actuator/*"}
+    REPLY = {"effect_class": "network.http", "target": "reply/*"}
+
+    def __init__(self, tmp_path, boundary="sink"):
+        from aggregator.containment_monitor.config import MonitorConfig
+        from containment_test_support import Ledger
+        from edgecitadel_agentd.effect_adapters import LedgerAdapter
+
+        self.node = Node(tmp_path / "k", "site-k")
+        self.ledger = Ledger()
+        self.node.managed(
+            "assistant", outbound=["helper"], effects=[self.ACT, self.REPLY]
+        )
+        self.node.managed("helper", effects=[self.ACT])
+        self.node.store.effects.adapters = {"http": LedgerAdapter(self.ledger.url)}
+        self.tasks, self.bindings = [], []
+        for _ in range(3):
+            self.tasks.append(self.node.submit("assistant"))
+            self.bindings.append(self.node.start("assistant")[1])
+        control = LocalAgentdControlClient(
+            "core-monitor", {"site-k": transport(self.node)}
+        )
+        config = MonitorConfig(
+            protected_effect_classes=frozenset({"device.command"}),
+            future_requests={"assistant": 10.0},
+            agent_nodes={"assistant": "site-k", "helper": "site-k"},
+            # No emission within a minute of starting: every action is timely.
+            min_emission_ms={"assistant": 60_000, "helper": 60_000},
+            boundary=boundary,
+        )
+        self.harness = Harness(tmp_path / "monitor", config, control)
+        self.harness.now = time.time_ns() // 1_000_000
+        self.ingested: set[str] = set()
+        self.sync()
+        roots = [inv(b["execution_attempt_id"]) for b in self.bindings]
+        self.decision = self.harness.monitor.respond(
+            operator_alert(roots[0], self.harness.now),
+            strategy="firebreak",
+            roots=roots,
+        )
+
+    def sync(self):
+        """Trace sync: Core ingests what the node journaled since last time."""
+        from containment_support import ingest
+        from test_containment_provenance import journal
+
+        for event in journal(self.node):
+            if event["event_id"] not in self.ingested:
+                ingest(self.harness.core, event)
+                self.ingested.add(event["event_id"])
+        self.harness.monitor.catch_up()
+
+    def execute(self, binding, rule, target):
+        reply = self.node.rpc(
+            "assistant",
+            "effect.execute",
+            schema_version=1,
+            request_id=str(uuid4()),
+            binding_id=binding["binding_id"],
+            adapter="http",
+            effect_class=rule["effect_class"],
+            target=target,
+            data=None,
+            tool_call_id=None,
+            scheduled_at_ms=None,
+        )
+        assert reply["status"] == "ok", reply
+        return reply
+
+    def held(self):
+        return {
+            row["subject_id"]: row["state"]
+            for row in self.node.store._connection.execute(
+                "SELECT subject_id,state FROM held_events"
+            )
+        }
+
+    def close(self):
+        self.harness.close()
+        self.ledger.close()
+        self.node.close()
+
+
+def test_a_labelled_units_reply_is_admitted_and_its_device_command_stays_held(
+    tmp_path,
+):
+    """The reply (unprotected) is held by agentd and admitted after one round,
+    with its latency logged; the device command, whose class the cut blocks,
+    stays held, also when the decision is taken again."""
+    unit = LabelledAssistant(tmp_path)
+    try:
+        assert unit.decision.status == "contained"
+        in_force = {r.action.label() for r in unit.harness.monitor.in_force.values()}
+        assert "revoke:grant:assistant>fx:device.command@site-k" in in_force
+        for task_id in unit.tasks:
+            assert f"hold:egress:{task_id}@site-k" in in_force
+        reply = unit.execute(unit.bindings[0], unit.REPLY, "reply/1")
+        command = unit.execute(unit.bindings[0], unit.ACT, "actuator/1")
+        assert {reply["result"]["state"], command["result"]["state"]} == {"held"}
+        unit.sync()
+        (admitted, kept) = sorted(
+            unit.harness.monitor.admit_held(), key=lambda r: r["decision"]
+        )
+        assert (admitted["decision"], admitted["reason"]) == (
+            "admit",
+            "unprotected_effect",
+        )
+        assert admitted["subject_id"] == reply["request_id"]
+        assert admitted["release_state"] == "released"
+        assert admitted["latency_ms"] >= 0
+        assert (kept["decision"], kept["reason"]) == ("keep", "protected_sink")
+        assert kept["subject_id"] == command["request_id"]
+        assert unit.node.store.effects.run_due("site-k") == 1
+        assert [r["body"]["target"] for r in unit.ledger.requests] == ["reply/1"]
+        # Decided again (nothing new is logged): the command stays held.
+        unit.sync()
+        assert unit.harness.monitor.admit_held() == []
+        assert unit.held() == {
+            reply["request_id"]: "admitted",
+            command["request_id"]: "held",
+        }
+        assert unit.node.store.effects.run_due("site-k") == 0
+        status = unit.harness.monitor.status()["held_events"]
+        assert status == {"admitted": 1, "kept": 1}
+    finally:
+        unit.close()
+
+
+def test_a_labelled_dispatch_is_admitted_once_its_new_task_is_labelled(tmp_path):
+    """(R) for a new edge: the dispatch's head (the new task) is labelled and
+    the label confirmed before the dispatch is admitted; the new task then runs
+    under its own label. The result, which no live invocation consumes, is
+    admitted too, and the invocation completes."""
+    unit = LabelledAssistant(tmp_path, boundary="defer")
+    try:
+        node = unit.node
+        reply = node.dispatch("assistant", unit.bindings[0], "helper")
+        assert reply["status"] == "ok", reply
+        helper = reply["result"]["task_id"]
+        session = node.agents["helper"].session_id
+        assert node.rpc("helper", "task.claim", session_id=session) is None
+        unit.sync()
+        (record,) = unit.harness.monitor.admit_held()
+        assert (record["event"], record["decision"]) == ("dispatch", "admit")
+        assert record["reason"] == "head_separated"
+        assert [label["action"]["kind"] for label in record["labels"]] == ["egress"]
+        assert record["labels"][0]["action"]["object_id"] == helper
+        assert record["labels"][0]["t_fenced"] is not None
+        holds = {
+            (h["kind"], h["object_id"]) for h in node.store.list_containment()["holds"]
+        }
+        assert ("egress", helper) in holds
+        assert node.rpc("helper", "task.claim", session_id=session)["task_id"] == helper
+        # The labelled invocation's result is held, then admitted.
+        with pytest.raises(StoreError, match="egress is held"):
+            node.complete("assistant", unit.tasks[0], {"body": "answer"})
+        unit.sync()
+        (record,) = unit.harness.monitor.admit_held()
+        assert (record["event"], record["reason"]) == ("result", "no_live_consumer")
+        node.complete("assistant", unit.tasks[0], {"body": "answer"})
+        assert node.store.get_task(unit.tasks[0])["state"] == "completed"
+    finally:
+        unit.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1056,6 +1278,24 @@ def late_effect_setup(tmp_path, mode, seed, due, latency_ms, control=None, **set
     harness.at(20)
     ids = {"a": inv(a), "root": root, "effect": effect["attributes"]["effect_id"]}
     return harness, control, trace, ids
+
+
+def test_a_pending_effect_whose_class_is_revoked_is_refused_at_its_commit(tmp_path):
+    """The gateway's commit re-check applies decisions in force: with b's
+    device class revoked, b's tainted scheduled command no longer reaches its
+    sink in G_C (and no deadline makes phase 1 freeze for it)."""
+    from aggregator.containment_monitor.model import revoke_grant
+
+    harness, _, _, ids = late_effect_setup(tmp_path, "adaptive", 0, 60_000, 50.0)
+    harness.monitor.graph.mark_roots([ids["a"]])
+    sink = f"fx:{ids['effect']}"
+    open_cg = harness.monitor._project(2, frozenset())
+    assert sink in open_cg.sinks and sink in open_cg.closure()
+    grant = revoke_grant("n2", "b", "fx:device.command")
+    cut_cg = harness.monitor._project(2, frozenset({grant}))
+    assert sink not in cut_cg.closure(removed={grant})
+    assert cut_cg.eat.get(sink, math.inf) == math.inf
+    harness.close()
 
 
 def frontier_shape(decision) -> Counter:

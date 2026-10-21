@@ -164,6 +164,11 @@ class MonitorConfig:
     c0: float = 0.01
     w_tainted: float = 0.0
     revoke_weight: float = 0.5
+    # Service agents: the expected number of future unprotected requests per
+    # agent (e.g. replies to users), each worth future_request_value, which an
+    # action that stops the agent's service forfeits (costs).
+    future_requests: Mapping[str, float] = field(default_factory=dict)
+    future_request_value: float = 1.0
     # Root cause and strategy.
     root_cause_window_ms: int = 600_000
     top_k: int = 5
@@ -304,6 +309,8 @@ class MonitorConfig:
                 "value_weights",
             }:
                 kwargs[key] = _number_map(item, key)
+            elif key == "future_requests":
+                kwargs[key] = _number_map(item, key, AGENT_PATTERN)
             elif key == "delivery_ms":
                 kwargs[key] = _number_map(item, key, LINK_PATTERN)
             elif key == "strategy":

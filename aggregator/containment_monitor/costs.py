@@ -11,6 +11,13 @@ node stops that parent. ``value(w)`` is the agent's configured weight, or
 live normal invocation they restrict (the future work they may starve): an egress
 block restricts one invocation, a grant or credential revocation every live
 invocation of the agent that could use it, an admission block the target agent's.
+A credential or admission revocation of a service agent also forfeits its
+future unprotected requests (``future_requests`` of the agent, each worth
+``future_request_value``, the same for every strategy): it stops the service,
+where a grant revocation of a protected class does not. Pausing one invocation
+of a service agent, or revoking its egress, forfeits the request it serves
+(one ``future_request_value``); a label (an egress hold) does not, since its
+unprotected events are admitted per event.
 """
 
 from __future__ import annotations
@@ -43,6 +50,12 @@ class CostModel:
         weight = self.config.value(self.units[key].agent)
         return weight * (self.config.w_tainted if key in self.taint_est else 1.0)
 
+    def request(self, key: str) -> float:
+        """The value of the request a unit of a service agent serves."""
+        if self.units[key].agent in self.config.future_requests:
+            return self.config.future_request_value
+        return 0.0
+
     def closure(self, keys: set[str]) -> set[str]:
         out = set()
         for key in keys:
@@ -67,6 +80,7 @@ class CostModel:
             key = self.by_task.get(action.object_id)
             if key is not None and self.units[key].node == action.node_id:
                 seeds = {key}  # paused at its own node
+                extra = self.request(key)
             else:
                 parent = self.units[key].parent if key is not None else None
                 parent = parent or self.result_parent.get(action.object_id)
@@ -79,6 +93,8 @@ class CostModel:
             extra = self.config.revoke_weight * (
                 key is not None and key not in self.taint_est
             )
+            if action.op != HOLD and key is not None:
+                extra += self.request(key)
         elif action.kind in {"grant", "credential", "admission"}:
             agent = action.object_id.split(">", 1)[0]
             target = (
@@ -92,6 +108,10 @@ class CostModel:
                 and (target is None or target.startswith("fx:") or unit.reaches(target))
             ]
             extra = self.config.revoke_weight * len(affected)
+            if action.kind in {"credential", "admission"}:
+                extra += self.config.future_request_value * (
+                    self.config.future_requests.get(agent, 0.0)
+                )
         stopped = frozenset(self.closure(seeds))
         cost = self.config.c0 + extra + sum(self.value(key) for key in stopped)
         self._cache[action] = (cost, stopped)

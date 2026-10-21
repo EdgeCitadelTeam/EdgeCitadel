@@ -13,6 +13,7 @@ from aggregator.containment_monitor.config import Mechanisms, MonitorConfig
 from aggregator.containment_monitor.control import FakeControlClient, execute
 from aggregator.containment_monitor.model import (
     Action,
+    hold_egress,
     hold_task,
     inv,
     revoke_admission,
@@ -524,7 +525,9 @@ def test_best_effort_guard_and_taint_aware_admission(tmp_path):
     actions, _, task_id, _ = results["guard"]
     assert {a.kind for a in actions} == {a.kind for a in plain} | {"admission"}
     actions, unavoidable, task_id, _ = results["admission"]
-    assert (actions, unavoidable) == ({revoke_egress("n0", task_id)}, [])
+    # With nothing else to cut, taint-aware admission labels the source side
+    # (an egress hold: its new events are admitted per event).
+    assert (actions, unavoidable) == ({hold_egress("n0", task_id)}, [])
 
 
 # ---------------------------------------------------------------------------
@@ -730,4 +733,40 @@ def test_a_replacing_action_behind_a_confirmed_hold_is_timely(tmp_path):
     assert {e.action for e in behind} >= {revoke_egress("n0", task_id)}
     assert all(e.deadline == float("inf") and e.feasible for e in behind)
     assert not any(e.tail.startswith("early") for e in held.edges)
+    harness.close()
+
+
+def test_stopping_a_service_costs_its_requests_and_a_label_does_not(tmp_path):
+    """A service agent (future_requests): revoking its credential or its
+    admission forfeits its expected future requests; pausing one invocation or
+    revoking its egress forfeits that invocation's request; a label (egress
+    hold, admitted per event) and a grant revocation of a protected class
+    forfeit none."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from aggregator.containment_monitor.model import (
+        revoke_credential,
+        revoke_grant,
+    )
+
+    config = MonitorConfig(
+        agent_nodes={"s": "n0"},
+        future_requests={"s": 12.0},
+        future_request_value=2.0,
+        session_isolated_agents=frozenset({"s"}),
+    )
+    harness = Harness(tmp_path, config)
+    trace = TraceBuilder()
+    task_id = trace.root("s", "n0", 0)
+    attempt = trace.start(task_id, 1)
+    harness.feed(trace.events)
+    harness.monitor.graph.mark_roots([inv(attempt)])
+    cost = gc(harness, 10).cost
+    c0 = config.c0
+    # A tainted invocation's own work is worth nothing; its request is not.
+    assert cost(hold_task("n0", task_id)) == c0 + 2.0
+    assert cost(revoke_egress("n0", task_id)) == c0 + 2.0
+    assert cost(hold_egress("n0", task_id)) == c0
+    assert cost(revoke_grant("n0", "s", "fx:device.command")) == c0
+    assert cost(revoke_credential("n0", "s")) == c0 + 24.0
+    assert cost(revoke_admission("n0", "s")) == c0 + 24.0
     harness.close()

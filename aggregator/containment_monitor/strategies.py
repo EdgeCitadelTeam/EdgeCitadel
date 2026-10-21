@@ -25,10 +25,11 @@ the choice are set per strategy (``config.Mechanisms``, by profile; see
 - ``best_effort_guard``: also issue every c0-cost action on the last hop into a
   sink that is unavoidable on the deadline-aware G_C (deadlines are lower
   bounds, so some of those may still land in time).
-- ``taint_aware_admission``: revoke the egress of every invocation still on the
-  source side of the chosen actions (new dispatches and effects denied): the
-  label set of theory A.6, and needed with ``boundary="defer"``, where nothing
-  else constrains new invocations until they materialize.
+- ``taint_aware_admission``: label every invocation still on the source side
+  of the chosen actions (an egress hold, under which agentd holds each new
+  event of the invocation and the monitor admits it per event, ``admission``):
+  the label set Q of theory A.6 (AI), and needed with ``boundary="defer"``,
+  where nothing else constrains new invocations until they materialize.
 
 Rules ignore feasibility (their actions are issued anyway).
 """
@@ -45,6 +46,7 @@ from .graph import ControlGraph
 from .model import (
     Action,
     hold_effect,
+    hold_egress,
     hold_task,
     revoke_egress,
     revoke_grant,
@@ -288,13 +290,16 @@ def best_effort(cg: ControlGraph, unavoidable) -> list[Action]:
 
 
 def taint_admission(cg: ControlGraph, actions: list[Action]) -> list[Action]:
-    """Egress blocks for every unit the cut leaves on the source side."""
+    """Labels (egress holds) on every unit the cut leaves on the source side;
+    one whose egress is already revoked needs none."""
     reached = cg.closure(removed=set(actions))
     out = []
     for name in reached:
         unit = cg.units.get(cg.nodes.get(name, {}).get("unit"))
-        if unit is not None and unit.node and unit.task_id:
-            out.append(revoke_egress(unit.node, unit.task_id))
+        if unit is None or not (unit.node and unit.task_id):
+            continue
+        if revoke_egress(unit.node, unit.task_id) not in actions:
+            out.append(hold_egress(unit.node, unit.task_id))
     return out
 
 

@@ -32,7 +32,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 from ..trace_payload_read import read_payload
-from . import rootcause
+from . import admission, rootcause
 from .config import ConfigError, MonitorConfig
 from .control import (
     Confirmation,
@@ -59,6 +59,7 @@ from .model import (
     Action,
     Alert,
     AlertError,
+    hold_event,
     inv,
     parse_external_alert,
     ver,
@@ -187,7 +188,7 @@ class ContainmentMonitor:
             # agentd fences and authenticates decisions per owner: one identity.
             raise ConfigError("control_owner_mismatch")
         ProvenanceGraph.initialize(monitor)
-        self.graph = ProvenanceGraph(monitor, config)
+        self.graph = ProvenanceGraph(monitor, config, clock=clock)
         self.graph.reload()
         self.sources = SourceProgress(monitor)
         # Observe-only monitors decide and log but send no decision; they still
@@ -210,6 +211,8 @@ class ContainmentMonitor:
         self.last_graph: dict = {}
         self.last_ranking: list[dict] = []
         self._last_resolve_ms = 0
+        # Per held event kept, the reason last logged.
+        self._kept: dict[str, str] = {}
         # The phase-1 mode of the decision being made: (J') reconciles taint
         # only for an adaptive phase 1.
         self._phase1_mode: str | None = None
@@ -547,8 +550,11 @@ class ContainmentMonitor:
         return decision
 
     def _persist(self, decision: Decision) -> None:
+        self._persist_records([*decision.phase1, *decision.phase2, *decision.released])
+
+    def _persist_records(self, records: list[ActionRecord]) -> None:
         with self.db:
-            for record in [*decision.phase1, *decision.phase2, *decision.released]:
+            for record in records:
                 state = {
                     "in_force": "in_force",
                     "released": "released",
@@ -605,6 +611,135 @@ class ContainmentMonitor:
         self._remember({"type": "resolve", "t_received": now, **decision.to_json()})
         return decision
 
+    # -- per-event admission (admission.py) ---------------------------------------
+    def admit_held(self) -> list[dict]:
+        """Decide every held event of a label not decided under the current
+        policy version (a kept one again once anything changed); label the
+        heads that need it, confirmed and fenced, then release the admitted
+        events' holds together. Returns the ``admission`` records logged."""
+        version = stored_policy_version(self.db)
+        pending = [
+            held
+            for held in self.graph.held.values()
+            if held.state == "held" or (held.decided_version or 0) < version
+        ]
+        if not pending or not self.config.enforce:
+            return []
+        incident = self.db.execute(
+            "SELECT incident_id,created_ms FROM containment_incidents "
+            "WHERE state='active' ORDER BY created_ms DESC LIMIT 1"
+        ).fetchone()
+        incident_id, t_alert = incident if incident else ("", self.clock())
+        protected = self.config.protected_effect_classes
+        cg = self._project(2, frozenset(self.in_force))
+        verdicts = {
+            held.event_id: admission.verdict(
+                held, cg, self.graph, frozenset(self.in_force), protected
+            )
+            for held in pending
+        }
+        labels = set().union(*(v.labels for v in verdicts.values()))
+        pushed = {event_id: v.labels for event_id, v in verdicts.items()}
+        label_records: list[ActionRecord] = []
+        if labels:
+            label_records = self.driver.apply(
+                labels - self.in_force.keys(),
+                incident_id=incident_id,
+                phase=2,
+                t_alert=t_alert,
+                t_decision=self.clock(),
+            )
+            self.in_force.update(
+                {r.action: r for r in label_records if r.state == "in_force"}
+            )
+            self._persist_records(label_records)
+            # Labels covering the enlarged source side are fenced before the
+            # releases that enlarge it (R).
+            if self.fence(label_records):
+                cg = self._project(2, frozenset(self.in_force))
+                for held in pending:
+                    if verdicts[held.event_id].labels <= self.in_force.keys():
+                        verdicts[held.event_id] = admission.verdict(
+                            held, cg, self.graph, frozenset(self.in_force), protected
+                        )
+        t_decided = self.clock()
+        admitted = [held for held in pending if verdicts[held.event_id].admit]
+        releases = self.driver.release(
+            [
+                ActionRecord(
+                    hold_event(held.node_id, held.event_id),
+                    incident_id,
+                    2,
+                    0,
+                    t_alert,
+                    t_decided,
+                    state="in_force",
+                )
+                for held in admitted
+            ]
+        )
+        version = stored_policy_version(self.db)
+        records = []
+        with self.graph.transaction():
+            for held in pending:
+                result = verdicts[held.event_id]
+                release = next(
+                    (r for r in releases if r.action.object_id == held.event_id), None
+                )
+                if release is None:
+                    state = "kept"
+                elif release.state == "released":
+                    state = "admitted"
+                elif release.state == "release_unconfirmed":
+                    state = "held"  # decided again next time
+                else:
+                    state = "failed"
+                self.graph.decide_held(held.event_id, state, version)
+                if state == "kept" and self._kept.get(held.event_id) == result.reason:
+                    continue  # logged when first kept for this reason
+                self._kept[held.event_id] = result.reason
+                records.append(
+                    self._admission_record(
+                        held,
+                        result,
+                        release,
+                        [r for r in label_records if r.action in pushed[held.event_id]],
+                    )
+                )
+        if self.log is not None:
+            for record in records:
+                self.log.append(record)
+        return records
+
+    def _admission_record(self, held, result, release, labels) -> dict:
+        applied = release.t_release_applied if release else None
+        return {
+            "type": "admission",
+            "event_id": held.event_id,
+            "event": held.event,
+            "node_id": held.node_id,
+            "attempt_id": held.attempt_id,
+            "task_id": held.task_id,
+            "subject_id": held.subject_id,
+            "effect_class": held.effect_class,
+            "target": held.target,
+            "recipient_id": held.recipient_id,
+            "decision": "admit" if result.admit else "keep",
+            "reason": result.reason,
+            "blocking": result.blocking,
+            # Labels pushed (and fenced) for this event's head first.
+            "labels": [r.to_json() for r in labels],
+            "t_held": held.held_ms,  # node clock
+            "t_seen": held.seen_ms,
+            "t_decided": self.clock(),
+            "t_release_sent": release.t_release_sent if release else None,
+            "t_release_applied": applied,  # node clock
+            "release_state": release.state if release else None,
+            "release_error": release.error if release else None,
+            # Hold to admission, both on the node's clock.
+            "latency_ms": applied - held.held_ms if applied is not None else None,
+        }
+
     def renew_leases(self) -> None:
         """Renew controller leases on every known node (``LeaseRenewer``)."""
         self.renewer.renew(self.graph.known_nodes(), stored_policy_version(self.db))
@@ -618,6 +753,7 @@ class ContainmentMonitor:
         self.renew_leases()
         self.handle_alerts()
         self.resolve_frontier()
+        self.admit_held()
 
     # -- observability -----------------------------------------------------------
     def status(self) -> dict:
@@ -654,6 +790,12 @@ class ContainmentMonitor:
                 "nodes": len(graph.taint),
                 "sessions": len(graph.tainted_sessions),
             },
+            # Per-event admission: events held by labels, by state.
+            "held_events": dict(
+                self.db.execute(
+                    "SELECT state,COUNT(*) FROM containment_held GROUP BY state"
+                ).fetchall()
+            ),
             "g_c": self.last_graph,
             "last_solve": last.get("solve") if last else None,
             "last_decision": last,
