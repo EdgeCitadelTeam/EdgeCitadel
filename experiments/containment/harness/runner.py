@@ -43,7 +43,6 @@ from __future__ import annotations
 import itertools
 import json
 import re
-import shutil
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -778,24 +777,11 @@ def _collect(
                 (logs / f"{host}__{Path(proc_log).name}").write_bytes(data[-2_000_000:])
     if not keep_state:
         for host in {controller, *config.node_hosts.values()}:
-            if config.hosts[host].ssh is None:
-                shutil.rmtree(stack.host_dir(host), ignore_errors=True)
-            else:
-                stack.hosts[host].run(["rm", "-rf", stack.host_dir(host)])
+            stack.hosts[host].remove_tree(stack.host_dir(host))
 
 
 def _remote_logs(stack: RunStack, host: str, directory: str) -> list[str]:
-    names = []
-    for proc_dir in ("logs",):
-        listing = stack.hosts[host].run(
-            [
-                "sh",
-                "-c",
-                f"ls {directory}/{proc_dir}/*.log {directory}/workers/*/*.events.jsonl 2>/dev/null || true",
-            ]
-        )
-        names += [line for line in listing.split() if line]
-    return names
+    return stack.hosts[host].glob(directory, ["logs/*.log", "workers/*/*.events.jsonl"])
 
 
 def infrastructure_failure(meta: Mapping[str, Any]) -> str | None:

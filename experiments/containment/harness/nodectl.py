@@ -18,6 +18,7 @@ node has its own state directory, created fresh for each run.
 - ``schedule``: submit external requests through that connector, each at its
   time, and mark each with the run's services (``submitted`` with its runtime
   task, or ``refused`` with agentd's code) on the services' clock.
+- ``socket``: print the path of the node's agentd admin socket.
 """
 
 from __future__ import annotations
@@ -191,7 +192,7 @@ def schedule(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="harness.nodectl")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("serve", "configure", "install", "operator", "schedule"):
+    for name in ("serve", "configure", "install", "operator", "schedule", "socket"):
         command = sub.add_parser(name)
         command.add_argument("--state", required=True, type=Path)
     sub.choices["configure"].add_argument("--node", required=True)
@@ -215,6 +216,10 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(install(args.state, json.loads(args.agents.read_text()))))
     elif args.command == "operator":
         operator(args.state, args.recipient)
+    elif args.command == "socket":
+        from edgecitadel_agentd.service import socket_path_for
+
+        print(socket_path_for(agentd_dir(args.state)))
     elif args.command == "schedule":
         from ._worker import services as det_services
 

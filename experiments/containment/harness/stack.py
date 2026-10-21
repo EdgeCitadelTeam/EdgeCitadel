@@ -8,8 +8,11 @@ same code drives both modes through a ``Host``:
   workload node, all on one local NATS server;
 - lab: the controller host (jim-eq) runs the services, NATS and the Core
   aggregator; each workload node's agentd and workers run on its host over SSH
-  (``SSHHost``). Experiment processes use their own ports and directories and
-  never touch the hosts' resident EdgeCitadel services.
+  (``SSHHost``) or, for a host listed with ``helper``, through that host's
+  ``harness.labhelper`` over the lab's NATS (``HelperHost``: no SSH; start,
+  stop and collect harness processes and run directories only, under the
+  host's work root). Experiment processes use their own ports and directories
+  and never touch the hosts' resident EdgeCitadel services.
 
 Processes run from ``runtime_root``, an EdgeCitadel checkout that has the
 agentd and monitor of this revision (usually this checkout), with this
@@ -28,13 +31,17 @@ node by default).
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import os
 import secrets
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -72,6 +79,10 @@ class HostConfig:
     # services) listen on, and the other hosts reach them at: the tailnet
     # address in the lab. Defaults to ``address``.
     listen: str | None = None
+    # Drive this host through its labhelper instead of SSH: {"nats_url": the
+    # lab broker, "token_file": the broker token's file on the runner's host,
+    # "subject": the helper's subject (default harness.lab.<name>)}.
+    helper: dict[str, str] | None = None
 
     def pythonpath(self) -> str:
         return ":".join(
@@ -100,6 +111,7 @@ class Proc:
     pid: int
     log: str
     popen: subprocess.Popen[bytes] | None = None
+    unit: str | None = None  # the labhelper's unit (HelperHost)
 
 
 class LocalHost:
@@ -174,6 +186,16 @@ class LocalHost:
 
     def exists(self, path: str) -> bool:
         return Path(path).exists()
+
+    def glob(self, directory: str, patterns: Sequence[str]) -> list[str]:
+        return [
+            str(p)
+            for pattern in patterns
+            for p in sorted(Path(directory).glob(pattern))
+        ]
+
+    def remove_tree(self, path: str) -> None:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 class SSHHost:
@@ -265,8 +287,176 @@ class SSHHost:
             == "yes"
         )
 
+    def glob(self, directory: str, patterns: Sequence[str]) -> list[str]:
+        paths = " ".join(f"{shlex.quote(directory)}/{p}" for p in patterns)
+        return self._ssh(f"ls -d {paths} 2>/dev/null || true").split()
 
-def make_host(config: HostConfig) -> LocalHost | SSHHost:
+    def remove_tree(self, path: str) -> None:
+        self._ssh(f"rm -rf -- {shlex.quote(path)}")
+
+
+class HelperClient:
+    """A NATS connection to the lab broker on its own event-loop thread, shared
+    by every run that drives the same helper subject."""
+
+    _shared: dict[tuple[str, str], HelperClient] = {}
+
+    def __init__(self, url: str, token: str) -> None:
+        self.loop = asyncio.new_event_loop()
+        threading.Thread(target=self.loop.run_forever, daemon=True).start()
+        self.nc = self._wait(self._connect(url, token), 20)
+
+    @classmethod
+    def for_helper(cls, url: str, token_file: str, subject: str) -> HelperClient:
+        key = (url, subject)
+        if key not in cls._shared:
+            path = Path(token_file)
+            if path.is_symlink() or not path.is_file():
+                raise StackError(f"labhelper {subject}: no broker token file")
+            cls._shared[key] = cls(url, path.read_text().strip())
+        return cls._shared[key]
+
+    @staticmethod
+    async def _connect(url: str, token: str) -> Any:
+        from nats.aio.client import Client as NATS
+
+        nc = NATS()
+        await nc.connect(
+            servers=[url],
+            token=token,
+            connect_timeout=3,
+            reconnect_time_wait=0.5,
+            max_reconnect_attempts=-1,
+        )
+        return nc
+
+    def _wait(self, coroutine: Any, timeout: float) -> Any:
+        return asyncio.run_coroutine_threadsafe(coroutine, self.loop).result(timeout)
+
+    def close(self) -> None:
+        for key, client in list(self._shared.items()):
+            if client is self:
+                del self._shared[key]
+        self._wait(self.nc.close(), 10)
+        self.loop.call_soon_threadsafe(self.loop.stop)
+
+    def request(self, subject: str, payload: Mapping[str, Any], timeout: float) -> Any:
+        async def call() -> Any:
+            message = await self.nc.request(
+                subject, json.dumps(payload).encode(), timeout=timeout
+            )
+            return json.loads(message.data)
+
+        try:
+            return self._wait(call(), timeout + 5)
+        except Exception as error:  # noqa: BLE001 - a transport failure of the lab path
+            raise StackError(f"labhelper {subject}: {type(error).__name__}") from None
+
+
+class HelperHost:
+    """A lab host driven through its ``harness.labhelper`` over NATS (no SSH).
+
+    The helper starts harness processes as ``firebreak-exp-h-*`` units, runs
+    short ``nodectl`` commands and reads and writes files, all under the host's
+    work root; secrets travel in the request and land in mode-600 files there.
+    """
+
+    def __init__(self, config: HostConfig) -> None:
+        assert config.helper is not None
+        from .labhelper import subject_for
+
+        self.config = config
+        self.subject = config.helper.get("subject") or subject_for(config.name)
+        self.client = HelperClient.for_helper(
+            config.helper["nats_url"], config.helper["token_file"], self.subject
+        )
+
+    def _call(self, op: str, args: Mapping[str, Any], wait: float = 60) -> Any:
+        reply = self.client.request(self.subject, {"op": op, "args": dict(args)}, wait)
+        if not reply.get("ok"):
+            raise StackError(f"labhelper {self.config.name} {op}: {reply.get('error')}")
+        return reply["value"]
+
+    def start(
+        self,
+        name: str,
+        argv: Sequence[str],
+        *,
+        env: Mapping[str, str],
+        cwd: str,
+        log: str,
+    ) -> Proc:
+        value = self._call(
+            "start",
+            {
+                "name": name,
+                "argv": list(argv),
+                "env": {**self.config.base_env(), **env},
+                "cwd": cwd,
+                "log": log,
+            },
+        )
+        return Proc(name, self.config.name, int(value["pid"]), log, unit=value["unit"])
+
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        cwd: str | None = None,
+        timeout: float = 60,
+    ) -> str:
+        return str(
+            self._call(
+                "run",
+                {
+                    "argv": list(argv),
+                    "env": {**self.config.base_env(), **(env or {})},
+                    "cwd": cwd,
+                    "timeout": timeout,
+                },
+                wait=timeout + 10,
+            )
+        )
+
+    def alive(self, proc: Proc) -> bool:
+        return bool(self._call("alive", {"unit": proc.unit}))
+
+    def stop(self, proc: Proc, timeout: float = 10) -> None:
+        self._call("stop", {"unit": proc.unit, "timeout": timeout}, wait=timeout + 30)
+
+    def write(self, path: str, data: bytes, mode: int = 0o600) -> None:
+        payload = base64.b64encode(data).decode()
+        self._call("write", {"path": path, "data": payload, "mode": mode})
+
+    def read(self, path: str) -> bytes:
+        chunks, offset = [], 0
+        while True:
+            value = self._call("read", {"path": path, "offset": offset})
+            chunk = base64.b64decode(value["data"])
+            chunks.append(chunk)
+            offset += len(chunk)
+            if value["eof"] or not chunk:
+                return b"".join(chunks)
+
+    def exists(self, path: str) -> bool:
+        return bool(self._call("exists", {"path": path}))
+
+    def glob(self, directory: str, patterns: Sequence[str]) -> list[str]:
+        return list(
+            self._call("glob", {"directory": directory, "patterns": list(patterns)})
+        )
+
+    def remove_tree(self, path: str) -> None:
+        self._call("remove", {"path": path})
+
+
+Host = LocalHost | SSHHost | HelperHost
+
+
+def make_host(config: HostConfig) -> Host:
+    if config.helper:
+        return HelperHost(config)
     return SSHHost(config) if config.ssh else LocalHost(config)
 
 
@@ -331,7 +521,24 @@ class StackConfig:
                 raise StackError(
                     f"host {name}: unset environment variables in {unresolved}"
                 )
+            helper = fields.get("helper")
+            if helper is not None:
+                helper = {k: os.path.expandvars(v) for k, v in dict(helper).items()}
+                if set(helper) - {"nats_url", "token_file", "subject"} or not (
+                    helper.get("nats_url") and helper.get("token_file")
+                ):
+                    raise StackError(
+                        f"host {name}: helper takes nats_url, token_file and subject"
+                    )
+                if any("${" in v for v in helper.values()):
+                    raise StackError(
+                        f"host {name}: unset environment variables in helper"
+                    )
+                fields["helper"] = helper
             hosts[name] = HostConfig(name=name, **fields)
+        transport = _transport(document.get("control_transport", "local"))
+        if transport != "nats" and any(h.helper for h in hosts.values()):
+            raise StackError("hosts driven by a labhelper need control_transport nats")
         return cls(
             mode=document["mode"],
             hosts=hosts,
@@ -340,7 +547,7 @@ class StackConfig:
             ports=dict(document.get("ports", {})),
             tau_ms=float(document.get("tau_ms", 50.0)),
             monitor_overrides=dict(document.get("monitor_overrides", {})),
-            control_transport=_transport(document.get("control_transport", "local")),
+            control_transport=transport,
             netem=_netem(document.get("netem", {})),
             effect_sink=_effect_sink(document.get("effect_sink", {"kind": "ledger"})),
             controller_lease_ms=_lease(document.get("controller_lease_ms", 30_000)),
@@ -922,6 +1129,8 @@ class RunStack:
         """Install a latency profile on every host when the stack file allows it."""
         if not profile or not self.config.netem.get("apply"):
             return False
+        if any(isinstance(h, HelperHost) for h in self.hosts.values()):
+            raise StackError("netem profiles are installed over SSH, not a labhelper")
         from .netem import commands
 
         for host, lines in commands(self.config.netem, profile).items():
@@ -941,9 +1150,11 @@ class RunStack:
         out = self.hosts[host].run(
             [
                 self._python(host),
-                "-c",
-                "import sys\nfrom pathlib import Path\nfrom edgecitadel_agentd.service import socket_path_for\nprint(socket_path_for(Path(sys.argv[1])))",
-                f"{self.node_state(node)}/agentd",
+                "-m",
+                "harness.nodectl",
+                "socket",
+                "--state",
+                self.node_state(node),
             ]
         )
         return out.strip()

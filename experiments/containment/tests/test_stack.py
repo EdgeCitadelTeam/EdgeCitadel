@@ -97,7 +97,9 @@ def test_shipped_stack_files_name_hosts_only():
         text = path.read_text()
         document = json.loads(text)
         # A Home Assistant token is only ever referenced by its file's path.
-        without_reference = text.replace('"token_file": "${HARNESS_HA_TOKEN_FILE}"', "")
+        without_reference = text.replace(
+            '"token_file": "${HARNESS_HA_TOKEN_FILE}"', ""
+        ).replace('"token_file": "${HARNESS_HELPER_TOKEN_FILE}"', "")
         assert "token" not in without_reference.lower(), path.name
         assert "password" not in text.lower(), path.name
         assert set(document["node_hosts"].values()) <= set(document["hosts"])
@@ -256,3 +258,34 @@ def test_lab_services_listen_on_the_tailnet_and_core_api_on_the_loopback(
     assert url.startswith("nats://100.64.0.1:")
     assert 'host: "100.64.0.1"' in conf and 'http: "127.0.0.1:' in conf
     assert "0.0.0.0" not in conf
+
+
+def test_helper_hosts_need_the_nats_control_path_and_no_netem(tmp_path, monkeypatch):
+    for name in (
+        "HARNESS_PYTHON",
+        "HARNESS_REPO",
+        "HARNESS_RUNTIME_ROOT",
+        "HARNESS_NATS_SERVER",
+        "HARNESS_CONTROLLER_LISTEN",
+        "HARNESS_REMOTE_PYTHON",
+        "HARNESS_REMOTE_REPO",
+        "HARNESS_REMOTE_RUNTIME_ROOT",
+        "HARNESS_REMOTE_WORK_ROOT",
+        "HARNESS_HELPER_NATS_URL",
+        "HARNESS_HELPER_TOKEN_FILE",
+    ):
+        monkeypatch.setenv(name, f"/x/{name.lower()}")
+    shipped = stack.HARNESS_ROOT / "configs" / "lab-helper.json"
+    config = stack.StackConfig.load(shipped)
+    edge = config.hosts["netsys-endurance"]
+    assert edge.ssh is None and edge.helper == {
+        "nats_url": "/x/harness_helper_nats_url",
+        "token_file": "/x/harness_helper_token_file",
+        "subject": "harness.lab.netsys-endurance",
+    }
+    document = json.loads(shipped.read_text())
+    document["control_transport"] = "ssh_forward"
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(stack.StackError, match="control_transport nats"):
+        stack.StackConfig.load(path)

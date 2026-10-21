@@ -14,7 +14,8 @@ Layout (``experiments/containment``):
 - ``harness/services.py``: ledger, worker events and readiness (one per run)
 - ``harness/deploy.py``: agent grants, slots and the monitor configuration
 - ``harness/stack.py``, ``nodectl.py``, ``coreq.py``, ``aggregator_shim.py``:
-  the per-run stack on local or SSH hosts
+  the per-run stack on local, SSH or helper-driven hosts; ``labhelper.py``: the
+  per-host helper that drives a lab host over NATS instead of SSH
 - ``harness/runner.py``: the paired grid and one run's control loop
 - ``harness/simbackend.py``, ``report.py``, ``names.py``: simulator rows,
   CSVs, statistics and figures; ``netem.py``: lab latency profiles
@@ -78,7 +79,18 @@ the edge hosts, and ``HARNESS_CONTROLLER_LISTEN`` (jim-eq's tailnet address):
 the run's NATS and services listen there only, NATS monitoring and Core's API
 (used by the runner alone) on the loopback. Every run uses its own ports, NATS, owner key and
 ``/var/tmp/edgecitadel-containment/<run>`` state on each host and never
-touches the resident EdgeCitadel services. ``control_transport:
+touches the resident EdgeCitadel services.
+
+Without SSH from jim-eq (``configs/lab-helper.json``): start
+``python -m harness.labhelper`` once on each edge host (see its docstring; a
+``firebreak-exp-labhelper`` unit), connected to the lab's experiment broker,
+and run the grid on jim-eq. The runner then starts, stops and collects each
+run's processes (``firebreak-exp-h-<run>-<process>`` units) and run
+directories through the helper, which refuses anything outside the host's
+work root or other programs. Set ``HARNESS_HELPER_NATS_URL`` and
+``HARNESS_HELPER_TOKEN_FILE`` (the broker and its token's file on jim-eq),
+``HARNESS_REMOTE_WORK_ROOT`` (the helpers' ``--root``) and the variables
+above; control goes over the run's NATS and netem profiles are not applied. ``control_transport:
 ssh_forward`` forwards remote admin sockets over SSH. The physical case
 (``configs/lab-homeassistant.json``) also needs ``HARNESS_HA_URL`` (the Home
 Assistant the services forward to), ``HARNESS_HA_TOKEN_FILE`` (the path, the
