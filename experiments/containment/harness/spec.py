@@ -187,6 +187,10 @@ class AlertTrigger:
     run start); fires ``delay_s`` (spec seconds) after the ``count``-th match.
     ``consume`` counts reader tasks that started computing with the item.
     ``sim_t`` is the simulator's alert time for this instance, when known.
+    ``posted_on_receipt`` (``produce`` with no delay only): the run's services
+    post the alert themselves when they receive the matching produce event,
+    instead of the controller after its next poll of their feed, so the alert
+    does not lag the event by the controller's polling and Core lookups.
     The alert is an operator alert. Whether it also hands the monitor the
     faulty source as the root cause is the experiment's root mode (see
     ``runner``), not this field: ``designate_root`` is read for older specs
@@ -200,6 +204,7 @@ class AlertTrigger:
     delay_s: float = 0.0
     designate_root: bool = True
     sim_t: float | None = None
+    posted_on_receipt: bool = False
 
 
 @dataclass(frozen=True)
@@ -463,6 +468,7 @@ def from_dict(document: Mapping[str, Any]) -> Spec:
                 "delay_s",
                 "designate_root",
                 "sim_t",
+                "posted_on_receipt",
             },
             where,
         )
@@ -477,6 +483,7 @@ def from_dict(document: Mapping[str, Any]) -> Spec:
             _number(a.get("delay_s", 0.0), f"{where}.delay_s"),
             bool(a.get("designate_root", True)),
             None if a.get("sim_t") is None else _number(a["sim_t"], f"{where}.sim_t"),
+            bool(a.get("posted_on_receipt", False)),
         )
     raw_rogue = document.get("rogue", {})
     if not isinstance(raw_rogue, Mapping):
@@ -551,6 +558,8 @@ def to_dict(spec: Spec) -> dict[str, Any]:
         out = {k: v for k, v in asdict(a).items() if v is not None}
         if out.get("count") == 1:
             del out["count"]
+        if not out.get("posted_on_receipt"):
+            out.pop("posted_on_receipt", None)
         return out
 
     fault: dict[str, Any] = {"class": spec.fault.cls}
@@ -708,6 +717,10 @@ def validate(spec: Spec) -> None:
             raise SpecError(f"{where}.item: unknown item")
         if alert.event in {"start", "end"} and alert.task not in tasks:
             raise SpecError(f"{where}.task: unknown task")
+        if alert.posted_on_receipt and (alert.event != "produce" or alert.delay_s):
+            raise SpecError(
+                f"{where}.posted_on_receipt: only for a produce event with no delay"
+            )
 
 
 def _validate_fault(spec: Spec, derived: Derived) -> None:

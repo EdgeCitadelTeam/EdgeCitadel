@@ -209,3 +209,104 @@ def test_scheduled_effects_stay_pending_until_the_sink_commits(served):
     client.ledger({"effect_id": "E_1", "issuer": "B.t0", "phase": "committed"})
     client.ledger({"effect_id": "E_2", "issuer": "B.t0", "phase": "denied"})
     assert services.pending_effects()["due_ms"] == []
+
+
+@pytest.fixture
+def intake():
+    """A stand-in for the monitor's alert intake: records each post."""
+    from http.server import BaseHTTPRequestHandler
+
+    posts = []
+
+    class Intake(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            return
+
+        def do_POST(self):  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            posts.append(({k.lower(): v for k, v in self.headers.items()}, body))
+            reply = json.dumps({"alert_id": "a-1"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Intake)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/api/containment/alerts", posts
+    server.shutdown()
+    server.server_close()
+
+
+def wait_for(probe, timeout=5.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = probe()
+        if value:
+            return value
+        time.sleep(0.02)
+    raise AssertionError("timed out")
+
+
+@pytest.mark.parametrize("armed_first", [True, False])
+def test_an_alert_is_posted_once_on_receipt_of_its_produce_event(
+    served, intake, armed_first
+):
+    """Armed before or after the produce event arrives, the services mark and
+    post the alert once, timed from the event's receipt; another item, a
+    non-task invocation and a second produce do not trigger it."""
+    url, services, directory = served
+    alert_url, posts = intake
+    client = ServicesClient(url, "secret")
+    services.arm_alert({"item": "sched@v1"})
+    alert = {"kind": "operator", "attempt_id": "att-1", "root": {"attempt_id": "att-1"}}
+    arm = {"alert": alert, "url": alert_url, "headers": {"x-admin": "tok"}}
+    if armed_first:
+        services.arm_alert(arm)
+    client.event({"kind": "produce", "item": "other@v1", "inv_kind": "task"})
+    client.event({"kind": "produce", "item": "sched@v1", "inv_kind": "rogue"})
+    # The worker's client returns nothing; the services stamp the event.
+    produced = services.event(
+        {"kind": "produce", "item": "sched@v1", "inv_kind": "task"}
+    )
+    client.event({"kind": "produce", "item": "sched@v1", "inv_kind": "task"})
+    if not armed_first:
+        assert services.alert_state()["triggered_ms"] == produced["t_ms"]
+        assert not posts  # nothing to post yet
+        services.arm_alert(arm)
+    state = wait_for(lambda: (s := services.alert_state()).get("done_ms") and s)
+    assert state["triggered_ms"] == produced["t_ms"] <= state["marked_ms"]
+    assert state["trigger_seq"] == produced["seq"]
+    assert state["reply"] == {"alert_id": "a-1"}
+    assert "headers" not in state and "url" not in state
+    ((headers, body),) = posts
+    assert body == alert and headers["x-admin"] == "tok"
+    marks = [json.loads(line) for line in (directory / "marks.jsonl").open()]
+    assert marks == [
+        {
+            "name": "alert",
+            "posted": True,
+            "on_receipt": True,
+            "triggered_ms": produced["t_ms"],
+            "t_ms": state["marked_ms"],
+        }
+    ]
+    assert "tok" not in (directory / "marks.jsonl").read_text()
+    services.arm_alert(arm)  # armed again: still one post
+    assert len(posts) == 1
+
+
+def test_an_uncontained_run_only_marks_its_alert_time(served, intake):
+    url, services, directory = served
+    _, posts = intake
+    services.arm_alert({"item": "sched@v1", "post": False})
+    produced = services.event(
+        {"kind": "produce", "item": "sched@v1", "inv_kind": "task"}
+    )
+    state = wait_for(lambda: (s := services.alert_state()).get("done_ms") and s)
+    assert state["triggered_ms"] == produced["t_ms"] and state["post"] is False
+    mark = json.loads((directory / "marks.jsonl").read_text())
+    assert mark["name"] == "alert" and mark["posted"] is False
+    assert posts == []

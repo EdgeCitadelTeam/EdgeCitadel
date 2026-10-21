@@ -49,6 +49,14 @@ def test_yaml_spec_loads_like_json(tmp_path, mini_spec):
             "delay_s",
         ),
         (lambda d: d["alerts"]["early"].update(item="nope"), "unknown item"),
+        (
+            lambda d: d["alerts"]["early"].update(posted_on_receipt=True),
+            "posted_on_receipt: only for a produce event with no delay",
+        ),
+        (
+            lambda d: d["alerts"]["late"].update(posted_on_receipt=True, delay_s=0),
+            "posted_on_receipt: only for a produce event with no delay",
+        ),
         (lambda d: d["placement"].pop("s-b"), "no node for sites"),
         (lambda d: d["rogue"].update(rate=1.5), "probability"),
     ],
@@ -164,3 +172,12 @@ def test_lease_runaway_gives_the_faulty_task_a_lease_for_its_subtree():
     plan = S.compile_plan(spec, run_id="r1", time_scale=1.0)
     [create] = [c for c in plan["tasks"]["R.plan"]["creates"] if c["task"] == "B.t0"]
     assert create["lease"] == {"max_effects": 1}
+
+
+def test_an_alert_posted_on_receipt_round_trips_and_is_left_out_by_default():
+    document = copy.deepcopy(mini_document())
+    document["alerts"]["early"].update(delay_s=0, posted_on_receipt=True)
+    spec = load(document)
+    assert spec.alerts["early"].posted_on_receipt
+    assert S.to_dict(spec)["alerts"]["early"]["posted_on_receipt"] is True
+    assert "posted_on_receipt" not in S.to_dict(spec)["alerts"]["late"]

@@ -81,6 +81,12 @@ START_MARGIN_MS = 1500
 EFFECT_GRACE_MS = 5000
 # Core ingests the faulty task's run/started about a second after it happened.
 ATTEMPT_LOOKUP_S = 1.0
+# An alert the services post on receipt waits for the faulty invocation's
+# attempt: look it up at once and then this often.
+ATTEMPT_LOOKUP_FAST_S = 0.2
+# A trigger that fired with the attempt still unknown this long after arms
+# the alert with the task as its subject (recorded as an error).
+ARM_FALLBACK_S = 5.0
 # How long a ranked-mode alert waits for Core to know the symptom invocation.
 SYMPTOM_LOOKUP_S = 5.0
 ROOT_MODES = ("given", "ranked")
@@ -668,11 +674,6 @@ def _drive(
     run_dir: Path,
 ) -> None:
     scale = experiment.time_scale
-    t0 = int(stack.services("GET", "/clock")["t_ms"]) + START_MARGIN_MS
-    meta["t0_ms"] = t0
-    stack.services("POST", "/mark", {"name": "t0", "t0_ms": t0})
-    for node, entries in request_schedule(spec, plan, cell.run_id, t0, scale).items():
-        stack.schedule(node, entries)
     trigger = (
         spec.alerts.get(cell.alert)
         if cell.alert and cell.strategy != "reference"
@@ -680,6 +681,30 @@ def _drive(
     )
     if cell.alert and cell.strategy != "reference" and trigger is None:
         raise ValueError(f"instance has no alert '{cell.alert}'")
+    alert_due = cell.strategy not in {"reference", "none"}
+    # An alert posted on receipt: the services post it (or, uncontained, mark
+    # its time) when the produce event reaches them. A stack without an HTTP
+    # alert intake keeps the controller's path, with no delay either.
+    endpoint = getattr(stack, "alert_endpoint", lambda: None)()
+    on_receipt = bool(
+        trigger is not None
+        and trigger.posted_on_receipt
+        and (endpoint is not None or not alert_due)
+    )
+    if on_receipt:
+        assert trigger is not None
+        stack.services(
+            "POST",
+            "/alert/arm",
+            {"item": trigger.item, **({} if alert_due else {"post": False})},
+        )
+    if trigger is not None and trigger.posted_on_receipt:
+        meta["alert_posted_by"] = "services" if on_receipt else "controller"
+    t0 = int(stack.services("GET", "/clock")["t_ms"]) + START_MARGIN_MS
+    meta["t0_ms"] = t0
+    stack.services("POST", "/mark", {"name": "t0", "t0_ms": t0})
+    for node, entries in request_schedule(spec, plan, cell.run_id, t0, scale).items():
+        stack.schedule(node, entries)
     watch = TriggerWatch(spec, trigger, t0, scale) if trigger else None
     origin = fault_origin(spec)
     deadline = (
@@ -693,7 +718,8 @@ def _drive(
     ended: set[str] = set()
     origin_rt = origin_attempt = None
     next_lookup = next_status = 0.0
-    alert_due = cell.strategy not in {"reference", "none"}
+    lookup_every = ATTEMPT_LOOKUP_FAST_S if on_receipt else ATTEMPT_LOOKUP_S
+    armed = False
     decision_seen = False
     while True:
         feed = stack.services("GET", f"/events?after={after}")
@@ -709,7 +735,7 @@ def _drive(
                 and origin_rt is None
             ):
                 origin_rt = event["rt"]
-                next_lookup = time.monotonic() + ATTEMPT_LOOKUP_S
+                next_lookup = time.monotonic() + (0.0 if on_receipt else lookup_every)
             if watch:
                 watch.observe(event)
         if (
@@ -720,10 +746,27 @@ def _drive(
         ):
             # Resolve the faulty invocation ahead of the trigger (Core lags the run).
             origin_attempt = stack.attempt_of(origin_rt)
-            next_lookup = time.monotonic() + ATTEMPT_LOOKUP_S
+            next_lookup = time.monotonic() + lookup_every
         now_ms = int(feed["t_ms"])
+        if on_receipt and alert_due and not armed and origin_rt is not None:
+            late = (
+                watch is not None
+                and watch.fire_at() is not None
+                and now_ms - watch.fire_at() > ARM_FALLBACK_S * 1000
+            )
+            if origin_attempt is not None or late:
+                assert watch is not None and endpoint is not None
+                alert = _alert_payload(
+                    stack, spec, cell, watch, origin_rt, origin_attempt, meta
+                )
+                meta["alert_payload"] = alert
+                stack.services("POST", "/alert/arm", {"alert": alert, **endpoint})
+                armed = True
+        if on_receipt and meta["t_alert_ms"] is None:
+            _alert_on_receipt(stack, meta)
         if (
             watch
+            and not on_receipt
             and meta["t_alert_ms"] is None
             and watch.fire_at() is not None
             and now_ms >= watch.fire_at()
@@ -768,6 +811,8 @@ def _drive(
             meta["status"] = "timeout"
             break
         time.sleep(POLL_S)
+    if on_receipt and alert_due and meta["t_alert_ms"] is not None:
+        _alert_on_receipt(stack, meta, wait_s=10.0)  # the post's reply
     meta["n_ended"] = len(ended)
     meta["t_end_ms"] = int(stack.services("GET", "/clock")["t_ms"])
     if trigger is not None and meta["t_alert_ms"] is None:
@@ -786,6 +831,29 @@ def _effects_settled(stack: RunStack) -> bool:
     return all(due + EFFECT_GRACE_MS <= pending["t_ms"] for due in pending["due_ms"])
 
 
+def _alert_on_receipt(
+    stack: RunStack, meta: dict[str, Any], wait_s: float = 0.0
+) -> None:
+    """Take an alert the services posted on receipt into the run's record:
+    its trigger and mark times and, once there, the post's reply."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        state = stack.services("GET", "/alert")
+        if state.get("marked_ms") is not None and meta["t_alert_ms"] is None:
+            meta["t_alert_ms"] = int(state["marked_ms"])
+            meta["alert_trigger_ms"] = int(state["triggered_ms"])
+            meta["alert_armed_ms"] = state.get("armed_ms")
+        if state.get("done_ms") is not None or state.get("post") is False:
+            if "alert_payload" in meta and "reply" not in meta["alert_payload"]:
+                meta["alert_payload"]["reply"] = state.get("reply")
+                if state.get("error"):
+                    meta["errors"].append(f"alert post failed: {state['error']}")
+            return
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(POLL_S)
+
+
 def _post_alert(
     stack: RunStack,
     spec: Spec,
@@ -795,6 +863,25 @@ def _post_alert(
     origin_attempt: str | None,
     meta: dict[str, Any],
 ) -> None:
+    """Post the run's operator alert (``_alert_payload``) now."""
+    alert = _alert_payload(stack, spec, cell, watch, origin_rt, origin_attempt, meta)
+    t_posted = int(
+        stack.services("POST", "/mark", {"name": "alert", "posted": True})["t_ms"]
+    )
+    reply = stack.post_alert(alert)
+    meta["t_alert_ms"] = t_posted
+    meta["alert_payload"] = {**alert, "reply": reply}
+
+
+def _alert_payload(
+    stack: RunStack,
+    spec: Spec,
+    cell: RunCell,
+    watch: TriggerWatch,
+    origin_rt: str,
+    origin_attempt: str | None,
+    meta: dict[str, Any],
+) -> dict[str, Any]:
     """The operator alert of the run's root mode.
 
     ``given``: the alert names the faulty invocation and designates it as the
@@ -835,12 +922,7 @@ def _post_alert(
     }
     if cell.root_mode == "given":
         alert["root"] = dict(subject)
-    t_posted = int(
-        stack.services("POST", "/mark", {"name": "alert", "posted": True})["t_ms"]
-    )
-    reply = stack.post_alert(alert)
-    meta["t_alert_ms"] = t_posted
-    meta["alert_payload"] = {**alert, "reply": reply}
+    return alert
 
 
 def _collect(

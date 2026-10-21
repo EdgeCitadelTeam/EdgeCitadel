@@ -52,7 +52,9 @@ def test_a_stopped_service_costs_its_expected_future_requests():
     late = svc.monitor_settings(spec, "late", 1.0)
     assert early["boundary"] == late["boundary"] == "defer"
     # rate x (end of requests - nominal alert time)
-    assert math.isclose(early["future_requests"]["assistant"], 0.5 * (85.0 - 20.8))
+    # The early alert is the schedule's produce event itself (P.sched ends at
+    # 20.5 s; amended 2026-10-21 from 0.3 s after it).
+    assert math.isclose(early["future_requests"]["assistant"], 0.5 * (85.0 - 20.5))
     assert late["future_requests"]["assistant"] < early["future_requests"]["assistant"]
     assert svc.monitor_settings(spec, "early", None).keys() == {
         "boundary",
@@ -129,3 +131,18 @@ def test_the_svc_grids_have_their_planned_sizes():
     }
     # 11 strategies (none included) x 2 alerts, plus the no-fault reference.
     assert sizes == {"svc-smoke": 23, "svc-pilot": 3 * 23}
+
+
+def test_the_early_alert_is_the_produce_event_posted_on_receipt():
+    spec = S.load(WORKLOAD)
+    early, late = spec.alerts["early"], spec.alerts["late"]
+    assert (early.event, early.item, early.delay_s) == ("produce", "sched@v1", 0.0)
+    assert early.posted_on_receipt
+    # The late alert is unchanged.
+    assert (late.event, late.item, late.count, late.delay_s) == (
+        "consume",
+        "sched@v1",
+        1,
+        15.0,
+    )
+    assert not late.posted_on_receipt

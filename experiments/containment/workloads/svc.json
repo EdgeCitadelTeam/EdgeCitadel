@@ -1325,8 +1325,9 @@
   "early": {
    "event": "produce",
    "item": "sched@v1",
-   "delay_s": 0.3,
-   "designate_root": true
+   "delay_s": 0.0,
+   "designate_root": true,
+   "posted_on_receipt": true
   },
   "late": {
    "event": "consume",
@@ -1373,7 +1374,7 @@
    ],
    "planner_compute_s": 0.5,
    "schedule_s": 20.0,
-   "alert_early_delay_s": 0.3,
+   "alert_early_delay_s": 0.0,
    "alert_late_delay_s": 15.0,
    "spare_slots": 2
   }

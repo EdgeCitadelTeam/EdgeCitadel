@@ -1462,11 +1462,19 @@ class RunStack:
         )
 
     def post_alert(self, alert: Mapping[str, Any]) -> dict[str, Any]:
-        return http_json(
-            self.aggregator_url + "/api/containment/alerts",
-            data=dict(alert),
-            headers={"x-edgecitadel-admin-token": self.admin_token},
-        )
+        endpoint = self.alert_endpoint()
+        assert endpoint is not None
+        return http_json(endpoint["url"], data=dict(alert), headers=endpoint["headers"])
+
+    def alert_endpoint(self) -> dict[str, Any] | None:
+        """Where an alert is posted over HTTP, so the run's services can post
+        one on receipt (None: the stack has no alert intake to hand over)."""
+        if self.bare:
+            return None
+        return {
+            "url": self.aggregator_url + "/api/containment/alerts",
+            "headers": {"x-edgecitadel-admin-token": self.admin_token},
+        }
 
     def schedule(self, node: str, entries: list[dict[str, Any]]) -> None:
         """Submit the node's external requests at their times (``nodectl

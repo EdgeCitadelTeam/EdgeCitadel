@@ -25,6 +25,15 @@ on one clock (the monitor runs on the same host in both modes):
   the number of distinct delivery invocations. It carries no content.
 - ``POST /spawn``: reserve one undeclared invocation under the run's cap.
 - ``POST /mark``: the controller's own time stamps (run start, alert).
+- ``POST /alert/arm`` and ``GET /alert``: an alert posted on receipt (an
+  ``AlertTrigger`` with ``posted_on_receipt``). The controller names the
+  produced ``item`` before the run starts and, once it resolved the faulty
+  invocation, hands over the alert and where to post it (or ``post: false``
+  for an uncontained run, whose alert time is only marked). When the services
+  have both the item's first produce event and the alert, they mark
+  ``alert`` and post it from a thread, without waiting for the controller's
+  next poll. ``GET /alert`` reports the trigger, mark and post times and the
+  reply; never the post's headers.
 
 Every request must carry the run's ``X-Harness-Token``; records are appended to
 JSON-lines files in the run directory and flushed one by one.
@@ -72,6 +81,8 @@ class RunServices:
         self._spawned: set[str] = set()
         # Effect id -> due time of a scheduled (or held) effect not yet resolved.
         self._pending: dict[str, int] = {}
+        # The alert posted on receipt (POST /alert/arm), with its credentials.
+        self._alert: dict[str, Any] = {}
 
     def close(self) -> None:
         with self._lock:
@@ -92,7 +103,103 @@ class RunServices:
                 self._ready[str(record["target"])][str(record["item"])].add(
                     str(record["rt"])
                 )
+            alert = self._alert
+            if (
+                alert.get("item") is not None
+                and alert.get("triggered_ms") is None
+                and record.get("kind") == "produce"
+                and record.get("inv_kind") == "task"
+                and record.get("item") == alert["item"]
+            ):
+                alert["triggered_ms"] = stamped["t_ms"]
+                alert["trigger_seq"] = stamped["seq"]
+            fire = self._alert_ready_locked()
+        if fire:
+            self._fire_alert()
         return {"seq": stamped["seq"], "t_ms": stamped["t_ms"]}
+
+    # -- the alert posted on receipt ---------------------------------------------
+    def arm_alert(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Name the trigger's ``item``, then the ``alert`` with its ``url`` and
+        ``headers`` (or ``post: false``); fires once both it and the trigger
+        are there."""
+        with self._lock:
+            alert = self._alert
+            if "item" in record:
+                alert["item"] = str(record["item"])
+            if record.get("post") is False:
+                alert["post"] = False
+            if "alert" in record:
+                if not isinstance(record["alert"], dict) or not record.get("url"):
+                    raise ValueError("alert and url required")
+                alert.update(
+                    alert=dict(record["alert"]),
+                    url=str(record["url"]),
+                    headers={
+                        str(k): str(v) for k, v in (record.get("headers") or {}).items()
+                    },
+                    armed_ms=now_ms(),
+                )
+            fire = self._alert_ready_locked()
+        if fire:
+            self._fire_alert()
+        return self.alert_state()
+
+    def _alert_ready_locked(self) -> bool:
+        alert = self._alert
+        if alert.get("fired") or alert.get("triggered_ms") is None:
+            return False
+        if alert.get("post") is not False and "alert" not in alert:
+            return False
+        alert["fired"] = True
+        return True
+
+    def _fire_alert(self) -> None:
+        threading.Thread(target=self._post_alert, daemon=True).start()
+
+    def _post_alert(self) -> None:
+        with self._lock:
+            alert = dict(self._alert)
+        posted = alert.get("post") is not False
+        marked = self.mark(
+            {
+                "name": "alert",
+                "posted": posted,
+                "on_receipt": True,
+                "triggered_ms": alert["triggered_ms"],
+            }
+        )["t_ms"]
+        outcome: dict[str, Any] = {"marked_ms": marked}
+        if posted:
+            try:
+                outcome["reply"] = post_json(
+                    alert["url"], alert["alert"], alert["headers"]
+                )
+            except (OSError, ValueError, urllib.error.URLError) as error:
+                # The type only: no URL, header or body in the record.
+                outcome["error"] = type(error).__name__
+        outcome["done_ms"] = now_ms()
+        with self._lock:
+            self._alert.update(outcome)
+
+    def alert_state(self) -> dict[str, Any]:
+        with self._lock:
+            alert = self._alert
+            return {
+                key: alert[key]
+                for key in (
+                    "item",
+                    "post",
+                    "triggered_ms",
+                    "trigger_seq",
+                    "armed_ms",
+                    "marked_ms",
+                    "reply",
+                    "error",
+                    "done_ms",
+                )
+                if key in alert
+            }
 
     def ledger(self, record: dict[str, Any]) -> dict[str, Any]:
         key = (str(record["effect_id"]), str(record["issuer"]), str(record["phase"]))
@@ -176,6 +283,19 @@ GATEWAY_FIELDS = (
 )
 
 
+def post_json(url: str, body: dict[str, Any], headers: dict[str, str]) -> Any:
+    """POST ``body`` as JSON (no proxy); the reply's JSON."""
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", **headers},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=30) as response:
+        return json.loads(response.read() or b"null")
+
+
 def forward(upstream: str, path: str, body: dict[str, Any], authorization: str) -> int:
     """Pass one Home Assistant service call on; returns its HTTP status."""
     request = urllib.request.Request(
@@ -240,6 +360,8 @@ def make_handler(
                 self._reply(200, services.pending_effects())
             elif url.path == "/health":
                 self._reply(200, {"ok": True})
+            elif url.path == "/alert":
+                self._reply(200, services.alert_state())
             else:
                 self._reply(404, {"error": "not found"})
 
@@ -301,6 +423,7 @@ def make_handler(
                     "/ledger": services.ledger,
                     "/spawn": services.spawn,
                     "/mark": services.mark,
+                    "/alert/arm": services.arm_alert,
                 }.get(urlsplit(self.path).path)
                 if route is None:
                     self._reply(404, {"error": "not found"})

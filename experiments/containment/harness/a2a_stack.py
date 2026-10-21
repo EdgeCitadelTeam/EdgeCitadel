@@ -186,6 +186,9 @@ class A2ARunStack(RunStack):
         assert self.controller is not None
         return self.controller.alert(alert)
 
+    def alert_endpoint(self) -> dict[str, Any] | None:
+        return None  # the operator runs in the controller: it posts the alert
+
     def monitor_status(self) -> dict[str, Any]:
         return self.controller.status() if self.controller else {}
 

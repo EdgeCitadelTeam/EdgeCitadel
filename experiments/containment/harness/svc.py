@@ -22,7 +22,9 @@ Roles (``service`` in the spec):
 Fault: the schedule artifact is corrupted (``wrong_value`` on ``sched@v1``);
 the assistant reads it (``A.sched``) and, its memory being shared, every later
 invocation of the assistant is tainted. Alerts: ``early`` just after the
-schedule is produced, ``late`` well after the assistant took it in.
+schedule is produced (on the produce event itself, posted by the run's
+services on receipt: amended 2026-10-21, see below), ``late`` well after the
+assistant took it in.
 
 Metrics, from the alert to the end of the run (``metrics``): tainted device
 commands committed; user requests answered; legitimate automation commands
@@ -38,6 +40,18 @@ invocations or revoking its egress forfeits that request. G_C defers the
 horizon (``boundary: defer``): a future invocation of the assistant (an external
 request) is handled when it materializes, by the receding re-solve, instead of
 being a horizon sink only its admission could stop.
+
+Amendment (2026-10-21, before any lab run of svc): the early alert fired
+0.3 s after the controller saw the schedule produced, and the controller
+polls the services' feed and resolves the faulty invocation through Core
+first. With fast hand-offs the assistant could read the schedule before that
+alert, which is the late case. The early alert now fires on the produce
+event itself (offset 0), posted by the services when they receive it. Its
+registered meaning, an alert before the assistant consumes the schedule,
+is unchanged and no longer depends on hand-off speed; ``consumed_at_alert``
+checks it in every run (the pipeline's gate reports it). The late alert is
+unchanged. ``future_requests`` follows the earlier nominal alert time
+(0.15 more expected requests).
 
 Generate (deterministic)::
 
@@ -76,7 +90,9 @@ PARAMS: dict[str, Any] = {
     "planner_hand_s": [10.0, 30.0, 50.0, 70.0],
     "planner_compute_s": 0.5,
     "schedule_s": 20.0,
-    "alert_early_delay_s": 0.3,
+    # Amended 2026-10-21 (was 0.3): the early alert is the produce event
+    # itself, posted on receipt by the run's services.
+    "alert_early_delay_s": 0.0,
     "alert_late_delay_s": 15.0,
     # Spare slots of each worker beyond the schedule's own concurrency.
     "spare_slots": 2,
@@ -225,6 +241,7 @@ def document(params: Mapping[str, Any] = PARAMS) -> dict[str, Any]:
                 "event": "produce",
                 "item": "sched@v1",
                 "delay_s": params["alert_early_delay_s"],
+                "posted_on_receipt": True,
             },
             "late": {
                 "event": "consume",
