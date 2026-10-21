@@ -920,3 +920,304 @@ assistant in Greedy cut and Cut without deadlines; they are not results.
   transient unit `firebreak-exp-h-runner`; copies off a Mac use
   `COPYFILE_DISABLE=1 tar`. With the approved SSH route from jim-eq the
   helper mode above is optional.
+
+## M7 (`m7/eventdriven`, from `m6/service` at `0e33433`)
+
+### Hand-offs wake on new work (agentd)
+
+A local dry run measured each EdgeCitadel hand-off at 0.3-1.3 s against
+23-56 ms for Google A2A. Two polls caused it: agentd's outbound transport loop
+slept 1 s after each batch, and an idle Managed Agent slot asked for a task
+every 0.5 s. Besides the latency, this slowed taint propagation and gave every
+strategy slack. Both paths now wake on new work:
+
+- `work_signal.WorkSignal` (one per store): a generation counter with waiting
+  threads and asyncio wakers. The store notifies it where a task becomes
+  claimable or an outbox message publishable: a task created (local, or
+  ingested from NATS), session recovery requeuing tasks, an outbox message
+  enqueued (`_queue_transport_locked`), a containment hold or label released
+  or a held event admitted (`release_hold`), an ingress filter removed, a task
+  cancelled. A notification only wakes waiters; they re-read the store under
+  its lock, so a notification sent inside a transaction is seen after the
+  commit, and one for a rolled-back transaction costs one re-check.
+- The outbound loop publishes the outbox when woken. Consumers, presence and
+  heartbeats keep their 1 s cadence (`MAINTENANCE_SECONDS`). Each message keeps
+  its commit-time re-check under the control lock (`publication_allowed`,
+  `_in_flight`), its order (`created_at_ms`) and its at-least-once publication
+  (marked published after the broker's ack; a failed publish ends the
+  connected loop and reconnects, as before).
+- `task.claim` takes `wait_ms` (0 to 2000; 0, the default, claims at once as
+  before). A waiting claim sleeps on the signal, checks with a read
+  (`has_claimable_task`, the claim's own `CLAIMABLE_SQL`) before it tries
+  again, and each attempt is the ordinary claim with its session check. The
+  Managed Agent runtime waits up to `EDGECITADEL_CLAIM_WAIT_MS` (1000; the
+  client's socket timeout is 5 s); a claim that returns early and empty is
+  retried after 50 ms, so it cannot spin.
+- Fallback re-checks: `EDGECITADEL_TRANSPORT_POLL_MS` (outbound loop) and
+  `EDGECITADEL_CLAIM_POLL_MS` (waiting claim), 50 ms by default (1 to 60000).
+  Every write that agentd's own store makes notifies, so the fallback only
+  bounds a change written by another connection or process (a restore tool, a
+  test's second connection). Why 50 ms: a change that came without a
+  notification still meets the 100 ms hand-off budget, and 50 is the cheaper
+  end of the 20-50 ms range. Its idle cost is measured below.
+
+Invariants checked before the change (deliberate-changes): the control-lock
+order and the commit-time re-check are unchanged, and nothing touches fencing
+or the journal positions in confirmations. At-least-once delivery and outbox
+order are unchanged. Leases: each claim attempt is the ordinary claim, with
+its session check. The M6 writer lock: a waiting claim re-checks with a read,
+not a write transaction, and the signal's condition is a leaf lock taken
+inside the store lock. Semantics are unchanged.
+
+Compatibility: either side may be older. An older agentd ignores `wait_ms`,
+and the runtime then asks every 50 ms; an older runtime claims without
+waiting.
+
+Tests:
+
+- `tests/agentd/test_handoff_latency.py`:
+  - An idle slot starts a created task with a median below 100 ms (state on
+    tmpfs; the fallback is set to 5 s, so only the wake-up can meet it).
+  - A task written by another connection is still found by the fallback.
+  - `wait_ms` is validated.
+  - Opt-in with NATS: an enqueued message reaches the broker with a median
+    below 100 ms (the fallback set to 5 s).
+- The same test with notifications disabled takes about 745 ms.
+- A probe of a local hand-off counts 5-8 SQLite commits up to the handler.
+  Most of them are read-only. The hand-off takes 23-44 ms on tmpfs and
+  41-75 ms on this VM's disk.
+
+### Measurements (local dry run, before and after)
+
+Setup:
+
+- Stack: `configs/dryrun-nats.json`, with three agentd nodes (core, edge-1,
+  edge-2), NATS, Core and the services on one shared 2-vCPU VM. Other
+  workloads kept its load average at 1.5-5 throughout. Each before/after
+  pair ran within half an hour under similar load.
+- Instances: `workloads/chain6.json` (new: a0..a6 on alternating nodes,
+  T0..T6 of 50 ms each, six created-task hand-offs, nominal makespan 1.35 s)
+  and the C2 no-fault reference (nominal 25.9 s).
+- Each instance had 3 repetitions at time scale 1, scored by the M7 scorer.
+
+The scorer's hand-off metrics (`metrics.handoff_latencies`,
+`task_handoff_latencies`) are timed on each worker's own clock, shifted onto
+the services' clock by the worker's smallest report delay. This keeps the up
+to 1 s that a report spends on its way to the services under load out of the
+metric.
+
+- Per hop: each message through agentd, from its dispatch (RPC returned) to
+  the start of the invocation it delivered (a pending creation, a created
+  task, a pushed item's delivery).
+- Per created task: both hops from the creator's dispatch to the task's
+  start, without the time the pending creation waits for the task's pushed
+  inputs.
+
+| run | chain6 hop median (p95) | C2 hop median (p95) | chain6 task median | C2 task median | chain6 makespan | C2 makespan |
+|---|---|---|---|---|---|---|
+| before, disk | 774 ms (1421) | 980 ms (2179) | 1684 ms | 2051 ms | 13.52 s | 41.96 s |
+| after, disk | 431 ms (1288) | 661 ms (1894) | 952 ms | 1776 ms | 10.97 s | 38.65 s |
+| before, tmpfs | 238 ms (1187) | 220 ms (734) | 834 ms | 514 ms | 7.18 s | 27.63 s |
+| after, tmpfs | **84 ms (185)** | **103 ms (407)** | 187 ms | 260 ms | 3.58 s | 26.62 s |
+
+Sample sizes: chain6 has 36 hops and 18 created tasks; C2 has 135 hops and
+48 created tasks. Makespans are the mean of the 3 runs. "tmpfs" puts every
+node's state (the harness work root) on `/dev/shm`. Every run completed with
+0 slot restarts after the change; before it, the tmpfs C2 runs lost 1 and 3
+slots and one chain6 run lost 1.
+
+What remains after the change is storage and CPU. On this VM a durable
+commit, as agentd makes it (rollback journal, `synchronous=EXTRA`), has a
+median of 32-36 ms to one database and 52-60 ms to the attached pair. On
+tmpfs the same commit takes 0.1 ms. A hop is several durable commits across
+the sender, the transport and the recipient (create, publication, ingest,
+claim, bind, start). So:
+
+- On this disk a hop costs about half a second.
+- On tmpfs the median is about 100 ms with the CPU oversubscribed about
+  twofold.
+- On an idle machine with tmpfs, the unit test's local hop takes 25-45 ms.
+
+The lab gate's 100 ms median therefore depends on the lab's storage.
+`python -m harness commit-cost <work root>` measures that commit on each
+host beforehand, and the pipeline records the controller's in `gate.json`.
+
+Idle CPU per agentd: chain6 with T0 released at 45 s, sampled over 30 s while
+nothing runs. Each node held about 7 idle worker slots. Mean of the three
+agentd processes, in % of one CPU, with the det-worker processes beside it:
+
+| code | agentd (core, edge-1, edge-2) | det-worker |
+|---|---|---|
+| M6 (polls) | 4.94 (5.99, 4.28, 4.56) | 0.61 |
+| M7, 50 ms fallbacks (default) | 7.63 (9.01, 6.91, 6.98) | 0.24 |
+| M7, 1 s fallbacks | 3.57 (4.28, 3.28, 3.14) | 0.25 |
+
+An earlier pair under heavier load gave 4.90 (M6), 6.52 (M7) and 3.73 (M7,
+1 s). The 50 ms fallbacks cost about 3-4 points of a CPU per idle agentd (the
+waiting claims' re-checks, about 20 per second per slot). The workers no
+longer poll. With `EDGECITADEL_CLAIM_POLL_MS` and
+`EDGECITADEL_TRANSPORT_POLL_MS` at 1000, idle agentd is below M6 and every
+in-process change still wakes at once. The defaults stay in the requested
+range.
+
+Consequence for the svc scenario: its early alert is 0.3 s after the
+schedule is produced. With the M6 polls the assistant's `A.sched` was
+probably still queued then, so input blocks (Reject source, Trace & stop) caught it. With
+fast hand-offs it may already have started. The early alert's meaning moves
+with hand-off speed; compare svc runs only within one code version.
+
+### Version ids are per task (side-experiment gap, D)
+
+`trace_lineage.version_id` hashes the entity, the task id and the content. The
+same stale content re-served in a new task therefore gets a new version id,
+and a detector that matches revoked version ids (`revoked_version_consumed`)
+misses it.
+
+This does not affect C3, any grid scenario or RQ1:
+
+- Every alert in the grid, including C3's `stale_version` fault on `V@v1`
+  produced by P, is an operator alert with a designated root (root mode
+  `given`).
+- Containment follows lineage from that root through dispatch, delivery and
+  `trace.use` edges, not through version-id matches.
+- The detector's own decisions are reported only as `n_detector_decisions`
+  and are not scored.
+
+A fix needs a task-independent content digest in the lineage events and
+matching on it in the detectors. That changes the trace schema on every node
+and in Core, which is not small, so it stays a documented limitation: a
+detector-driven stale-content alert (as opposed to an operator alert) cannot
+recognize content re-served under a new task.
+
+### Pilot sizes (E) and the lab pipeline (F)
+
+- `lab-pilot`: lab-smoke with 2 repetitions per cell, 338 runs.
+- `svc-pilot`: svc-smoke with 3 repetitions, 63 runs.
+- `experiments/regression.json`: the regression cells of
+  `deploy/g2/regression-m6.json` (C2, N2 and rand-n7-s1 lab-smoke cells, 63
+  runs) with paths relative to the repository.
+- `python -m harness pipeline --stack <lab stack> --out <root>`
+  (`harness/pipeline.py`) runs regression, scores it, runs svc-smoke, scores
+  it, then applies the gate. Each part runs in its own directory. The gate
+  requires:
+  - every run complete or quiescent;
+  - `commits_unlabelled`, `commits_unresolved` and `commits_label_mismatch`
+    all 0;
+  - Firebreak clean after the alert in every faulted run;
+  - at most 3 worker-slot restarts in total;
+  - a median per-hop hand-off over all runs below 100 ms.
+- The verdict, with the controller's commit cost, goes to `gate.json`. On a
+  failed gate the pipeline writes the reasons to `GATE-FAILED`, stops and
+  exits 1. Otherwise it runs and scores lab-pilot and svc-pilot.
+- A rerun resumes: finished runs are skipped. To run it as the runner unit:
+  `python -m harness unit --log <root>/pipeline.log -- pipeline --stack
+  <stack> --out <root>`.
+
+### Phase-1 convergence and idle tainted contexts (simulator v5 check 1)
+
+The simulator's v5 found that an idle context with whole-context taint (no
+live invocation at the alert) had no control-graph node. Its label was not
+counted in (C2), so tau_1 was declared before the label landed and tainted
+commands committed after a "converged" tau_1.
+
+The monitor had the same gap in a different form. There is no context label
+in agentd's vocabulary: a tainted context's future invocation was an
+arrival with h = 1 and no next events. With `boundary: sink` it is a horizon
+sink that is unavoidable at the alert and therefore left out; with `defer` it
+is a dead end. Either way the convergence check covered nothing for it.
+
+Reproduced with real agentd: a shared-memory assistant reads the corrupted
+input and finishes, then the alert. The decision was `contained`, with phase
+1 converged and no action. A request arriving afterwards committed its
+device command, until a receding re-solve would label it.
+
+Fix:
+
+- The projection models one level of next events (its protected classes and
+  dispatches) for the future invocations of a whole-context tainted context
+  (a shared-memory agent's `ctx:<agent>:*`), whatever the horizon.
+- `enforcement.context_sinks`: the context's protected-class sinks count in
+  every convergence and release check (`cut_holds`), doomed or not.
+- `enforcement.context_covers`: the adaptive phase 1 pushes, with its labels,
+  the revocation of those classes for the agent (C2). It is confirmed and
+  fenced before tau_1, one control round after the alert.
+- A request seen before convergence is also labelled (its command is held);
+  later ones are refused at the gateway (`ingress_filtered`); replies go out.
+- Per-context sessions (every grid instance) are unchanged. Covering them
+  agent-wide would stop the agent's clean conversations, and a per-context
+  label would be a new agentd actuator. They stay with the receding re-solve
+  (a limitation).
+- The freeze modes (holds only) cannot cover such a context in phase 1, so
+  they converge only in phase 2. They do not run in svc.
+
+Effect on earlier results:
+
+- No grid instance has a shared-memory agent, so G1 and the lab-smoke cells
+  are unaffected.
+- In svc, any tainted device command committed after a converged tau_1
+  would show in the svc metric "tainted device commands committed" after the
+  alert. The lab's svc smoke data are not available here to check.
+- Svc baselines may now report `cut_valid` false when their rule leaves the
+  idle context's classes open. This is reporting only.
+
+Test: `test_an_idle_tainted_context_is_covered_before_phase_1_converges`
+(both boundaries; a request arrives between the alert and the cover's
+confirmation, another after convergence). It fails without the fix.
+
+### Pause pricing (simulator v5 check 2)
+
+The simulator priced a pause of a held or queued invocation as free when its
+planned end preceded the pause's landing. The monitor's cost model has no
+planned ends. A task hold at the unit's own node always costs the unit's
+value plus, for a service agent, its request, whether the unit is running,
+held or queued. So this pattern is absent, and no earlier lab result was
+affected by it. Test (pinning it):
+`test_pausing_queued_or_held_work_costs_it_whatever_its_planned_end`.
+
+### Cost option `tainted_output_value` (post-hoc ablation, off by default)
+
+Context: in the m6 svc smoke with an early alert, the input blockers
+answered all 45 requests with 0 tainted replies. Firebreak let the schedule
+in, labelled the context and cancelled device commands: 45 answered, 43
+tainted, because the pre-registered model values a tainted reply as fully
+answered.
+
+`MonitorConfig.tainted_output_value` (0 to 1, default 1.0, the
+pre-registered model) is the value of an unprotected output produced from
+tainted input, relative to a clean one.
+
+- Below 1, letting taint reach a shared-memory service agent's context costs
+  (1 - value) × `future_request_value` per expected future request
+  (`future_requests`, the svc cost basis).
+- This loss is not an action: G_C gets a priced sink `T:<agent>`, entered
+  from each of the agent's units when it starts with tainted input and from
+  its tainted context. Only the strategies' solve sees it
+  (`ControlGraph.instance(penalties=True)`); the cut either pays it (a
+  `model.TaintedOutputs` token, never sent) or stops the taint first.
+- The way to stop it first is the hold of a queued unit, if that hold lands
+  before the unit can start.
+- Checks never see the priced sink.
+- Decisions record `tainted_output_value`, and each solve reports
+  `tainted_outputs_accepted`. At 1.0 nothing is added: no edges, the same
+  solves.
+
+Harness: the `tainted_output_values` grid dimension (default [1.0]). Another
+value runs as a `tov<value>` variant, is recorded in `run.json` and the scored
+row, and is passed to the monitor. The 1.0 cells keep their ids and configs.
+
+Tests: `test_a_tainted_output_value_below_one_prefers_blocking_the_input`.
+
+- Early (hand-off in transit): the sink cut at 1.0, the input block at 0.5.
+- Hand-off already queued, so the block cannot land in time: the sink cut at
+  both values.
+- Late: the sink cut at both values, with the accepted loss of 15 reported
+  at 0.5.
+- `test_the_tainted_output_value_ablation_is_named_and_recorded` covers the
+  harness side, and the config tests cover validation.
+
+Caveat for running it in the lab: the svc monitor settings keep the delivery
+and start lower bounds at 0. Under those bounds a hold on the queued
+`A.sched` is never judged able to land before it starts, so Firebreak's
+choice would not change. The ablation needs measured minimum delivery or
+start bounds in the svc monitor settings (or the in-transit window) to
+compare anything.
