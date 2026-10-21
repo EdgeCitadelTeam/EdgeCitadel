@@ -28,6 +28,9 @@ from .solver import CutInstance
 # Edge kinds that represent declared or recorded flows (the rest are possible,
 # authority-bounded flows). "Trace & stop" follows only declared kinds.
 DECLARED_KINDS = frozenset({"request", "split", "early", "result", "session", "effect"})
+# Edges only the cut model sees: a shared-memory invocation's write into its
+# agent's context (``projection``). The rule baselines' closures skip them.
+MODEL_ONLY_KINDS = frozenset({"memory"})
 
 
 @dataclass
@@ -100,7 +103,11 @@ class ControlGraph:
         return (self.edges[i] for i in self.out.get(node, ()))
 
     def closure(
-        self, *, declared_only: bool = False, removed: set[Action] | None = None
+        self,
+        *,
+        declared_only: bool = False,
+        removed: set[Action] | None = None,
+        excluded_kinds: frozenset[str] = frozenset(),
     ) -> set[str]:
         removed = removed or set()
         seen = set(self.sources)
@@ -109,6 +116,8 @@ class ControlGraph:
             node = queue.popleft()
             for edge in self.successors(node):
                 if declared_only and not edge.declared:
+                    continue
+                if edge.kind in excluded_kinds:
                     continue
                 if edge.action is not None and edge.feasible and edge.action in removed:
                     continue

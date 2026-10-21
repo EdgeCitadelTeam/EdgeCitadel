@@ -317,8 +317,9 @@ def context_sinks(cg: ControlGraph) -> frozenset[str]:
     sinks are separated when phase 1 converges, a request arriving after
     tau_1 commits tainted commands until a re-solve catches it."""
     out: set[str] = set()
-    for source in cg.sources:
-        attrs = cg.nodes.get(source, {})
+    # Every whole context, a source or one a source-side invocation's memory
+    # write reaches (``projection`` memory edges); unreached ones never count.
+    for source, attrs in list(cg.nodes.items()):
         if attrs.get("kind") != "context" or not attrs.get("whole"):
             continue
         prefix = f"K:{attrs['agent']}:"

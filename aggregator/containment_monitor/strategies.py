@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 
 from . import solver
 from .config import Mechanisms, MonitorConfig
-from .graph import ControlGraph
+from .graph import MODEL_ONLY_KINDS, ControlGraph
 from .model import (
     Action,
     TaintedOutputs,
@@ -200,7 +200,9 @@ def stop_team(ctx: Context) -> StrategyResult:
 
 def _closure_actions(ctx: Context, name: str, declared_only: bool) -> StrategyResult:
     started = time.perf_counter()
-    reached = ctx.cg.closure(declared_only=declared_only)
+    reached = ctx.cg.closure(
+        declared_only=declared_only, excluded_kinds=MODEL_ONLY_KINDS
+    )
     actions = [
         edge.action
         for edge in ctx.cg.edges
@@ -208,6 +210,7 @@ def _closure_actions(ctx: Context, name: str, declared_only: bool) -> StrategyRe
         and edge.tail in reached
         and edge.head in reached
         and (edge.declared or not declared_only)
+        and edge.kind not in MODEL_ONLY_KINDS
     ]
     return _finish(ctx, name, actions, started)
 

@@ -569,7 +569,21 @@ class _Builder:
                         "session",
                         fn=("start", follower.key),
                     )
-        for agent, context in sorted(graph.tainted_sessions):
+        # A shared-memory agent's invocation writes the agent's memory, which
+        # every later invocation resumes: a pending edge of G(tau) from each of
+        # its units into the agent's context continuation (theory), so a
+        # source-side invocation that has not tainted the memory yet (a
+        # labelled pending one) already reaches the context's protected
+        # classes. Holding the invocation (its split edge) stops the write; an
+        # egress label does not. Undeclared, and left out of the rule
+        # baselines' closures (``MODEL_ONLY_KINDS``).
+        memory: set[tuple[str, str]] = set()
+        for unit in units.values():
+            if config.session_of(unit.agent, unit.context) == "*":
+                memory.add((unit.agent, "*"))
+                context = cg.node(f"ctx:{unit.agent}:*", kind="context")
+                cg.edge(f"out:{unit.key}", context, "memory", declared=False)
+        for agent, context in sorted(set(graph.tainted_sessions) | memory):
             # Any future task of this agent in this conversation resumes tainted
             # memory, including tasks not dispatched yet: a new invocation of it.
             # Under whole-context taint (a shared-memory agent, context "*")
@@ -577,10 +591,12 @@ class _Builder:
             # its next events (one level, whatever the horizon) are modelled,
             # so the context's protected classes are sinks that (C2) covers
             # (``enforcement.context_covers``) although it has no unit to label.
+            # A context only a memory edge reaches is not a source.
             whole = context == "*"
             source = cg.node(f"ctx:{agent}:{context}", kind="context")
             cg.nodes[source].update(agent=agent, whole=whole)
-            cg.sources.add(source)
+            if (agent, context) in graph.tainted_sessions:
+                cg.sources.add(source)
             cg.edge(
                 source,
                 self.arrival(f"ctx:{context}", agent, "", 0 if whole else 1),

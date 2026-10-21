@@ -1200,6 +1200,98 @@ def test_an_idle_tainted_context_is_covered_before_phase_1_converges(
         node.close()
 
 
+def test_a_source_side_invocation_that_taints_shared_memory_after_tau_1_is_covered(
+    tmp_path,
+):
+    """svc's early alert (H): the planner (the root) has handed the
+    shared-memory assistant its schedule task, still queued at the alert, so
+    the assistant's memory is clean then. Firebreak converges; afterwards, with
+    no further monitor step, the schedule task runs (unless the alert held it)
+    and a user request starts after it, resuming the memory it tainted. That
+    request's device command must not commit: the at-alert solve and tau_1's
+    (C4) see the source-side invocation's write to the agent's memory as a
+    pending edge into its context and the context's protected classes."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from containment_test_support import Ledger
+    from edgecitadel_agentd.effect_adapters import LedgerAdapter
+
+    act = {"effect_class": "device.command", "target": "actuator/*"}
+    reply = {"effect_class": "network.http", "target": "reply/*"}
+    node = Node(tmp_path / "k", "site-k")
+    ledger = Ledger()
+    node.managed("planner", outbound=["assistant"])
+    node.managed("assistant", effects=[act, reply])
+    node.store.effects.adapters = {"http": LedgerAdapter(ledger.url)}
+    node.submit("planner", "make the schedule")
+    _, planner = node.start("planner")
+    handed = node.dispatch("planner", planner, "assistant", request="the schedule")
+    assert handed["status"] == "ok", handed
+    schedule_task = handed["result"]["task_id"]
+    control = LocalAgentdControlClient("core-monitor", {"site-k": transport(node)})
+    config = MonitorConfig(
+        protected_effect_classes=frozenset({"device.command"}),
+        future_requests={"assistant": 10.0},
+        agent_nodes={"planner": "site-k", "assistant": "site-k"},
+        shared_memory_agents=frozenset({"assistant"}),
+        boundary="defer",
+    )
+    harness = Harness(tmp_path / "monitor", config, control)
+    harness.now = time.time_ns() // 1_000_000
+    ingested: set[str] = set()
+
+    def sync():
+        from containment_support import ingest
+        from test_containment_provenance import journal
+
+        for event in journal(node):
+            if event["event_id"] not in ingested:
+                ingest(harness.core, event)
+                ingested.add(event["event_id"])
+        harness.monitor.catch_up()
+
+    def execute(bound, rule, target):
+        result = node.rpc(
+            "assistant",
+            "effect.execute",
+            schema_version=1,
+            request_id=str(uuid4()),
+            binding_id=bound["binding_id"],
+            adapter="http",
+            effect_class=rule["effect_class"],
+            target=target,
+            data=None,
+            tool_call_id=None,
+            scheduled_at_ms=None,
+        )
+        return result["result"]["state"] if result["status"] == "ok" else result["code"]
+
+    log = harness.monitor.log = ListLog()
+    try:
+        sync()
+        root = inv(planner["execution_attempt_id"])
+        decision = harness.monitor.respond(
+            operator_alert(root, harness.now), strategy="firebreak", roots=[root]
+        )
+        assert decision.status == "contained"
+        (record,) = [r for r in log if r["type"] == "converged"]
+        in_force = {a.label() for a in harness.monitor.in_force}
+        # After tau_1, before any re-solve: the schedule task runs unless held.
+        if f"hold:task:{schedule_task}@site-k" not in in_force:
+            started, _ = node.start("assistant")
+            assert started["task_id"] == schedule_task
+        node.submit("assistant", "turn the lamp on")
+        later = node.start("assistant")[1]
+        assert execute(later, act, "actuator/1") != "committed"
+        assert execute(later, reply, "reply/1") == "committed"
+        assert [r["body"]["target"] for r in ledger.requests] == ["reply/1"]
+        # tau_1's (C4) covered the context's protected class.
+        assert "K:assistant:device.command@new" in record["sinks_checked"]
+    finally:
+        harness.close()
+        ledger.close()
+        node.close()
+
+
 # ---------------------------------------------------------------------------
 # The two baselines added in M4
 # ---------------------------------------------------------------------------
