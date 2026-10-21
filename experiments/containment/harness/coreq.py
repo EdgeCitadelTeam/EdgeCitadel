@@ -12,7 +12,7 @@ occurred (two clocks: the hosts are assumed synchronized, as on the tailnet).
 Usage:
 ``python -m harness.coreq attempt --db <core db> --task <task id>``,
 ``python -m harness.coreq effects --db <core db>``,
-``python -m harness.coreq ingest --db <core db>``.
+``python -m harness.coreq ingest --db <core db> [--since-ms <run start>]``.
 """
 
 from __future__ import annotations
@@ -81,8 +81,9 @@ def _occurred_ms(value: str) -> int:
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
 
 
-def ingest_lags(db: Path) -> dict[str, list[int]]:
-    """Per node, every raw event's Core receive time minus its occurrence (ms)."""
+def ingest_lags(db: Path, since_ms: int | None = None) -> dict[str, list[int]]:
+    """Per node, every raw event's Core receive time minus its occurrence (ms),
+    for the events that occurred at or after ``since_ms``."""
     core = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=2.0)
     try:
         out: dict[str, list[int]] = {}
@@ -95,6 +96,8 @@ def ingest_lags(db: Path) -> dict[str, list[int]]:
                 event = event.get("event", event)
                 occurred = _occurred_ms(event["occurred_at"])
             except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+            if since_ms is not None and occurred < since_ms:
                 continue
             out.setdefault(str(node), []).append(int(received) - occurred)
         return out
@@ -112,13 +115,14 @@ def main(argv: list[str] | None = None) -> None:
     effects.add_argument("--db", required=True, type=Path)
     lags = sub.add_parser("ingest")
     lags.add_argument("--db", required=True, type=Path)
+    lags.add_argument("--since-ms", type=int)
     args = parser.parse_args(argv)
     if args.command == "attempt":
         print(json.dumps({"attempt_id": attempt_of(args.db, args.task)}))
     elif args.command == "ingest":
         from .runstats import distribution
 
-        per_node = ingest_lags(args.db)
+        per_node = ingest_lags(args.db, args.since_ms)
         print(
             json.dumps(
                 {

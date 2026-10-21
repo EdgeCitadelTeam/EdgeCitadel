@@ -231,6 +231,8 @@ def test_core_ingest_lag_is_receipt_minus_occurrence_per_node(tmp_path, monkeypa
     payloads = {4: {"event": {"occurred_at": occurred}}}
     monkeypatch.setattr(coreq, "read_payload", lambda db, seq: payloads.get(seq))
     assert coreq.ingest_lags(db) == {"core": [50], "edge-1": [400], "edge-2": [70]}
+    # Events that occurred before the run's start are left out.
+    assert coreq.ingest_lags(db, since_ms=1_000_000_000_001) == {}
 
 
 def test_a_hosts_unit_prefix_scopes_its_units_and_their_cleanup(monkeypatch, tmp_path):
