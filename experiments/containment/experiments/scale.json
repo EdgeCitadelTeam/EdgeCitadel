@@ -66,5 +66,6 @@
         "firebreak"
       ]
     }
-  ]
+  ],
+  "root_wait_s": 10.0
 }

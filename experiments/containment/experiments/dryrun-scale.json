@@ -43,5 +43,6 @@
   ],
   "receding_during_waits": [
     false
-  ]
+  ],
+  "root_wait_s": 10.0
 }

@@ -86,12 +86,15 @@ def ingest_lags(db: Path) -> dict[str, list[int]]:
     core = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=2.0)
     try:
         out: dict[str, list[int]] = {}
-        for node, received, raw in core.execute(
-            "SELECT node_id,received_at_ms,event_json FROM trace_raw_events"
+        for node, received, seq, raw in core.execute(
+            "SELECT node_id,received_at_ms,ingest_seq,event_json FROM trace_raw_events"
         ):
             try:
-                occurred = _occurred_ms(json.loads(raw)["occurred_at"])
-            except (ValueError, KeyError, TypeError):
+                # Separated payloads leave event_json empty: read the payload.
+                event = json.loads(raw) if raw else (read_payload(core, seq) or {})
+                event = event.get("event", event)
+                occurred = _occurred_ms(event["occurred_at"])
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
             out.setdefault(str(node), []).append(int(received) - occurred)
         return out

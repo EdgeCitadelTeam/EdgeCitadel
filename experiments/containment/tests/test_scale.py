@@ -209,27 +209,28 @@ def test_runstats_columns_from_decisions_ingest_and_process_samples(tmp_path):
     assert empty["n_confirm"] == 0 and empty["core_cpu_s"] != empty["core_cpu_s"]
 
 
-def test_core_ingest_lag_is_receipt_minus_occurrence_per_node(tmp_path):
+def test_core_ingest_lag_is_receipt_minus_occurrence_per_node(tmp_path, monkeypatch):
     db = tmp_path / "core.db"
     core = sqlite3.connect(db)
     core.execute(
-        "CREATE TABLE trace_raw_events(node_id TEXT, received_at_ms INTEGER, event_json TEXT)"
+        "CREATE TABLE trace_raw_events(node_id TEXT, received_at_ms INTEGER, "
+        "ingest_seq INTEGER, event_json TEXT)"
     )
+    occurred = "2001-09-09T01:46:40.000Z"  # 1_000_000_000_000 ms
     rows = [
-        ("core", 1_000_050, "2001-09-09T01:46:40.000Z"),
-        ("edge-1", 1_000_400, "2001-09-09T01:46:40.000Z"),
-        ("edge-1", 1_000_100, "not a time"),
+        ("core", 1_000_000_000_050, 1, json.dumps({"occurred_at": occurred})),
+        ("edge-1", 1_000_000_000_400, 2, json.dumps({"occurred_at": occurred})),
+        ("edge-1", 1_000_000_000_100, 3, json.dumps({"occurred_at": "not a time"})),
+        # A separated payload: event_json is empty, the payload holds it.
+        ("edge-2", 1_000_000_000_070, 4, ""),
+        ("edge-2", 1_000_000_000_070, 5, ""),  # an expired payload
     ]
-    core.executemany(
-        "INSERT INTO trace_raw_events VALUES (?,?,?)",
-        [
-            (n, r - 1_000_000 + 1_000_000_000_000, json.dumps({"occurred_at": t}))
-            for n, r, t in rows
-        ],
-    )
+    core.executemany("INSERT INTO trace_raw_events VALUES (?,?,?,?)", rows)
     core.commit()
     core.close()
-    assert coreq.ingest_lags(db) == {"core": [50], "edge-1": [400]}
+    payloads = {4: {"event": {"occurred_at": occurred}}}
+    monkeypatch.setattr(coreq, "read_payload", lambda db, seq: payloads.get(seq))
+    assert coreq.ingest_lags(db) == {"core": [50], "edge-1": [400], "edge-2": [70]}
 
 
 def test_a_hosts_unit_prefix_scopes_its_units_and_their_cleanup(monkeypatch, tmp_path):
@@ -293,3 +294,17 @@ def test_the_committed_sim_export_covers_every_lab_workload():
     for name, entry in manifest["instances"].items():
         assert (sim / entry["spec"]).resolve() == (WORKLOADS / f"{name}.json").resolve()
         assert (sim / entry["sites_file"]).exists()
+
+
+def test_an_alert_waits_a_bounded_time_for_core_to_know_its_root(monkeypatch):
+    answers = iter([None, None, "attempt-1"])
+    stack = type("Stack", (), {"attempt_of": lambda self, rt: next(answers)})()
+    monkeypatch.setattr(runner, "ATTEMPT_LOOKUP_FAST_S", 0.0)
+    meta: dict = {}
+    assert runner._wait_for_root(stack, "task-1", 5.0, meta) == "attempt-1"
+    assert meta["alert_root_wait_ms"] >= 0
+    never = type("Stack", (), {"attempt_of": lambda self, rt: None})()
+    assert runner._wait_for_root(never, "task-1", 0.05, meta) is None
+    loaded = runner.Experiment.load(ROOT / "experiments" / "scale.json")
+    assert loaded.root_wait_s == 10.0
+    assert all(part.root_wait_s == 10.0 for part in loaded.parts)
