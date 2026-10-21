@@ -43,7 +43,7 @@ confirmation over the whole incident.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
 from .groundtruth import (
@@ -354,6 +354,118 @@ def admission_metrics(decisions: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _worker_clock(
+    events: Iterable[Mapping[str, Any]],
+) -> Callable[[Mapping[str, Any]], float]:
+    """An event's time in ms: the worker's own clock (``t_local_ms``) shifted
+    onto the services clock by that worker's smallest ``t_ms - t_local_ms``
+    (the offset plus the fastest report), so the time a report spends on its
+    way to the services, up to a second under load, does not count. Events
+    without a local time keep ``t_ms``."""
+    offset: dict[str, float] = {}
+    for e in events:
+        if e.get("t_local_ms") is not None:
+            gap = float(e["t_ms"]) - float(e["t_local_ms"])
+            agent = str(e.get("agent"))
+            offset[agent] = min(offset.get(agent, gap), gap)
+
+    def at(e: Mapping[str, Any]) -> float:
+        if e.get("t_local_ms") is None:
+            return float(e["t_ms"])
+        return float(e["t_local_ms"]) + offset[str(e.get("agent"))]
+
+    return at
+
+
+def _handoff_index(records: RunRecords) -> dict[tuple[str, str], float]:
+    """First start of each invocation, first successful dispatch of each
+    (purpose, item, target), and the start dispatch of each created task, on
+    the workers' clocks (``_worker_clock``)."""
+    at = _worker_clock(records.events)
+    first: dict[tuple[str, str], float] = {}
+    for e in records.events:
+        name, kind = str(e.get("task")), e["kind"]
+        if kind == "start":
+            first.setdefault(("start", name), at(e))
+        elif kind == "dispatch" and e.get("code") is None:
+            key = f"{e.get('purpose')}:{e.get('item')}->{e.get('target')}"
+            first.setdefault(("dispatch", key), at(e))
+            if e.get("purpose") == "start":  # a pending creation starts its task
+                first.setdefault(("started_by", str(e.get("target"))), at(e))
+    return first
+
+
+def _dispatches(
+    first: Mapping[tuple[str, str], float],
+) -> Iterator[tuple[str, str, str, float]]:
+    for (what, key), t in first.items():
+        if what == "dispatch":
+            purpose, rest = key.split(":", 1)
+            item, target = rest.split("->", 1)
+            yield purpose, item, target, t
+
+
+def handoff_latencies(records: RunRecords) -> list[float]:
+    """The run's per-hop hand-off latencies in ms: for each message through
+    agentd, from its dispatch to the start of the invocation it delivered (a
+    created task's pending creation, a created task, a pushed item's
+    delivery).
+
+    A dispatch is reported once its RPC returned, so a hop can come out a few
+    ms below 0. Spawned and rogue messages (faults) are not hand-offs.
+    """
+    first = _handoff_index(records)
+    invocation = {
+        "create": lambda item, target: f"create:{target}",
+        "start": lambda item, target: target,
+        "deliver": lambda item, target: f"deliver:{item}->{target}",
+    }
+    out = []
+    for purpose, item, target, t in _dispatches(first):
+        if purpose in invocation:
+            arrived = first.get(("start", invocation[purpose](item, target)))
+            if arrived is not None:
+                out.append(arrived - t)
+    return sorted(out)
+
+
+def task_handoff_latencies(records: RunRecords) -> list[float]:
+    """Each created task's hand-off in ms, from its creator's dispatch to its
+    start, without the time its pending creation waited for the task's pushed
+    inputs: the two hops (to the pending creation, and from it to the task)."""
+    first = _handoff_index(records)
+    out = []
+    for purpose, _item, target, t in _dispatches(first):
+        if purpose == "create":
+            arrived = first.get(("start", f"create:{target}"))
+            handed = first.get(("started_by", target))
+            started = first.get(("start", target))
+            if arrived is not None and handed is not None and started is not None:
+                out.append((arrived - t) + (started - handed))
+    return sorted(out)
+
+
+def _quantile(values: list[float], q: float) -> float:
+    return values[min(len(values) - 1, int(q * len(values)))] if values else NAN
+
+
+def handoff_metrics(records: RunRecords) -> dict[str, Any]:
+    hops = handoff_latencies(records)
+    tasks = task_handoff_latencies(records)
+    return {
+        "n_handoffs": len(hops),
+        "handoff_ms_median": _quantile(hops, 0.5),
+        "handoff_ms_p95": _quantile(hops, 0.95),
+        "handoff_ms_max": hops[-1] if hops else NAN,
+        # Every hop of the run, for pooled statistics (the lab gate).
+        "handoff_ms": json.dumps(hops),
+        "n_task_handoffs": len(tasks),
+        "task_handoff_ms_median": _quantile(tasks, 0.5),
+        "task_handoff_ms_p95": _quantile(tasks, 0.95),
+        "task_handoff_ms": json.dumps(tasks),
+    }
+
+
 def _action_label(action: Mapping[str, Any]) -> str:
     return f"{action['op']}:{action['kind']}:{action['object_id']}@{action['node_id']}"
 
@@ -505,6 +617,7 @@ def evaluate(
     }
     row.update(decision)
     row.update(admission_metrics(decisions or []))
+    row.update(handoff_metrics(records))
     row.pop("t_established_ms", None)
     origin = meta.get("origin_attempt")
     roots = json.loads(row.get("roots") or "[]")

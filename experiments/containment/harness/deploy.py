@@ -84,8 +84,9 @@ def slots(spec: Spec, agent: str) -> int:
     and each session has at most one waiting at a time; every other
     invocation finishes on its own. So sessions + 1 slots can never deadlock;
     one more spare (two more with undeclared invocations) keeps deliveries
-    from queueing behind running turns. Each idle slot polls agentd, so more
-    slots cost the node real load.
+    from queueing behind running turns. Each idle slot holds a waiting claim
+    in agentd, which re-checks it every ``EDGECITADEL_CLAIM_POLL_MS``, so more
+    slots cost the node some load.
     """
     if agent in spec.slots:
         return spec.slots[agent]

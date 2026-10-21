@@ -409,3 +409,62 @@ def test_root_correct_compares_the_monitors_roots_with_the_faulty_attempt(run):
         M.evaluate(run.spec, meta, run.events, run.ledger, [picked])["root_correct"]
         == 1
     )
+
+
+def test_handoffs_leave_out_data_waits_and_report_delays():
+    """Hops of a created task (to its pending creation, then to the task) and
+    of a pushed item, timed on each worker's clock: a0's clock is 1 s behind
+    the services', a1's 5 s ahead, and a0's dispatch reaches the services
+    400 ms late. The task's hand-off is its two hops, without the creation's
+    wait for its data."""
+    skew = {"a0": -1000, "a1": 5000, "a2": 0}
+
+    def ev(kind, agent, task, t, late=0, **data):
+        return {
+            "kind": kind,
+            "agent": agent,
+            "task": task,
+            "t_ms": t + late,
+            "t_local_ms": t + skew[agent],
+            **data,
+        }
+
+    events = [
+        ev("start", "a0", "T0", 0),
+        ev(
+            "dispatch",
+            "a0",
+            "T0",
+            100,
+            late=400,
+            purpose="create",
+            item="h1",
+            target="T1",
+        ),
+        ev("end", "a0", "T0", 120),
+        ev("start", "a1", "create:T1", 140),
+        # the creation waits for T1's pushed inputs until 200
+        ev("dispatch", "a1", "create:T1", 200, purpose="start", item="h1", target="T1"),
+        ev("start", "a1", "T1", 230),
+        ev("dispatch", "a0", "T0", 300, purpose="deliver", item="X", target="T2"),
+        ev("start", "a2", "deliver:X->T2", 310),
+        # a refused dispatch is no hand-off
+        ev(
+            "dispatch",
+            "a0",
+            "T0",
+            320,
+            purpose="deliver",
+            item="Y",
+            target="T2",
+            code="denied",
+        ),
+    ]
+    records = G.RunRecords(tasks={}, ledger=[], spawned={}, consumed={}, events=events)
+    assert M.handoff_latencies(records) == [10.0, 30.0, 40.0]
+    assert M.task_handoff_latencies(records) == [70.0]
+    row = M.handoff_metrics(records)
+    assert row["n_handoffs"] == 3 and row["handoff_ms_median"] == 30.0
+    assert row["handoff_ms_max"] == 40.0
+    assert json.loads(row["handoff_ms"]) == [10.0, 30.0, 40.0]
+    assert row["n_task_handoffs"] == 1 and row["task_handoff_ms_median"] == 70.0

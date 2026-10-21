@@ -1,0 +1,164 @@
+{
+ "spec_version": 1,
+ "name": "chain6",
+ "agents": [
+  {
+   "id": "a0",
+   "parent": null,
+   "site": "s0",
+   "label": "A0"
+  },
+  {
+   "id": "a1",
+   "parent": "a0",
+   "site": "s1",
+   "label": "A1"
+  },
+  {
+   "id": "a2",
+   "parent": "a1",
+   "site": "s2",
+   "label": "A2"
+  },
+  {
+   "id": "a3",
+   "parent": "a2",
+   "site": "s3",
+   "label": "A3"
+  },
+  {
+   "id": "a4",
+   "parent": "a3",
+   "site": "s4",
+   "label": "A4"
+  },
+  {
+   "id": "a5",
+   "parent": "a4",
+   "site": "s5",
+   "label": "A5"
+  },
+  {
+   "id": "a6",
+   "parent": "a5",
+   "site": "s6",
+   "label": "A6"
+  }
+ ],
+ "placement": {
+  "s0": "core",
+  "s1": "edge-1",
+  "s2": "edge-2",
+  "s3": "core",
+  "s4": "edge-1",
+  "s5": "edge-2",
+  "s6": "core"
+ },
+ "effect_classes": [
+  {
+   "id": "done",
+   "site": "s6",
+   "min_delay": 0.0,
+   "protected": false
+  }
+ ],
+ "tasks": [
+  {
+   "id": "T0",
+   "agent": "a0",
+   "session": "s0",
+   "compute": 0.05,
+   "release": 1.0
+  },
+  {
+   "id": "T1",
+   "agent": "a1",
+   "session": "s1",
+   "compute": 0.05
+  },
+  {
+   "id": "T2",
+   "agent": "a2",
+   "session": "s2",
+   "compute": 0.05
+  },
+  {
+   "id": "T3",
+   "agent": "a3",
+   "session": "s3",
+   "compute": 0.05
+  },
+  {
+   "id": "T4",
+   "agent": "a4",
+   "session": "s4",
+   "compute": 0.05
+  },
+  {
+   "id": "T5",
+   "agent": "a5",
+   "session": "s5",
+   "compute": 0.05
+  },
+  {
+   "id": "T6",
+   "agent": "a6",
+   "session": "s6",
+   "compute": 0.05
+  }
+ ],
+ "external_inputs": [],
+ "artifacts": [],
+ "messages": [
+  {
+   "id": "h1",
+   "sender": "T0",
+   "receiver": "T1"
+  },
+  {
+   "id": "h2",
+   "sender": "T1",
+   "receiver": "T2"
+  },
+  {
+   "id": "h3",
+   "sender": "T2",
+   "receiver": "T3"
+  },
+  {
+   "id": "h4",
+   "sender": "T3",
+   "receiver": "T4"
+  },
+  {
+   "id": "h5",
+   "sender": "T4",
+   "receiver": "T5"
+  },
+  {
+   "id": "h6",
+   "sender": "T5",
+   "receiver": "T6"
+  }
+ ],
+ "effects": [
+  {
+   "id": "E_done",
+   "issuer": "T6",
+   "class": "done",
+   "delay": 0.0
+  }
+ ],
+ "fault": {
+  "class": "none"
+ },
+ "alerts": {},
+ "rogue": {
+  "rate": 0.0,
+  "seed": 0
+ },
+ "source": {
+  "generator": "hand-written",
+  "note": "six cross-node hand-offs, 50 ms of compute each (M7 latency measurement)"
+ }
+}
