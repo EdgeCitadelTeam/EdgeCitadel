@@ -178,7 +178,9 @@ Do the nodes one at a time and verify each before the next.
      arrives, so these only bound a change that came without a wake-up (another
      process writing the store). On the Managed Agent runtime,
      `EDGECITADEL_CLAIM_WAIT_MS` (default 1000) is how long an idle slot's claim
-     waits in agentd. Leave the defaults.
+     waits in agentd. Leave the defaults. (The experiment harness's lab stacks
+     set both fallbacks to 1000 through their `runtime_env`, on the full and
+     the bare runtime alike, for the system comparison.)
 
    Why 30 s: the monitor renews every 10 s (`controller_lease_renew_ms`), so 30 s
    tolerates two lost renewals in a row or a monitor/aggregator restart; a

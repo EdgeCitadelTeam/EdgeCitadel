@@ -123,6 +123,14 @@ def gate(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "handoff_ms_median": median,
         "handoff_criterion": "absolute",
         "runs_with_errors": [r["run_id"] for r in rows if _number(r.get("n_errors"))],
+        # Not a condition: whether svc's early alert still came before the
+        # assistant read the corrupted schedule (1: the early/late distinction
+        # has collapsed in that run; it moves with hand-off speed).
+        "svc_early_consumed_at_alert": {
+            r["run_id"]: r.get("consumed_at_alert")
+            for r in rows
+            if r.get("instance") == "svc" and r.get("alert") == "early"
+        },
     }
 
 

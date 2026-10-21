@@ -1221,3 +1221,181 @@ and start lower bounds at 0. Under those bounds a hold on the queued
 choice would not change. The ablation needs measured minimum delivery or
 start bounds in the svc monitor settings (or the in-transit window) to
 compare anything.
+
+## Evaluation branch (`eval/2026-10-22`, from `m7/eventdriven` at `896719e`)
+
+### G-Safeguard baseline (`gsafeguard`)
+
+G-Safeguard's remediation rule (Wang et al., ACL 2025, section 3.3, Eq. 11),
+reproduced under the shared alert. Their code (`TA/agents.py`
+`re_generate`/`are_generate`, `TA/main_defense_for_different_topology.py`
+`defense_communication`) behaves as follows:
+
+- once an agent is flagged, its replies are dropped from every receiver's
+  input from the next round on;
+- the flag is sticky;
+- the flagged agent keeps running and receiving;
+- nothing already received is withdrawn.
+
+Ours (`strategies.gsafeguard`):
+
+- **Flag:** the agent of each root invocation (a version root names its
+  producer).
+- **Actions, for each unit of that agent, live or queued:**
+  - its egress is revoked: agentd denies its new dispatches and effect
+    requests;
+  - its result is parked at its live parent's node, when that parent runs
+    on another node. Where they share a node, a park would pause the unit,
+    so that result flows.
+- **What it does not touch:**
+  - the flagged agent's tasks are neither held nor cancelled;
+  - consumers;
+  - outputs already published or delivered;
+  - other agents' leases and grants.
+- **Effect requests** count as outgoing edges because the actuator is a node
+  of our graph. This can only help the baseline: the original has no effects
+  to drop.
+- **Stickiness**, through the persistent quarantine's mechanism:
+  - an active `gsafeguard` incident flags its agents in the provenance
+    graph (`flagged_agents`, rebuilt from the incident on restart);
+  - each later unit of a flagged agent is then a frontier advance, even a
+    clean one;
+  - the receding re-solve applies the same rule to it. A later unit can emit
+    before its own revocation lands, the deployed counterpart of the
+    original's "next round".
+- **Profiles:** a rule baseline under both, like the others.
+- **Display:** "G-Safeguard", no-lineage family.
+- **Grids:** regression 69 runs, svc-smoke 23, svc-pilot 69, lab-smoke 185
+  (including its shared-profile part), lab-pilot 370, plus lab-main.
+
+Tests:
+- `test_gsafeguard_flags_the_root_agent_and_drops_only_its_outputs`;
+- `test_gsafeguard_covers_a_later_unit_of_the_flagged_agent` (a later clean
+  task of the flagged agent is covered after a monitor restart; another
+  agent's is not);
+- the opt-in end-to-end
+  `test_gsafeguard_lets_output_published_before_the_alert_reach_its_consumers`
+  (C2 early: a1 has already finished, so nothing is flagged live; its
+  artifact travels on to b1, whose actuator command is accepted).
+
+**Pre-registered expectation (recorded 2026-10-21, before any run):**
+- In every paired cell, G-Safeguard commits at least as many tainted
+  protected effects after the alert as Stop team. It stops neither the
+  flagged agent's sub-agents nor anything that already received its outputs,
+  while Stop team pauses the root agent's whole team.
+- It has collateral on the flagged agent's later clean outputs: they are
+  dropped whatever their lineage.
+
+In the local svc early run the flagged agent was the planner, whose
+schedule hand-off had already left. The assistant then:
+- served all 45 requests, with 45 tainted replies;
+- committed 17 tainted device commands (No containment: 20).
+
+The planner's later hand-offs were denied, so the run ended quiescent rather
+than complete.
+
+### A2A and bare-runtime baselines (merged)
+
+**Source.** `a2a-baseline.bundle`, sha256 `2e5a9912d1501b2e…` (checked). Its
+head is `d77f9ec`, five commits on `m5/integration` `e445457`; the
+coordinator's note named `0950578`, which `d77f9ec` contains. The merge
+(`4dc12a2`) had five conflicts, each resolved keeping both sides:
+- `harness/stack.py`:
+  - the M6 operator connector for every node's external recipients;
+  - no monitor or leases on `edgecitadel_bare`;
+  - the monitor options with the profile's phase-1 default and the M7
+    settings.
+- `harness/runner.py`:
+  - `make_stack` with the `tainted_output_value` setting;
+  - the request scheduler helpers beside the A2A transport codes.
+- `harness/__init__.py`, `tests/test_runner.py`, `tests/test_stack.py`: both
+  sides' text and tests.
+
+Two semantic conflicts surfaced in a local A2A run and are fixed:
+- **External requests.** M6 moved them to per-node schedules (`nodectl
+  schedule` through agentd), which an A2A stack lacks, so every A2A run lost
+  its `requests-<node>` process. `A2ARunStack.schedule` now submits from the
+  controller at the same times, with the same marks.
+- **Hop timing.** A2A's `message/send` blocks until the recipient finished,
+  so the dispatch event (reported when the call returns) came after the
+  child started: hops were negative (median -51 ms). The det-worker's
+  dispatch event now carries `sent_local_ms`, and hops count from the send.
+  On EdgeCitadel a hop therefore now includes the sender's `task.create`.
+
+**Local measurement.** Six-hop chain `bench/chain-k2e`, 2 repetitions each,
+on this VM's disk:
+
+| stack | per-hop median | per-task median | ratio |
+|---|---|---|---|
+| A2A-SQLite | 27 ms | 54.5 ms | – |
+| EdgeCitadel | 644.5 ms | 1364 ms | about 24× A2A-SQLite |
+
+Here the fallback criterion below would fail. EdgeCitadel pays several
+durable commits of an attached pair per hop (60 ms each on this disk), so
+the lab's storage decides.
+
+### Gate criterion for hand-offs (approved 2026-10-21)
+
+The per-hop median of regression + svc-smoke passes at **100 ms or less**.
+
+Otherwise, and only if every other condition passed, the fallback runs:
+- the six-hop chain between jim-eq and Endurance
+  (`experiments/handoff-chain.json`, `bench/chain-k2e`, 10 repetitions,
+  no fault) runs on the pipeline's EdgeCitadel stack (`handoff-ec`);
+- the same chain runs on the durability-matched A2A stack, A2A with its
+  SQLite task store (`--a2a-stack`, `configs/lab-a2a-sqlite-gate.json`,
+  `handoff-a2a-sqlite`);
+- the gate passes if EdgeCitadel's per-hop median on the chain is **at most
+  3 times** A2A-SQLite's (H11's criterion).
+
+`gate.json` records:
+- `handoff_criterion` (`absolute` or `a2a_sqlite_ratio`);
+- the pooled `handoff_ms_median`;
+- `chain_handoff_ms_median` for both systems and their ratio.
+
+A missing A2A stack, one that is not A2A with SQLite, a failing A2A run or a
+chain without hand-offs fails the gate, giving that reason.
+
+`gate.json` also reports `svc_early_consumed_at_alert` (information, not a
+condition). `configs/lab-a2a-sqlite-gate.json`:
+- is `lab-a2a-sqlite` with the A2A virtual environments in
+  `HARNESS_A2A_PYTHON` (jim-eq) and `HARNESS_A2A_REMOTE_PYTHON` (Endurance),
+  so one pipeline process runs both systems;
+- runs Endurance's processes as user units.
+
+### Lab defaults for agentd's fallback re-checks
+
+A stack file's `runtime_env` sets `EDGECITADEL_*` values for agentd and the
+Managed Agent runtime on every node.
+- Never the harness's own per-node settings.
+- Recorded in `run.json`.
+- The repository's EdgeCitadel lab stacks set
+  `EDGECITADEL_TRANSPORT_POLL_MS` and `EDGECITADEL_CLAIM_POLL_MS` to 1000:
+  full (`lab`, `lab-helper`, both Home Assistant variants,
+  `lab-ec-overhead`) and bare (`lab-bare`) alike, so H11 compares like with
+  like.
+- The code default stays 50 ms. Dry runs and A2A stacks are unchanged.
+- A lab copy of a stack (such as the lab agent's `lab-m6.json`) needs the same
+  `runtime_env` field.
+
+### svc early alert (local check)
+
+Run on `dryrun-nats`, early cells only. In every run the schedule was not yet
+consumed at the early alert, so the early/late distinction holds here. All
+times are relative to the alert.
+
+| strategy | consumed_at_alert | dispatch carrying the schedule | `A.sched` starts | `A.sched` reads it |
+|---|---|---|---|---|
+| Firebreak | 0.0 | -0.53 s | +0.90 s | +1.06 s |
+| No containment | 0.0 | -0.21 s | +2.41 s | +2.53 s |
+| G-Safeguard | 0.0 | -0.53 s | +1.59 s | +1.74 s |
+
+The margin is two hand-off hops of this slow-disk VM (about 0.5–1.2 s each).
+The dispatch carrying the schedule already leaves before the alert, which
+fires 0.4–0.7 s after the produce event: its 0.3 s delay plus the trigger
+watch.
+
+With lab hops at or below 100 ms, `A.sched` would read the schedule about
+0.2 s after that dispatch, which is before the alert, and the distinction
+would collapse. The workload is unchanged. The proposed fix goes to the
+coordinator, because it touches the H8/H9 pre-registration.

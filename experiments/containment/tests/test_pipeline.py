@@ -78,6 +78,15 @@ def test_a_hop_median_of_exactly_100_ms_passes():
     assert pipeline.gate([row(handoff_ms=json.dumps([90.0, 100.0, 110.0]))])["passed"]
 
 
+def test_the_gate_reports_whether_svcs_early_alert_preceded_the_read():
+    svc = row(run_id="svc__early__native__r0__none", instance="svc", alert="early")
+    verdict = pipeline.gate(
+        [row(), {**svc, "consumed_at_alert": 1.0}, {**svc, "alert": "late"}]
+    )
+    assert verdict["passed"]  # informational only
+    assert verdict["svc_early_consumed_at_alert"] == {svc["run_id"]: 1.0}
+
+
 def staged(monkeypatch, chain_ec, chain_a2a, *, gated_hops=(150.0,), fail=None):
     """Stages answered from memory: the gated parts with ``gated_hops``, the
     chain on each system with its own hops (``fail``: that stage raises)."""

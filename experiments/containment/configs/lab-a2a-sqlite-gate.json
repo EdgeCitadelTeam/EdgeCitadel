@@ -1,7 +1,7 @@
 {
   "mode": "lab",
   "system": "a2a",
-  "_note": "The pipeline gate's hand-off fallback (harness.pipeline): the durability-matched A2A stack (SQLite task store) as lab-a2a-sqlite, with the A2A virtual environments in HARNESS_A2A_PYTHON (jim-eq) and HARNESS_A2A_REMOTE_PYTHON (Endurance), so one pipeline process runs both systems. Ports from the A2A design note: agent servers 19300 + agent index, services 19390.",
+  "_note": "The pipeline gate's hand-off fallback (harness.pipeline): the durability-matched A2A stack (SQLite task store) as lab-a2a-sqlite, with the A2A virtual environments in HARNESS_A2A_PYTHON (jim-eq) and HARNESS_A2A_REMOTE_PYTHON (Endurance), so one pipeline process runs both systems. Ports from the A2A design note: agent servers 19300 + agent index, services 19390. Endurance runs each process as a user unit, as the main runs' approved SSH route does.",
   "controller": "jim-eq",
   "hosts": {
     "jim-eq": {
@@ -17,7 +17,8 @@
       "python": "${HARNESS_A2A_REMOTE_PYTHON}",
       "repo": "${HARNESS_REMOTE_REPO}",
       "runtime_root": "${HARNESS_REMOTE_RUNTIME_ROOT}",
-      "work_root": "${HARNESS_REMOTE_WORK_ROOT}"
+      "work_root": "${HARNESS_REMOTE_WORK_ROOT}",
+      "units": "user"
     }
   },
   "node_hosts": {
