@@ -1,0 +1,32 @@
+{
+  "name": "timing-langgraph",
+  "note": "LangGraph StateGraph against the functional API, no fault (user decision 2026-10-21 21:40: report the completion-time difference): reference runs of the 7 smoke workloads x 3 repetitions at the main runs' time scale, the same cells as overhead.json's first part. Run the same file on lab-langgraph and lab-langgraph-functional, after the A2A grids; the first to drop if time runs short.",
+  "instances": [
+    "../workloads/c2.json",
+    "../workloads/c3.json",
+    "../workloads/n2.json",
+    "../workloads/n3.json",
+    "../workloads/rand-n7-s0.json",
+    "../workloads/rand-n7-s1.json",
+    "../workloads/rand-n7-s2.json"
+  ],
+  "strategies": [],
+  "alerts": [],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    }
+  ],
+  "repetitions": 3,
+  "time_scale": 2.0,
+  "reference": true,
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90
+}

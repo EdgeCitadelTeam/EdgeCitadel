@@ -356,7 +356,14 @@ class StackConfig:
         )
 
 
-SYSTEMS = ("edgecitadel", "edgecitadel_bare", "a2a", "langgraph")
+SYSTEMS = (
+    "edgecitadel",
+    "edgecitadel_bare",
+    "a2a",
+    "langgraph",
+    # timing only: the same workload in the functional API (harness.lg_func)
+    "langgraph_functional",
+)
 CONTROL_TRANSPORTS = ("local", "nats", "ssh_forward")
 
 
@@ -1128,7 +1135,7 @@ def make_stack(config: StackConfig, run_id: str, run_dir: Path) -> RunStack:
         from .a2a_stack import A2ARunStack
 
         return A2ARunStack(config, run_id, run_dir)
-    if config.system == "langgraph":
+    if config.system in {"langgraph", "langgraph_functional"}:
         from .lg_stack import LangGraphRunStack
 
         return LangGraphRunStack(config, run_id, run_dir)

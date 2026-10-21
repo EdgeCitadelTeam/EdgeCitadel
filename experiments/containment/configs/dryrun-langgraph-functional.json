@@ -1,0 +1,24 @@
+{
+  "mode": "dryrun",
+  "system": "langgraph_functional",
+  "controller": "local",
+  "_note": "Timing only (reference and uncontained runs): the LangGraph workload in the functional API (harness.lg_func), on this machine.",
+  "hosts": {
+    "local": {
+      "address": "127.0.0.1",
+      "python": "${HARNESS_PYTHON}",
+      "repo": "",
+      "runtime_root": "${HARNESS_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_WORK_ROOT}"
+    }
+  },
+  "node_hosts": {
+    "core": "local",
+    "edge-1": "local",
+    "edge-2": "local"
+  },
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "procstat_interval_ms": 200
+}

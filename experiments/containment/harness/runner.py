@@ -611,7 +611,12 @@ def _drive(
             if status.get("last_decision"):
                 decision_seen = True
                 (run_dir / "status_at_decision.json").write_text(json.dumps(status))
-        if len(ended) == len(spec.tasks) and time.monotonic() - last_change > 1.0:
+        if (
+            len(ended) == len(spec.tasks)
+            and time.monotonic() - last_change > 1.0
+            # Every task ended once, but a LangGraph fork may be redoing some.
+            and not stack.busy()
+        ):
             meta["status"] = "complete"
             break
         if (
@@ -814,7 +819,7 @@ def check_system(system: str, strategies: set[str]) -> None:
         allowed = set(A2A_CODES)
     elif system == "langgraph":
         allowed = set(LG_CODES)
-    elif system == "edgecitadel_bare":
+    elif system in {"edgecitadel_bare", "langgraph_functional"}:
         allowed = set()
     else:
         allowed = set(deploy.STRATEGIES) - set(NATIVE_CODES)

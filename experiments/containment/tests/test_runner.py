@@ -303,3 +303,7 @@ def test_each_system_runs_only_its_own_controls():
         runner.check_system("edgecitadel", {"a2a_cancel_all"})
     with pytest.raises(ValueError, match="cannot run"):
         runner.check_system("edgecitadel_bare", {"stop_team"})
+    runner.check_system("langgraph", {"lg_time_travel", "none", "reference"})
+    runner.check_system("langgraph_functional", {"none", "reference"})
+    with pytest.raises(ValueError, match="cannot run"):
+        runner.check_system("langgraph_functional", {"lg_cancel_run"})

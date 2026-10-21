@@ -33,7 +33,11 @@ log = logging.getLogger(__name__)
 DECISIONS = "core/containment-decisions.jsonl"
 # One super-step per supervisor round and per worker round; generous.
 RECURSION_LIMIT = 10_000
-ENTRY = "from harness.lg_graph import graph  # noqa: F401\n"
+ENTRY = {
+    "langgraph": "from harness.lg_graph import graph  # noqa: F401\n",
+    # timing only (reference and uncontained runs): the functional API
+    "langgraph_functional": "from harness.lg_func import graph  # noqa: F401\n",
+}
 
 
 class LangGraphRunStack(RunStack):
@@ -67,7 +71,7 @@ class LangGraphRunStack(RunStack):
         files = {
             "plan.json": json.dumps(plan).encode(),
             "slots.json": json.dumps(slots).encode(),
-            "graph_entry.py": ENTRY.encode(),
+            "graph_entry.py": ENTRY[self.config.system].encode(),
             "langgraph.json": json.dumps(
                 {
                     "dependencies": ["."],

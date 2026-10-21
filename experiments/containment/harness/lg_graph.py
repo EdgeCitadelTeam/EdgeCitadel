@@ -20,12 +20,17 @@ Shape, as a LangGraph supervisor is usually written:
 - ``actuate`` performs one scheduled effect on the run's sink when it is due
   (the device call); a cancel before then stops it.
 
-Every workload byte that later invocations read (pushed deliveries) is in the
-graph state, so a fork from an earlier checkpoint replays with that
-checkpoint's inputs; the operator's ``blocked_items`` and ``skip_tasks`` are
-state too (``harness.lg_control``). Each node execution is a new invocation
-(a fresh id), so a re-executed node repeats its work and effects, as LangGraph
-does without application-level idempotency; the sink counts repeats.
+Every workload byte that later invocations read is in the graph state:
+pushed deliveries, rogue messages that landed in a task (``pollution``) and
+which tasks finished. The supervisor loads the agents' memory from the state
+before it acts and a worker loads its task's inputs from its ``Send``, so a
+fork from an earlier checkpoint replays with that checkpoint's inputs, and a
+step re-run after a cancel sees the inputs the cut-short run saw. The
+operator's ``blocked_items`` and ``skip_tasks`` are state too
+(``harness.lg_control``). Each node execution is a new invocation (a fresh
+id), so a re-executed node repeats its work and effects, as LangGraph does
+without application-level idempotency; the sink counts repeats, with the
+labels of the attempt that repeated (the ledger keeps the first attempt).
 
 Environment: ``LG_WORK_DIR`` (``plan.json``, ``slots.json``, ``sink.url``),
 ``DET_WORKER_SERVICES`` and ``DET_WORKER_SERVICES_TOKEN``.
@@ -81,10 +86,21 @@ def _merge_delivered(a: dict | None, b: dict | None) -> dict:
     return out
 
 
+def _merge_pollution(a: dict | None, b: dict | None) -> dict:
+    """receiver task -> rogue messages landed in it ({id, labels, rt}), each once."""
+    out = {t: list(msgs) for t, msgs in (a or {}).items()}
+    for task, msgs in (b or {}).items():
+        have = out.setdefault(task, [])
+        seen = {m["id"] for m in have}
+        have += [m for m in msgs if m["id"] not in seen]
+    return out
+
+
 class State(TypedDict, total=False):
     requests: Annotated[list, _append]  # {id, recipient, body}
     taken: Annotated[list, _union]  # request ids routed or rejected
     delivered: Annotated[dict, _merge_delivered]
+    pollution: Annotated[dict, _merge_pollution]
     effects: Annotated[list, _append]  # scheduled effects {id, due_ms, record}
     effects_taken: Annotated[list, _union]
     completed: Annotated[list, _union]  # spec tasks whose invocation finished
@@ -104,8 +120,15 @@ class Run:
         self.services = ServicesClient(
             os.environ["DET_WORKER_SERVICES"], os.environ["DET_WORKER_SERVICES_TOKEN"]
         )
+        # (effect id, invocation) -> the labels that attempt carried.
+        self.attempts: dict[tuple[str, str], list[str]] = {}
         self.workers = {
-            agent: DetWorker(self.plan, agent, self.services, node=spec["node"])
+            agent: DetWorker(
+                self.plan,
+                agent,
+                _Attempts(self.services, self.attempts),
+                node=spec["node"],
+            )
             for agent, spec in self.plan["agents"].items()
         }
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -125,6 +148,9 @@ class Run:
                 reply = json.loads(response.read() or b"{}")
             if reply.get("repeated"):
                 data = record["data"]
+                labels = self.attempts.get(
+                    (str(data.get("ec_effect")), str(record["task_id"])), []
+                )
                 self.services.event(
                     {
                         "run": self.plan["run_id"],
@@ -133,6 +159,7 @@ class Run:
                         "task": data.get("ec_issuer"),
                         "effect_id": data.get("ec_effect"),
                         "rt": record["task_id"],
+                        "labels": labels,
                         "inv_kind": "effect",
                         "t_local_ms": now_ms(),
                     }
@@ -142,6 +169,25 @@ class Run:
             return False, f"http:{error.code}"
         except (urllib.error.URLError, OSError) as error:
             return False, type(error).__name__
+
+
+class _Attempts:
+    """The det-worker's services client, remembering each effect attempt's labels:
+    the ledger keeps one record per effect, so a re-executed invocation's attempt
+    is otherwise lost."""
+
+    def __init__(self, services: ServicesClient, attempts: dict) -> None:
+        self._services = services
+        self._attempts = attempts
+
+    def ledger(self, record: Any) -> dict[str, Any]:
+        if record.get("phase") == "attempted":
+            key = (str(record["effect_id"]), str(record["rt_task"]))
+            self._attempts[key] = list(record.get("labels") or [])
+        return self._services.ledger(record)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._services, name)
 
 
 @cache
@@ -237,12 +283,24 @@ def _ready(task: str, delivered: dict[str, Any]) -> bool:
     return True
 
 
-async def _invoke(request: dict[str, Any], rt: str) -> Port:
+async def _invoke(request: dict[str, Any], rt: str) -> tuple[Port, dict[str, Any]]:
     agent = request["recipient"]
     port = Port(agent, rt)
     envelope = {"payload": {"body": json.dumps(request["body"])}, "task_id": rt}
-    await run().workers[agent].handle(envelope, port)
-    return port
+    result, _ = await run().workers[agent].handle(envelope, port)
+    return port, result
+
+
+def _load_memory(state: State) -> None:
+    """Every agent's memory as the state has it (the supervisor runs alone, between
+    worker steps): finished tasks, nothing computing, no rogue message pending in
+    memory (pending ones are state, handed to the receiving task's worker)."""
+    completed = set(state.get("completed") or [])
+    for agent in run().workers.values():
+        agent.state.finished = completed & set(agent.scope["tasks"])
+        agent.state.computing.clear()
+        agent.state.pollution.clear()
+        agent.state.polluters.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -253,10 +311,12 @@ async def supervisor(state: State) -> dict[str, Any]:
     blocked = set(state.get("blocked_items") or [])
     skip = set(state.get("skip_tasks") or [])
     delivered = _merge_delivered(state.get("delivered"), {})
+    _load_memory(state)
     queue = [r for r in state.get("requests") or [] if r["id"] not in taken]
     new_requests: list[dict[str, Any]] = []
     new_taken: list[str] = []
     new_delivered: dict[str, Any] = {}
+    new_pollution: dict[str, Any] = {}
     sends: list[dict[str, Any]] = []
     per_agent: Counter[str] = Counter()
     slots = run().slots
@@ -287,8 +347,18 @@ async def supervisor(state: State) -> dict[str, Any]:
             elif kind == "create" and not _ready(body["task"], delivered):
                 rest.append(request)
             elif kind in INLINE_KINDS:
-                port = await _invoke(request, str(uuid.uuid4()))
+                rt = str(uuid.uuid4())
+                port, result = await _invoke(request, rt)
                 new_taken.append(request["id"])
+                receiver = result.get("landed") if kind == "rogue_msg" else None
+                if receiver:
+                    landed = {"id": request["id"], "labels": body["labels"], "rt": rt}
+                    new_pollution = _merge_pollution(
+                        new_pollution, {receiver: [landed]}
+                    )
+                    memory = run().workers[agent].state
+                    memory.pollution.pop(receiver, None)
+                    memory.polluters.pop(receiver, None)
                 if kind == "deliver":
                     copy = {"id": request["id"], "content": body["content"]}
                     update = {body["target"]: {body["item"]: [copy]}}
@@ -308,6 +378,7 @@ async def supervisor(state: State) -> dict[str, Any]:
         "requests": new_requests,
         "taken": new_taken,
         "delivered": new_delivered,
+        "pollution": new_pollution,
         "effects_taken": [e["id"] for e in effects],
         "outbox": sends,
     }
@@ -316,12 +387,17 @@ async def supervisor(state: State) -> dict[str, Any]:
 def route(state: State) -> list[Send] | str:
     blocked = set(state.get("blocked_items") or [])
     skip = set(state.get("skip_tasks") or [])
+    pollution = state.get("pollution") or {}
     out = []
     for send in state.get("outbox") or []:
-        if send["node"] == "worker" and rejected(
-            send["request"]["body"], blocked, skip
-        ):
-            continue
+        if send["node"] == "worker":
+            body = send["request"]["body"]
+            if rejected(body, blocked, skip):
+                continue
+            # Rogue messages that landed in this task, also later in the same
+            # supervisor pass that sent it.
+            task = body.get("task") if body.get("kind") == "task" else None
+            send = {**send, "pollution": pollution.get(task, []) if task else []}
         out.append(Send(send["node"], send))
     return out or END
 
@@ -332,12 +408,19 @@ async def worker(arg: dict[str, Any]) -> dict[str, Any]:
     task = body.get("task")
     agent = run().workers[request["recipient"]]
     if task and body.get("kind") == "task":
-        # The agent reads its pushed inputs from memory: as the state has them.
+        # The agent reads its pushed inputs and the rogue messages that landed
+        # in the task from memory: as the state has them.
         agent.state.delivered[task] = {
             item: [Delivered(dict(c["content"]), c["id"]) for c in copies]
             for item, copies in (arg.get("delivered") or {}).items()
         }
-    port = await _invoke(request, str(uuid.uuid4()))
+        landed = arg.get("pollution") or []
+        agent.state.pollution.pop(task, None)
+        agent.state.polluters.pop(task, None)
+        if landed:
+            agent.state.pollution[task] = {lab for m in landed for lab in m["labels"]}
+            agent.state.polluters[task] = [m["rt"] for m in landed]
+    port, _ = await _invoke(request, str(uuid.uuid4()))
     return {
         "requests": port.dispatches,
         "effects": port.scheduled,
