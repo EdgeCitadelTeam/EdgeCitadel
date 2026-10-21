@@ -120,6 +120,9 @@ class MonitorConfig:
     # renew:controller; 0 disables. Keep it well under the lease and the command
     # lifetime: a renewal never outlives the command that carried it.
     controller_lease_renew_ms: int = 10_000
+    # False: decide and log every response but send no decision (actions are
+    # recorded failed, not_enforced); describe and lease renewals still go out.
+    enforce: bool = True
     # How long a decision waits for Core to ingest each confirming node's events
     # up to the journal position it confirmed before it gives up releasing.
     ingest_timeout_ms: int = 5_000
@@ -195,6 +198,7 @@ class MonitorConfig:
                 "taint_aware_admission",
                 "best_effort_guard",
                 "phase1_freeze",
+                "enforce",
             }:
                 if not isinstance(item, bool):
                     raise ConfigError(f"invalid_{key}")

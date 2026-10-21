@@ -3675,7 +3675,12 @@ logged, and every action is recorded as failed (`node_unreachable`).
 **Controller lease.** Every `controller_lease_renew_ms` (default 10000; 0 stops)
 the monitor sends `renew` to each known node (seen in events or named in
 `agent_nodes`) that describes `renew:controller`, beside its decisions so an
-unreachable node never delays one. A renewal carries the owner's current policy
+unreachable node never delays one. Renewal starts with the monitor service,
+before Core's collector is ready (then to the `agent_nodes` nodes) and whether
+or not an alert ever arrives. With `enforce: false` the monitor computes and
+logs every decision but sends none (its actions are recorded failed,
+`not_enforced`) while still describing nodes and renewing their leases, for runs
+that must not contain but keep fail-closed leases on. A renewal carries the owner's current policy
 version without advancing it; one that races a newer decision is rejected as
 stale and the next round renews again. Status reports each node's
 `controller_lease_until_ms`, whether the node enforces a lease, and the last

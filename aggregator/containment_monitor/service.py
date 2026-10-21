@@ -40,6 +40,7 @@ from .control import (
     ControlError,
     LocalAgentdControlClient,
     NatsControlClient,
+    ObservingControlClient,
     UnconfiguredControlClient,
 )
 from .detectors import detect
@@ -79,6 +80,78 @@ class DecisionLog:
             handle.flush()
 
 
+class LeaseRenewer:
+    """Keeps agentd's fail-closed controller lease alive on the known nodes.
+
+    A node with ``EDGECITADEL_CONTROLLER_LEASE_MS`` denies effects unless a
+    renewal was applied within that period, so a monitor that stops (or is
+    cut off) stops the fleet's effects. Renewal starts with the service, before
+    Core's collector is ready and whether or not any alert ever arrives, and
+    runs beside decisions on its own pool so an unreachable node never delays
+    one; one renewal per node is in flight. Renewals carry the owner's current
+    policy version without advancing it; one that races a newer decision is
+    rejected as stale and the next round renews again.
+    """
+
+    def __init__(
+        self,
+        control: ControlClient,
+        config: MonitorConfig,
+        *,
+        clock: Callable[[], int] = now_ms,
+    ):
+        self.control = control
+        self.config = config
+        self.clock = clock
+        self._pool = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="containment-lease"
+        )
+        self._renewals: dict[str, Future[Confirmation]] = {}
+        self._last_ms: int | None = None
+        self.leases: dict[str, dict] = {}
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=True)
+
+    def renew(self, nodes: set[str], policy_version: int) -> None:
+        for node, future in list(self._renewals.items()):
+            if not future.done():
+                continue
+            del self._renewals[node]
+            try:
+                confirmation = future.result()
+            except ControlError as error:
+                self.leases[node] = {**self.leases.get(node, {}), "error": error.code}
+            else:
+                enforcement = confirmation.enforcement
+                self.leases[node] = {
+                    "until_ms": enforcement.get("controller_lease_until_ms"),
+                    "enforced": enforcement.get("controller_lease_enforced"),
+                    "renewed_at_ms": confirmation.applied_at_ms,
+                    "error": None,
+                }
+        interval = self.config.controller_lease_renew_ms
+        now = self.clock()
+        if not interval or (
+            self._last_ms is not None and now - self._last_ms < interval
+        ):
+            return
+        self._last_ms = now
+        self.control.refresh(nodes)
+        version = max(1, policy_version)
+        for node in sorted(nodes - self._renewals.keys()):
+            if "renew:controller" in self.control.capabilities(node):
+                self._renewals[node] = self._pool.submit(
+                    self.control.send, node, "renew", {}, policy_version=version
+                )
+
+
+def stored_policy_version(db: sqlite3.Connection) -> int:
+    return db.execute(
+        "SELECT policy_version FROM containment_state WHERE singleton=1"
+    ).fetchone()[0]
+
+
 class ContainmentMonitor:
     def __init__(
         self,
@@ -91,6 +164,7 @@ class ContainmentMonitor:
         clock: Callable[[], int] = now_ms,
         batch: int = BATCH,
         wait: Callable[[float], None] = time.sleep,
+        renewer: LeaseRenewer | None = None,
     ):
         self.core = core
         self.db = monitor
@@ -107,8 +181,11 @@ class ContainmentMonitor:
         self.graph = ProvenanceGraph(monitor, config)
         self.graph.reload()
         self.sources = SourceProgress(monitor)
+        # Observe-only monitors decide and log but send no decision; they still
+        # describe nodes and renew leases through the same client.
+        decisions = control if config.enforce else ObservingControlClient(control)
         self.driver = EnforcementDriver(
-            control, self._next_version, sites=self._sites, clock=clock
+            decisions, self._next_version, sites=self._sites, clock=clock
         )
         self.protocol = TwoPhaseProtocol(self.driver, max_rounds=config.max_rounds)
         self.in_force: dict[Action, ActionRecord] = {
@@ -124,17 +201,16 @@ class ContainmentMonitor:
         self.last_graph: dict = {}
         self.last_ranking: list[dict] = []
         self._last_resolve_ms = 0
-        # Controller lease renewals run beside decisions so that an unreachable
-        # node never delays a response; one renewal per node in flight.
-        self._lease_pool = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="containment-lease"
-        )
-        self._renewals: dict[str, Future[Confirmation]] = {}
-        self._last_renewal_ms: int | None = None
-        self.leases: dict[str, dict] = {}
+        self._owns_renewer = renewer is None
+        self.renewer = renewer or LeaseRenewer(control, config, clock=clock)
+
+    @property
+    def leases(self) -> dict[str, dict]:
+        return self.renewer.leases
 
     def close(self) -> None:
-        self._lease_pool.shutdown(wait=True)
+        if self._owns_renewer:
+            self.renewer.close()
         self.driver.close()
 
     # -- following --------------------------------------------------------------
@@ -449,48 +525,8 @@ class ContainmentMonitor:
         return decision
 
     def renew_leases(self) -> None:
-        """Keep agentd's fail-closed controller lease alive on the known nodes.
-
-        A node with ``EDGECITADEL_CONTROLLER_LEASE_MS`` denies effects unless a
-        renewal was applied within that period, so a monitor that stops (or is
-        cut off) stops the fleet's effects. Renewals carry the owner's current
-        policy version without advancing it; one that races a newer decision is
-        rejected as stale and the next round renews again.
-        """
-        for node, future in list(self._renewals.items()):
-            if not future.done():
-                continue
-            del self._renewals[node]
-            try:
-                confirmation = future.result()
-            except ControlError as error:
-                self.leases[node] = {**self.leases.get(node, {}), "error": error.code}
-            else:
-                enforcement = confirmation.enforcement
-                self.leases[node] = {
-                    "until_ms": enforcement.get("controller_lease_until_ms"),
-                    "enforced": enforcement.get("controller_lease_enforced"),
-                    "renewed_at_ms": confirmation.applied_at_ms,
-                    "error": None,
-                }
-        interval = self.config.controller_lease_renew_ms
-        now = self.clock()
-        if not interval or (
-            self._last_renewal_ms is not None and now - self._last_renewal_ms < interval
-        ):
-            return
-        self._last_renewal_ms = now
-        version = max(
-            1,
-            self.db.execute(
-                "SELECT policy_version FROM containment_state WHERE singleton=1"
-            ).fetchone()[0],
-        )
-        for node in sorted(self.graph.known_nodes() - self._renewals.keys()):
-            if "renew:controller" in self.control.capabilities(node):
-                self._renewals[node] = self._lease_pool.submit(
-                    self.control.send, node, "renew", {}, policy_version=version
-                )
+        """Renew controller leases on every known node (``LeaseRenewer``)."""
+        self.renewer.renew(self.graph.known_nodes(), stored_policy_version(self.db))
 
     def step(self) -> None:
         if self.fault is not None:
@@ -678,43 +714,33 @@ class ContainmentMonitorService:
         from edgecitadel_agentd.writer_lock import WriterActiveError, exclusive_writer
 
         try:
-            while not self._stop.is_set() and not self._ready():
-                self._set(state="waiting", fault="collector_unavailable")
-                self._stop.wait(self.poll_seconds)
-            if self._stop.is_set():
-                return
             with exclusive_writer(
                 self.monitor_db.parent / (self.monitor_db.name + ".writer")
             ):
-                core, monitor = open_core(self.core_db), open_monitor(self.monitor_db)
-                engine = ContainmentMonitor(
-                    core,
-                    monitor,
-                    self.config,
-                    self.control,
-                    decision_log=DecisionLog(self.decision_log),
-                )
+                monitor = open_monitor(self.monitor_db)
+                ProvenanceGraph.initialize(monitor)
+                # Leases are renewed from startup: nodes that enforce them deny
+                # effects until the first renewal, whatever Core is doing.
+                renewer = LeaseRenewer(self.control, self.config)
                 try:
-                    while not self._stop.is_set():
-                        while True:
-                            try:
-                                alert = self._alerts.get_nowait()
-                            except queue.Empty:
-                                break
-                            engine.submit(alert)
-                        started = time.perf_counter()
-                        engine.step()
+                    while not self._stop.is_set() and not self._ready():
+                        renewer.renew(
+                            set(self.config.agent_nodes.values()),
+                            stored_policy_version(monitor),
+                        )
                         self._set(
-                            **engine.status(),
-                            state="paused" if engine.fault else "running",
-                            last_step_ms=round(
-                                (time.perf_counter() - started) * 1000, 3
-                            ),
+                            state="waiting",
+                            fault="collector_unavailable",
+                            control={
+                                "owner": self.control.owner,
+                                "controller_leases": copy.deepcopy(renewer.leases),
+                            },
                         )
                         self._stop.wait(self.poll_seconds)
+                    if not self._stop.is_set():
+                        self._follow(monitor, renewer)
                 finally:
-                    engine.close()
-                    core.close()
+                    renewer.close()
                     monitor.close()
         except WriterActiveError:
             self._set(state="paused", fault="monitor_writer_active")
@@ -722,6 +748,36 @@ class ContainmentMonitorService:
             self._set(state="paused", fault="monitor_storage_unavailable")
         except Exception:  # noqa: BLE001 - thread boundary reports a fixed code, no payload text
             self._set(state="failed", fault="monitor_lifecycle_fault")
+
+    def _follow(self, monitor: sqlite3.Connection, renewer: LeaseRenewer) -> None:
+        core = open_core(self.core_db)
+        engine = ContainmentMonitor(
+            core,
+            monitor,
+            self.config,
+            self.control,
+            decision_log=DecisionLog(self.decision_log),
+            renewer=renewer,
+        )
+        try:
+            while not self._stop.is_set():
+                while True:
+                    try:
+                        alert = self._alerts.get_nowait()
+                    except queue.Empty:
+                        break
+                    engine.submit(alert)
+                started = time.perf_counter()
+                engine.step()
+                self._set(
+                    **engine.status(),
+                    state="paused" if engine.fault else "running",
+                    last_step_ms=round((time.perf_counter() - started) * 1000, 3),
+                )
+                self._stop.wait(self.poll_seconds)
+        finally:
+            engine.close()
+            core.close()
 
 
 def service_from_environment(core_db: Path) -> ContainmentMonitorService:

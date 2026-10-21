@@ -328,3 +328,60 @@ def test_monitor_waits_for_the_collector_epoch(core_db, tmp_path):
         wait_for(lambda: service.status().get("state") == "running")
     finally:
         service.close()
+
+
+def test_leases_are_renewed_from_startup_before_core_is_ready(core_db):
+    """Fail-closed nodes deny effects until renewed: the monitor renews as soon
+    as it starts, with no alert and before the collector's epoch exists."""
+    path, _, _ = core_db
+    with sqlite3.connect(path) as core:
+        core.execute("DELETE FROM trace_collector")
+    service = ContainmentMonitorService(
+        path,
+        config=MonitorConfig(agent_nodes={"a": "n0"}, controller_lease_renew_ms=50),
+        control=FakeControlClient(),
+        poll_seconds=0.02,
+    )
+    service.start()
+    try:
+        leases = wait_for(
+            lambda: (service.status().get("control") or {}).get("controller_leases")
+        )
+        assert leases["n0"]["error"] is None
+        assert service.status()["fault"] == "collector_unavailable"
+    finally:
+        service.close()
+
+
+def test_an_observing_monitor_decides_and_renews_but_sends_no_decision(
+    core_db, tmp_path
+):
+    from aggregator.containment_monitor.model import parse_external_alert
+    from aggregator.containment_monitor.service import (
+        ContainmentMonitor,
+        open_core,
+        open_monitor,
+    )
+
+    path, result, _ = core_db
+    control = FakeControlClient()
+    engine = ContainmentMonitor(
+        open_core(path),
+        open_monitor(tmp_path / "m.db"),
+        MonitorConfig(enforce=False, agent_nodes={"p": "n0"}),
+        control,
+    )
+    engine.catch_up()
+    engine.submit(
+        parse_external_alert(
+            {"kind": "validator_failure", "version_id": result}, now_ms=engine.clock()
+        )
+    )
+    (decision,) = engine.handle_alerts()
+    records = decision.phase1 + decision.phase2
+    assert records and {r.error for r in records} == {"not_enforced"}
+    assert control.timeline == [] and engine.status()["in_force"] == []
+    engine.renew_leases()
+    wait_for(lambda: engine.renew_leases() or engine.leases.get("n0"))
+    assert engine.leases["n0"]["error"] is None
+    engine.close()

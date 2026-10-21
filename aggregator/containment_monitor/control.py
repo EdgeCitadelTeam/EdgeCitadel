@@ -558,6 +558,34 @@ class FakeControlClient:
             }
 
 
+class ObservingControlClient:
+    """Decisions are computed and logged but never sent (``enforce: false``).
+
+    Describe and controller-lease renewals still go through the wrapped client,
+    so an observing monitor keeps fail-closed nodes' effects allowed.
+    """
+
+    def __init__(self, inner: ControlClient):
+        self.inner = inner
+        self.owner = inner.owner
+
+    def capabilities(self, node_id: str) -> frozenset[str]:
+        return self.inner.capabilities(node_id)
+
+    def refresh(self, nodes: Iterable[str]) -> None:
+        self.inner.refresh(nodes)
+
+    def close(self) -> None:
+        return None  # the wrapped client is owned by its creator
+
+    def send(self, node_id, action, target, *, policy_version):
+        if action in {"describe", "renew"}:
+            return self.inner.send(
+                node_id, action, target, policy_version=policy_version
+            )
+        raise ControlError("not_enforced")
+
+
 class UnconfiguredControlClient:
     """No enforcement endpoints: plan with agentd's vocabulary, apply nothing."""
 
