@@ -85,9 +85,13 @@ class HostConfig:
     # "subject": the helper's subject (default harness.lab.<name>)}.
     helper: dict[str, str] | None = None
     # An SSH host's processes as transient systemd units (``user`` or
-    # ``system``) named firebreak-exp-h-<run>-<process>, checked and stopped
+    # ``system``) named <unit_prefix><run>-<process>, checked and stopped
     # through systemd; None: background process groups.
     units: str | None = None
+    # A stack's own unit namespace: an attempt stops only the leftover units
+    # of its prefix, so two stacks on one host never stop each other's (the
+    # scale testbed uses firebreak-exp-s- beside the evaluation's -h-).
+    unit_prefix: str = "firebreak-exp-h-"
 
     def pythonpath(self) -> str:
         return ":".join(
@@ -208,10 +212,10 @@ UNIT_PREFIX = "firebreak-exp-h-"
 RUNNER_UNIT = "firebreak-exp-h-runner"
 
 
-def unit_name(log: str, name: str) -> str:
+def unit_name(log: str, name: str, prefix: str = UNIT_PREFIX) -> str:
     """The unit of a run's process (its log is <work_root>/<run>/logs/<name>.log)."""
     run_id = Path(log).parent.parent.name
-    return UNIT_PREFIX + re.sub(r"[^A-Za-z0-9_.:-]+", "-", f"{run_id}-{name}")[:200]
+    return prefix + re.sub(r"[^A-Za-z0-9_.:-]+", "-", f"{run_id}-{name}")[:200]
 
 
 class SSHHost:
@@ -257,7 +261,7 @@ class SSHHost:
         env_file = self._env_file(name, env, str(Path(log).parent))
         q = shlex.quote
         if self.config.units:
-            unit = unit_name(log, name)
+            unit = unit_name(log, name, self.config.unit_prefix)
             source = '. "$0" && exec "$@"'
             command = (
                 f"mkdir -p {q(str(Path(log).parent))} && "
@@ -281,14 +285,16 @@ class SSHHost:
 
     def stop_leftover_units(self) -> list[str]:
         """Stop the harness units an interrupted run left (never a runner)."""
+        prefix = self.config.unit_prefix
         listing = self._ssh(
             f"systemctl {self._scope()}list-units --all --no-legend --plain "
-            f"'{UNIT_PREFIX}*' | awk '{{print $1}}'"
+            f"'{prefix}*' | awk '{{print $1}}'"
         )
         left = [
             unit
             for unit in listing.split()
-            if unit.startswith(UNIT_PREFIX) and not unit.startswith(RUNNER_UNIT)
+            if unit.startswith(prefix)
+            and not unit.startswith((RUNNER_UNIT, f"{prefix}runner"))
         ]
         if left:
             units = " ".join(shlex.quote(u) for u in left)
@@ -617,6 +623,12 @@ class StackConfig:
                 fields["helper"] = helper
             if fields.get("units") not in (None, "user", "system"):
                 raise StackError(f"host {name}: units is user or system")
+            if "unit_prefix" in fields and not re.fullmatch(
+                r"firebreak-exp-[a-z0-9]+-", str(fields["unit_prefix"])
+            ):
+                raise StackError(
+                    f"host {name}: unit_prefix is firebreak-exp-<name>- (lower case)"
+                )
             hosts[name] = HostConfig(name=name, **fields)
         transport = _transport(document.get("control_transport", "local"))
         if transport != "nats" and any(h.helper for h in hosts.values()):

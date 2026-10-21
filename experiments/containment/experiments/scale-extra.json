@@ -1,0 +1,49 @@
+{
+  "name": "scale-extra",
+  "note": "Optional extension of scale.json (about 2.3 h): the S = 32 comparison on a second instance, rand-n63-s2-S32 (Firebreak, Trace & quarantine, Stop team, No containment x early/late x 3 repetitions, plus the reference): 27 runs. Run into the same output root as scale.json.",
+  "instances": [
+    "../workloads/scale/rand-n63-s2-S32.json"
+  ],
+  "strategies": [
+    "firebreak",
+    "trace_and_quarantine",
+    "stop_team",
+    "none"
+  ],
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "repetitions": 3,
+  "rogue_rates": [
+    0.0
+  ],
+  "reference": true,
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 400
+      }
+    }
+  ],
+  "time_scale": 2.0,
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 120,
+  "root_modes": [
+    "given"
+  ],
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "phase1_labels": [
+    "frontier"
+  ],
+  "receding_during_waits": [
+    false
+  ]
+}

@@ -68,7 +68,6 @@ measures it in each node's work root beforehand.
 from __future__ import annotations
 
 import json
-import math
 import os
 import sqlite3
 import statistics
@@ -149,26 +148,15 @@ def _number(value: Any) -> float:
     return 0.0 if number != number else number  # NaN counts as 0
 
 
-def quantile(values: Iterable[float], q: float) -> float:
-    """Nearest-rank quantile (the maximum for q = 1)."""
-    ordered = sorted(values)
-    return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
-
-
 def control_summary(per_site: Mapping[str, Iterable[float]]) -> dict[str, Any]:
     """Per site: the count, p50, p95, p99 and maximum (ms)."""
+    from .runstats import distribution
+
     out = {}
     for site in sorted(per_site):
-        times = list(per_site[site])
-        if times:
-            out[site] = {
-                "n": len(times),
-                **{
-                    name: round(quantile(times, q), 1)
-                    for name, q in (("p50", 0.5), ("p95", 0.95), ("p99", 0.99))
-                },
-                "max": round(max(times), 1),
-            }
+        summary = distribution(per_site[site])
+        if summary["n"]:
+            out[site] = summary
     return out
 
 

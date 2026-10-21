@@ -1001,6 +1001,22 @@ def _collect(
     except (StackError, OSError):
         effects = ""
     (run_dir / "gateway_effects.jsonl").write_text(effects)
+    try:  # Core's ingest lag per node (harness.runstats)
+        lags = stack.hosts[controller].run(
+            [
+                config.hosts[controller].python,
+                "-m",
+                "harness.coreq",
+                "ingest",
+                "--db",
+                f"{base}/core/openclaw.db",
+            ],
+            cwd=config.hosts[controller].runtime_root,
+        )
+    except (StackError, OSError):
+        lags = ""
+    if lags.strip():
+        (run_dir / "core_ingest.json").write_text(lags)
     logs = run_dir / "logs"
     logs.mkdir(exist_ok=True)
     for host in {controller, *config.node_hosts.values()}:
