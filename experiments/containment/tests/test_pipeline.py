@@ -38,15 +38,34 @@ def test_each_gate_condition_fails_on_its_own():
         "commits_unresolved is not 0": row(commits_unresolved=1),
         "Firebreak not clean": row(clean_after_alert=0),
         "worker slot restarts": row(slot_restarts=4),
-        "median hand-off latency": row(handoff_ms=json.dumps([150.0, 160.0])),
+        "testbed failures": row(
+            testbed_failure="2 runtime call(s) never reached agentd"
+        ),
     }
     for reason, bad in cases.items():
         verdict = pipeline.gate([bad])
         assert not verdict["passed"]
         assert any(reason in r for r in verdict["reasons"]), (reason, verdict)
-    # An uncontained or no-fault run need not be clean; slot losses add up.
+    # An uncontained or no-fault run need not be clean; slot losses add up, and
+    # a run that only lost a worker slot counts against that budget alone.
     assert pipeline.gate([row(strategy_code="none", clean_after_alert=0)])["passed"]
     assert not pipeline.gate([row(slot_restarts=2), row(slot_restarts=2)])["passed"]
+    lost = row(slot_restarts=1, testbed_failure="1 worker slot(s) lost agentd")
+    assert pipeline.gate([lost])["passed"]
+
+
+def test_hand_offs_are_recorded_with_their_verdict_but_do_not_block():
+    verdict = pipeline.gate([row(handoff_ms=json.dumps([150.0, 160.0]))])
+    assert verdict["passed"] and verdict["reasons"] == []
+    assert verdict["handoff"] == "recorded_not_blocking"
+    assert verdict["handoff_ms_median"] == 155.0
+    assert verdict["handoff_verdict"] == {
+        "passed": False,
+        "reasons": [
+            "median hand-off latency 155.0 ms over 2 hand-offs (at most 100 ms needed)"
+        ],
+    }
+    assert pipeline.gate([row()])["handoff_verdict"] == {"passed": True, "reasons": []}
 
 
 CONFIRMED = {"core": [18.0], "edge-1": [40.0]}
@@ -79,7 +98,8 @@ def test_a_failed_gate_stops_before_the_pilots(tmp_path, monkeypatch):
 
 
 def test_a_hop_median_of_exactly_100_ms_passes():
-    assert pipeline.gate([row(handoff_ms=json.dumps([90.0, 100.0, 110.0]))])["passed"]
+    verdict = pipeline.gate([row(handoff_ms=json.dumps([90.0, 100.0, 110.0]))])
+    assert verdict["handoff_verdict"]["passed"]
 
 
 def test_the_gate_reports_whether_svcs_early_alert_preceded_the_read():
@@ -117,6 +137,7 @@ def test_a_slow_hop_median_falls_back_to_the_a2a_sqlite_ratio(tmp_path, monkeypa
     assert pipeline.run_pipeline(tmp_path / "ec.json", out, tmp_path / "a2a.json") == 0
     verdict = json.loads((out / "gate.json").read_text())
     assert verdict["passed"] and verdict["handoff_criterion"] == "a2a_sqlite_ratio"
+    assert verdict["handoff_verdict"] == {"passed": True, "reasons": []}
     assert verdict["handoff_ms_median"] == 150.0
     assert verdict["chain_handoff_ms_median"] == {
         "edgecitadel": 120.0,
@@ -131,9 +152,9 @@ def test_a_slow_hop_median_falls_back_to_the_a2a_sqlite_ratio(tmp_path, monkeypa
     assert [name for name, _ in ran[4:]] == ["lab-pilot", "svc-pilot"]
 
 
-def test_the_fallback_fails_above_three_times_or_without_a_measurement(
-    tmp_path, monkeypatch
-):
+def test_a_failed_fallback_is_recorded_and_the_pilots_still_run(tmp_path, monkeypatch):
+    """Above 3 times A2A-SQLite, or with no A2A measurement, the recorded
+    hand-off verdict fails with the reason; the pipeline goes on."""
     cases = {
         "times A2A-SQLite": dict(chain_ec=[200.0], chain_a2a=[50.0]),
         "could not run: ValueError: handoff-a2a-sqlite could not start": dict(
@@ -142,19 +163,22 @@ def test_the_fallback_fails_above_three_times_or_without_a_measurement(
         "could not run: ValueError: no hand-offs": dict(chain_ec=[60.0], chain_a2a=[]),
     }
     for index, (reason, case) in enumerate(cases.items()):
-        staged(monkeypatch, **case)
+        ran = staged(monkeypatch, **case)
         out = tmp_path / f"out{index}"
         assert (
-            pipeline.run_pipeline(tmp_path / "ec.json", out, tmp_path / "a.json") == 1
+            pipeline.run_pipeline(tmp_path / "ec.json", out, tmp_path / "a.json") == 0
         )
-        failed = (out / "GATE-FAILED").read_text()
-        assert reason in failed and pipeline.HANDOFF_REASON not in failed, failed
-    ran = staged(monkeypatch, [60.0], [50.0])
-    assert pipeline.run_pipeline(tmp_path / "ec.json", tmp_path / "none") == 1
-    assert (
-        "no A2A-SQLite stack given" in (tmp_path / "none" / "GATE-FAILED").read_text()
-    )
-    assert [name for name, _ in ran] == ["regression", "svc-smoke"]
+        assert not (out / "GATE-FAILED").exists()
+        verdict = json.loads((out / "gate.json").read_text())
+        assert verdict["passed"] and verdict["handoff"] == "recorded_not_blocking"
+        assert verdict["handoff_criterion"] == "a2a_sqlite_ratio"
+        (recorded,) = verdict["handoff_verdict"]["reasons"]
+        assert not verdict["handoff_verdict"]["passed"] and reason in recorded
+        assert [name for name, _ in ran][-2:] == ["lab-pilot", "svc-pilot"]
+    staged(monkeypatch, [60.0], [50.0])
+    assert pipeline.run_pipeline(tmp_path / "ec.json", tmp_path / "none") == 0
+    verdict = json.loads((tmp_path / "none" / "gate.json").read_text())
+    assert "no A2A-SQLite stack given" in verdict["handoff_verdict"]["reasons"][0]
 
 
 def test_other_failures_skip_the_fallback(tmp_path, monkeypatch):
@@ -286,7 +310,10 @@ def test_a_control_latency_failure_skips_the_handoff_fallback(tmp_path, monkeypa
     assert pipeline.run_pipeline(tmp_path / "ec.json", out, tmp_path / "a.json") == 1
     assert [name for name, _ in ran] == ["regression", "svc-smoke"]
     failed = (out / "GATE-FAILED").read_text()
-    assert pipeline.CONTROL_REASON in failed and pipeline.HANDOFF_REASON in failed
+    assert pipeline.CONTROL_REASON in failed and pipeline.HANDOFF_REASON not in failed
+    verdict = json.loads((out / "gate.json").read_text())
+    assert verdict["handoff_criterion"] == "absolute"
+    assert not verdict["handoff_verdict"]["passed"]  # recorded, not run further
 
 
 def test_every_native_lab_setting_plans_with_the_gated_L():

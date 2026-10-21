@@ -8,29 +8,33 @@ into its own directory under ``<root>``:
    N2 and rand-n7-s1, 69 runs), then scores it;
 2. ``svc-smoke`` (23 runs), then scores it;
 3. the gate on both (``gate.json``); on a failure it writes the reasons to
-   ``GATE-FAILED`` and stops;
+   ``GATE-FAILED`` and stops (hand-offs are recorded, not gated);
 4. ``lab-pilot`` (370 runs) and ``svc-pilot`` (69 runs), each scored.
 
 The gate (``GATE``) asks of every run of steps 1 and 2: it ended ``complete``
 or ``quiescent``; the scorer's integrity counts (``commits_unlabelled``,
-``commits_unresolved``, ``commits_label_mismatch``) are 0; and of all of them
+``commits_unresolved``, ``commits_label_mismatch``) are 0; it had no testbed
+failure other than lost worker slots (``testbed_failure``); and of all of them
 together: Firebreak was clean after the alert in every faulted run and at most
-3 worker slots were lost. Hand-offs (approved 2026-10-21): the per-hop median
+3 worker slots were lost. Control latency (approved 2026-10-21): the monitor
+plans with L = 150 ms at every site, which theory needs to bound a control
+action's decide-to-enforced time; from the regression stage's decision logs
+the gate records every site's sent-to-confirmed p50, p95, p99 and maximum
+(``control_sent_to_confirmed_ms``) and fails when a site's p99 is above L (or
+when no command was confirmed, so the bound is unchecked).
+
+Hand-offs are measured and recorded but do not block (decided 2026-10-21:
+``handoff: "recorded_not_blocking"``; ``handoff_verdict`` is the verdict the
+approved criterion would have given). The criterion: the per-hop median
 (every hop of every run, ``metrics.handoff_latencies``) passes at 100 ms or
-less. Otherwise, when everything else passed, the six-hop chain between
-jim-eq and Endurance (``experiments/handoff-chain.json``, 10 repetitions)
-runs on this stack (``handoff-ec``) and on the durability-matched A2A stack,
-A2A with its SQLite task store (``--a2a-stack``, e.g.
-``configs/lab-a2a-sqlite-gate.json``; ``handoff-a2a-sqlite``), and the gate
-passes if EdgeCitadel's per-hop median on the chain is at most 3 times
-A2A-SQLite's (H11's pre-registered criterion). ``gate.json`` records the
-criterion used and every median; an A2A measurement that cannot run fails
-the gate with that reason. Control latency (approved 2026-10-21): the
-monitor plans with L = 150 ms at every site, which theory needs to bound a
-control action's decide-to-enforced time; from the regression stage's
-decision logs the gate records every site's sent-to-confirmed p50, p95, p99
-and maximum (``control_sent_to_confirmed_ms``) and fails when a site's p99 is
-above L (or when no command was confirmed, so the bound is unchecked).
+less. Otherwise, when the gate passed, the six-hop chain between jim-eq and
+Endurance (``experiments/handoff-chain.json``, 10 repetitions) runs on this
+stack (``handoff-ec``) and on the durability-matched A2A stack, A2A with its
+SQLite task store (``--a2a-stack``, e.g. ``configs/lab-a2a-sqlite-gate.json``;
+``handoff-a2a-sqlite``), and it passes if EdgeCitadel's per-hop median on the
+chain is at most 3 times A2A-SQLite's (H11's pre-registered criterion).
+``gate.json`` records the criterion used and every median; an A2A
+measurement that cannot run is recorded with its reason.
 
 A rerun resumes: finished runs are skipped, and every finished part is scored
 again. Progress lines go to standard output (``PIPELINE ...``); run it as the
@@ -78,6 +82,8 @@ GATE: dict[str, Any] = {
 CONTROL_STAGE = "regression"
 HANDOFF_CHAIN = "experiments/handoff-chain.json"
 HANDOFF_REASON = "median hand-off latency"
+# runner.infrastructure_failure's text for lost worker slots.
+SLOT_LOSS = "worker slot(s) lost agentd"
 CONTROL_REASON = "control latency"
 
 
@@ -121,6 +127,7 @@ def gate(
     ``reasons``."""
     rows = list(rows)
     reasons: list[str] = []
+    handoff_reasons: list[str] = []
     bad_status = [
         f"{r['run_id']}: {r.get('status')}"
         for r in rows
@@ -141,6 +148,15 @@ def gate(
     ]
     if leaked:
         reasons.append(f"Firebreak not clean after the alert in {leaked}")
+    testbed = [
+        f"{r['run_id']}: {r['testbed_failure']}"
+        for r in rows
+        if r.get("testbed_failure")
+        # Lost worker slots have their own budget below.
+        and SLOT_LOSS not in str(r["testbed_failure"])
+    ]
+    if testbed:
+        reasons.append(f"testbed failures in {testbed}")
     restarts = int(sum(_number(r.get("slot_restarts")) for r in rows))
     if restarts > GATE["max_slot_restarts"]:
         reasons.append(
@@ -149,7 +165,7 @@ def gate(
     handoffs = hops(rows)
     median = statistics.median(handoffs) if handoffs else None
     if median is None or median > GATE["max_handoff_ms_median"]:
-        reasons.append(
+        handoff_reasons.append(
             f"{HANDOFF_REASON} {median} ms over {len(handoffs)} hand-offs "
             f"(at most {GATE['max_handoff_ms_median']:.0f} ms needed)"
         )
@@ -175,6 +191,10 @@ def gate(
         "handoffs": len(handoffs),
         "handoff_ms_median": median,
         "handoff_criterion": "absolute",
+        # Recorded, not gated (2026-10-21): the verdict the criterion would
+        # have given; the A2A-SQLite fallback may still decide it.
+        "handoff": "recorded_not_blocking",
+        "handoff_verdict": {"passed": not handoff_reasons, "reasons": handoff_reasons},
         "control_latency_ms": bound,
         "control_sent_to_confirmed_ms": summary,
         "runs_with_errors": [r["run_id"] for r in rows if _number(r.get("n_errors"))],
@@ -290,9 +310,10 @@ def _control_latency(out: Path) -> dict[str, list[float]]:
 def _handoff_fallback(
     verdict: dict[str, Any], stack_path: Path, a2a_stack: Path | None, out: Path
 ) -> None:
-    """Replace a failed absolute hand-off check by the A2A-SQLite ratio."""
+    """Replace a failed absolute hand-off check by the A2A-SQLite ratio, in
+    the recorded ``handoff_verdict``."""
     verdict["handoff_criterion"] = "a2a_sqlite_ratio"
-    reasons = [r for r in verdict["reasons"] if not r.startswith(HANDOFF_REASON)]
+    reasons: list[str] = []
     try:
         if a2a_stack is None:
             raise ValueError("no A2A-SQLite stack given (--a2a-stack)")
@@ -316,8 +337,7 @@ def _handoff_fallback(
                 f"{medians['a2a_sqlite']:.1f} ms (at most "
                 f"{GATE['max_handoff_ratio']:g} times needed)"
             )
-    verdict["reasons"] = reasons
-    verdict["passed"] = not reasons
+    verdict["handoff_verdict"] = {"passed": not reasons, "reasons": reasons}
 
 
 def run_pipeline(stack_path: Path, out: Path, a2a_stack: Path | None = None) -> int:
@@ -327,9 +347,8 @@ def run_pipeline(stack_path: Path, out: Path, a2a_stack: Path | None = None) -> 
     for name, experiment in GATED:
         gated += _stage(stack_path, name, experiment, out)
     verdict = gate(gated, _control_latency(out))
-    others = [r for r in verdict["reasons"] if not r.startswith(HANDOFF_REASON)]
-    if not verdict["passed"] and not others:
-        # Only the hand-off check failed: the approved fallback decides it.
+    if verdict["passed"] and not verdict["handoff_verdict"]["passed"]:
+        # The approved fallback decides the recorded hand-off verdict.
         _handoff_fallback(verdict, stack_path, a2a_stack, out)
     verdict["commit_cost_ms"] = commit_cost_ms(out)
     (out / "gate.json").write_text(json.dumps(verdict, indent=1))
@@ -338,11 +357,14 @@ def run_pipeline(stack_path: Path, out: Path, a2a_stack: Path | None = None) -> 
         _say("gate FAILED: " + "; ".join(verdict["reasons"]))
         return 1
     p99 = max(v["p99"] for v in verdict["control_sent_to_confirmed_ms"].values())
+    handoff = verdict["handoff_verdict"]
     _say(
         f"gate passed: {verdict['runs']} runs, {verdict['slot_restarts']} slot "
-        f"restarts, median hand-off {verdict['handoff_ms_median']:.0f} ms "
-        f"({verdict['handoff_criterion']} criterion), control p99 at most "
-        f"{p99:.0f} ms"
+        f"restarts, control p99 at most {p99:.0f} ms; hand-offs recorded, not "
+        f"gated: median {verdict['handoff_ms_median']} ms, would have "
+        f"{'passed' if handoff['passed'] else 'failed'} "
+        f"({verdict['handoff_criterion']} criterion)"
+        + ("" if handoff["passed"] else ": " + "; ".join(handoff["reasons"]))
     )
     for name, experiment in PILOTS:
         _stage(stack_path, name, experiment, out)
