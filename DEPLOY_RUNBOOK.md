@@ -1,8 +1,11 @@
-# Deployment runbook: containment milestone (m3/integration) on the 3-node testbed
+# Deployment runbook: containment milestone (m4/design) on the 3-node testbed
 
-This runbook upgrades the real testbed to the integrated containment milestone:
-agentd schema 32 with the control channel and effect gateway on every node, and
-Core with trace projection v9 and the containment monitor. It contains no
+This runbook upgrades the real testbed to the containment milestone: agentd
+schema 33 with the control channel and the effect gateway (which performs
+registered effects itself) on every node, and Core with trace projection v9 and
+the containment monitor (checked solver with HiGHS, ingest-then-release).
+A testbed already on `m3/integration` (schema 32) needs only the changes marked
+**M4** below. It contains no
 secrets: every credential below is generated or copied on the hosts and never
 printed, pasted into chat, committed or logged.
 
@@ -22,13 +25,16 @@ anything, and record what you find.
 
 | Component | Before (last recorded) | After | Compatibility |
 |---|---|---|---|
-| agentd SQLite | schema 29 (main `4d464fe`) or 31 | **32** | migrated in place at first start; an older agentd refuses a newer database |
+| agentd SQLite | schema 29 (main `4d464fe`), 31 or 32 | **33** | migrated in place at first start; an older agentd refuses a newer database. **M4**: scheduled effects recorded by schema 32 (no adapter) are marked denied by the migration |
 | Delegation envelopes | no `effect_scope`/`lease`/`authority_chain` | carried in `payload.execution_context` | a schema 32 node rejects delegations without an authority scope; mixed versions break cross-node delegation |
-| Control RPC | `containment.hold`/`containment.release` | `containment.control` (+ NATS `edgecitadel.control.v1.<node>`) | old RPCs removed |
+| Control RPC | `containment.hold`/`containment.release` | `containment.control` (+ NATS `edgecitadel.control.v1.<node>`) | old RPCs removed. **M4**: confirmations carry `journal` (the monitor waits until it has ingested the node's events through it) |
+| Effects (**M4**) | `effect.authorize` + harness-performed, `effect.commit` for scheduled ones | `effect.execute`: agentd performs Home Assistant and HTTP-ledger effects through adapters in `EDGECITADEL_EFFECT_ADAPTERS`, re-checked at commit; `effect.authorize` stays for effects only the harness can perform (not fenced) | `effect.commit` removed; harnesses that perform registered effects themselves must switch to `effect.execute` |
+| Trace RPC (**M4**) | — | `trace.use`: a harness reports an input it consumed from agent memory or a pushed delivery | harnesses that pass delivered results through memory should call it, or the lineage misses the edge |
 | Native connector grants | recipients only (or the old implicit grant) | recipients **and effects**, both empty by default | re-grant after upgrade (step 5) |
 | Core trace projection | v8 | **v9** | an existing v8 projection pauses the projector (`projector_rebuild_required`); see step 3 |
-| Containment monitor | absent | `EDGECITADEL_CONTAINMENT_MONITOR=1` | off until step 7 |
-| Controller lease | none | **on in the lab**: `EDGECITADEL_CONTROLLER_LEASE_MS=30000` on every agentd, renewed by the monitor | effects are denied (fail closed) whenever no renewal arrived within 30 s |
+| Containment monitor | absent | `EDGECITADEL_CONTAINMENT_MONITOR=1` | off until step 7. **M4**: Core image needs `highspy` (in `aggregator/requirements.txt`); rebuild it |
+| Controller lease | none | **on in the lab**: `EDGECITADEL_CONTROLLER_LEASE_MS=30000` on every agentd, renewed by the monitor from its start, alert or not | effects are denied (fail closed) whenever no renewal arrived within 30 s |
+| Trace export (**M4**) | new events polled every 1000 ms | every 100 ms (`EDGECITADEL_TRACE_EXPORT_IDLE_MS`, 10 to 60000) | measured export lag p95 958 ms before, 48 ms after |
 | Pi packages | 0.1.1 | rebuilt from this revision (abort/resume, effect gate) | reinstall; state preserved |
 
 Upgrade all agentd nodes and Core in one maintenance window. Record the
@@ -106,7 +112,11 @@ its own clock. Do not continue with a host that is not NTP-synchronized.
 ## 3. Upgrade Core on jim-eq
 
 1. Install the revision into the Core deployment the way it was installed
-   (compose project or `deploy/deploy-host.sh --update`). Keep
+   (compose project or `deploy/deploy-host.sh --update`). **Rebuild** the
+   aggregator image rather than reusing the previous one: the monitor's ILP
+   solver needs `highspy` from `aggregator/requirements.txt` (without it,
+   instances off the fast path fall back to the greedy cut and the solve is
+   reported `approximate`). Keep
    `EDGECITADEL_TRACE_COLLECTOR=1` and leave `EDGECITADEL_CONTAINMENT_MONITOR=0`
    for now.
 2. Start the aggregator and check `GET /api/system/status` and the collector
@@ -136,6 +146,30 @@ Do the nodes one at a time and verify each before the next.
      unless a controller renewal was applied in the last 30 s. Effects stay
      denied from now until the monitor runs (step 7); that is intended while
      traffic is frozen. Dispatch and task execution are not gated.
+   - **M4**, on nodes whose agents perform registered effects:
+     `EDGECITADEL_EFFECT_ADAPTERS=<agentd state>/effect-adapters.json`, a JSON
+     file with one entry per adapter (no secrets in it):
+
+     ```json
+     {
+       "homeassistant": {"base_url": "http://127.0.0.1:8123",
+                         "token_file": "<agentd state>/credentials/homeassistant.token",
+                         "timeout_ms": 5000},
+       "http": {"ledger_url": "http://127.0.0.1:9100/effects", "timeout_ms": 5000}
+     }
+     ```
+
+     `base_url` defaults to `http://127.0.0.1:8123`. The token file holds a Home
+     Assistant long-lived access token: create it on the node (never paste it
+     into a shell history or chat), as a regular file (not a symbolic link)
+     owned by the agentd user, mode 0600, directory 0700. agentd reads it at
+     start, never logs or returns it, and refuses to start on an unreadable or
+     malformed file. An effect targets `<domain>.<service>/<entity_id>` (class
+     `device.command`), so the package or connector grant names those targets
+     (step 5). Omit the variable on nodes without such effects; `effect.execute`
+     then answers `effect_adapter_unavailable`.
+   - **M4**, optional: `EDGECITADEL_TRACE_EXPORT_IDLE_MS` (default 100) is how
+     often trace sync looks for new events when idle. Leave the default.
 
    Why 30 s: the monitor renews every 10 s (`controller_lease_renew_ms`), so 30 s
    tolerates two lost renewals in a row or a monitor/aggregator restart; a
@@ -146,7 +180,7 @@ Do the nodes one at a time and verify each before the next.
    only in memory and denies effects until the next renewal (at most 10 s). The
    value is configurable per node; keep it at least twice the renew interval and
    no longer than the command lifetime.
-3. Start agentd. It migrates the database to schema 32 on start. Check:
+3. Start agentd. It migrates the database to schema 33 on start. Check:
 
    ```bash
    edgecitadel doctor                              # service, database, transport, Leaf
@@ -199,7 +233,7 @@ below it**, not only its direct children.
   `device.command`, targets exact or a `*`-suffixed prefix.
 - Hermes is a Managed Agent package (`agent-packages/hermes`); its manifest
   declares no effects, which is correct while Hermes does not call
-  `effect.authorize`.
+  `effect.authorize` or `effect.execute`.
 
 ## 6. Control keys, one per owner
 
@@ -275,6 +309,20 @@ referenced by path):
   `horizon: 1` with `boundary: "sink"`, and `controller_lease_renew_ms: 10000`.
   Set them explicitly only to deviate (`controller_lease_renew_ms: 0` stops
   renewing, which makes lease-enforcing nodes deny all effects).
+- **M4** settings (defaults shown; set only to deviate):
+  `phase1_freeze: true` (the two-phase protocol for every strategy; `false`
+  measures each strategy's rule alone), `ingest_timeout_ms: 5000` (how long a
+  release waits for the confirmed journal positions to be ingested; on timeout
+  the decision ends `ingest_timeout` and keeps its phase-1 holds),
+  `enforce: true` (`false`: compute and log decisions, send no command, but
+  still describe nodes and renew leases, for runs that must not contain),
+  `taint_aware_admission: false` (set **true** for runs that rely on Theorem 5:
+  it labels the source side left by phase 2 before any release; see
+  `INTEGRATION_NOTES.md`, item 4), and `shared_memory_agents: []` (agents whose
+  memory persists across contexts, so their invocations share one session).
+- With leases on, the monitor renews them from the moment it starts, before
+  Core's collector is ready and whether or not an alert ever arrives; a
+  non-enforcing run uses `enforce: false`, not a stopped monitor.
 - `agent_nodes` must name at least one agent on every node: the monitor renews
   leases (and describes capabilities) on the nodes it knows, and a node it has
   not seen in any event is otherwise unknown until its first event.
@@ -289,8 +337,9 @@ curl -s -H "X-EdgeCitadel-Admin-Token: $EDGECITADEL_ADMIN_TOKEN" \
 
 Expect `state: running`, `cursor.lag` falling to 0, under `control.capabilities`
 every node with its `describe` answer (13 pairs from `hold:task` to
-`renew:controller`), and under `control.controller_leases` every node with
-`enforced: true`, `error: null` and `until_ms` 20 to 30 s ahead. A node with an
+`renew:controller`), under `ingest` a watermark per node with `gap_from: 0`,
+and under `control.controller_leases` every node with `enforced: true`,
+`error: null` and `until_ms` 20 to 30 s ahead. A node with an
 empty capability set has not answered `describe`; a lease `error` of
 `not_authenticated` is a key mismatch, `stale_policy_version` a monitor database
 or owner change (step 6), `node_unreachable` a transport problem. While any node
@@ -306,6 +355,12 @@ shows an error, that node denies effects.
    (denied `outside_effect_scope`, and the model reports the block). If tools run
    without these events, the SDK contract from step 4.6 does not hold: stop and
    report.
+   **M4**, on a node with adapters: ask `effect.execute` for a harmless Home
+   Assistant service (for example `light.turn_on/light.test_lamp` on a test
+   entity) and check `effect/committed` with `adapter: homeassistant` and
+   `committed_at_ms`, then the result's `outcome.performed: true`. With the
+   task held the same request is `effect/denied` and Home Assistant receives
+   nothing.
 3. **Control channel.** Under the drill owner, hold and release an unused task
    ID on each node with a signed command (or `containment.control` on the
    node's admin socket) and check the confirmation's `status: applied` and
@@ -337,7 +392,7 @@ new owner (step 6) before the next run.
   they are the experiment record.
 - **Everything:** stop Managed Agents and agentd on every node, restore each
   node's state backup from step 2 as a unit, reinstall the previous runtime, and
-  start the nodes one at a time. A schema 32 database cannot be opened by the
+  start the nodes one at a time. A schema 33 database cannot be opened by the
   previous agentd ("newer than supported"), so restoring the backup is required,
   and tasks and traces recorded after the upgrade are lost with it: export what
   you need first. Reinstall the previous Pi packages with
@@ -349,7 +404,7 @@ new owner (step 6) before the next run.
 ## 10. Adding Raspberry Pis later
 
 Enroll each Pi as an Edge (`edgecitadel install --join ... --messaging-mode
-nats_leaf` keeps local messaging when the Core link drops), install the schema 32
+nats_leaf` keeps local messaging when the Core link drops), install the schema 33
 runtime, set `EDGECITADEL_TRACE_SYNC=1` and `EDGECITADEL_CONTROLLER_LEASE_MS`,
 copy the owner key (step 6), add one of its agents to `agent_nodes`, grant its
 connectors (step 5), extend the root's grant to its agents, and add its node to
@@ -373,3 +428,10 @@ device that already received a command.
 - The Pi worker effect gate is unverified against the real SDK (step 4.6).
 - Unconfirmed actions are reported, not reconciled automatically: compare
   status `unconfirmed` with `containment.list` on the node.
+- Effects decided by `effect.authorize` and performed by the harness (bash,
+  sandbox files) are not fenced at commit; measure their bypass at the
+  destination. Only `effect.execute` effects are.
+- A gap in a node's journal as Core collected it (status `ingest.gap_from`)
+  keeps every later command on that node unfenced, so its phase-1 holds stay.
+- A delegation root without an agentd task (a native session's own work)
+  cannot be held or labelled; only its delegated tasks can.

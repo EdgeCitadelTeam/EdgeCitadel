@@ -405,3 +405,38 @@ Defaults: `phase1_freeze: true`, `best_effort_guard: true`,
 `test_every_strategy_shares_the_vocabulary_and_mechanisms` (the phase-1 set and
 the first round's guard are identical across all nine strategies on one
 workload), plus one test per new baseline.
+
+### Findings from the experiment harness (`m3/harness`)
+
+- **Lineage through agent memory.** In the harness's C2 realization a producer
+  pushes its item to the consumer as a delivery task; the consumer's delivery
+  invocation stores it in agent memory and a later invocation of that agent
+  uses it. Nothing recorded `used` on that later invocation, so the backward
+  slice from the symptom stopped at the consumer's session and the producer
+  was never a root-cause candidate. Fixed two ways, both explicit: the trace
+  RPC `trace.use` (`schemas/trace-use-request.v1.json`) lets the consuming
+  invocation declare the delivered task it used, and agentd records `used` of
+  that task's request version on it (only for deliveries to the same agent,
+  idempotent); and the monitor setting `shared_memory_agents` links all
+  invocations of an agent as one session across conversations, for agents
+  whose memory is shared. Test: `test_containment_rootcause.py`
+  (`pushed_artifact` cases: without either, the producer is not a candidate;
+  with either, it is). Harness follow-up: the det-worker's consuming step must
+  call `trace.use` with the delivery's task ID, or the run's config must list
+  the agent in `shared_memory_agents`.
+- **Ingest lag.** The trace exporter looked for new journal events once per
+  second when idle, so Core saw events up to a second late, and decisions and
+  fences (item 3) waited on it. The idle interval is now
+  `EDGECITADEL_TRACE_EXPORT_IDLE_MS` (default 100, 10 to 60000). Measured with
+  nats-server 2.14.6, journal commit to delivery at Core's subscriber: mean
+  493 ms, p95 958 ms at 1000 ms; mean 23 ms, p95 48 ms at 100 ms.
+- **Leases in every run.** With fail-closed leases on all nodes, a monitor
+  that renewed only once the collector was ready, or a run that disabled
+  control to avoid enforcing, left the nodes denying every effect. The monitor
+  now renews from its start (before the collector is ready, to the
+  `agent_nodes` nodes) whether or not an alert ever arrives, and
+  `enforce: false` computes and logs decisions without sending any command
+  while describes and renewals still go out. Harness follow-up: keep
+  `EDGECITADEL_CONTROLLER_LEASE_MS` on and configure control with
+  `enforce: false` for non-enforcing runs. Tests in
+  `test_containment_service.py`.
