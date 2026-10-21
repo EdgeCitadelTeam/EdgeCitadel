@@ -184,6 +184,62 @@ def test_tainted_effect_after_the_alert_is_a_violation(run):
     assert row["clean_after_alert"] == 0 and row["tainted_after_established"] == 1
 
 
+def unattributed_commit(effect_id: str, t: int, **post) -> dict:
+    """A sink commit as the services record it when the worker's attempted
+    record is missing: no class, no fault labels, ``attributed: false``."""
+    return {
+        "run": "r1",
+        "effect_id": effect_id,
+        "phase": "committed",
+        "sink": "http",
+        "gateway": {"effect_id": f"g-{effect_id}", **post},
+        "attributed": False,
+        "t_ms": t,
+    }
+
+
+def test_a_tainted_commit_without_an_attempted_record_is_a_violation(run):
+    """The sink's copy of the worker's labels is empty here; the commit's
+    lineage (the gateway's runtime task -> B.t0, which consumed X@v1) still
+    makes it a leak, and the missing record is counted apart."""
+    finish_b_n(run)
+    run.ledger.append(
+        unattributed_commit(
+            "E_B", 9000, task_id="rt-B.t0", target="actuator://act_b/E_B"
+        )
+    )
+    row = evaluate(run)
+    assert row["violations"] == 1 and row["clean_after_alert"] == 0
+    assert row["commits_unlabelled"] == 1
+    assert row["commits_unresolved"] == 0 and row["commits_label_mismatch"] == 0
+
+
+def test_the_commit_lineage_joins_cores_gateway_record(run):
+    """A post naming only the gateway's effect id is resolved through Core's
+    record of the same commit: B.n's clean command is no violation, B.t0's is.
+    Without Core's record neither issuer is known, and both count as leaks."""
+    run.ledger.append(unattributed_commit("E_Bn", 9000))
+    run.ledger.append(unattributed_commit("E_B", 9100))
+    gateway = [
+        {"phase": "committed", "effect_id": "g-E_Bn", "task_id": "rt-B.n"},
+        {"phase": "committed", "effect_id": "g-E_B", "task_id": "rt-B.t0"},
+    ]
+    records = G.read_records(run.spec, run.events, run.ledger)
+    lineage = G.commit_lineage(run.spec, records, gateway)
+    assert {k: (v["issuer"], v["tainted"]) for k, v in lineage.items()} == {
+        "E_Bn": ("B.n", False),
+        "E_B": ("B.t0", True),
+    }
+    meta = {"t0_ms": 0, "t_alert_ms": ALERT, "status": "quiescent"}
+    row = M.evaluate(
+        run.spec, meta, run.events, run.ledger, [decision()], gateway=gateway
+    )
+    assert row["violations"] == 1 and row["commits_unlabelled"] == 2
+    assert row["commits_unresolved"] == 0
+    unjoined = M.evaluate(run.spec, meta, run.events, run.ledger, [decision()])
+    assert unjoined["commits_unresolved"] == 2 and unjoined["violations"] == 2
+
+
 def test_tainted_effect_before_the_alert_is_not_a_violation(run):
     finish_b_n(run)
     run.effect("E_B", "B.t0", 5000, (FAULT,))

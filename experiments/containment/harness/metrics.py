@@ -14,8 +14,14 @@ rows are comparable (times in seconds from the run's start ``t0``):
   compute-weighted share, GPU-seconds and tokens. **contaminated**: an at-risk
   task that consumed faulty content; **collateral**: at risk, neither kept nor
   contaminated; **interrupted**: at risk and paused at least once.
-- **violation**: a tainted (fault-labelled) effect of a protected class that
-  the ledger committed.
+- **violation**: a tainted effect of a protected class that the sink
+  committed. Taint is the commit's lineage (``groundtruth.commit_lineage``:
+  the runtime task the gateway committed for, its planned task, and whether
+  the fault reaches that task), so a commit without the worker's
+  ``attempted`` record (no fault labels) is still classified; one whose
+  issuer cannot be resolved counts as tainted. ``commits_unlabelled`` (no
+  ``attempted`` record), ``commits_unresolved`` (no issuer) and
+  ``commits_label_mismatch`` (labels and lineage disagree) must be 0.
 
 Containment outcomes are split (no single "fully contained" headline):
 
@@ -42,12 +48,14 @@ from typing import Any
 
 from .groundtruth import (
     RunRecords,
+    commit_lineage,
     declared_closure,
     expected_contents,
     fault_seeds,
     ledger_effects,
     protected_classes,
     read_records,
+    runtime_tasks,
 )
 from .spec import Spec, derive
 
@@ -357,10 +365,13 @@ def evaluate(
     ledger: Iterable[Mapping[str, Any]],
     decisions: list[Mapping[str, Any]] | None = None,
     status: Mapping[str, Any] | None = None,
+    gateway: Iterable[Mapping[str, Any]] = (),
+    marks: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """One row for one run. ``meta`` holds ``t0_ms``, ``t_alert_ms`` (None for a
     no-fault reference run, where every task is at risk from the start) and
-    ``status`` (complete / quiescent / timeout)."""
+    ``status`` (complete / quiescent / timeout); ``gateway`` is Core's record
+    of the gateway's effects and ``marks`` the harness's request marks."""
     records = read_records(spec, events, ledger)
     derived = derive(spec)
     t0 = float(meta["t0_ms"])
@@ -400,14 +411,17 @@ def evaluate(
     def share(part: float, whole: float) -> float:
         return part / whole if whole else NAN
 
-    effects = ledger_effects(records)
+    lineage = commit_lineage(
+        spec, records, gateway, runtime_tasks(records.events, marks)
+    )
+    effects = ledger_effects(records, lineage)
+    committed = [e for e in effects.values() if e["state"] == "committed"]
     classes = {c.id for c in spec.effect_classes}
     protected = protected_classes(spec)
     violations = [
         e
-        for e in effects.values()
-        if e["state"] == "committed"
-        and e["labels"]
+        for e in committed
+        if e["tainted"] is not False
         and (e["class"] in protected or e["class"] not in classes)
     ]
     decision = decision_metrics(decisions or [], horizon) if t_alert is not None else {}
@@ -447,6 +461,18 @@ def evaluate(
         "redo_compute_s": sum(rec.wasted_s for rec in records.tasks.values()),
         "violations": len(after_alert),
         "violations_total": len(violations),
+        # Scorer checks, each 0 in a sound run: sink commits without the
+        # worker's attempted record, without a resolvable issuer, and whose
+        # fault labels disagree with their lineage.
+        "commits_unlabelled": sum(1 for e in committed if not e["attributed"]),
+        "commits_unresolved": sum(1 for e in committed if e["tainted"] is None),
+        "commits_label_mismatch": sum(
+            1
+            for e in committed
+            if e["attributed"]
+            and e["tainted"] is not None
+            and bool(e["labels"]) != e["tainted"]
+        ),
         "viol_declared": sum(1 for e in after_alert if e["declared"]),
         "viol_undeclared": sum(1 for e in after_alert if not e["declared"]),
         # (a) no tainted effect committed after the alert (a timed-out run's

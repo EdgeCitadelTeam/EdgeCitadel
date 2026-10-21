@@ -50,7 +50,7 @@ import argparse
 import json
 import math
 import random
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -308,18 +308,31 @@ def metrics(
     meta: Mapping[str, Any],
     ledger: list[Mapping[str, Any]],
     marks: list[Mapping[str, Any]],
+    events: Iterable[Mapping[str, Any]] = (),
+    gateway: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Service continuity from the alert to the end of the run (services clock).
 
     A request counts from the alert on when it was submitted (or refused) at or
     after the alert; it is answered when its reply committed. Latency: from its
-    submission to its reply's commit.
+    submission to its reply's commit. Tainted commits are classified by their
+    lineage (``groundtruth.commit_lineage``).
     """
-    from .groundtruth import ledger_effects, protected_classes, read_records
+    from .groundtruth import (
+        commit_lineage,
+        ledger_effects,
+        protected_classes,
+        read_records,
+        runtime_tasks,
+    )
 
     service = spec.service
     t_alert = float(meta["t_alert_ms"])
-    effects = ledger_effects(read_records(spec, [], ledger))
+    records = read_records(spec, events, ledger)
+    effects = ledger_effects(
+        records,
+        commit_lineage(spec, records, gateway, runtime_tasks(records.events, marks)),
+    )
     submitted = {m["task"]: m["t_ms"] for m in marks if m.get("name") == "submitted"}
     refused = {m["task"]: m["t_ms"] for m in marks if m.get("name") == "refused"}
     asked = {**refused, **submitted}
@@ -351,12 +364,14 @@ def metrics(
         "svc_answered": len(latency),
         "svc_answered_frac": len(latency) / len(requests) if requests else math.nan,
         "svc_tainted_device_commands": sum(
-            1 for e in committed_after if e["labels"] and e["class"] in protected
+            1
+            for e in committed_after
+            if e["tainted"] is not False and e["class"] in protected
         ),
         "svc_tainted_replies": sum(
             1
             for e in committed_after
-            if e["labels"] and e["class"] == service["reply_class"]
+            if e["tainted"] is not False and e["class"] == service["reply_class"]
         ),
         "svc_automation_committed": sum(
             1 for e in committed_after if e["issuer"] in automation

@@ -94,7 +94,14 @@ def test_service_metrics_count_from_the_alert_on():
         {"name": "submitted", "task": "M05", "t_ms": 3150},
         {"name": "refused", "task": spec.service["requests"][3], "t_ms": 3300},
     ]
-    row = svc.metrics(spec, {"t_alert_ms": 2000}, ledger, marks)
+    # The second request's invocation computed on the corrupted schedule (the
+    # assistant's shared memory): its commits are tainted by lineage.
+    events = [
+        {"kind": kind, "task": second, "rt": "rt-2", "inv_kind": "task", "t_ms": t}
+        | ({"labels": label} if kind == "compute_start" else {})
+        for kind, t in (("start", 2190), ("compute_start", 2200))
+    ]
+    row = svc.metrics(spec, {"t_alert_ms": 2000}, ledger, marks, events)
     assert (row["svc_requests"], row["svc_answered"], row["svc_refused"]) == (3, 1, 1)
     assert row["svc_tainted_replies"] == row["svc_tainted_device_commands"] == 1
     assert (row["svc_automation_committed"], row["svc_automation_due"]) == (1, 1)

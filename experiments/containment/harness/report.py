@@ -154,25 +154,17 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     status = _optional_json(run_dir / "status_at_decision.json") or _optional_json(
         run_dir / "status.json"
     )
+    events = _jsonl(run_dir / "events.jsonl")
+    ledger = _jsonl(run_dir / "ledger.jsonl")
+    marks = _jsonl(run_dir / "marks.jsonl")
+    gateway = _jsonl(run_dir / "gateway_effects.jsonl")
     row.update(
         evaluate(
-            spec,
-            meta,
-            _jsonl(run_dir / "events.jsonl"),
-            _jsonl(run_dir / "ledger.jsonl"),
-            decisions,
-            status,
+            spec, meta, events, ledger, decisions, status, gateway=gateway, marks=marks
         )
     )
     if spec.service and meta.get("t_alert_ms") is not None:
-        row.update(
-            svc.metrics(
-                spec,
-                meta,
-                _jsonl(run_dir / "ledger.jsonl"),
-                _jsonl(run_dir / "marks.jsonl"),
-            )
-        )
+        row.update(svc.metrics(spec, meta, ledger, marks, events, gateway))
     t_alert = meta.get("t_alert_ms")
     for d in decisions:
         for record in [*d.get("phase1", ()), *d.get("phase2", ())]:

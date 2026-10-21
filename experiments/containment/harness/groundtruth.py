@@ -12,6 +12,14 @@ Nothing here reads the tracer or the monitor. Two sources:
   gateway), with content. An effect the gateway scheduled and later refused
   stays ``pending`` here; the gateway's own decisions are in
   ``gateway_effects.jsonl``.
+
+Whether a committed effect is tainted is decided by its lineage
+(``commit_lineage``), not by the labels the sink copies from the worker's
+``attempted`` record: the sink entry names the runtime task that issued it
+(the gateway's post, or Core's gateway record of the same commit), the run's
+records map that task to its planned task, and the fault spec with the
+observed contamination says whether that task is tainted. A commit with no
+``attempted`` record is still classified, and counted apart.
 """
 
 from __future__ import annotations
@@ -116,6 +124,84 @@ def protected_classes(spec: Spec) -> set[str]:
     return {c.id for c in spec.effect_classes if c.protected}
 
 
+def tainted_tasks(spec: Spec, records: RunRecords) -> set[str]:
+    """Planned tasks whose work carries the fault, by lineage: the fault's
+    seeds, every task the worker events show computing on fault-labelled
+    content (or polluted), and their declared dependents."""
+    found = fault_seeds(spec) | {
+        t for t, rec in records.tasks.items() if rec.tainted_at is not None
+    }
+    return declared_closure(spec, found) if found else set()
+
+
+def runtime_tasks(
+    events: Iterable[Mapping[str, Any]], marks: Iterable[Mapping[str, Any]] = ()
+) -> dict[str, str]:
+    """Runtime task id -> the planned task (or spawned invocation) it ran, from
+    the worker events and the harness's request marks."""
+    out: dict[str, str] = {}
+    for record in [*marks, *events]:
+        rt, task = record.get("rt"), record.get("task")
+        if rt and task and record.get("inv_kind", "task") in {"task", "rogue"}:
+            out.setdefault(str(rt), str(task))
+    return out
+
+
+def _effect_class(spec: Spec, effect_id: str, target: Any) -> str | None:
+    """The workload class of an effect: the spec's, else its ledger target
+    (``actuator://<class>/<effect>``)."""
+    declared = {e.id: e.cls for e in spec.effects}
+    if effect_id in declared:
+        return declared[effect_id]
+    if isinstance(target, str) and target.startswith("actuator://"):
+        return target.removeprefix("actuator://").split("/", 1)[0] or None
+    return None
+
+
+def commit_lineage(
+    spec: Spec,
+    records: RunRecords,
+    gateway: Iterable[Mapping[str, Any]] = (),
+    rt_tasks: Mapping[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Every committed sink entry classified by lineage.
+
+    The issuer is the planned task of the runtime task the gateway committed
+    for (the sink entry's gateway post, else Core's gateway record of the same
+    commit); only when neither names one, the worker's identity the effect
+    carried to the sink. ``tainted`` is None when no issuer is known.
+    """
+    rt_tasks = runtime_tasks(records.events) if rt_tasks is None else rt_tasks
+    core = {str(r["effect_id"]): r for r in gateway if r.get("phase") == "committed"}
+    tainted = tainted_tasks(spec, records)
+    declared = {e.id for e in spec.effects}
+    out: dict[str, dict[str, Any]] = {}
+    for r in records.ledger:
+        if r.get("phase") != "committed" or r["effect_id"] in out:
+            continue
+        post = r.get("gateway") or {}
+        joined = core.get(str(post.get("effect_id")), {})
+        runtime = post.get("task_id") or joined.get("task_id")
+        issuer = rt_tasks.get(str(runtime)) if runtime else None
+        source = "gateway" if issuer is not None else None
+        if issuer is None and r.get("issuer"):
+            issuer, source = str(r["issuer"]), "sink_data"
+        out[r["effect_id"]] = {
+            "issuer": issuer,
+            "source": source,
+            "class": r.get("class")
+            or _effect_class(
+                spec, str(r["effect_id"]), post.get("target") or joined.get("target")
+            ),
+            "declared": r["effect_id"] in declared,
+            "tainted": None
+            if issuer is None
+            else issuer in tainted or issuer in records.spawned,
+            "attributed": r.get("attributed", True),
+        }
+    return out
+
+
 # ---------------------------------------------------------------------------
 # From the run's records
 # ---------------------------------------------------------------------------
@@ -210,25 +296,46 @@ def read_records(
     )
 
 
-def ledger_effects(records: RunRecords) -> dict[str, dict[str, Any]]:
-    """Effect id -> its final ledger state and times (the actuator's view)."""
+def ledger_effects(
+    records: RunRecords, lineage: Mapping[str, Mapping[str, Any]] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Effect id -> its final ledger state and times (the actuator's view).
+
+    With ``lineage`` (``commit_lineage``), a committed effect's ``tainted`` is
+    its lineage verdict (None: unknown); otherwise, and for effects never
+    committed, whether the worker's record carried fault labels.
+    """
     out: dict[str, dict[str, Any]] = {}
     for r in records.ledger:
+        known = (lineage or {}).get(r["effect_id"], {})
         entry = out.setdefault(
             r["effect_id"],
             {
-                "issuer": r["issuer"],
-                "class": r["class"],
-                "declared": r["declared"],
-                "origin": r["origin"],
+                "issuer": r.get("issuer", known.get("issuer")),
+                "class": r.get("class", known.get("class")),
+                "declared": r.get("declared", known.get("declared", False)),
+                "origin": r.get(
+                    "origin", "declared" if known.get("declared") else None
+                ),
                 "labels": tuple(r.get("labels", ())),
                 "value": r.get("value"),
+                "attributed": True,
             },
         )
         entry.setdefault(f"t_{r['phase']}", int(r["t_ms"]))
         if r["phase"] in {"committed", "denied", "sink_failed"}:
             entry["state"] = r["phase"]
             entry["code"] = r.get("code")
-    for entry in out.values():
+        if r["phase"] == "committed":
+            entry["attributed"] = bool(r.get("attributed", True))
+    for effect_id, entry in out.items():
         entry.setdefault("state", "pending")
+        if lineage is not None and effect_id in lineage:
+            entry["tainted"] = lineage[effect_id]["tainted"]
+            entry["lineage"] = lineage[effect_id]["source"]
+            if entry["class"] is None:
+                entry["class"] = lineage[effect_id]["class"]
+        else:
+            entry["tainted"] = bool(entry["labels"])
+            entry["lineage"] = None
     return out
