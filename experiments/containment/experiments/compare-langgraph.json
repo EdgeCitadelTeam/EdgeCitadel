@@ -1,6 +1,6 @@
 {
   "name": "compare-langgraph",
-  "note": "System comparison against LangGraph (to be pre-registered before its runs): the same cells as compare-a2a (content faults: the 7 smoke workloads x early/late x 3 repetitions; rogue: C2 at rate 0.3, and saturated rogue at rate 1.0, x early/late x 5 repetitions). Run on lab-langgraph (one host).",
+  "note": "System comparison against LangGraph, pre-registered as H10-LG (exec doc, 2026-10-21): the same cells as compare-a2a (content faults: the 7 smoke workloads x early/late x 3 repetitions; rogue: C2 at rate 0.3, and saturated rogue at rate 1.0, x early/late x 5 repetitions). Run on lab-langgraph (one host).",
   "instances": [
     "../workloads/c2.json",
     "../workloads/c3.json",
