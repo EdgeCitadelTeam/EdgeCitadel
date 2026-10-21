@@ -1918,3 +1918,46 @@ conversation from outside the source side.
 - **(b) Shared-memory agents' onward flows.** The class revocation covers
   the context's protected classes only. Later invocations' dispatches,
   results or store read-backs are not covered by it.
+
+### LangGraph baseline and the comparison scorer (merged)
+
+**Source.** `langgraph-baseline-93e12ab.bundle`, sha256 `4f9bd662…e297`
+(checked). It holds `langgraph/baseline` `93e12ab`: `a2a/baseline`
+`d77f9ec` (merged earlier) plus two commits:
+- the LangGraph StateGraph supervisor baseline (`lg_*.py`, `native.py`, its
+  configs and grids);
+- `harness/compare.py`, which splits each leak by cause and fixes
+  cross-system pairing.
+
+It changes experiments/containment only.
+
+**Merge.** One conflict, in `harness/runner.py`, resolved keeping both sides:
+- the imports keep `svc` and add the A2A and LangGraph code lists;
+- the end-of-run rules keep M6's settled-effects rule and add
+  `not stack.busy()` to both the complete and the quiescent condition.
+
+`RunStack.busy()` is always False, and A2A inherits it, so EdgeCitadel and
+A2A runs end as before (`test_only_the_langgraph_stack_can_be_busy`).
+`stack.py`, `names.py` (G-Safeguard kept beside the LangGraph codes),
+`__init__.py` and the tests merged cleanly.
+
+**Adjustments on top:**
+- `LangGraphRunStack.alert_endpoint` is None: its operator runs in the
+  controller, as A2A's does, so an alert posted on receipt goes through the
+  controller.
+- The three LangGraph grids (`compare-langgraph`, `timing-langgraph`,
+  `dryrun-langgraph-c2`) plan with native L = 150 ms like every other file.
+  LangGraph runs have no EdgeCitadel monitor, so L is only recorded there.
+- The M7 fallback-env test now covers the stacks that run agentd
+  (EdgeCitadel full and bare), not every non-A2A lab stack.
+- `lab-main.json` sets `"phase1_modes": ["adaptive"]` explicitly, matching
+  the comparison grids, so `compare.py` pairs Firebreak's content-fault rows
+  with `compare-ec` from one configuration.
+  - Run ids and behaviour are unchanged: adaptive is the deployed profile's
+    default, and rule strategies still have no phase 1.
+  - The pilot's V1/V2 ablation part is unchanged.
+
+**Tests.** The harness suite passes: 186 passed, 1 skipped. The skip is
+`tests/test_langgraph.py`: the LangGraph venv (langgraph 1.2.16 and the
+CLI/API packages) is not installed here. The bundle's README reports 5
+passed in that venv at `93e12ab`.

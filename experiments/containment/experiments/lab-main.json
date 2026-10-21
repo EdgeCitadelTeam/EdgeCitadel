@@ -51,6 +51,9 @@
   "profiles": [
     "deployed"
   ],
+  "phase1_modes": [
+    "adaptive"
+  ],
   "phase1_labels": [
     "frontier"
   ],
