@@ -127,5 +127,5 @@ def test_the_svc_grids_have_their_planned_sizes():
         name: len(runner.grid(runner.Experiment.load(root / f"{name}.json")))
         for name in ("svc-smoke", "svc-pilot")
     }
-    # 10 strategies (none included) x 2 alerts, plus the no-fault reference.
-    assert sizes == {"svc-smoke": 21, "svc-pilot": 3 * 21}
+    # 11 strategies (none included) x 2 alerts, plus the no-fault reference.
+    assert sizes == {"svc-smoke": 23, "svc-pilot": 3 * 23}

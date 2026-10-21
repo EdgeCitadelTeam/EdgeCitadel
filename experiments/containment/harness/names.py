@@ -28,6 +28,9 @@ MAIN = [
 EXTRA = [
     ("Trace & quarantine", FAMILY_PAST, "#56B4E9", "o"),
     ("Sink guard", FAMILY_NO, "#009E73", "h"),
+    # G-Safeguard's remediation (ACL 2025): flags the root's agent and drops
+    # its outputs, no lineage; the last free Okabe-Ito entry.
+    ("G-Safeguard", FAMILY_NO, "#F0E442", "d"),
 ]
 # The Google A2A baseline's own controls (harness.a2a_control): no lineage,
 # run on the A2A stack only. Greys and markers close to their nearest
@@ -54,6 +57,7 @@ CODE_NAME = {
     "firebreak": "Firebreak (ours)",
     "trace_and_quarantine": "Trace & quarantine",
     "sink_guard": "Sink guard",
+    "gsafeguard": "G-Safeguard",
     "a2a_block_input": "A2A: block bad input",
     "a2a_cancel_agent": "A2A: cancel faulty agent",
     "a2a_cancel_all": "A2A: cancel all",

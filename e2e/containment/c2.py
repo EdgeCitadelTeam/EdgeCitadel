@@ -940,6 +940,7 @@ def main() -> int:
             "trace_and_stop",
             "trace_and_quarantine",
             "sink_guard",
+            "gsafeguard",
             "stop_team",
             "greedy_cut",
             "reject_source",

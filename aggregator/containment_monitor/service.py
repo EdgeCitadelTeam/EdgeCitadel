@@ -56,6 +56,7 @@ from .enforcement import (
 from .graph import ControlGraph
 from .model import (
     FAILURE_KINDS,
+    STICKY_FLAG_STRATEGIES,
     Action,
     Alert,
     AlertError,
@@ -464,6 +465,8 @@ class ContainmentMonitor:
                 (incident_id, alert.alert_id, json.dumps(roots), name, t_received),
             )
             self.graph.mark_roots(roots)
+        if name in STICKY_FLAG_STRATEGIES:
+            self.graph.flagged_agents |= self.graph.agents_of(roots)
         self.graph.frontier_advanced = False
         self.last_ranking = [c.to_json() for c in ranking]
         decision = self._enforce(incident_id, name, alert.observed_at_ms, roots)

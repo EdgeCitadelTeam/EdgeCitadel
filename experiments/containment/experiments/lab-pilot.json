@@ -1,6 +1,6 @@
 {
   "name": "lab-pilot",
-  "note": "lab-smoke with 2 repetitions per cell: 338 runs.",
+  "note": "lab-smoke with 2 repetitions per cell: 370 runs.",
   "instances": [
     "../workloads/c2.json",
     "../workloads/c3.json",
@@ -15,6 +15,7 @@
     "stop_team",
     "stop_downstream",
     "sink_guard",
+    "gsafeguard",
     "trace_and_stop",
     "trace_and_quarantine",
     "greedy_cut",
@@ -62,6 +63,7 @@
         "stop_team",
         "stop_downstream",
         "sink_guard",
+        "gsafeguard",
         "trace_and_stop",
         "trace_and_quarantine",
         "greedy_cut",

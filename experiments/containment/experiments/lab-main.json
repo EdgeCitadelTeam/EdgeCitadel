@@ -15,6 +15,7 @@
     "stop_team",
     "stop_downstream",
     "sink_guard",
+    "gsafeguard",
     "trace_and_stop",
     "trace_and_quarantine",
     "greedy_cut",

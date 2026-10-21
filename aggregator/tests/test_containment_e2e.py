@@ -95,3 +95,27 @@ def test_phase1_with_the_at_alert_cut_blocks_the_late_effect_from_the_first_roun
     assert not result["effect_performed"]
     assert "committed" not in result["effect"]["agentd_state"].values()
     assert result["releases_after_confirmations"] and not result["unconfirmed"]
+
+
+def test_gsafeguard_lets_output_published_before_the_alert_reach_its_consumers(
+    tmp_path,
+):
+    """G-Safeguard withdraws nothing already received. Early in C2, a1's
+    artifact is already with tars and a2 when the validator fails it: the
+    flag on a1 touches a1 alone (no pause, no consumer, no park of the
+    published artifact; a1 has already finished, so nothing at all), and
+    a2's analysis built on it travels on through kipp and case to b1, whose
+    actuator command the gateway accepts and schedules."""
+    result = run_c2(tmp_path, "gsafeguard", "early")
+    assert result["root_cause"]["names_producer"]
+    assert result["status"] == "applied"
+    subjects = {
+        action["action"].split("(", 1)[1].split(")", 1)[0]
+        for action in result["actions"]
+    }
+    assert subjects <= {"a1"}
+    assert not any(a["action"].startswith("hold:") for a in result["actions"])
+    for agent in ("a2", "tars", "kipp", "b1"):
+        assert result["tasks"][agent] and set(result["tasks"][agent]) == {"completed"}
+    states = result["effect"]["agentd_state"]
+    assert states and set(states.values()) <= {"scheduled", "committed"}

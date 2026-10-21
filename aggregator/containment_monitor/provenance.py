@@ -34,7 +34,18 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .config import MonitorConfig
-from .model import AUTHORITY, DATA, SESSION, TAINT_EDGE_TYPES, fx, inv, split, task, ver
+from .model import (
+    AUTHORITY,
+    DATA,
+    SESSION,
+    STICKY_FLAG_STRATEGIES,
+    TAINT_EDGE_TYPES,
+    fx,
+    inv,
+    split,
+    task,
+    ver,
+)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS containment_state (
@@ -299,7 +310,11 @@ class ProvenanceGraph:
         # Taint index: node -> earliest time it may carry taint (ROOT_TIME for roots).
         self.taint: dict[str, int] = {}
         self.tainted_sessions: set[tuple[str, str]] = set()
-        # Set when taint reaches a live element; the service clears it after re-solving.
+        # Agents flagged by an active incident of a sticky-flag strategy
+        # (G-Safeguard): each new unit of theirs is a frontier advance.
+        self.flagged_agents: set[str] = set()
+        # Set when taint reaches a live element (or a flagged agent gets a new
+        # unit); the service clears it after re-solving.
         self.frontier_advanced = False
         self.coverage_gaps = 0
         self.blocked_dispatches = 0
@@ -379,11 +394,15 @@ class ProvenanceGraph:
         self.taint = {}
         self.tainted_sessions = set()
         roots: list[str] = []
-        for (encoded,) in db.execute(
-            "SELECT roots_json FROM containment_incidents WHERE state='active'"
+        flagged: list[str] = []
+        for encoded, strategy in db.execute(
+            "SELECT roots_json,strategy FROM containment_incidents WHERE state='active'"
         ):
             roots.extend(json.loads(encoded))
+            if strategy in STICKY_FLAG_STRATEGIES:
+                flagged.extend(json.loads(encoded))
         self.mark_roots(roots)
+        self.flagged_agents = self.agents_of(flagged)
         self.frontier_advanced = False
         self.counts = {
             "nodes": sum(
@@ -516,7 +535,7 @@ class ProvenanceGraph:
                 self.running[attempt] = Invocation(
                     attempt, agent, node, task_id, event["context_id"], at
                 )
-                if inv(attempt) in self.taint:
+                if inv(attempt) in self.taint or agent in self.flagged_agents:
                     self.frontier_advanced = True
         elif event["phase"] in RUN_TERMINAL:
             self._end_invocation(attempt, at, event["phase"], seq)
@@ -760,7 +779,7 @@ class ProvenanceGraph:
         self.pending[task_id] = PendingTask(*row[:9])
         if row[2] is not None:
             self.agent_nodes.setdefault(row[1], row[2])
-        if self.tainted_request(self.pending[task_id]):
+        if self.tainted_request(self.pending[task_id]) or row[1] in self.flagged_agents:
             self.frontier_advanced = True
 
     def _consider_result(self, result: PendingResult) -> None:
@@ -979,6 +998,27 @@ class ProvenanceGraph:
             (attempt,),
         ).fetchone()
         return json.loads(row[0]) if row and row[0] else None
+
+    def agents_of(self, roots: Iterable[str]) -> set[str]:
+        """The agents of root invocations (a version root: its producer's; a
+        task root: its invocations')."""
+        attempts: list[str] = []
+        for root in roots:
+            kind, identity = split(root)
+            if kind == "inv":
+                attempts.append(identity)
+            elif kind == "ver":
+                row = self.version_row(identity)
+                if row and row["producer_attempt"]:
+                    attempts.append(row["producer_attempt"])
+            elif kind == "task":
+                attempts.extend(self.invocations_of_task(identity))
+        agents = set()
+        for attempt in attempts:
+            row = self.invocation(attempt)
+            if row is not None:
+                agents.add(row["agent_id"])
+        return agents
 
     def task_row(self, task_id: str) -> dict | None:
         return self._row("SELECT * FROM containment_tasks WHERE task_id=?", (task_id,))

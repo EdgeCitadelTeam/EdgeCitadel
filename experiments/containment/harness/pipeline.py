@@ -4,11 +4,11 @@
 ``experiments/containment`` and each into its own directory under ``<root>``:
 
 1. ``regression`` (``experiments/regression.json``: the lab-smoke cells of C2,
-   N2 and rand-n7-s1, 63 runs), then scores it;
-2. ``svc-smoke`` (21 runs), then scores it;
+   N2 and rand-n7-s1, 69 runs), then scores it;
+2. ``svc-smoke`` (23 runs), then scores it;
 3. the gate on both (``gate.json``); on a failure it writes the reasons to
    ``GATE-FAILED`` and stops;
-4. ``lab-pilot`` (338 runs) and ``svc-pilot`` (63 runs), each scored.
+4. ``lab-pilot`` (370 runs) and ``svc-pilot`` (69 runs), each scored.
 
 The gate (``GATE``) asks of every run of steps 1 and 2: it ended ``complete``
 or ``quiescent``; the scorer's integrity counts (``commits_unlabelled``,

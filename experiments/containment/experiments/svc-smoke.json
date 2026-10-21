@@ -1,6 +1,6 @@
 {
   "name": "svc-smoke",
-  "note": "Pre-registered service-continuity scenario (harness.svc): every strategy once per alert (early, late) plus the no-fault reference, deployed profile, request_value 1.0 per future request: 21 runs.",
+  "note": "Pre-registered service-continuity scenario (harness.svc): every strategy once per alert (early, late) plus the no-fault reference, deployed profile, request_value 1.0 per future request: 23 runs.",
   "instances": [
     "../workloads/svc.json"
   ],
@@ -9,6 +9,7 @@
     "stop_team",
     "stop_downstream",
     "sink_guard",
+    "gsafeguard",
     "trace_and_stop",
     "trace_and_quarantine",
     "greedy_cut",

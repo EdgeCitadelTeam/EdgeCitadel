@@ -201,10 +201,14 @@ STRATEGY_NAMES = (
     "trace_and_stop",
     "trace_and_quarantine",
     "sink_guard",
+    "gsafeguard",
     "greedy_cut",
     "cut_without_deadlines",
     "firebreak",
 )
+# Strategies whose flag on the root's agent outlives the alert: a new unit of
+# a flagged agent is a frontier advance, so the re-solve covers it.
+STICKY_FLAG_STRATEGIES = frozenset({"gsafeguard"})
 MAX_DETAIL_KEYS = 16
 MAX_DETAIL_TEXT = 256
 

@@ -1,6 +1,6 @@
 {
   "name": "regression",
-  "note": "Lab regression before the pilots: the lab-smoke cells of C2, N2 and rand-n7-s1 (every strategy, early and late alert, plus each instance's no-fault reference): 63 runs.",
+  "note": "Lab regression before the pilots: the lab-smoke cells of C2, N2 and rand-n7-s1 (every strategy, early and late alert, plus each instance's no-fault reference): 69 runs.",
   "instances": [
     "../workloads/c2.json",
     "../workloads/n2.json",
@@ -11,6 +11,7 @@
     "stop_team",
     "stop_downstream",
     "sink_guard",
+    "gsafeguard",
     "trace_and_stop",
     "trace_and_quarantine",
     "greedy_cut",

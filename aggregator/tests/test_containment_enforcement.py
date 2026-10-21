@@ -1265,6 +1265,56 @@ def test_sink_guard_guards_every_protected_sink_without_tracing(tmp_path):
     harness.close()
 
 
+def test_gsafeguard_flags_the_root_agent_and_drops_only_its_outputs(tmp_path):
+    """G-Safeguard: the flagged agent (a) keeps running and receiving; its
+    egress is revoked and its result parked at its parent's node; nothing of
+    the consumers (r, b, c), no other agent's grant, no pause and nothing
+    already sent (c's result back at r, a's scheduled effect) is touched."""
+    harness, root, ids = two_teams(tmp_path)
+    decision = harness.monitor.respond(
+        operator_alert(root, harness.now), strategy="gsafeguard", roots=[root]
+    )
+    assert decision.status == "applied" and decision.phase1 == []
+    assert phase_two(decision) == {
+        f"revoke:egress:{ids['a']}@n1",
+        f"hold:task:{ids['a']}@n0",  # a's result, parked at r's node
+    }
+    assert harness.monitor.graph.flagged_agents == {"a"}
+    harness.close()
+
+
+def test_gsafeguard_covers_a_later_unit_of_the_flagged_agent(tmp_path):
+    """The flag is sticky: a task r dispatches to a after the alert is a
+    frontier advance, though nothing tainted reaches it, and the re-solve
+    applies the same rule to it; a later task of another agent is not one.
+    The flag survives a monitor restart."""
+    from containment_support import TraceBuilder
+
+    harness, root, ids = two_teams(tmp_path)
+    harness.monitor.respond(
+        operator_alert(root, harness.now), strategy="gsafeguard", roots=[root]
+    )
+    trace = TraceBuilder()
+    other = trace.root("b", "n2", 30)  # a clean root task of b
+    harness.feed(trace.events)
+    assert not harness.monitor.graph.frontier_advanced
+    harness.reopen()
+    assert harness.monitor.graph.flagged_agents == {"a"}
+    trace = TraceBuilder()
+    later = trace.root("a", "n1", 40)  # a new, clean request to the flagged a
+    trace.start(later, 41)
+    harness.feed(trace.events)
+    assert harness.monitor.graph.frontier_advanced
+    harness.at(100)
+    resolved = harness.monitor.resolve_frontier()
+    assert resolved is not None and resolved.strategy == "gsafeguard"
+    added = {r.action.label() for r in resolved.phase2}
+    assert f"revoke:egress:{later}@n1" in added
+    assert not any(other in label for label in added)
+    assert not any(label.startswith(f"hold:task:{later}") for label in added)
+    harness.close()
+
+
 @pytest.mark.parametrize(
     "mode, labels",
     [

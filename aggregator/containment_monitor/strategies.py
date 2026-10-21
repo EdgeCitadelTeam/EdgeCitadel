@@ -11,6 +11,8 @@
 | sink_guard            | Sink guard                  | hold every pending scheduled effect, revoke every       |
 |                       |                             | agent's protected effect classes at its gateway, park   |
 |                       |                             | every result delivered into a delegation root           |
+| gsafeguard            | G-Safeguard                 | flag the root's agent(s): revoke the egress of each of  |
+|                       |                             | its units and park their results, live and later        |
 | greedy_cut            | Greedy cut                  | greedy cover on the deadline-aware G_C                  |
 | cut_without_deadlines | Cut without deadlines       | exact cut on G_C with every element feasible            |
 | firebreak             | Firebreak                   | exact deadline-aware cut (gadget/enumeration/ILP)       |
@@ -64,6 +66,7 @@ DISPLAY = {
     "trace_and_stop": "Trace & stop",
     "trace_and_quarantine": "Trace & quarantine",
     "sink_guard": "Sink guard",
+    "gsafeguard": "G-Safeguard",
     "greedy_cut": "Greedy cut",
     "cut_without_deadlines": "Cut without deadlines",
     "firebreak": "Firebreak",
@@ -278,6 +281,44 @@ def sink_guard(ctx: Context) -> StrategyResult:
     return _finish(ctx, "sink_guard", actions, started)
 
 
+def gsafeguard(ctx: Context) -> StrategyResult:
+    """G-Safeguard's remediation (Wang et al., ACL 2025, section 3.3, Eq. 11),
+    under the shared alert: the agent of each root invocation is flagged, and
+    from then on every message it sends, every result it delivers and every
+    effect it requests is dropped. Their code (TA/agents.py re_generate and
+    are_generate, TA/main_defense_for_different_topology.py
+    defense_communication) drops a flagged agent's replies from every
+    receiver's input from the next round on; the flag is sticky; the flagged
+    agent keeps running and receiving; nothing already received is withdrawn.
+
+    Here, for each unit of a flagged agent (live or queued): its egress is
+    revoked (agentd denies its new dispatches and effect requests) and its
+    result is parked at its live parent's node when that parent runs on
+    another node. Nothing else: its tasks are neither held nor cancelled
+    (where the parent shares the unit's node, parking the result would pause
+    the unit, so that result flows), no consumer is touched, outputs already
+    published or delivered stay where they are, and no other agent's lease or
+    grant changes. Effect requests count as outgoing edges because the
+    actuator is a node of our graph, which can only help this baseline (the
+    original has no effects to drop).
+
+    Sticky: the flag stays with the incident (``model.STICKY_FLAG_STRATEGIES``),
+    so a later unit of the agent is a frontier advance and the receding
+    re-solve (the persistent quarantine's mechanism) applies the same rule to
+    it once the monitor sees it."""
+    started = time.perf_counter()
+    agents = ctx.graph.agents_of(ctx.roots)
+    actions = []
+    for unit in ctx.cg.units.values():
+        if unit.agent not in agents or not (unit.node and unit.task_id):
+            continue
+        actions.append(revoke_egress(unit.node, unit.task_id))
+        parent = ctx.cg.units.get(unit.parent) if unit.parent else None
+        if parent is not None and parent.node and parent.node != unit.node:
+            actions.append(hold_task(parent.node, unit.task_id))
+    return _finish(ctx, "gsafeguard", actions, started)
+
+
 def best_effort(cg: ControlGraph, unavoidable) -> list[Action]:
     """c0-cost actions on the last hop into sinks judged unavoidable."""
     threshold = cg.cost.config.c0 + 1e-9 if cg.cost else 0.0
@@ -389,6 +430,7 @@ STRATEGIES: dict[str, Callable[[Context], StrategyResult]] = {
     "trace_and_stop": trace_and_stop,
     "trace_and_quarantine": trace_and_quarantine,
     "sink_guard": sink_guard,
+    "gsafeguard": gsafeguard,
     "greedy_cut": greedy_cut,
     "cut_without_deadlines": cut_without_deadlines,
     "firebreak": firebreak,

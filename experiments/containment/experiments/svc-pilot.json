@@ -1,6 +1,6 @@
 {
   "name": "svc-pilot",
-  "note": "svc-smoke with 3 repetitions per cell: 63 runs.",
+  "note": "svc-smoke with 3 repetitions per cell: 69 runs.",
   "instances": [
     "../workloads/svc.json"
   ],
@@ -9,6 +9,7 @@
     "stop_team",
     "stop_downstream",
     "sink_guard",
+    "gsafeguard",
     "trace_and_stop",
     "trace_and_quarantine",
     "greedy_cut",

@@ -335,11 +335,19 @@ def test_the_lab_grids_have_their_planned_sizes():
         assert {c.strategy for c in ablations} <= {"firebreak"}
         assert {c.phase1_labels for c in cells} == {"frontier"}
         assert not any(c.receding for c in cells)
-    # 7 instances x (reference + 2 alerts x (9 strategies + none)), plus C2's
-    # 2 alerts x 9 strategies under the shared profile, plus Firebreak on C2
+    # 7 instances x (reference + 2 alerts x (10 strategies + none)), plus C2's
+    # 2 alerts x 10 strategies under the shared profile, plus Firebreak on C2
     # under the freeze and freeze_plus_cut phase 1 (2 alerts each).
-    assert sizes["lab-smoke"] == 7 * (1 + 2 * 10) + 2 * 9 + 2 * 2
-    assert sizes["lab-pilot"] == 2 * sizes["lab-smoke"] == 338
+    assert sizes["lab-smoke"] == 7 * (1 + 2 * 11) + 2 * 10 + 2 * 2 == 185
+    assert sizes["lab-pilot"] == 2 * sizes["lab-smoke"] == 370
+    # G-Safeguard is in every grid the lab runs, under both profiles.
+    for name in ("regression", "svc-smoke", "svc-pilot", "lab-smoke", "lab-pilot"):
+        loaded = runner.Experiment.load(root / f"{name}.json")
+        cells = runner.grid(loaded)
+        assert {c.profile for c in cells if c.strategy == "gsafeguard"} == (
+            {"deployed", "shared"} if name.startswith("lab-") else {"deployed"}
+        )
+    assert len(runner.grid(runner.Experiment.load(root / "regression.json"))) == 69
 
 
 def test_a_resumed_experiment_skips_finished_runs_and_their_retries(
