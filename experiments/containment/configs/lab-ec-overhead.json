@@ -1,0 +1,41 @@
+{
+  "mode": "lab",
+  "control_transport": "nats",
+  "_note": "EdgeCitadel with provenance and the monitor, as the main runs, plus process sampling, for the system comparison's overhead runs. Same ports as the main runs' harness (14322, 18322, 18900, 18800): never run it while main runs use the lab.",
+  "controller": "jim-eq",
+  "hosts": {
+    "jim-eq": {
+      "address": "${HARNESS_JIM_ADDRESS}",
+      "python": "${HARNESS_PYTHON}",
+      "repo": "${HARNESS_REPO}",
+      "runtime_root": "${HARNESS_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_WORK_ROOT}",
+      "nats_server": "${HARNESS_NATS_SERVER}"
+    },
+    "netsys-endurance": {
+      "ssh": "${HARNESS_SSH_ENDURANCE}",
+      "address": "${HARNESS_ENDURANCE_ADDRESS}",
+      "python": "${HARNESS_REMOTE_PYTHON}",
+      "repo": "${HARNESS_REMOTE_REPO}",
+      "runtime_root": "${HARNESS_REMOTE_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_REMOTE_WORK_ROOT}"
+    }
+  },
+  "node_hosts": {
+    "core": "jim-eq",
+    "edge-1": "netsys-endurance",
+    "edge-2": "netsys-endurance"
+  },
+  "ports": {
+    "nats": 14322,
+    "nats_monitor": 18322,
+    "services": 18900,
+    "aggregator": 18800
+  },
+  "tau_ms": 50,
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "controller_lease_ms": 30000,
+  "procstat_interval_ms": 200
+}

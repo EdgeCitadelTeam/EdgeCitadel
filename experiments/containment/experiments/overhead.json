@@ -1,0 +1,45 @@
+{
+  "name": "overhead",
+  "note": "System comparison, no fault: reference runs of the 7 smoke workloads (10 repetitions, the main runs' time scale) and of the overhead benchmarks (six-hop chains per host pair and a 12-task fan-out, 40 repetitions). Run the same file on each system's stack (lab-ec-overhead, lab-bare, lab-a2a); grid dimensions match the comparison runs so rows pair.",
+  "instances": [
+    "../workloads/c2.json",
+    "../workloads/c3.json",
+    "../workloads/n2.json",
+    "../workloads/n3.json",
+    "../workloads/rand-n7-s0.json",
+    "../workloads/rand-n7-s1.json",
+    "../workloads/rand-n7-s2.json"
+  ],
+  "strategies": [],
+  "alerts": [],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    }
+  ],
+  "repetitions": 10,
+  "time_scale": 2.0,
+  "reference": true,
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90,
+  "parts": [
+    {
+      "instances": [
+        "../workloads/bench/chain-k2e.json",
+        "../workloads/bench/chain-e2e.json",
+        "../workloads/bench/chain-k2k.json",
+        "../workloads/bench/fanout-k2e-12.json"
+      ],
+      "repetitions": 40,
+      "time_scale": 1.0,
+      "quiet_s": 4
+    }
+  ]
+}

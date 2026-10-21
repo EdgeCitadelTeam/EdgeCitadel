@@ -18,6 +18,14 @@ Layout (``experiments/containment``):
 - ``harness/runner.py``: the paired grid and one run's control loop
 - ``harness/simbackend.py``, ``report.py``, ``names.py``: simulator rows,
   CSVs, statistics and figures; ``netem.py``: lab latency profiles
+- system baselines (the stack file's ``system``): ``a2a_stack.py``,
+  ``a2a_agent.py``, ``a2a_control.py``, ``a2a_common.py`` run the same plan
+  and det-worker on Google's A2A protocol (a2a-sdk) with only its own
+  controls; ``edgecitadel_bare`` runs agentd without trace export, controller
+  lease or monitor; ``procstat.py`` samples CPU and memory per process,
+  ``overhead.py`` turns fault-free runs into completion time, handoff
+  latency, throughput and resources, ``benchspec.py`` writes the overhead
+  workloads (``workloads/bench``)
 - ``workloads/``: exported instances; ``experiments/``: grids (``lab-smoke``
   165 runs: every strategy x scenario x early/late alert once under the
   deployed profile plus C2 under the shared profile; ``lab-pilot`` the same

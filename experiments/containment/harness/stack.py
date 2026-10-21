@@ -294,6 +294,17 @@ class StackConfig:
     effect_sink: dict[str, Any] = field(default_factory=lambda: {"kind": "ledger"})
     # agentd's fail-closed controller lease on every node, renewed by the monitor.
     controller_lease_ms: int = 30_000
+    # Which system runs the workload (SYSTEMS): EdgeCitadel with provenance and
+    # the monitor; EdgeCitadel with trace export, controller lease and monitor
+    # off (the transport and runtime alone, for overhead runs); or the Google
+    # A2A baseline (harness.a2a_stack).
+    system: str = "edgecitadel"
+    # Sample every run process's CPU and memory at this period (harness.procstat);
+    # None leaves sampling off (the containment runs' default).
+    procstat_interval_ms: int | None = None
+    # Where the A2A baseline keeps its tasks: a2a-sdk's in-memory store, or
+    # SQLite (durable, like EdgeCitadel's journal) for overhead comparisons.
+    a2a_task_store: str = "memory"
 
     def plan_sink(self) -> dict[str, Any]:
         """The workers' view of the sink (det_worker.effects)."""
@@ -338,10 +349,34 @@ class StackConfig:
             netem=_netem(document.get("netem", {})),
             effect_sink=_effect_sink(document.get("effect_sink", {"kind": "ledger"})),
             controller_lease_ms=_lease(document.get("controller_lease_ms", 30_000)),
+            system=_system(document.get("system", "edgecitadel")),
+            procstat_interval_ms=_interval(document.get("procstat_interval_ms")),
+            a2a_task_store=_task_store(document.get("a2a_task_store", "memory")),
         )
 
 
+SYSTEMS = ("edgecitadel", "edgecitadel_bare", "a2a")
 CONTROL_TRANSPORTS = ("local", "nats", "ssh_forward")
+
+
+def _interval(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or not 50 <= value <= 10_000:
+        raise StackError("procstat_interval_ms must be an integer from 50 to 10000")
+    return value
+
+
+def _task_store(name: str) -> str:
+    if name not in ("memory", "sqlite"):
+        raise StackError("a2a_task_store must be memory or sqlite")
+    return name
+
+
+def _system(name: str) -> str:
+    if name not in SYSTEMS:
+        raise StackError(f"system must be one of {SYSTEMS}")
+    return name
 # The NATS control client retries one command until this timeout, then records
 # it as unconfirmed (neither in force nor absent).
 NATS_CONFIRMATION_TIMEOUT_MS = 5000
@@ -468,6 +503,7 @@ class RunStack:
         self.nats_token = secrets.token_urlsafe(24)
         self.services_url = ""
         self.aggregator_url = ""
+        self.bare = config.system == "edgecitadel_bare"
 
     # -- paths ------------------------------------------------------------------
     def host_dir(self, host: str) -> str:
@@ -546,22 +582,28 @@ class RunStack:
                 plan["root_agent"],
             ]
         )
-        self._start_aggregator(
-            controller,
-            spec,
-            strategy,
-            control_latency_ms,
-            control_delay_ms,
-            nats_url,
-            enforce,
-            {
-                "profile": profile,
-                "phase1_mode": phase1_mode,
-                "phase1_labels": phase1_labels,
-                "receding_during_waits": receding_during_waits,
-            },
-        )
-        self._await_leases(spec)
+        if self.bare:
+            if enforce:
+                raise StackError(
+                    "edgecitadel_bare has no monitor: run none or reference"
+                )
+        else:
+            self._start_aggregator(
+                controller,
+                spec,
+                strategy,
+                control_latency_ms,
+                control_delay_ms,
+                nats_url,
+                enforce,
+                {
+                    "profile": profile,
+                    "phase1_mode": phase1_mode,
+                    "phase1_labels": phase1_labels,
+                    "receding_during_waits": receding_during_waits,
+                },
+            )
+            self._await_leases(spec)
         plan_bytes = json.dumps(plan).encode()
         for agent in spec.agents:
             self._start_worker(
@@ -574,6 +616,36 @@ class RunStack:
             host = self.config.node_hosts[plan["agents"][agent.id]["node"]]
             ready = f"{self.host_dir(host)}/workers/{agent.id}/ready"
             wait_until(lambda: self.hosts[host].exists(ready), f"det-worker {agent.id}")
+        self.start_procstat()
+
+    def start_procstat(self) -> None:
+        """Sample this run's processes on each host (``procstat_interval_ms``),
+        once all of them run; each is the leader of its own process group."""
+        interval = self.config.procstat_interval_ms
+        if not interval:
+            return
+        groups: dict[str, dict[str, int]] = {}
+        for proc in self.procs:
+            groups.setdefault(proc.host, {})[proc.name] = proc.pid
+        for host, members in groups.items():
+            directory = self.host_dir(host)
+            path = f"{directory}/procstat.groups.json"
+            self.hosts[host].write(path, json.dumps(members).encode(), mode=0o644)
+            self._start(
+                host,
+                "procstat",
+                [
+                    self._python(host),
+                    "-m",
+                    "harness.procstat",
+                    "--groups",
+                    path,
+                    "--out",
+                    f"{directory}/procstat.jsonl",
+                    "--interval",
+                    str(interval / 1000),
+                ],
+            )
 
     def _start_services(self, host: str, spec: Spec) -> None:
         directory = f"{self.host_dir(host)}/services"
@@ -658,8 +730,12 @@ class RunStack:
             f"agentd-{node}",
             [python, "-m", "harness.nodectl", "serve", "--state", state],
             env={
-                "EDGECITADEL_TRACE_SYNC": "1",
-                "EDGECITADEL_CONTROLLER_LEASE_MS": str(self.config.controller_lease_ms),
+                # Bare: no export to Core and no controller lease (agentd's
+                # defaults); local journaling stays, it is the dispatch path.
+                "EDGECITADEL_TRACE_SYNC": "0" if self.bare else "1",
+                "EDGECITADEL_CONTROLLER_LEASE_MS": "0"
+                if self.bare
+                else str(self.config.controller_lease_ms),
                 "EDGECITADEL_EFFECT_ADAPTERS": self._effect_adapters(node),
             },
         )
@@ -971,6 +1047,8 @@ class RunStack:
         )
 
     def monitor_status(self) -> dict[str, Any]:
+        if self.bare:
+            return {}
         return http_json(
             self.aggregator_url + "/api/containment/status",
             headers={"x-edgecitadel-admin-token": self.admin_token},
@@ -1031,3 +1109,13 @@ class RunStack:
 
     def roots(self, spec: Spec) -> tuple[str, ...]:
         return derive(spec).roots
+
+
+def make_stack(config: StackConfig, run_id: str, run_dir: Path) -> RunStack:
+    """The run's stack for the configured system (the A2A baseline imports
+    a2a-sdk, so EdgeCitadel runs never need it)."""
+    if config.system == "a2a":
+        from .a2a_stack import A2ARunStack
+
+        return A2ARunStack(config, run_id, run_dir)
+    return RunStack(config, run_id, run_dir)

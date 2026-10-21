@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from conftest import mini_document
@@ -284,7 +285,20 @@ def test_a_resumed_experiment_skips_finished_runs_and_their_retries(
         return run_dir
 
     monkeypatch.setattr(runner, "run_cell", run_cell)
-    done = runner.run_experiment(None, loaded, out, limit=3)  # type: ignore[arg-type]
+    stack = SimpleNamespace(system="edgecitadel")
+    done = runner.run_experiment(stack, loaded, out, limit=3)  # type: ignore[arg-type]
     assert ran == [c.run_id for c in cells[1:]]
     assert len(done) == 3
     assert json.loads((finished / "run.json").read_text())["attempts"] == 2
+
+
+def test_each_system_runs_only_its_own_controls():
+    runner.check_system("edgecitadel", {"firebreak", "none", "reference"})
+    runner.check_system("a2a", {"a2a_cancel_agent", "a2a_block_input", "none"})
+    runner.check_system("edgecitadel_bare", {"none", "reference"})
+    with pytest.raises(ValueError, match="cannot run"):
+        runner.check_system("a2a", {"firebreak"})
+    with pytest.raises(ValueError, match="cannot run"):
+        runner.check_system("edgecitadel", {"a2a_cancel_all"})
+    with pytest.raises(ValueError, match="cannot run"):
+        runner.check_system("edgecitadel_bare", {"stop_team"})

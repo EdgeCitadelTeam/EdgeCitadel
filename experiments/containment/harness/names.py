@@ -29,8 +29,16 @@ EXTRA = [
     ("Trace & quarantine", FAMILY_PAST, "#56B4E9", "o"),
     ("Sink guard", FAMILY_NO, "#009E73", "h"),
 ]
+# The Google A2A baseline's own controls (harness.a2a_control): no lineage,
+# run on the A2A stack only. Greys and markers close to their nearest
+# EdgeCitadel strategy (Reject source, Stop team, Stop everything downstream).
+SYSTEM_BASELINES = [
+    ("A2A: block bad input", FAMILY_NO, "#d9d9d9", "1"),
+    ("A2A: cancel faulty agent", FAMILY_NO, "#a6a6a6", "2"),
+    ("A2A: cancel all", FAMILY_NO, "#3a3a3a", "3"),
+]
 MAIN_NAMES = [m[0] for m in MAIN]
-PLOTTED = [*MAIN, *EXTRA]
+PLOTTED = [*MAIN, *EXTRA, *SYSTEM_BASELINES]
 PLOTTED_NAMES = [m[0] for m in PLOTTED]
 COLOR = {m[0]: m[2] for m in PLOTTED}
 MARKER = {m[0]: m[3] for m in PLOTTED}
@@ -46,11 +54,16 @@ CODE_NAME = {
     "firebreak": "Firebreak (ours)",
     "trace_and_quarantine": "Trace & quarantine",
     "sink_guard": "Sink guard",
+    "a2a_block_input": "A2A: block bad input",
+    "a2a_cancel_agent": "A2A: cancel faulty agent",
+    "a2a_cancel_all": "A2A: cancel all",
     "none": "No containment",
     "reference": "No fault (reference)",
 }
 # Monitor strategy codes the harness can run (``none`` is no alert at all).
 STRATEGY_CODES = tuple(c for c in CODE_NAME if c not in {"none", "reference"})
+# Codes the A2A stack runs (and the EdgeCitadel monitor does not).
+NATIVE_CODES = ("a2a_block_input", "a2a_cancel_agent", "a2a_cancel_all")
 # The simulator's internal codes of the same strategies (its v2 registry);
 # strategies without one are skipped by the simulator backend.
 SIM_CODE = {

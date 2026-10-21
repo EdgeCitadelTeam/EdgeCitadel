@@ -59,7 +59,8 @@ from .spec import (
     makespan,
     to_dict,
 )
-from .stack import RunStack, StackConfig, StackError
+from .names import NATIVE_CODES
+from .stack import RunStack, StackConfig, StackError, make_stack
 
 POLL_S = 0.2
 START_MARGIN_MS = 1500
@@ -404,6 +405,7 @@ def run_cell(
         "run_id": cell.run_id,
         "experiment": experiment.name,
         "mode": stack_config.mode,
+        "system": stack_config.system,
         "instance": cell.instance.stem,
         "spec_name": spec.name,
         "fault": spec.fault.cls,
@@ -431,7 +433,7 @@ def run_cell(
         "status": "failed_to_start",
         "errors": [],
     }
-    stack = RunStack(stack_config, cell.run_id, run_dir)
+    stack = make_stack(stack_config, cell.run_id, run_dir)
     strategy = cell.strategy if cell.strategy in deploy.STRATEGIES else "firebreak"
     netem = False
     try:
@@ -466,7 +468,11 @@ def run_cell(
     return run_dir
 
 
-TRANSPORT_CODES = ("rpc:agentd is unavailable", "rpc:agentd closed the connection")
+TRANSPORT_CODES = (
+    "rpc:agentd is unavailable",
+    "rpc:agentd closed the connection",
+    "rpc:a2a unavailable",  # the A2A baseline's port (harness.a2a_agent)
+)
 
 
 def testbed_counts(run_dir: Path) -> dict[str, int]:
@@ -708,6 +714,9 @@ def _collect(
     logs.mkdir(exist_ok=True)
     for host in {controller, *config.node_hosts.values()}:
         directory = stack.host_dir(host)
+        samples = stack.fetch(host, f"{directory}/procstat.jsonl")
+        if samples:
+            (run_dir / f"procstat__{host}.jsonl").write_bytes(samples)
         for proc_log in _remote_logs(stack, host, directory):
             data = stack.fetch(host, proc_log)
             if data is not None:
@@ -755,6 +764,21 @@ def infrastructure_failure(meta: Mapping[str, Any]) -> str | None:
     return None
 
 
+def check_system(system: str, strategies: set[str]) -> None:
+    """Each system runs only its own controls: the monitor's strategies on
+    EdgeCitadel, the protocol's own on A2A, and none on the bare runtime."""
+    contained = strategies - {"none", "reference"}
+    if system == "a2a":
+        allowed = set(NATIVE_CODES)
+    elif system == "edgecitadel_bare":
+        allowed = set()
+    else:
+        allowed = set(deploy.STRATEGIES) - set(NATIVE_CODES)
+    wrong = sorted(contained - allowed)
+    if wrong:
+        raise ValueError(f"system {system} cannot run strategies {wrong}")
+
+
 def run_experiment(
     stack_config: StackConfig,
     experiment: Experiment,
@@ -763,8 +787,10 @@ def run_experiment(
     limit: int | None = None,
 ) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
+    cells = grid(experiment)
+    check_system(stack_config.system, {cell.strategy for cell in cells})
     done = []
-    for i, cell in enumerate(grid(experiment)):
+    for i, cell in enumerate(cells):
         if limit is not None and i >= limit:
             break
         if (out / "runs" / cell.run_id / "run.json").exists():

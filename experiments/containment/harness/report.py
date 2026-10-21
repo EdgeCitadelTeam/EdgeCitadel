@@ -45,6 +45,7 @@ IDENTITY = (
     "run_id",
     "experiment",
     "mode",
+    "system",
     "instance",
     "spec_name",
     "fault",
@@ -99,6 +100,8 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "run_id": meta["run_id"],
         "experiment": meta.get("experiment"),
         "mode": meta.get("mode"),
+        # Runs before the system baselines were all EdgeCitadel with the monitor.
+        "system": meta.get("system", "edgecitadel"),
         "instance": meta.get("instance"),
         "spec_name": meta.get("spec_name"),
         "fault": meta.get("fault"),
@@ -229,6 +232,7 @@ def score(out: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 CELL = [
     "mode",
+    "system",
     "profile",
     "phase1_mode",
     "phase1_labels",
