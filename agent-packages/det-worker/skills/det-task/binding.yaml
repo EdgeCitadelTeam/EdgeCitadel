@@ -1,0 +1,15 @@
+apiVersion: edgecitadel.io/v1alpha1
+kind: AgentSkillBinding
+skillId: det.task
+version: 0.1.0
+execution:
+  kind: runtime-handler
+  name: det-task
+schemas:
+  input: schemas/input.json
+  output: schemas/output.json
+requires:
+  knowledge: []
+  network: []
+  devices: []
+extensions: {}

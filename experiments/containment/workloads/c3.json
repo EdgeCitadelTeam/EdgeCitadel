@@ -1,0 +1,474 @@
+{
+ "spec_version": 1,
+ "name": "c3",
+ "agents": [
+  {
+   "id": "kipp",
+   "parent": null,
+   "site": "core",
+   "label": "KIPP"
+  },
+  {
+   "id": "tars",
+   "parent": "kipp",
+   "site": "siteA",
+   "label": "TARS"
+  },
+  {
+   "id": "case",
+   "parent": "kipp",
+   "site": "siteB",
+   "label": "CASE"
+  },
+  {
+   "id": "tars-l1",
+   "parent": "tars",
+   "site": "siteA1",
+   "label": "TARS-L1"
+  },
+  {
+   "id": "tars-l2",
+   "parent": "tars",
+   "site": "siteA2",
+   "label": "TARS-L2"
+  },
+  {
+   "id": "case-l1",
+   "parent": "case",
+   "site": "siteB1",
+   "label": "CASE-L1"
+  },
+  {
+   "id": "case-l2",
+   "parent": "case",
+   "site": "siteB2",
+   "label": "CASE-L2"
+  }
+ ],
+ "placement": {
+  "core": "core",
+  "siteB": "edge-1",
+  "siteB2": "edge-1",
+  "siteB1": "edge-1",
+  "siteA": "edge-2",
+  "siteA2": "edge-2",
+  "siteA1": "edge-2"
+ },
+ "effect_classes": [
+  {
+   "id": "final",
+   "site": "core",
+   "min_delay": 0.2,
+   "protected": true
+  },
+  {
+   "id": "act_B1",
+   "site": "siteB1",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_B2",
+   "site": "siteB2",
+   "min_delay": 0.5,
+   "protected": true
+  }
+ ],
+ "tasks": [
+  {
+   "id": "K.plan",
+   "agent": "kipp",
+   "session": "sK",
+   "compute": 1.0,
+   "reads": [
+    "task"
+   ]
+  },
+  {
+   "id": "T.plan",
+   "agent": "tars",
+   "session": "sT",
+   "compute": 1.0
+  },
+  {
+   "id": "C.plan",
+   "agent": "case",
+   "session": "sC",
+   "compute": 1.0
+  },
+  {
+   "id": "P",
+   "agent": "tars-l1",
+   "session": "sP",
+   "compute": 3.0
+  },
+  {
+   "id": "T.n",
+   "agent": "tars-l1",
+   "session": "sTn",
+   "compute": 10.0
+  },
+  {
+   "id": "c1",
+   "agent": "case-l1",
+   "session": "sigma",
+   "compute": 3.0,
+   "reads": [
+    "V@v1"
+   ]
+  },
+  {
+   "id": "c2",
+   "agent": "case-l1",
+   "session": "sigma",
+   "compute": 4.0,
+   "release": 10.0
+  },
+  {
+   "id": "c3",
+   "agent": "case-l1",
+   "session": "sigma",
+   "compute": 3.0
+  },
+  {
+   "id": "c4",
+   "agent": "case-l1",
+   "session": "sigma",
+   "compute": 2.0
+  },
+  {
+   "id": "q0",
+   "agent": "tars-l2",
+   "session": "sQ",
+   "compute": 8.0
+  },
+  {
+   "id": "q1",
+   "agent": "tars-l2",
+   "session": "sQ",
+   "compute": 3.0,
+   "reads": [
+    "V@v1"
+   ]
+  },
+  {
+   "id": "n_a",
+   "agent": "case-l1",
+   "session": "s_na",
+   "compute": 15.0
+  },
+  {
+   "id": "n_b",
+   "agent": "case-l2",
+   "session": "s_nb",
+   "compute": 12.0
+  },
+  {
+   "id": "T.agg",
+   "agent": "tars",
+   "session": "sT",
+   "compute": 2.0
+  },
+  {
+   "id": "C.agg",
+   "agent": "case",
+   "session": "sC",
+   "compute": 2.0
+  },
+  {
+   "id": "K.agg",
+   "agent": "kipp",
+   "session": "sK",
+   "compute": 2.0
+  }
+ ],
+ "external_inputs": [
+  "task"
+ ],
+ "artifacts": [
+  {
+   "id": "V@v1",
+   "producer": "P"
+  }
+ ],
+ "messages": [
+  {
+   "id": "dT",
+   "sender": "K.plan",
+   "receiver": "T.plan",
+   "latency": 0.3
+  },
+  {
+   "id": "dC",
+   "sender": "K.plan",
+   "receiver": "C.plan",
+   "latency": 0.3
+  },
+  {
+   "id": "d_P",
+   "sender": "T.plan",
+   "receiver": "P",
+   "latency": 0.3
+  },
+  {
+   "id": "d_Tn",
+   "sender": "T.plan",
+   "receiver": "T.n",
+   "latency": 0.3
+  },
+  {
+   "id": "d_q",
+   "sender": "T.plan",
+   "receiver": "q0",
+   "latency": 0.3
+  },
+  {
+   "id": "d_c1",
+   "sender": "C.plan",
+   "receiver": "c1",
+   "latency": 0.3
+  },
+  {
+   "id": "d_na",
+   "sender": "C.plan",
+   "receiver": "n_a",
+   "latency": 0.3
+  },
+  {
+   "id": "d_nb",
+   "sender": "C.plan",
+   "receiver": "n_b",
+   "latency": 0.3
+  },
+  {
+   "id": "r_c",
+   "sender": "c4",
+   "receiver": "C.agg",
+   "latency": 0.3
+  },
+  {
+   "id": "r_na",
+   "sender": "n_a",
+   "receiver": "C.agg",
+   "latency": 0.3
+  },
+  {
+   "id": "r_nb",
+   "sender": "n_b",
+   "receiver": "C.agg",
+   "latency": 0.3
+  },
+  {
+   "id": "r_q",
+   "sender": "q1",
+   "receiver": "T.agg",
+   "latency": 0.3
+  },
+  {
+   "id": "r_tn",
+   "sender": "T.n",
+   "receiver": "T.agg",
+   "latency": 0.3
+  },
+  {
+   "id": "rT",
+   "sender": "T.agg",
+   "receiver": "K.agg",
+   "latency": 0.3
+  },
+  {
+   "id": "rC",
+   "sender": "C.agg",
+   "receiver": "K.agg",
+   "latency": 0.3
+  }
+ ],
+ "effects": [
+  {
+   "id": "E_c3",
+   "issuer": "c3",
+   "class": "act_B1",
+   "delay": 2.0
+  },
+  {
+   "id": "E_nb",
+   "issuer": "n_b",
+   "class": "act_B2",
+   "delay": 2.0
+  },
+  {
+   "id": "FINAL",
+   "issuer": "K.agg",
+   "class": "final",
+   "delay": 0.5
+  }
+ ],
+ "fault": {
+  "class": "stale_version",
+  "item": "V@v1"
+ },
+ "alerts": {
+  "early": {
+   "event": "produce",
+   "item": "V@v1",
+   "delay_s": 0.4,
+   "designate_root": true
+  },
+  "late": {
+   "event": "consume",
+   "item": "V@v1",
+   "count": 2,
+   "delay_s": 0.4,
+   "designate_root": true
+  },
+  "sim": {
+   "event": "consume",
+   "item": "V@v1",
+   "delay_s": 3.9000000000000004,
+   "designate_root": true,
+   "sim_t": 9.5
+  }
+ },
+ "rogue": {
+  "rate": 0.0,
+  "p_eff": 0.5,
+  "extra_delay": 1.5,
+  "p_spawn": 1.0,
+  "seed": 0,
+  "dyn_steps": 3,
+  "dyn_step_len": 2.0,
+  "new_inv_step": 0.5,
+  "max_dyn": 200
+ },
+ "sim": {
+  "site_L": {
+   "core": 0.5,
+   "siteA": 0.5,
+   "siteA1": 0.5,
+   "siteA2": 0.5,
+   "siteB": 0.5,
+   "siteB1": 0.5,
+   "siteB2": 0.5
+  },
+  "net_lat": [
+   [
+    "kipp",
+    "case",
+    0.3
+   ],
+   [
+    "kipp",
+    "case-l1",
+    0.6
+   ],
+   [
+    "kipp",
+    "case-l2",
+    0.6
+   ],
+   [
+    "kipp",
+    "kipp",
+    0.0
+   ],
+   [
+    "kipp",
+    "tars",
+    0.3
+   ],
+   [
+    "kipp",
+    "tars-l1",
+    0.6
+   ],
+   [
+    "kipp",
+    "tars-l2",
+    0.6
+   ],
+   [
+    "tars",
+    "case-l1",
+    1.9
+   ],
+   [
+    "tars",
+    "kipp",
+    0.3
+   ],
+   [
+    "tars",
+    "tars",
+    0.0
+   ],
+   [
+    "tars",
+    "tars-l1",
+    0.3
+   ],
+   [
+    "tars",
+    "tars-l2",
+    0.3
+   ],
+   [
+    "case",
+    "case",
+    0.0
+   ],
+   [
+    "case",
+    "case-l1",
+    0.3
+   ],
+   [
+    "case",
+    "case-l2",
+    0.3
+   ],
+   [
+    "case",
+    "kipp",
+    0.3
+   ],
+   [
+    "tars-l1",
+    "case-l1",
+    2.2
+   ],
+   [
+    "tars-l1",
+    "tars",
+    0.3
+   ],
+   [
+    "tars-l1",
+    "tars-l2",
+    0.6
+   ],
+   [
+    "tars-l2",
+    "tars",
+    0.3
+   ],
+   [
+    "case-l1",
+    "case",
+    0.3
+   ],
+   [
+    "case-l2",
+    "case",
+    0.3
+   ]
+  ],
+  "new_inv_step": 0.5,
+  "t_alert": 9.5,
+  "workflow": "C3"
+ },
+ "source": {
+  "kind": "sim",
+  "scenario": "c3",
+  "params": {}
+ }
+}

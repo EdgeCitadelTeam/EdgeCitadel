@@ -1,0 +1,50 @@
+{
+  "name": "dryrun-latency",
+  "instances": [
+    "../workloads/c2.json"
+  ],
+  "strategies": [
+    "reject_source",
+    "stop_team",
+    "stop_downstream",
+    "trace_and_stop",
+    "greedy_cut",
+    "cut_without_deadlines",
+    "firebreak"
+  ],
+  "alerts": [
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    },
+    {
+      "name": "stress-1s",
+      "control_latency_ms": {
+        "*": 1000
+      },
+      "control_delay_ms": {
+        "*": 1000
+      }
+    },
+    {
+      "name": "stress-3s",
+      "control_latency_ms": {
+        "*": 3000
+      },
+      "control_delay_ms": {
+        "*": 3000
+      }
+    }
+  ],
+  "repetitions": 1,
+  "time_scale": 1.0,
+  "rogue_rates": [
+    0.3
+  ],
+  "reference": false
+}

@@ -1,0 +1,62 @@
+{
+  "files": [
+    {
+      "path": "det_worker/__init__.py",
+      "sha256": "4d8d379d3160e31f891b26383d6d47d535850f7f0217cf5721fb7e1aa9e8ee6a"
+    },
+    {
+      "path": "det_worker/__main__.py",
+      "sha256": "d2af8483aab75f014687253bfe617b393eb8beb1776a388aac7b2d04b52e188f"
+    },
+    {
+      "path": "det_worker/content.py",
+      "sha256": "289ae578d4adbcf9f74a9b67fa43c7f311a91c67112e786a50b5d2560617f0a6"
+    },
+    {
+      "path": "det_worker/effects.py",
+      "sha256": "50b5053863899ae45964fef7efb9aaa0289e4bdd9b82e1cb3da325da08b29396"
+    },
+    {
+      "path": "det_worker/services.py",
+      "sha256": "d0e8a2a3b3a16a5c1a697305b54df20ca553bd67440557ac53a28ef64935b691"
+    },
+    {
+      "path": "det_worker/worker.py",
+      "sha256": "eac14edc8cfdd1a8c0fc9bd7b6aaf9e64aa9afedca0814c2b0812fd7b00aa5dc"
+    },
+    {
+      "path": "plugin.yaml",
+      "sha256": "e588233ac0354448286f4a03da99d3a0c38f6b858007d3adf8ace2998e001a96"
+    },
+    {
+      "path": "skills/det-task/SKILL.md",
+      "sha256": "17e784bab38733e6d36df9cb3d935ad7a906aa551f16fdb0863efc04905d1a4d"
+    },
+    {
+      "path": "skills/det-task/binding.yaml",
+      "sha256": "fe31648b9ca019bf184aaefa984f3954b6e08fd738698cc84b94bbec8da26cf3"
+    },
+    {
+      "path": "skills/det-task/schemas/input.json",
+      "sha256": "488dbf6db77e68435a7458fe2d191b00ec3f0d0ac16c727fc9c179712439cc03"
+    },
+    {
+      "path": "skills/det-task/schemas/output.json",
+      "sha256": "ebdf872f31b87545092a19a1fbe34cb7c083096d1d47af511ce483eb913f244d"
+    }
+  ],
+  "lockVersion": 1,
+  "package": {
+    "id": "edgecitadel.det-worker",
+    "protocol": "edgecitadel.managed-agent.v1",
+    "version": "0.1.0"
+  },
+  "skills": [
+    {
+      "contentSha256": "17e784bab38733e6d36df9cb3d935ad7a906aa551f16fdb0863efc04905d1a4d",
+      "name": "det-task",
+      "skillId": "det.task",
+      "version": "0.1.0"
+    }
+  ]
+}
