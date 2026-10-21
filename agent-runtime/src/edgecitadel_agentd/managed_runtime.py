@@ -22,7 +22,7 @@ otherwise. If this process exits meanwhile, agentd's session recovery decides
 the task once the hold is released. An egress hold (a label) does not pause the
 handler; agentd holds its result as an event, and the runtime offers the
 result again every watch interval until the label's owner admits it (or
-releases the label).
+releases the label), also after a pause of a labelled task ends.
 """
 
 from __future__ import annotations
@@ -156,16 +156,15 @@ class _TaskSupervisor:
             return "egress", state
         return "run", state
 
-    async def wait_while_held(self, *, egress: bool = False) -> tuple[Signal, str]:
-        """Wait out a hold, and also an egress hold when ``egress`` is set."""
-        waiting = {"held", "egress"} if egress else {"held"}
+    async def wait_while_held(self) -> tuple[Signal, str]:
+        """Wait out a hold (a pause); a label alone is not waited out."""
         while True:
             try:
                 await asyncio.wait_for(self.stop.wait(), WATCH_INTERVAL_SECONDS)
             except TimeoutError:
                 pass
             signal, state = await self.signal()
-            if signal not in waiting:
+            if signal != "held":
                 return signal, state
 
     async def transition(
@@ -201,7 +200,9 @@ class _TaskSupervisor:
                 except TimeoutError:
                     continue
                 return None
-            signal, current = await self.wait_while_held(egress=True)
+            # Paused: offer the result again once the pause ends (under a label
+            # that stays, agentd then holds it as an event to be admitted).
+            signal, current = await self.wait_while_held()
             if signal == "terminal":
                 return current
             if signal == "stopped":

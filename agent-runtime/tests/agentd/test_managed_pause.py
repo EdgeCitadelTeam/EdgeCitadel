@@ -141,6 +141,47 @@ async def test_an_egress_hold_lets_the_handler_finish_but_holds_its_result(
         assert calls == ["finished"]
 
 
+@pytest.mark.asyncio
+async def test_a_labelled_result_paused_at_commit_is_admitted_after_the_pause(
+    tmp_path, monkeypatch
+):
+    """A frontier pause of a labelled task that finished: once the pause ends
+    and the label stays, its result is held as an event and admitted alone."""
+    agent_ref: list[Any] = []
+
+    async def handler(envelope: dict[str, Any], context: Any):
+        # Labelled, then paused, after the work finished and before the commit.
+        agent_ref[0].hold(envelope["task_id"], kind="egress")
+        agent_ref[0].hold(envelope["task_id"])
+        return {"body": "admitted alone"}, "completed"
+
+    def held_result(task_id: str) -> dict[str, Any] | None:
+        with agent.store() as store:
+            row = store._connection.execute(
+                "SELECT * FROM held_events WHERE kind='result' AND subject_id=?",
+                (task_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    async with managed_agent(tmp_path, monkeypatch, handler) as agent:
+        agent_ref.append(agent)
+        task_id = agent.submit()
+        await eventually(lambda: "containment_hold" in agent.task(task_id))
+        await asyncio.sleep(0.3)
+        assert agent.task(task_id)["state"] == "running"
+        assert held_result(task_id) is None  # refused by the pause itself
+
+        agent.release(task_id)
+        await eventually(lambda: held_result(task_id) is not None)
+        assert agent.task(task_id)["state"] == "running"
+        event = held_result(task_id)
+        assert event is not None and event["state"] == "held"
+        agent.control("release", {"kind": "event", "object_id": event["event_id"]}, 1)
+        await eventually(lambda: agent.task(task_id)["state"] == "completed")
+        assert agent.task(task_id)["result"] == {"body": "admitted alone"}
+        assert held_result(task_id)["state"] == "admitted"
+
+
 def test_release_recovers_a_task_whose_runtime_exited_while_paused(tmp_path):
     node = Node(tmp_path / "node", "node-a")
     try:
