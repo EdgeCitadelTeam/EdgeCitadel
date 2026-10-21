@@ -226,3 +226,33 @@ def test_home_assistant_is_configured_only_on_the_nodes_it_names(tmp_path):
     core = json.loads(stack.Path(run._effect_adapters("core")).read_text())
     edge = json.loads(stack.Path(run._effect_adapters("edge-1")).read_text())
     assert set(core) == {"http", "homeassistant"} and set(edge) == {"http"}
+
+
+def test_lab_services_listen_on_the_tailnet_and_core_api_on_the_loopback(
+    tmp_path, monkeypatch
+):
+    """NATS and the services take connections from every host, so they bind
+    the controller's tailnet address (its monitoring port the loopback);
+    Core's API serves only the runner, on the controller: the loopback."""
+    hosts = {
+        "ctl": host_config(
+            name="ctl", ssh=None, listen="100.64.0.1", work_root=str(tmp_path)
+        ),
+        "edge": host_config(),
+    }
+    config = stack.StackConfig(
+        mode="lab", hosts=hosts, controller="ctl", node_hosts={"core": "ctl"}
+    )
+    run = stack.RunStack(config, "r1", tmp_path / "out")
+    assert run._listen("ctl") == "100.64.0.1"
+    assert run._runner_listen("ctl") == "127.0.0.1"
+    # A runner elsewhere reaches Core's API at the controller's address.
+    assert run._runner_listen("edge") == "NetSys-Endurance"
+    started = []
+    monkeypatch.setattr(run, "_start", lambda *args, **kw: started.append(args))
+    monkeypatch.setattr(stack, "wait_until", lambda *args, **kw: None)
+    url = run._start_nats("ctl")
+    conf = (tmp_path / "r1" / "nats" / "nats.conf").read_text()
+    assert url.startswith("nats://100.64.0.1:")
+    assert 'host: "100.64.0.1"' in conf and 'http: "127.0.0.1:' in conf
+    assert "0.0.0.0" not in conf

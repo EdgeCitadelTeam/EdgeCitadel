@@ -5,6 +5,7 @@
   "hosts": {
     "jim-eq": {
       "address": "jim-eq",
+      "listen": "${HARNESS_CONTROLLER_LISTEN}",
       "python": "${HARNESS_PYTHON}",
       "repo": "${HARNESS_REPO}",
       "runtime_root": "${HARNESS_RUNTIME_ROOT}",

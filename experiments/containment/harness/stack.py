@@ -68,6 +68,10 @@ class HostConfig:
     work_root: str  # where run state lives on this host
     ssh: str | None = None  # "user@host"; None runs locally
     nats_server: str | None = None
+    # The local address this host's cross-host services (the run's NATS and
+    # services) listen on, and the other hosts reach them at: the tailnet
+    # address in the lab. Defaults to ``address``.
+    listen: str | None = None
 
     def pythonpath(self) -> str:
         return ":".join(
@@ -508,6 +512,20 @@ class RunStack:
     def _python(self, host: str) -> str:
         return self.config.hosts[host].python
 
+    def _listen(self, host: str) -> str:
+        """Where a service the other hosts use listens (and is reached): the
+        loopback in a dry run, the host's tailnet address in the lab."""
+        if self.config.mode == "dryrun":
+            return "127.0.0.1"
+        return self.config.hosts[host].listen or self.config.hosts[host].address
+
+    def _runner_listen(self, host: str) -> str:
+        """Where a service only the runner uses listens: the loopback when the
+        runner runs on that host, else where the other hosts reach it."""
+        if self.config.mode == "dryrun" or isinstance(self.hosts[host], LocalHost):
+            return "127.0.0.1"
+        return self._listen(host)
+
     # -- lifecycle --------------------------------------------------------------
     def up(
         self,
@@ -601,7 +619,8 @@ class RunStack:
             else:
                 self.hosts[host].write(f"{directory}/ha.token", self.ha_token.encode())
         port = self._port("services")
-        bind = "127.0.0.1" if self.config.mode == "dryrun" else "0.0.0.0"
+        # Workers and gateways on every host post here.
+        bind = self._listen(host)
         self._start(
             host,
             "services",
@@ -623,24 +642,27 @@ class RunStack:
         ready = f"{directory}/services.ready"
         wait_until(lambda: self.hosts[host].exists(ready), "services")
         port = json.loads(self.hosts[host].read(ready))["port"]
-        self.services_url = f"http://{self.config.hosts[host].address}:{port}"
+        self.services_url = f"http://{bind}:{port}"
         wait_until(lambda: self.services("GET", "/health"), "services health")
 
     def _start_nats(self, host: str) -> str:
         port, monitor = self._port("nats"), self._port("nats_monitor")
         directory = f"{self.host_dir(host)}/nats"
+        # Nodes on every host connect; the monitoring port only for this host.
+        listen = self._listen(host)
         config = (
-            f"port: {port}\nhttp_port: {monitor}\n"
+            f"host: {json.dumps(listen)}\nport: {port}\n"
+            f"http: {json.dumps(f'127.0.0.1:{monitor}')}\n"
             f"authorization {{ token: {json.dumps(self.nats_token)} }}\n"
             f"jetstream {{ store_dir: {json.dumps(directory + '/js')} }}\n"
         )
         self.hosts[host].write(f"{directory}/nats.conf", config.encode())
         binary = self.config.hosts[host].nats_server or "nats-server"
         self._start(host, "nats", [binary, "-c", f"{directory}/nats.conf"])
-        url = f"nats://{self.config.hosts[host].address}:{port}"
+        url = f"nats://{listen}:{port}"
         wait_until(
             lambda: http_json(f"http://127.0.0.1:{monitor}/healthz")
-            if self.config.hosts[host].ssh is None
+            if isinstance(self.hosts[host], LocalHost)
             else True,
             "NATS",
         )
@@ -798,7 +820,8 @@ class RunStack:
             f"{directory}/containment.json", json.dumps(document, indent=1).encode()
         )
         port = self._port("aggregator")
-        bind = "127.0.0.1" if self.config.mode == "dryrun" else "0.0.0.0"
+        # Only the runner calls Core's API (nodes use NATS).
+        bind = self._runner_listen(host)
         self._start(
             host,
             "aggregator",
@@ -826,7 +849,7 @@ class RunStack:
                 "HARNESS_CONTROL_DELAY_MS": json.dumps(dict(delay)),
             },
         )
-        self.aggregator_url = f"http://{self.config.hosts[host].address}:{port}"
+        self.aggregator_url = f"http://{bind}:{port}"
         wait_until(
             lambda: self.monitor_status().get("state") == "running", "Core monitor"
         )

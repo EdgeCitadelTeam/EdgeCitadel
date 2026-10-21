@@ -74,7 +74,9 @@ co-located admin sockets.
 Lab: run the same commands on jim-eq with ``configs/lab.json``; set
 ``HARNESS_SSH_ENDURANCE``/``HARNESS_SSH_CLUSTER`` (``user@host``),
 ``HARNESS_REPO`` and the ``HARNESS_REMOTE_*`` paths of the same checkouts on
-the edge hosts. Every run uses its own ports, NATS, owner key and
+the edge hosts, and ``HARNESS_CONTROLLER_LISTEN`` (jim-eq's tailnet address):
+the run's NATS and services listen there only, NATS monitoring and Core's API
+(used by the runner alone) on the loopback. Every run uses its own ports, NATS, owner key and
 ``/var/tmp/edgecitadel-containment/<run>`` state on each host and never
 touches the resident EdgeCitadel services. ``control_transport:
 ssh_forward`` forwards remote admin sockets over SSH. The physical case
