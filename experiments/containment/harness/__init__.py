@@ -81,6 +81,21 @@ the run's NATS and services listen there only, NATS monitoring and Core's API
 ``/var/tmp/edgecitadel-containment/<run>`` state on each host and never
 touches the resident EdgeCitadel services.
 
+Long grids: start the runner on jim-eq as a transient systemd unit, which
+outlives the login session and stops its processes with it::
+
+  python -m harness unit --log <out>/runner.log -- run --stack ... --experiment ... --out <out>
+
+(``--name`` defaults to ``firebreak-exp-h-runner``). With ``"units": "user"`` (or
+``"system"``) on an SSH host, each of a run's processes there is a transient unit
+``firebreak-exp-h-<run>-<process>``, checked and stopped through systemd. Before
+every attempt the runner stops the harness units an interrupted run left on
+such hosts (never the runner's), removes the run's stale directories and waits
+for the stack's fixed ports on the controller (an attempt whose ports stay busy
+for 30 s is a testbed failure). Copy run outputs off a Mac with
+``COPYFILE_DISABLE=1 tar`` (macOS tar otherwise adds ``._*`` AppleDouble files;
+the scorer ignores them).
+
 Without SSH from jim-eq (``configs/lab-helper.json``): start
 ``python -m harness.labhelper`` once on each edge host (see its docstring; a
 ``firebreak-exp-harness-helper`` unit), connected to the lab's experiment broker,

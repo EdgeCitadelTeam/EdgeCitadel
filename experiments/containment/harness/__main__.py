@@ -9,6 +9,8 @@ Run from ``experiments/containment`` (``python -m harness <command>``):
   sim       the same grid in the simulator -> sim_runs.csv (sim-to-real)
   report    summaries with bootstrap CIs, paired comparisons and figures
   netem     print (or apply/clear) a lab latency profile's tc commands
+  unit      run one of these commands as a transient systemd unit (a runner
+            that outlives the login session; its processes stop with it)
 """
 
 from __future__ import annotations
@@ -119,6 +121,46 @@ def _netem(args: argparse.Namespace) -> None:
             print(line)
 
 
+def unit_command(
+    name: str, log: Path, harness_args: list[str], *, user: bool = False
+) -> list[str]:
+    """``systemd-run`` for ``python -m harness <args>`` from this directory, with
+    the HARNESS_* and PYTHONPATH environment, output appended to ``log``."""
+    import os
+
+    if not harness_args or harness_args[0] == "unit":
+        raise SystemExit("unit: give the harness command to run")
+    env = [
+        f"--setenv={key}={value}"
+        for key, value in sorted(os.environ.items())
+        if key.startswith("HARNESS_") or key in {"PYTHONPATH", "PATH"}
+    ]
+    return [
+        "systemd-run",
+        *(["--user"] if user else []),
+        f"--unit={name}",
+        "--collect",
+        "--property=KillMode=control-group",
+        f"--property=WorkingDirectory={Path.cwd()}",
+        f"--property=StandardOutput=append:{log.resolve()}",
+        f"--property=StandardError=append:{log.resolve()}",
+        *env,
+        sys.executable,
+        "-m",
+        "harness",
+        *harness_args,
+    ]
+
+
+def _unit(args: argparse.Namespace) -> None:
+    import subprocess
+
+    args.log.parent.mkdir(parents=True, exist_ok=True)
+    command = unit_command(args.name, args.log, args.harness, user=args.user)
+    subprocess.run(command, check=True)
+    print(f"{args.name}: started; output in {args.log}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="harness",
@@ -168,7 +210,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--profile", required=True)
     p.add_argument("--clear", action="store_true")
     p.set_defaults(handler=_netem)
+    p = sub.add_parser("unit")
+    p.add_argument("--name", default="firebreak-exp-h-runner")
+    p.add_argument("--log", required=True, type=Path)
+    p.add_argument("--user", action="store_true", help="a user unit")
+    p.add_argument("harness", nargs=argparse.REMAINDER, help="-- <command> ...")
+    p.set_defaults(handler=_unit)
     args = parser.parse_args(argv)
+    if getattr(args, "harness", None) and args.harness[0] == "--":
+        args.harness = args.harness[1:]
     args.handler(args)
 
 

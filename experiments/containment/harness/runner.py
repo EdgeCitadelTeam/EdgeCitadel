@@ -473,6 +473,8 @@ def run_cell(
     strategy = cell.strategy if cell.strategy in deploy.STRATEGIES else "firebreak"
     netem = False
     try:
+        # What an interrupted earlier attempt left (units, directories, ports).
+        meta["prepared"] = stack.prepare()
         netem = stack.apply_netem(cell.latency.netem)
         meta["netem_applied"] = netem
         stack.up(
@@ -815,6 +817,7 @@ def infrastructure_failure(meta: Mapping[str, Any]) -> str | None:
             "exited early" in error
             or "did not become ready" in error
             or "cannot reach" in error
+            or "ports still in use" in error
             # Nothing strategy-specific runs before the alert, so a run that
             # never reached its alert point stalled on the testbed.
             or "never fired" in error

@@ -35,6 +35,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -83,6 +84,10 @@ class HostConfig:
     # lab broker, "token_file": the broker token's file on the runner's host,
     # "subject": the helper's subject (default harness.lab.<name>)}.
     helper: dict[str, str] | None = None
+    # An SSH host's processes as transient systemd units (``user`` or
+    # ``system``) named firebreak-exp-h-<run>-<process>, checked and stopped
+    # through systemd; None: background process groups.
+    units: str | None = None
 
     def pythonpath(self) -> str:
         return ":".join(
@@ -198,6 +203,17 @@ class LocalHost:
         shutil.rmtree(path, ignore_errors=True)
 
 
+UNIT_PREFIX = "firebreak-exp-h-"
+# A runner started with ``python -m harness unit`` (never stopped by cleanup).
+RUNNER_UNIT = "firebreak-exp-h-runner"
+
+
+def unit_name(log: str, name: str) -> str:
+    """The unit of a run's process (its log is <work_root>/<run>/logs/<name>.log)."""
+    run_id = Path(log).parent.parent.name
+    return UNIT_PREFIX + re.sub(r"[^A-Za-z0-9_.:-]+", "-", f"{run_id}-{name}")[:200]
+
+
 class SSHHost:
     """Processes on a lab host; secrets travel in mode-600 files, never argv."""
 
@@ -239,12 +255,49 @@ class SSHHost:
         log: str,
     ) -> Proc:
         env_file = self._env_file(name, env, str(Path(log).parent))
+        q = shlex.quote
+        if self.config.units:
+            unit = unit_name(log, name)
+            source = '. "$0" && exec "$@"'
+            command = (
+                f"mkdir -p {q(str(Path(log).parent))} && "
+                f"systemd-run {self._scope()}--quiet --collect --unit={q(unit)} "
+                f"-p Type=exec -p TimeoutStopSec=10 -p WorkingDirectory={q(cwd)} "
+                f"-p StandardOutput=append:{q(log)} -p StandardError=append:{q(log)} "
+                f"/bin/bash -c {q(source)} {q(env_file)} {shlex.join(argv)} "
+                f"&& systemctl {self._scope()}show -p MainPID --value {q(unit)}"
+            )
+            pid = int(self._ssh(command).strip().splitlines()[-1])
+            return Proc(name, self.config.name, pid, log, unit=unit)
         command = (
-            f"mkdir -p {shlex.quote(str(Path(log).parent))} && cd {shlex.quote(cwd)} && "
-            f". {shlex.quote(env_file)} && setsid nohup {shlex.join(argv)} "
-            f">> {shlex.quote(log)} 2>&1 < /dev/null & echo $!"
+            f"mkdir -p {q(str(Path(log).parent))} && cd {q(cwd)} && "
+            f". {q(env_file)} && setsid nohup {shlex.join(argv)} "
+            f">> {q(log)} 2>&1 < /dev/null & echo $!"
         )
         return Proc(name, self.config.name, int(self._ssh(command).strip()), log)
+
+    def _scope(self) -> str:
+        return "--user " if self.config.units == "user" else ""
+
+    def stop_leftover_units(self) -> list[str]:
+        """Stop the harness units an interrupted run left (never a runner)."""
+        listing = self._ssh(
+            f"systemctl {self._scope()}list-units --all --no-legend --plain "
+            f"'{UNIT_PREFIX}*' | awk '{{print $1}}'"
+        )
+        left = [
+            unit
+            for unit in listing.split()
+            if unit.startswith(UNIT_PREFIX) and not unit.startswith(RUNNER_UNIT)
+        ]
+        if left:
+            units = " ".join(shlex.quote(u) for u in left)
+            self._ssh(
+                f"systemctl {self._scope()}stop {units}; "
+                f"systemctl {self._scope()}reset-failed {units} 2>/dev/null; true",
+                timeout=90,
+            )
+        return left
 
     def run(
         self,
@@ -260,12 +313,23 @@ class SSHHost:
         return self._ssh(command, timeout=timeout)
 
     def alive(self, proc: Proc) -> bool:
+        if proc.unit:
+            check = (
+                f"systemctl {self._scope()}is-active --quiet {shlex.quote(proc.unit)}"
+            )
+            return self._ssh(f"{check} && echo yes || echo no").strip() == "yes"
         return (
             self._ssh(f"kill -0 {proc.pid} 2>/dev/null && echo yes || echo no").strip()
             == "yes"
         )
 
     def stop(self, proc: Proc, timeout: float = 10) -> None:
+        if proc.unit:
+            self._ssh(
+                f"systemctl {self._scope()}stop {shlex.quote(proc.unit)} 2>/dev/null; true",
+                timeout=60,
+            )
+            return
         self._ssh(
             f"kill -TERM -- -{proc.pid} 2>/dev/null; for i in $(seq {int(timeout * 5)}); do "
             f"kill -0 {proc.pid} 2>/dev/null || exit 0; sleep 0.2; done; kill -KILL -- -{proc.pid} 2>/dev/null; true"
@@ -535,6 +599,8 @@ class StackConfig:
                         f"host {name}: unset environment variables in helper"
                     )
                 fields["helper"] = helper
+            if fields.get("units") not in (None, "user", "system"):
+                raise StackError(f"host {name}: units is user or system")
             hosts[name] = HostConfig(name=name, **fields)
         transport = _transport(document.get("control_transport", "local"))
         if transport != "nats" and any(h.helper for h in hosts.values()):
@@ -625,6 +691,21 @@ def _transport(name: str) -> str:
     if name not in CONTROL_TRANSPORTS:
         raise StackError(f"control_transport must be one of {CONTROL_TRANSPORTS}")
     return name
+
+
+PORT_WAIT_S = 30.0
+
+
+def port_free(address: str, port: int) -> bool:
+    """Whether a server could bind ``address:port`` now (as ours do, with
+    address reuse, so connections in TIME_WAIT do not count)."""
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((address, port))
+        except OSError:
+            return False
+    return True
 
 
 def free_port() -> int:
@@ -734,6 +815,43 @@ class RunStack:
         return self._listen(host)
 
     # -- lifecycle --------------------------------------------------------------
+    def prepare(self) -> list[str]:
+        """Before an attempt, clear what an interrupted one left: harness units
+        on unit-driven hosts, this run's directories, and the stack's fixed
+        ports on the controller (waited for, never taken from another
+        process). Returns what it did."""
+        notes = []
+        for name, host in self.hosts.items():
+            if isinstance(host, SSHHost) and host.config.units:
+                left = host.stop_leftover_units()
+                if left:
+                    notes.append(f"{name}: stopped leftover units {left[:4]}")
+            directory = self.host_dir(name)
+            if host.exists(directory):
+                host.remove_tree(directory)
+                notes.append(f"{name}: removed {directory}")
+        controller = self.config.controller
+        if isinstance(self.hosts[controller], LocalHost):
+            where = {
+                "nats": self._listen(controller),
+                "services": self._listen(controller),
+                "nats_monitor": "127.0.0.1",
+                "aggregator": self._runner_listen(controller),
+            }
+            wanted = {
+                (where.get(k, "127.0.0.1"), int(v))
+                for k, v in self.config.ports.items()
+                if v
+            }
+            deadline = time.monotonic() + PORT_WAIT_S
+            while busy := sorted(a for a in wanted if not port_free(*a)):
+                if time.monotonic() > deadline:
+                    raise StackError(
+                        f"ports still in use after {PORT_WAIT_S:.0f} s: {busy}"
+                    )
+                time.sleep(1)
+        return notes
+
     def up(
         self,
         spec: Spec,

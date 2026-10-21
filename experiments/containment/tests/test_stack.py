@@ -307,3 +307,86 @@ def test_teardown_stops_core_after_the_nodes_and_before_its_broker(tmp_path):
         run.procs.append(stack.Proc(name, "ctl", 1, "log"))
     assert run.down() == []
     assert stopped == ["worker-a", "agentd-core", "aggregator", "nats", "services"]
+
+
+def test_an_ssh_host_with_units_runs_each_process_as_a_named_unit(captured):
+    host = stack.SSHHost(host_config(units="user"))
+    proc = host.start(
+        "worker-a",
+        ["/opt/venv/bin/python", "-m", "det_worker", "--agent", "a"],
+        env={"DET_WORKER_SERVICES_TOKEN": "s3cret"},
+        cwd="/srv/ec/agent-packages/det-worker",
+        log="/var/tmp/x/run-7/logs/worker-a.log",
+    )
+    assert proc.unit == "firebreak-exp-h-run-7-worker-a" and proc.pid == 4242
+    command = captured[-1]["argv"][-1]
+    assert (
+        "systemd-run --user --quiet --collect --unit=firebreak-exp-h-run-7-worker-a"
+        in command
+    )
+    assert "s3cret" not in command
+    host.alive(proc)
+    host.stop(proc)
+    assert (
+        "systemctl --user is-active --quiet firebreak-exp-h-run-7-worker-a"
+        in (captured[-2]["argv"][-1])
+    )
+    assert (
+        "systemctl --user stop firebreak-exp-h-run-7-worker-a"
+        in captured[-1]["argv"][-1]
+    )
+
+
+def test_leftover_units_are_stopped_but_never_the_runner(monkeypatch):
+    host = stack.SSHHost(host_config(units="system"))
+    calls = []
+
+    def ssh(command, *, data=None, timeout=60):
+        calls.append(command)
+        if "list-units" in command:
+            return (
+                "firebreak-exp-h-r1-worker-a.service\nfirebreak-exp-h-runner.service\n"
+            )
+        return ""
+
+    monkeypatch.setattr(host, "_ssh", ssh)
+    assert host.stop_leftover_units() == ["firebreak-exp-h-r1-worker-a.service"]
+    assert "systemctl stop firebreak-exp-h-r1-worker-a.service" in calls[-1]
+    assert "runner" not in calls[-1]
+
+
+def test_an_attempt_waits_for_its_fixed_ports_and_clears_stale_state(
+    tmp_path, monkeypatch
+):
+    import socket
+
+    held = socket.socket()
+    held.bind(("127.0.0.1", 0))
+    held.listen()
+    port = held.getsockname()[1]
+    run = local_stack(tmp_path, ports={"aggregator": port})
+    stale = tmp_path / "ctl" / "r1" / "nodes"
+    stale.mkdir(parents=True)
+    monkeypatch.setattr(stack, "PORT_WAIT_S", 0.5)
+    try:
+        with pytest.raises(stack.StackError, match="ports still in use"):
+            run.prepare()
+        assert not stale.exists()
+    finally:
+        held.close()
+    assert run.prepare() == []
+
+
+def test_the_runner_unit_carries_the_harness_environment(monkeypatch, tmp_path):
+    from harness.__main__ import unit_command
+
+    monkeypatch.setenv("HARNESS_RUNTIME_ROOT", "/srv/ec")
+    monkeypatch.setenv("HARNESS_HA_TOKEN_FILE", "/etc/ha.token")
+    command = unit_command(
+        "firebreak-exp-h-runner", tmp_path / "runner.log", ["run", "--out", "o"]
+    )
+    assert command[:3] == ["systemd-run", "--unit=firebreak-exp-h-runner", "--collect"]
+    assert "--setenv=HARNESS_RUNTIME_ROOT=/srv/ec" in command
+    assert command[-5:] == ["-m", "harness", "run", "--out", "o"][-5:]
+    with pytest.raises(SystemExit):
+        unit_command("u", tmp_path / "l", [])
