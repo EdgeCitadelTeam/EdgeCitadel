@@ -50,9 +50,6 @@
   "profiles": [
     "deployed"
   ],
-  "phase1_modes": [
-    "freeze"
-  ],
   "phase1_labels": [
     "frontier"
   ],

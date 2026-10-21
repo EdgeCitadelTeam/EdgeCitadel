@@ -510,7 +510,7 @@ class RunStack:
         control_delay_ms: Mapping[str, float],
         enforce: bool = True,
         profile: str = "deployed",
-        phase1_mode: str = "freeze",
+        phase1_mode: str | None = None,
         phase1_labels: str = "frontier",
         receding_during_waits: bool = False,
     ) -> None:
@@ -556,7 +556,8 @@ class RunStack:
             enforce,
             {
                 "profile": profile,
-                "phase1_mode": phase1_mode,
+                # None: the profile's (MonitorConfig.phase1_mode_for).
+                **({"phase1_mode": phase1_mode} if phase1_mode else {}),
                 "phase1_labels": phase1_labels,
                 "receding_during_waits": receding_during_waits,
             },

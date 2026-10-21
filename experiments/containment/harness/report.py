@@ -38,7 +38,7 @@ from typing import Any
 from .metrics import evaluate
 from .names import CODE_NAME, COLOR, FAMILY, MARKER, PLOTTED_NAMES
 from .netem import MEASURED_RTT_MS
-from .runner import infrastructure_failure, testbed_counts
+from .runner import PROFILE_PHASE1_MODES, infrastructure_failure, testbed_counts
 from .spec import from_dict
 
 IDENTITY = (
@@ -111,8 +111,8 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "latency": meta.get("latency"),
         "latency_regime": meta.get("latency_regime") or _regime(meta),
         "effect_sink": meta.get("effect_sink", "ledger"),
-        # The monitor's mechanism profile and option of the run (main design:
-        # deployed, no at-alert cut).
+        # The monitor's mechanism profile and options of the run (main design:
+        # deployed, its adaptive phase 1; runs before M6 recorded freeze).
         "profile": meta.get("profile", "deployed"),
         "phase1_mode": meta.get("phase1_mode", "freeze"),
         "phase1_labels": meta.get("phase1_labels", "frontier"),
@@ -539,12 +539,14 @@ STRESS_NOTE = "stress settings, above the measured LAN round trip (1.5-4 ms)"
 
 def _main_runs(runs: Any, mode: str) -> Any:
     """Runs of one mode in the main design: plotted strategies, root given, the
-    deployed profile with the freeze phase 1 and no receding additions."""
+    deployed profile with its adaptive phase 1 and no receding additions."""
     r = runs[(runs["mode"] == mode) & runs.strategy.isin(PLOTTED_NAMES)]
     if "profile" in r:
         r = r[r.profile.isna() | (r.profile == "deployed")]
     if "phase1_mode" in r:
-        r = r[r.phase1_mode.isna() | (r.phase1_mode == "freeze")]
+        r = r[
+            r.phase1_mode.isna() | (r.phase1_mode == PROFILE_PHASE1_MODES["deployed"])
+        ]
     if "phase1_labels" in r:
         r = r[r.phase1_labels.isna() | (r.phase1_labels == "frontier")]
     if "receding_during_waits" in r:

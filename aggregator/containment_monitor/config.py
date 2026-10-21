@@ -21,10 +21,14 @@ taint-aware admission. ``profile`` gives every strategy its defaults and
 - ``deployed`` (default): each strategy as it would be deployed. The rule-based
   baselines apply their rule directly (no freeze, no guard, no taint-aware
   admission; nothing lineage-based is added to the no-lineage ones); the three
-  cut strategies run the two-phase protocol with the guard and taint-aware
-  admission, which Theorem 5 needs.
-- ``shared``: every mechanism on for every strategy, an ablation in which
-  strategies differ only in their phase-2 rule.
+  cut strategies run the two-phase protocol with the adaptive phase 1, the
+  guard and taint-aware admission, which Theorem 5 needs.
+- ``shared``: every mechanism on for every strategy with the frontier-freeze
+  phase 1, an ablation in which strategies differ only in their phase-2 rule.
+
+Taint-aware admission places labels: reversible egress holds under which agentd
+holds each new event of the unit and the monitor admits it per event
+(``admission``).
 
 Confirmation, fencing and agentd's gates apply to every strategy either way.
 """
@@ -51,6 +55,8 @@ class ConfigError(ValueError):
 PROFILES = ("deployed", "shared")
 PHASE1_MODES = ("freeze", "freeze_plus_cut", "adaptive")
 PHASE1_LABELS = ("frontier", "forward_closure")
+# The phase-1 mode of each profile when ``phase1_mode`` is not set.
+PROFILE_PHASE1_MODES = {"deployed": "adaptive", "shared": "freeze"}
 # The strategies that solve a cut on G_C (the others apply a rule).
 CUT_STRATEGIES = frozenset({"greedy_cut", "cut_without_deadlines", "firebreak"})
 
@@ -177,15 +183,18 @@ class MonitorConfig:
     # overrides {"<strategy>" | "*": {"<mechanism>": bool}}.
     profile: str = "deployed"
     mechanisms: Mapping[str, Mapping[str, bool]] = field(default_factory=dict)
-    # What phase 1 issues (enforcement.TwoPhaseProtocol): "freeze" (the
-    # frontier freeze B_1), "freeze_plus_cut" (B_1 and the strategy's own cut
-    # solved at the alert, B_a, at once) or "adaptive" (B_a with the
-    # taint-aware labels of its source side; the freeze only when B_a leaves a
-    # protected sink untimely, when the earliest tainted-effect deadline is
-    # within phase1_margin_rounds control rounds of B_a's landing, or when B_a
-    # in force is not a cut once reconciled). Phase 2 and the guarded release
-    # are the same in every mode.
-    phase1_mode: str = "freeze"
+    # What phase 1 issues (enforcement.TwoPhaseProtocol) for a strategy that
+    # runs the two-phase protocol: "adaptive" (B_a, the strategy's own cut
+    # solved at the alert, with the taint-aware labels of its source side; the
+    # freeze only when B_a leaves a protected sink untimely, when the earliest
+    # tainted-effect deadline is within phase1_margin_rounds control rounds of
+    # B_a's landing, or when B_a in force is not a cut once reconciled),
+    # "freeze" (the frontier freeze B_1) or "freeze_plus_cut" (B_1 and B_a at
+    # once). None takes the profile's (``phase1_mode_for``): adaptive for the
+    # cut strategies of the deployed profile, freeze in the shared ablation,
+    # whose strategies share one phase 1. Phase 2 and the guarded release are
+    # the same in every mode.
+    phase1_mode: str | None = None
     phase1_margin_rounds: int = 2
     # Phase-1 labels (admission holds): "frontier" covers U (freeze modes) or
     # S(B_a) (adaptive); "forward_closure" covers the sources' forward closure.
@@ -213,6 +222,15 @@ class MonitorConfig:
             **self.mechanisms.get(strategy, {}),
         }
         return replace(defaults, **overrides)
+
+    def phase1_mode_for(self, strategy: str) -> str | None:
+        """The strategy's phase-1 mode; None when it has no phase 1 (it
+        applies its rule directly)."""
+        if not self.mechanisms_for(strategy).phase1_freeze:
+            return None
+        if self.phase1_mode is not None:
+            return self.phase1_mode
+        return PROFILE_PHASE1_MODES[self.profile]
 
     def session_of(self, agent_id: str, context_id: str | None) -> str | None:
         """The memory an invocation continues: its conversation, ``*`` (all of

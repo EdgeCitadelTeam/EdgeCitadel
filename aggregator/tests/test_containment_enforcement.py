@@ -120,10 +120,11 @@ def test_releases_only_after_every_phase_two_confirmation(tmp_path):
 
 def three_invocations(tmp_path, control):
     """Three tainted invocations of agent a share one credential hub and cannot
-    emit within a second of starting. Phase 1 holds each of them; the optimum
-    revokes a's credential once (a gated group), in time for their emissions.
-    Taint-aware admission is off: it would add the egress revocations of the
-    three, and these tests are about the protocol around the one revocation."""
+    emit within a second of starting. The frontier-freeze phase 1 holds each of
+    them; the optimum revokes a's credential once (a gated group), in time for
+    their emissions. Taint-aware admission is off: it would add the labels of
+    the three, and these tests are about the protocol around the one
+    revocation."""
     from aggregator.containment_monitor.config import MonitorConfig
     from containment_support import TraceBuilder
 
@@ -133,6 +134,7 @@ def three_invocations(tmp_path, control):
         session_isolated_agents=frozenset({"a"}),
         min_emission_ms={"a": 1000},
         mechanisms={"firebreak": {"taint_aware_admission": False}},
+        phase1_mode="freeze",
     )
     harness = Harness(tmp_path, config, control)
     trace = TraceBuilder()
@@ -376,7 +378,8 @@ def test_frontier_advance_triggers_a_receding_re_solve(tmp_path):
     harness.at(20)
     again = harness.monitor.resolve_frontier()
     assert again is not None and again.status == "contained"
-    assert ("n1", "task", child) in control.in_force()
+    # Paused, or labelled (adaptive phase 1): nothing it emits leaves unheld.
+    assert {("n1", "task", child), ("n1", "egress", child)} & control.in_force()
     assert harness.monitor.resolve_frontier() is None  # nothing new
     harness.close()
 
@@ -471,9 +474,10 @@ def test_the_deployed_profile_adds_mechanisms_only_to_the_cut_strategies(
     tmp_path, seed, monkeypatch
 ):
     """Main runs: the rule-based baselines apply their own rule directly, with
-    nothing lineage-based added; the cut strategies run the two-phase protocol
-    with the guard and taint-aware admission (Theorem 5). Every strategy's
-    actions are confirmed either way."""
+    nothing lineage-based added (and no phase 1); the cut strategies run the
+    two-phase protocol with the adaptive phase 1 (their own cut at the alert
+    and its labels), the guard and taint-aware admission (Theorem 5). Every
+    strategy's actions are confirmed either way."""
     from aggregator.containment_monitor.config import CUT_STRATEGIES
 
     runs = every_strategy(tmp_path, seed, monkeypatch, "deployed")
@@ -485,13 +489,18 @@ def test_the_deployed_profile_adds_mechanisms_only_to_the_cut_strategies(
             assert decision.status in {"contained", "phase2_check_failed"}, name
             assert run["guard"] is not None and run["guard"] <= run["issued"], name
             assert run["admission"], name
+            assert decision.phase1_mode == "adaptive", name
+            at_alert = decision.solves[0]
+            assert at_alert["phase"] == 1, name
+            assert {Action.from_json(a) for a in at_alert["actions"]} <= set(
+                run["phase1"]
+            ), name
         else:
             assert set(decision.mechanisms.values()) == {False}, name
             assert decision.status == "applied" and not decision.phase1, name
+            assert decision.phase1_mode is None, name
             assert run["guard"] is None and not run["admission"], name
             assert decision.released == [], name
-    cut_phase1 = {tuple(runs[n]["phase1"]) for n in CUT_STRATEGIES}
-    assert len(cut_phase1) == 1 and cut_phase1 != {()}
 
 
 # ---------------------------------------------------------------------------

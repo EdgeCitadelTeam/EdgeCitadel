@@ -210,6 +210,9 @@ class ContainmentMonitor:
         self.last_graph: dict = {}
         self.last_ranking: list[dict] = []
         self._last_resolve_ms = 0
+        # The phase-1 mode of the decision being made: (J') reconciles taint
+        # only for an adaptive phase 1.
+        self._phase1_mode: str | None = None
         self._owns_renewer = renewer is None
         self.renewer = renewer or LeaseRenewer(control, config, clock=clock)
 
@@ -411,7 +414,7 @@ class ContainmentMonitor:
             )
 
         cg = build()
-        if self.config.phase1_mode == "adaptive" and not static:
+        if self._phase1_mode == "adaptive" and not static:
             # (J'): with an adaptive phase 1 the source side holds uncovered
             # edges whose commits arrive from journals with different delays;
             # reconcile conservatively before every solve and check.
@@ -479,8 +482,7 @@ class ContainmentMonitor:
         self, incident_id: str, name: str, t_alert: int, roots: list[str]
     ) -> Decision:
         mechanisms = self.config.mechanisms_for(name)
-        # Only a strategy that runs the two-phase protocol has a phase 1.
-        mode = self.config.phase1_mode if mechanisms.phase1_freeze else "freeze"
+        mode = self.config.phase1_mode_for(name)
         decision = Decision(
             incident_id,
             name,
@@ -523,20 +525,24 @@ class ContainmentMonitor:
             self.graph.frontier_advanced = False
             return set(choose(self._project(2, frozenset(self.in_force))).actions)
 
-        self.protocol.run(
-            decision,
-            t_alert=t_alert,
-            project=self._project,
-            fence=self.fence,
-            choose=choose,
-            in_force=self.in_force,
-            two_phase=mechanisms.phase1_freeze,
-            phase1_mode=mode,
-            phase1_labels=self.config.phase1_labels,
-            cut_at_alert=rule,
-            trigger=trigger,
-            receding=receding if self.config.receding_during_waits else None,
-        )
+        self._phase1_mode = mode
+        try:
+            self.protocol.run(
+                decision,
+                t_alert=t_alert,
+                project=self._project,
+                fence=self.fence,
+                choose=choose,
+                in_force=self.in_force,
+                two_phase=mechanisms.phase1_freeze,
+                phase1_mode=mode or "freeze",
+                phase1_labels=self.config.phase1_labels,
+                cut_at_alert=rule,
+                trigger=trigger,
+                receding=receding if self.config.receding_during_waits else None,
+            )
+        finally:
+            self._phase1_mode = None
         self._persist(decision)
         return decision
 
@@ -624,7 +630,9 @@ class ContainmentMonitor:
         return {
             "fault": self.fault,
             "profile": self.config.profile,
-            "phase1_mode": self.config.phase1_mode,
+            "phase1_mode": {
+                name: self.config.phase1_mode_for(name) for name in STRATEGIES
+            },
             "phase1_labels": self.config.phase1_labels,
             "receding_during_waits": self.config.receding_during_waits,
             "mechanisms": {

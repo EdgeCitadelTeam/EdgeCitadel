@@ -175,7 +175,7 @@ class Deployment:
     run_dir: Path
     strategy: str
     profile: str = "deployed"
-    phase1_mode: str = "freeze"
+    phase1_mode: str | None = None  # the profile's
     phase1_labels: str = "frontier"
     processes: list[tuple[str, subprocess.Popen]] = field(default_factory=list)
     ledger: ActuatorLedger | None = None
@@ -334,7 +334,11 @@ class Deployment:
                         },
                         "strategy": self.strategy,
                         "profile": self.profile,
-                        "phase1_mode": self.phase1_mode,
+                        **(
+                            {"phase1_mode": self.phase1_mode}
+                            if self.phase1_mode
+                            else {}
+                        ),
                         "phase1_labels": self.phase1_labels,
                     },
                     "control": {
@@ -948,7 +952,8 @@ def main() -> int:
     parser.add_argument(
         "--phase1-mode",
         choices=["freeze", "freeze_plus_cut", "adaptive"],
-        default="freeze",
+        default=None,
+        help="default: the profile's (adaptive for deployed cut strategies)",
     )
     parser.add_argument(
         "--phase1-labels", choices=["frontier", "forward_closure"], default="frontier"

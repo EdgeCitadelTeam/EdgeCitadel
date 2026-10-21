@@ -220,11 +220,18 @@ def test_profiles_options_and_parts_extend_the_paired_grid(tmp_path):
     cells = runner.grid(loaded)
     # 1 reference + 2 modes x 2 alerts x 3 strategies, then 2 alerts x 1 shared.
     assert len(cells) == 1 + 12 + 2
-    main = [c for c in cells if c.profile == "deployed" and c.phase1_mode == "freeze"]
+    # The deployed profile's own phase 1 (adaptive) keeps plain ids; the
+    # freeze ablation is named.
+    main = [
+        c for c in cells if c.alert and c.profile == "deployed" and c.mode == "adaptive"
+    ]
+    assert len(main) == 6 and all(c.main_design for c in main)
     assert all(c.run_id.endswith(f"__r0__{c.strategy}") for c in main if c.alert)
-    adaptive = [c for c in cells if c.phase1_mode == "adaptive"]
-    assert len(adaptive) == 6 and all("__r0__adaptive__" in c.run_id for c in adaptive)
+    frozen = [c for c in cells if c.profile == "deployed" and c.mode == "freeze"]
+    assert len(frozen) == 6 and all("__r0__freeze__" in c.run_id for c in frozen)
     shared = [c for c in cells if c.profile == "shared"]
+    # The shared ablation's own phase 1 is the freeze: not named a variant.
+    assert all(c.mode == "freeze" and "freeze" not in c.run_id for c in shared)
     assert all(c.receding for c in shared)
     assert [c.run_id.rsplit("__", 3)[1:] for c in shared] == [
         ["shared", "receding", "firebreak"]
@@ -251,12 +258,20 @@ def test_the_lab_grids_have_their_planned_sizes():
         cells = runner.grid(loaded)
         sizes[name] = len(cells)
         assert {c.profile for c in cells} <= {"deployed", "shared"}
-        assert {c.phase1_mode for c in cells} == {"freeze"}
+        # Each profile's own phase 1 (deployed: adaptive; shared: the
+        # freeze), and the deployed freeze ablations on C2 with Firebreak.
+        assert {(c.profile, c.mode) for c in cells if c.main_design} <= {
+            ("deployed", "adaptive"),
+            ("shared", "freeze"),
+        }
+        ablations = [c for c in cells if c.profile == "deployed" and not c.main_design]
+        assert {c.strategy for c in ablations} <= {"firebreak"}
         assert {c.phase1_labels for c in cells} == {"frontier"}
         assert not any(c.receding for c in cells)
     # 7 instances x (reference + 2 alerts x (9 strategies + none)), plus C2's
-    # 2 alerts x 9 strategies under the shared profile.
-    assert sizes["lab-smoke"] == 7 * (1 + 2 * 10) + 2 * 9
+    # 2 alerts x 9 strategies under the shared profile, plus Firebreak on C2
+    # under the freeze and freeze_plus_cut phase 1 (2 alerts each).
+    assert sizes["lab-smoke"] == 7 * (1 + 2 * 10) + 2 * 9 + 2 * 2
     assert sizes["lab-pilot"] == 3 * sizes["lab-smoke"]
 
 

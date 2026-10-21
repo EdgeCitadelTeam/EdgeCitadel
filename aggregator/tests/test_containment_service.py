@@ -246,6 +246,19 @@ def test_configuration_file_builds_the_authority_mirror_and_control(
         "taint_aware_admission": True,
     }
     assert service.config.mechanisms_for("reject_source").best_effort_guard
+    # Phase-1 modes: the shared ablation shares the frontier freeze; deployed
+    # cut strategies run the adaptive phase 1 and the rules have none.
+    assert service.config.phase1_mode_for("reject_source") == "freeze"
+    deployed = MonitorConfig()
+    assert deployed.phase1_mode_for("firebreak") == "adaptive"
+    assert deployed.phase1_mode_for("greedy_cut") == "adaptive"
+    assert deployed.phase1_mode_for("trace_and_stop") is None
+    assert (
+        MonitorConfig(phase1_mode="freeze_plus_cut").phase1_mode_for(
+            "cut_without_deadlines"
+        )
+        == "freeze_plus_cut"
+    )
     assert isinstance(service.control, LocalAgentdControlClient)
     assert service.control.owner == service.config.owner == "core-monitor"
     key = startup / "core-monitor.key"

@@ -240,7 +240,8 @@ class Decision:
     # The mechanisms the strategy ran with (config.Mechanisms) and their profile.
     profile: str = "deployed"
     mechanisms: dict = field(default_factory=dict)
-    phase1_mode: str = "freeze"
+    # None: the strategy applies its rule directly (no phase 1).
+    phase1_mode: str | None = "adaptive"
     phase1_labels: str = "frontier"
     receding_during_waits: bool = False
     status: str = "pending"

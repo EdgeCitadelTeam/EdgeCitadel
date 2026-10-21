@@ -3,9 +3,11 @@
 An experiment file names instances (spec files), strategies, alert timings,
 latency settings, repetitions, the monitor's mechanism ``profiles``
 (``deployed``: each strategy as deployed, the default; ``shared``: every
-mechanism for every strategy), ``phase1_modes`` (``freeze``, the default,
-``freeze_plus_cut`` or ``adaptive``), ``phase1_labels`` (``frontier``, the
-default, or ``forward_closure``) and ``receding_during_waits`` settings. ``parts``
+mechanism for every strategy), ``phase1_modes`` (unset: the profile's,
+``adaptive`` for the deployed cut strategies and ``freeze`` in the shared
+ablation; or an ablation setting ``freeze``, ``freeze_plus_cut``),
+``phase1_labels`` (``frontier``, the default, or ``forward_closure``) and
+``receding_during_waits`` settings. ``parts``
 adds sub-grids that override any of those (for example one instance under the
 shared profile). The grid is paired: every strategy runs the same instance
 under the same alert trigger, latency setting, repetition, profile and option,
@@ -123,7 +125,8 @@ class Experiment:
     root_modes: tuple[str, ...] = ("given",)
     measured_rtt_ms: float = MEASURED_RTT_MS
     profiles: tuple[str, ...] = ("deployed",)
-    phase1_modes: tuple[str, ...] = ("freeze",)
+    # None: the profile's phase-1 mode (PROFILE_PHASE1_MODES).
+    phase1_modes: tuple[str | None, ...] = (None,)
     phase1_labels: tuple[str, ...] = ("frontier",)
     receding_during_waits: tuple[bool, ...] = (False,)
     # Sub-grids run after this one, each overriding some of its dimensions.
@@ -145,6 +148,9 @@ class Experiment:
 PROFILES = ("deployed", "shared")
 PHASE1_MODES = ("freeze", "freeze_plus_cut", "adaptive")
 PHASE1_LABELS = ("frontier", "forward_closure")
+# The monitor's phase-1 mode per profile when a run sets none
+# (MonitorConfig.phase1_mode_for): the main design of each profile.
+PROFILE_PHASE1_MODES = {"deployed": "adaptive", "shared": "freeze"}
 
 
 def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any]:
@@ -230,9 +236,23 @@ class RunCell:
     rep: int
     root_mode: str = "given"
     profile: str = "deployed"
-    phase1_mode: str = "freeze"
+    phase1_mode: str | None = None  # None: the profile's
     receding: bool = False
     phase1_labels: str = "frontier"
+
+    @property
+    def mode(self) -> str:
+        """The phase-1 mode of the run's two-phase strategies."""
+        return self.phase1_mode or PROFILE_PHASE1_MODES[self.profile]
+
+    @property
+    def main_design(self) -> bool:
+        """The profile's own phase 1 with frontier labels and no additions."""
+        return (
+            self.mode == PROFILE_PHASE1_MODES[self.profile]
+            and self.phase1_labels == "frontier"
+            and not self.receding
+        )
 
     @property
     def run_id(self) -> str:
@@ -240,9 +260,10 @@ class RunCell:
         alert = self.alert or "nofault"
         if self.alert and self.root_mode != "given":
             alert = f"{alert}.{self.root_mode}"
-        # The main design (deployed profile, freeze phase 1) keeps plain ids.
+        # The main design (deployed profile, its phase 1) keeps plain ids.
         variant = [] if self.profile == "deployed" else [self.profile]
-        variant += [] if self.phase1_mode == "freeze" else [self.phase1_mode]
+        if self.mode != PROFILE_PHASE1_MODES[self.profile]:
+            variant.append(self.mode)
         variant += [] if self.phase1_labels == "frontier" else [self.phase1_labels]
         variant += ["receding"] if self.receding else []
         parts = [
@@ -418,7 +439,10 @@ def run_cell(
         "effect_sink": stack_config.effect_sink["kind"],
         "controller_lease_ms": stack_config.controller_lease_ms,
         "profile": cell.profile,
-        "phase1_mode": cell.phase1_mode,
+        # The run's setting; phase1_modes says what each strategy ran (none
+        # for a rule applied directly), from the monitor's status.
+        "phase1_mode": cell.mode,
+        "phase1_modes": None,
         "phase1_labels": cell.phase1_labels,
         "receding_during_waits": cell.receding,
         "mechanisms": None,  # the monitor's, for this strategy (from its status)
@@ -450,7 +474,9 @@ def run_cell(
             receding_during_waits=cell.receding,
         )
         if cell.strategy in deploy.STRATEGIES:
-            meta["mechanisms"] = stack.monitor_status()["mechanisms"][cell.strategy]
+            status = stack.monitor_status()
+            meta["mechanisms"] = status["mechanisms"][cell.strategy]
+            meta["phase1_modes"] = status["phase1_mode"]
         _drive(stack, spec, plan, cell, experiment, meta, run_dir)
     except (StackError, OSError, ValueError, KeyError) as error:
         meta["errors"].append(f"{type(error).__name__}: {error}"[:2000])
