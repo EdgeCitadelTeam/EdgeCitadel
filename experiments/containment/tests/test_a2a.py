@@ -15,6 +15,7 @@ pytest.importorskip("a2a")
 
 from a2a.types import a2a_pb2 as pb
 from a2a.utils.errors import TaskNotCancelableError
+
 from harness import a2a_agent, a2a_common, a2a_control
 from harness.metrics import decision_metrics
 

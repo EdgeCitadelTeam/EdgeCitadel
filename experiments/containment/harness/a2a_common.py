@@ -12,10 +12,7 @@ Only the A2A stack imports this module; EdgeCitadel runs never need a2a-sdk.
 
 from __future__ import annotations
 
-import asyncio
-import threading
-import time
-from collections.abc import Awaitable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, TypeVar
 
 import httpx
@@ -23,16 +20,14 @@ from a2a.client import A2AClientError, Client, ClientConfig, create_client
 from a2a.types import a2a_pb2 as pb
 from google.protobuf import json_format, struct_pb2
 
+from .native import LoopThread, now_ms  # noqa: F401 (re-exported)
+
 T = TypeVar("T")
 SKILL_ID = "det.task"
 PROTOCOL_BINDING = "JSONRPC"
 # States an operator's sweep cancels: work that is queued or running.
 LIVE_STATES = (pb.TaskState.TASK_STATE_SUBMITTED, pb.TaskState.TASK_STATE_WORKING)
 LIST_PAGE_SIZE = 100
-
-
-def now_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 def agent_card(agent: str, url: str) -> pb.AgentCard:
@@ -159,27 +154,6 @@ class Peers:
         for client in self._clients.values():
             await client.close()
         await self._http.aclose()
-
-
-class LoopThread:
-    """An asyncio loop on its own daemon thread, for synchronous callers."""
-
-    def __init__(self, name: str) -> None:
-        self.loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(
-            target=self.loop.run_forever, name=name, daemon=True
-        )
-        self._thread.start()
-
-    def run(self, coro: Awaitable[T], timeout: float | None = 60.0) -> T:
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)  # type: ignore[arg-type]
-
-    def submit(self, coro: Awaitable[T]) -> asyncio.Future[T]:
-        return asyncio.run_coroutine_threadsafe(coro, self.loop)  # type: ignore[arg-type,return-value]
-
-    def close(self) -> None:
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self._thread.join(5)
 
 
 def unique(items: Iterable[str]) -> list[str]:

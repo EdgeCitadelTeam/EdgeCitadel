@@ -1,0 +1,31 @@
+{
+  "name": "dryrun-langgraph-c2",
+  "note": "The LangGraph baseline on C2: its three native controls and no containment, early and late alert, plus the reference.",
+  "instances": [
+    "../workloads/c2.json"
+  ],
+  "strategies": [
+    "lg_block_resume",
+    "lg_time_travel",
+    "lg_cancel_run",
+    "none"
+  ],
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 4
+      }
+    }
+  ],
+  "repetitions": 1,
+  "time_scale": 1.0,
+  "reference": true,
+  "phase1_modes": [
+    "adaptive"
+  ]
+}

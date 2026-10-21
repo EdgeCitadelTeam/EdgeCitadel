@@ -31,10 +31,10 @@ from a2a.types import a2a_pb2 as pb
 from a2a.utils.errors import A2AError, TaskNotCancelableError
 
 from .a2a_common import LoopThread, Peers, now_ms
-from .names import NATIVE_CODES
+from .names import A2A_CODES
 
 log = logging.getLogger(__name__)
-NATIVE_STRATEGIES = NATIVE_CODES
+NATIVE_STRATEGIES = A2A_CODES
 SWEEP_S = 0.1
 CONFIRMED = "confirmed"
 

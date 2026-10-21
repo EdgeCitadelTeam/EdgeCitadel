@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from . import deploy, netem
+from .names import A2A_CODES, LG_CODES, NATIVE_CODES
 from .spec import (
     AlertTrigger,
     Fault,
@@ -59,7 +60,6 @@ from .spec import (
     makespan,
     to_dict,
 )
-from .names import NATIVE_CODES
 from .stack import RunStack, StackConfig, StackError, make_stack
 
 POLL_S = 0.2
@@ -617,6 +617,9 @@ def _drive(
         if (
             time.monotonic() - last_change > quiet
             and (now_ms - t0) / 1000 > makespan(spec) * scale
+            # A baseline that redoes work (a LangGraph fork) can be silent
+            # while it computes; its stack says so. EdgeCitadel's never is.
+            and not stack.busy()
         ):
             meta["status"] = "quiescent"
             break
@@ -805,10 +808,12 @@ def checkouts(stack_config: StackConfig) -> dict[str, Any]:
 
 def check_system(system: str, strategies: set[str]) -> None:
     """Each system runs only its own controls: the monitor's strategies on
-    EdgeCitadel, the protocol's own on A2A, and none on the bare runtime."""
+    EdgeCitadel, A2A's and LangGraph's own on theirs, none on the bare runtime."""
     contained = strategies - {"none", "reference"}
     if system == "a2a":
-        allowed = set(NATIVE_CODES)
+        allowed = set(A2A_CODES)
+    elif system == "langgraph":
+        allowed = set(LG_CODES)
     elif system == "edgecitadel_bare":
         allowed = set()
     else:

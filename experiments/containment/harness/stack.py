@@ -296,8 +296,9 @@ class StackConfig:
     controller_lease_ms: int = 30_000
     # Which system runs the workload (SYSTEMS): EdgeCitadel with provenance and
     # the monitor; EdgeCitadel with trace export, controller lease and monitor
-    # off (the transport and runtime alone, for overhead runs); or the Google
-    # A2A baseline (harness.a2a_stack).
+    # off (the transport and runtime alone, for overhead runs); the Google
+    # A2A baseline (harness.a2a_stack); or the LangGraph baseline
+    # (harness.lg_stack, one host).
     system: str = "edgecitadel"
     # Sample every run process's CPU and memory at this period (harness.procstat);
     # None leaves sampling off (the containment runs' default).
@@ -355,7 +356,7 @@ class StackConfig:
         )
 
 
-SYSTEMS = ("edgecitadel", "edgecitadel_bare", "a2a")
+SYSTEMS = ("edgecitadel", "edgecitadel_bare", "a2a", "langgraph")
 CONTROL_TRANSPORTS = ("local", "nats", "ssh_forward")
 
 
@@ -377,6 +378,8 @@ def _system(name: str) -> str:
     if name not in SYSTEMS:
         raise StackError(f"system must be one of {SYSTEMS}")
     return name
+
+
 # The NATS control client retries one command until this timeout, then records
 # it as unconfirmed (neither in force nor absent).
 NATS_CONFIRMATION_TIMEOUT_MS = 5000
@@ -1046,6 +1049,13 @@ class RunStack:
             headers={"X-Harness-Token": self.services_token},
         )
 
+    def busy(self) -> bool:
+        """Whether the system is still executing work although no worker event
+        arrived (the runner's quiescence rule asks). Only the LangGraph
+        baseline says so, while a forked run redoes work; a run whose remaining
+        invocations wait on inputs that will never come is not busy."""
+        return False
+
     def monitor_status(self) -> dict[str, Any]:
         if self.bare:
             return {}
@@ -1118,4 +1128,8 @@ def make_stack(config: StackConfig, run_id: str, run_dir: Path) -> RunStack:
         from .a2a_stack import A2ARunStack
 
         return A2ARunStack(config, run_id, run_dir)
+    if config.system == "langgraph":
+        from .lg_stack import LangGraphRunStack
+
+        return LangGraphRunStack(config, run_id, run_dir)
     return RunStack(config, run_id, run_dir)

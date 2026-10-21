@@ -25,7 +25,12 @@ Layout (``experiments/containment``):
   lease or monitor; ``procstat.py`` samples CPU and memory per process,
   ``overhead.py`` turns fault-free runs into completion time, handoff
   latency, throughput and resources, ``benchspec.py`` writes the overhead
-  workloads (``workloads/bench``)
+  workloads (``workloads/bench``); ``lg_stack.py``, ``lg_graph.py``,
+  ``lg_control.py`` run the plan as a LangGraph StateGraph supervisor on
+  ``langgraph dev`` (one host) with only LangGraph Server's controls (run
+  cancel, edit and resume, time travel); ``native.py`` holds what both
+  native controllers share; ``compare.py`` joins result directories of all
+  systems and runs the pre-registered H10 tests
 - ``workloads/``: exported instances; ``experiments/``: grids (``lab-smoke``
   165 runs: every strategy x scenario x early/late alert once under the
   deployed profile plus C2 under the shared profile; ``lab-pilot`` the same

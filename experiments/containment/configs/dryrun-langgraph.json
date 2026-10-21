@@ -1,0 +1,24 @@
+{
+  "mode": "dryrun",
+  "system": "langgraph",
+  "controller": "local",
+  "_note": "LangGraph baseline on this machine: services and one langgraph dev per run (HARNESS_PYTHON must be a venv with langgraph, langgraph-cli[inmem], langgraph-sdk and the runtime's dependencies).",
+  "hosts": {
+    "local": {
+      "address": "127.0.0.1",
+      "python": "${HARNESS_PYTHON}",
+      "repo": "",
+      "runtime_root": "${HARNESS_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_WORK_ROOT}"
+    }
+  },
+  "node_hosts": {
+    "core": "local",
+    "edge-1": "local",
+    "edge-2": "local"
+  },
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "procstat_interval_ms": 200
+}
