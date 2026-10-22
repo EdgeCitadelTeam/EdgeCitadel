@@ -274,7 +274,7 @@ def test_control_latency_is_read_per_site_from_the_regression_decision_logs(
         "c2__early__native__r0__firebreak.infra1",
         [decision(1000, record("e", core=(1000, 9000)))],
     )
-    assert pipeline._control_latency(tmp_path) == {
+    assert pipeline._control_latency(stage) == {
         "core": [18.0, 20.0],
         "edge-1": [82.0],
     }
@@ -372,3 +372,111 @@ def test_every_native_lab_setting_plans_with_the_gated_L():
             else:
                 assert latency.regime(loaded.measured_rtt_ms) == "stress", path.name
     assert native == 21  # with main-smoke and svc-main (2026-10-22)
+
+
+def test_a_tainted_commit_after_tau1_is_recorded_and_blocks_in_the_main_gate():
+    late = row(run_id="c2__late__native__r0__gsafeguard", tainted_after_tau1=2)
+    unconverged = row(run_id="c2__late__native__r0__none", tainted_after_tau1="nan")
+    verdict = pipeline.gate([row(), late, unconverged])
+    assert verdict["passed"]  # the pilot profile records it only
+    assert verdict["tainted_after_tau1"] == "recorded_not_blocking"
+    assert verdict["tainted_after_tau1_runs"] == [late["run_id"]]
+    verdict = pipeline.gate([row(), late, unconverged], tau1_blocking=True)
+    assert not verdict["passed"]
+    assert verdict["reasons"] == [
+        f"{pipeline.TAU1_REASON} in ['c2__late__native__r0__gsafeguard']"
+    ]
+    assert pipeline.gate([row(), unconverged], tau1_blocking=True)["passed"]
+
+
+def test_the_main_profile_gates_the_smoke_then_runs_lab_main_and_svc_main(
+    tmp_path, monkeypatch
+):
+    # Slow hops: recorded only, with no A2A-SQLite chain in this profile.
+    ran = staged(monkeypatch, [60.0], [50.0], gated_hops=(338.0,))
+    read = []
+    monkeypatch.setattr(
+        pipeline, "_control_latency", lambda stage: read.append(stage.name) or CONFIRMED
+    )
+    out = tmp_path / "out"
+    assert pipeline.run_pipeline(tmp_path / "ec.json", out, profile="main") == 0
+    assert [name for name, _ in ran] == ["main-smoke", "lab-main", "svc-main"]
+    assert read == ["main-smoke"]
+    verdict = json.loads((out / "gate.json").read_text())
+    assert verdict["profile"] == "main" and verdict["control_stage"] == "main-smoke"
+    assert verdict["handoff_fallback"] == "not_run"
+    assert verdict["handoff_criterion"] == "absolute"
+    assert not verdict["handoff_verdict"]["passed"]
+    assert verdict["tainted_after_tau1"] == "blocking"
+    planned = verdict["planned_after_gate"]
+    assert set(planned) == {"lab-main", "svc-main"}
+    # 7 instances x (reference + 2 alerts x 11 strategies) per repetition and
+    # rogue rate; svc-pilot's 23 cells per repetition.
+    lab, svc = planned["lab-main"], planned["svc-main"]
+    assert lab["runs"] == 7 * 23 * lab["repetitions"] * len(lab["rogue_rates"])
+    assert svc["runs"] == 23 * svc["repetitions"]
+
+
+def test_the_main_gate_blocks_on_tau1_and_control_latency(tmp_path, monkeypatch):
+    ran = staged(monkeypatch, [60.0], [50.0])
+    monkeypatch.setattr(
+        pipeline,
+        "_stage",
+        lambda *a: ran.append((a[1], "")) or [row(tainted_after_tau1=1)],
+    )
+    out = tmp_path / "tau1"
+    assert pipeline.run_pipeline(tmp_path / "ec.json", out, profile="main") == 1
+    assert [name for name, _ in ran] == ["main-smoke"]
+    assert pipeline.TAU1_REASON in (out / "GATE-FAILED").read_text()
+    ran.clear()
+    staged(monkeypatch, [60.0], [50.0])
+    monkeypatch.setattr(pipeline, "_control_latency", lambda stage: {"edge-1": [401.0]})
+    out = tmp_path / "control"
+    assert pipeline.run_pipeline(tmp_path / "ec.json", out, profile="main") == 1
+    failed = (out / "GATE-FAILED").read_text()
+    assert "L = 400 ms at {'edge-1': 401.0}" in failed
+    assert "main-smoke" in json.loads((out / "gate.json").read_text())["control_stage"]
+
+
+def test_the_main_smoke_and_the_main_grids_as_decided():
+    from harness import runner
+
+    root = pipeline.Path(pipeline.__file__).resolve().parents[1]
+    smoke = runner.Experiment.load(root / "experiments" / "main-smoke.json")
+    cells = runner.grid(smoke)
+    by_instance: dict[str, set] = {}
+    for cell in cells:
+        name = pipeline.Path(cell.instance).stem
+        by_instance.setdefault(name, set()).add((cell.strategy, cell.alert))
+    assert by_instance == {
+        "c2": {
+            (s, a)
+            for s in ("firebreak", "trace_and_quarantine", "gsafeguard", "none")
+            for a in ("early", "late")
+        },
+        "svc": {(s, a) for s in ("firebreak", "none") for a in ("early", "late")},
+    }
+    assert len(cells) == 12
+    # The repetitions are set after the pilot, in the files, clearly marked.
+    for name in ("lab-main", "svc-main"):
+        document = json.loads((root / "experiments" / f"{name}.json").read_text())
+        assert document["repetitions_note"].startswith("SET AFTER THE PILOT")
+    assert [n for n, _ in pipeline.PROFILES["main"].after] == ["lab-main", "svc-main"]
+
+
+def test_the_cli_takes_the_profile(monkeypatch, tmp_path):
+    from harness import __main__ as cli
+
+    seen = {}
+
+    def run(stack, out, a2a, control_blocking, profile):
+        seen.update(profile=profile, control_blocking=control_blocking)
+        return 0
+
+    monkeypatch.setattr(pipeline, "run_pipeline", run)
+    for argv, profile in (([], "pilot"), (["--profile", "main"], "main")):
+        try:
+            cli.main(["pipeline", "--stack", "s.json", "--out", str(tmp_path), *argv])
+        except SystemExit as stop:
+            assert stop.code == 0
+        assert seen == {"profile": profile, "control_blocking": True}

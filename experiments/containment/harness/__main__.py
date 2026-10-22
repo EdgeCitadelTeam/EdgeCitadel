@@ -11,7 +11,8 @@ Run from ``experiments/containment`` (``python -m harness <command>``):
   netem     print (or apply/clear) a lab latency profile's tc commands
   unit      run one of these commands as a transient systemd unit (a runner
             that outlives the login session; its processes stop with it)
-  pipeline  the lab chain: regression, svc-smoke, gate, lab-pilot, svc-pilot
+  pipeline  the lab chain: --profile pilot (regression, svc-smoke, gate,
+            lab-pilot, svc-pilot) or main (main-smoke, gate, lab-main, svc-main)
   commit-cost  median durable SQLite commit (as agentd's) in each directory
 """
 
@@ -163,6 +164,7 @@ def _pipeline(args: argparse.Namespace) -> None:
             args.out,
             args.a2a_stack,
             control_blocking=args.control_latency == "blocking",
+            profile=args.profile,
         )
     )
 
@@ -235,6 +237,14 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("pipeline")
     p.add_argument("--stack", required=True, type=Path)
     p.add_argument("--out", required=True, type=Path)
+    p.add_argument(
+        "--profile",
+        choices=("pilot", "main"),
+        default="pilot",
+        help="pilot: regression and svc-smoke gated, then lab-pilot and "
+        "svc-pilot; main: main-smoke gated (tainted commits after tau_1 "
+        "block, hand-offs recorded only), then lab-main and svc-main",
+    )
     p.add_argument(
         "--a2a-stack",
         type=Path,

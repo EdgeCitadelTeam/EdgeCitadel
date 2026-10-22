@@ -1,8 +1,10 @@
-"""The lab's chained grids with a gate before the pilots.
+"""The lab's chained grids with a gate before the pilots or the main runs.
 
-``python -m harness pipeline --stack <stack file> --out <root> [--a2a-stack
-<A2A-SQLite stack file>]`` runs, from ``experiments/containment`` and each
-into its own directory under ``<root>``:
+``python -m harness pipeline --stack <stack file> --out <root> [--profile
+{pilot,main}] [--a2a-stack <A2A-SQLite stack file>]`` runs, from
+``experiments/containment`` and each into its own directory under ``<root>``,
+the profile's chain (``PROFILES``). The pilot profile (the default, the chain
+of the first evaluation night):
 
 1. ``regression`` (``experiments/regression.json``: the lab-smoke cells of C2,
    N2 and rand-n7-s1, 69 runs), then scores it;
@@ -11,15 +13,29 @@ into its own directory under ``<root>``:
    ``GATE-FAILED`` and stops (hand-offs are recorded, not gated);
 4. ``lab-pilot`` (370 runs) and ``svc-pilot`` (69 runs), each scored.
 
-The gate (``GATE``) asks of every run of steps 1 and 2: it ended ``complete``
+The main profile (decided 2026-10-22, 12:23 London), on the frozen code:
+
+1. ``main-smoke`` (12 runs: C2 early/late x Firebreak, Trace & quarantine,
+   G-Safeguard, No containment; svc early/late x Firebreak, No containment),
+   then scores it;
+2. the gate on it, which here also fails on any run with a tainted commit
+   after tau_1 (``tainted_after_tau1`` above 0) and checks control latency on
+   ``main-smoke``'s decision logs; hand-offs are recorded only (no
+   A2A-SQLite fallback runs);
+3. ``lab-main`` and ``svc-main``, each scored. Their sizes are the
+   ``repetitions`` (and lab-main's ``rogue_rates``) in their experiment
+   files, marked "SET AFTER THE PILOT"; the pipeline prints the planned runs
+   at the start and records them in ``gate.json`` (``planned_after_gate``).
+
+The gate (``GATE``) asks of every gated run: it ended ``complete``
 or ``quiescent``; the scorer's integrity counts (``commits_unlabelled``,
 ``commits_unresolved``, ``commits_label_mismatch``) are 0; it had no testbed
 failure other than lost worker slots (``testbed_failure``); and of all of them
 together: Firebreak was clean after the alert in every faulted run and at most
 3 worker slots were lost. Control latency (approved 2026-10-21; L = 400 ms
 since 2026-10-22, 150 ms before): the monitor plans with L at every site,
-which theory needs to bound a control
-action's decide-to-enforced time; from the regression stage's decision logs
+which theory needs to bound a control action's decide-to-enforced time; from
+the decision logs of the profile's control stage (regression; main-smoke)
 the gate records every site's sent-to-confirmed p50, p95, p99 and maximum
 (``control_sent_to_confirmed_ms``) and fails when a site's p99 is above L (or
 when no command was confirmed, so the bound is unchecked).
@@ -28,7 +44,8 @@ Hand-offs are measured and recorded but do not block (decided 2026-10-21:
 ``handoff: "recorded_not_blocking"``; ``handoff_verdict`` is the verdict the
 approved criterion would have given). The criterion: the per-hop median
 (every hop of every run, ``metrics.handoff_latencies``) passes at 100 ms or
-less. Otherwise, when the gate passed, the six-hop chain between jim-eq and
+less. Otherwise, in the pilot profile and when the gate passed, the six-hop
+chain between jim-eq and
 Endurance (``experiments/handoff-chain.json``, 10 repetitions) runs on this
 stack (``handoff-ec``) and on the durability-matched A2A stack, A2A with its
 SQLite task store (``--a2a-stack``, e.g. ``configs/lab-a2a-sqlite-gate.json``;
@@ -58,6 +75,7 @@ import statistics
 import tempfile
 import time
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -81,11 +99,46 @@ GATE: dict[str, Any] = {
     "max_control_p99_ms": 400.0,
 }
 CONTROL_STAGE = "regression"
+TAU1_REASON = "tainted commits after tau_1"
 HANDOFF_CHAIN = "experiments/handoff-chain.json"
 HANDOFF_REASON = "median hand-off latency"
 # runner.infrastructure_failure's text for lost worker slots.
 SLOT_LOSS = "worker slot(s) lost agentd"
 CONTROL_REASON = "control latency"
+# The main profile's chain (decided 2026-10-22, 12:23 London): a short smoke of
+# the frozen code as the gated stage, then the main runs. lab-main's and
+# svc-main's sizes are their files' ``repetitions`` (and lab-main's
+# ``rogue_rates``), marked "SET AFTER THE PILOT" there.
+MAIN_GATED = (("main-smoke", "experiments/main-smoke.json"),)
+MAIN = (
+    ("lab-main", "experiments/lab-main.json"),
+    ("svc-main", "experiments/svc-main.json"),
+)
+
+
+@dataclass(frozen=True)
+class Profile:
+    """A chain: its gated stages, the stages after a passed gate, the stage
+    whose decision logs the control-latency check reads, whether a failed
+    hand-off check runs the A2A-SQLite fallback (its verdict is recorded in
+    either case), and whether a tainted commit after tau_1 fails the gate."""
+
+    gated: tuple[tuple[str, str], ...]
+    after: tuple[tuple[str, str], ...]
+    control_stage: str
+    handoff_fallback: bool
+    tau1_blocking: bool
+
+
+PROFILES = {
+    # The chain of the first evaluation night (unchanged).
+    "pilot": Profile(
+        GATED, PILOTS, CONTROL_STAGE, handoff_fallback=True, tau1_blocking=False
+    ),
+    "main": Profile(
+        MAIN_GATED, MAIN, "main-smoke", handoff_fallback=False, tau1_blocking=True
+    ),
+}
 
 
 def _number(value: Any) -> float:
@@ -123,16 +176,22 @@ def gate(
     rows: Iterable[Mapping[str, Any]],
     control: Mapping[str, Iterable[float]] | None = None,
     control_blocking: bool = True,
+    tau1_blocking: bool = False,
+    control_stage: str = CONTROL_STAGE,
 ) -> dict[str, Any]:
     """The gate's verdict on scored rows (and, when given, the per-site
-    sent-to-confirmed times of the regression stage): ``passed`` and its
+    sent-to-confirmed times of ``control_stage``): ``passed`` and its
     ``reasons``. With ``control_blocking`` False (user decision 2026-10-22,
     00:25 London) the control-latency check is recorded in
-    ``control_latency_verdict`` but does not fail the gate."""
+    ``control_latency_verdict`` but does not fail the gate. Runs with a
+    tainted commit after tau_1 are always listed (``tainted_after_tau1_runs``)
+    and fail the gate with ``tau1_blocking`` (the main profile)."""
     rows = list(rows)
     reasons: list[str] = []
     handoff_reasons: list[str] = []
     control_reasons: list[str] = []
+    # NaN (phase 1 never converged, so no tau_1) counts as none.
+    after_tau1 = [r["run_id"] for r in rows if _number(r.get("tainted_after_tau1")) > 0]
     bad_status = [
         f"{r['run_id']}: {r.get('status')}"
         for r in rows
@@ -162,6 +221,9 @@ def gate(
     ]
     if testbed:
         reasons.append(f"testbed failures in {testbed}")
+    if after_tau1 and tau1_blocking:
+        # Theorem: once phase 1 has converged no tainted effect commits.
+        reasons.append(f"{TAU1_REASON} in {after_tau1}")
     restarts = int(sum(_number(r.get("slot_restarts")) for r in rows))
     if restarts > GATE["max_slot_restarts"]:
         reasons.append(
@@ -181,7 +243,7 @@ def gate(
         if not summary:
             control_reasons.append(
                 f"{CONTROL_REASON}: no control command was confirmed in the "
-                f"{CONTROL_STAGE} stage, so L = {bound:.0f} ms is unchecked"
+                f"{control_stage} stage, so L = {bound:.0f} ms is unchecked"
             )
         elif over:
             control_reasons.append(
@@ -209,6 +271,9 @@ def gate(
             "reasons": control_reasons,
         },
         "control_sent_to_confirmed_ms": summary,
+        "control_stage": control_stage,
+        "tainted_after_tau1": "blocking" if tau1_blocking else "recorded_not_blocking",
+        "tainted_after_tau1_runs": after_tau1,
         "runs_with_errors": [r["run_id"] for r in rows if _number(r.get("n_errors"))],
         # Not a condition: whether svc's early alert still came before the
         # assistant read the corrupted schedule (1: the early/late distinction
@@ -312,11 +377,28 @@ def _stage(
     return rows
 
 
-def _control_latency(out: Path) -> dict[str, list[float]]:
-    """Per site, the regression stage's sent-to-confirmed times (ms)."""
+def _control_latency(stage_dir: Path) -> dict[str, list[float]]:
+    """Per site, a stage's sent-to-confirmed times (ms)."""
     from .report import control_latency
 
-    return control_latency(out / CONTROL_STAGE)
+    return control_latency(stage_dir)
+
+
+def planned_runs(experiment: str) -> dict[str, Any]:
+    """A stage's size from its file (relative to ``experiments/containment``):
+    runs and repetitions (and rogue rates), as the runner will grid it."""
+    from .runner import Experiment, grid
+
+    path = Path(experiment)
+    if not path.is_absolute() and not path.exists():
+        path = Path(__file__).resolve().parents[1] / experiment
+    loaded = Experiment.load(path)
+    return {
+        "runs": len(grid(loaded)),
+        "repetitions": loaded.repetitions,
+        # None: each instance's own rogue rate.
+        "rogue_rates": list(loaded.rogue_rates) if loaded.rogue_rates else None,
+    }
 
 
 def _handoff_fallback(
@@ -357,14 +439,33 @@ def run_pipeline(
     out: Path,
     a2a_stack: Path | None = None,
     control_blocking: bool = True,
+    profile: str = "pilot",
 ) -> int:
+    chain = PROFILES[profile]
     out.mkdir(parents=True, exist_ok=True)
     (out / "GATE-FAILED").unlink(missing_ok=True)
+    planned = {name: planned_runs(experiment) for name, experiment in chain.after}
+    for name, plan in planned.items():
+        _say(
+            f"{name}: {plan['runs']} runs planned after the gate "
+            f"({plan['repetitions']} repetitions, rogue rates {plan['rogue_rates']})"
+        )
     gated: list[dict[str, Any]] = []
-    for name, experiment in GATED:
+    for name, experiment in chain.gated:
         gated += _stage(stack_path, name, experiment, out)
-    verdict = gate(gated, _control_latency(out), control_blocking=control_blocking)
-    if verdict["passed"] and not verdict["handoff_verdict"]["passed"]:
+    verdict = gate(
+        gated,
+        _control_latency(out / chain.control_stage),
+        control_blocking=control_blocking,
+        tau1_blocking=chain.tau1_blocking,
+        control_stage=chain.control_stage,
+    )
+    verdict["profile"] = profile
+    verdict["planned_after_gate"] = planned
+    if not chain.handoff_fallback:
+        # Recorded only: the per-hop verdict stands, no chain runs.
+        verdict["handoff_fallback"] = "not_run"
+    elif verdict["passed"] and not verdict["handoff_verdict"]["passed"]:
         # The approved fallback decides the recorded hand-off verdict.
         _handoff_fallback(verdict, stack_path, a2a_stack, out)
     verdict["commit_cost_ms"] = commit_cost_ms(out)
@@ -399,7 +500,7 @@ def run_pipeline(
         f"({verdict['handoff_criterion']} criterion)"
         + ("" if handoff["passed"] else ": " + "; ".join(handoff["reasons"]))
     )
-    for name, experiment in PILOTS:
+    for name, experiment in chain.after:
         _stage(stack_path, name, experiment, out)
     _say("done")
     return 0

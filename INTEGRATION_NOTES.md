@@ -2030,3 +2030,55 @@ action. The wait is the harness-side guard against that.
 **Limitation (disclosed).** The monitor is unchanged. An alert whose root
 Core has not ingested within 10 s is still closed as contained with no
 action; `alert_root_wait_ms` of 10 000 or more marks such a run.
+
+### Pipeline main profile (decided 2026-10-22, before the main runs)
+
+`python -m harness pipeline --profile main --stack <lab stack> --out <root>`
+runs the chain for the main runs on the frozen code. The default profile,
+`pilot`, is unchanged (regression and svc-smoke gated, then lab-pilot and
+svc-pilot).
+
+1. **`main-smoke`** (`experiments/main-smoke.json`, 12 runs, about 0.4 h),
+   the gated stage:
+   - C2 early/late × Firebreak, Trace & quarantine, G-Safeguard and No
+     containment (time scale 2);
+   - svc early/late × Firebreak and No containment.
+2. **The gate** on main-smoke. It fails on:
+   - a run that is not complete or quiescent;
+   - a non-zero integrity count;
+   - Firebreak not clean after the alert in a faulted run;
+   - a run with a tainted commit after τ₁ (`tainted_after_tau1` above 0; new,
+     blocking in this profile only, recorded in both as
+     `tainted_after_tau1_runs`);
+   - testbed failures, or more than 3 worker-slot restarts;
+   - a site whose sent-to-confirmed p99 on main-smoke is above L = 400 ms
+     (`--control-latency recorded` still makes this one recorded only).
+
+   Hand-offs are recorded only: the per-hop verdict stands and no A2A-SQLite
+   chain runs (`handoff_fallback: "not_run"`).
+3. **`lab-main`, then `svc-main`**, each scored.
+
+`gate.json` also records `profile`, `control_stage` and
+`planned_after_gate`: the runs, repetitions and rogue rates the pipeline
+read from lab-main's and svc-main's files at its start (also printed).
+
+**Sizes are set after the pilot.** lab-main's and svc-main's `repetitions`
+(and lab-main's `rogue_rates`) are the settings to change. Each file marks
+them with a `repetitions_note` starting "SET AFTER THE PILOT". As committed:
+lab-main 3 repetitions × rogue 0 and 0.3 (966 runs); svc-main 3 repetitions
+(69 runs).
+
+**Proposed sizes** (from the pilot's mean attempt times: c2 99 s, c3 95,
+n2 80, n3 94, rand-n7-s1 119 (also used for s0 and s2), svc 123; lab-pilot
+averaged 92 s per run). One repetition at one rogue rate is 161 runs,
+about 4.1–4.6 h. Rogue 0.3 was not run in the pilot and may take longer.
+
+| option | lab-main | lab-main h | + svc-main 3 reps (2.4 h) and smoke (0.4 h) |
+|---|---|---|---|
+| A: 3 reps, rogue 0 and 0.3 (as committed) | 966 runs | 25–28 | 28–31 h |
+| B: 3 reps, rogue 0 only | 483 runs | 12.3–13.9 | 15–17 h |
+| C: B plus rogue 0.3 on c2 and rand-n7-s1 (a `parts` entry) | 621 runs | 15.9–18.1 | 19–21 h |
+| D: 2 reps, rogue 0 and 0.3 | 644 runs | 16.5–18.5 | 19–21 h |
+
+svc-main at 5 repetitions is 115 runs, about 3.9 h. Retries add to all of
+these (the pilot night needed none).
