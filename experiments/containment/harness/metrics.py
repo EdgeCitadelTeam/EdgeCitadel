@@ -873,6 +873,12 @@ def evaluate(
         effect_id for effect_id, e in effects.items() if any(e is v for v in violations)
     }
     tau1 = tau1_ms(decisions or [], incidents) if t_alert is not None else None
+    if found is not None and meta.get("strategy") == "none":
+        # No containment: the monitor answers a detector alert but enforces
+        # nothing (enforce: false); its convergence check then passes when
+        # the fault burns out, which is no tau_1 (an injected No-containment
+        # run gets none either: no alert reaches the monitor).
+        tau1 = None
     decision = (
         decision_metrics(decisions or [], horizon, incidents)
         if t_alert is not None or found is not None

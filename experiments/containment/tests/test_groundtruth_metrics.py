@@ -745,3 +745,23 @@ def test_injected_alerts_are_labelled_and_still_required(run):
             run.events,
             run.ledger,
         )
+
+
+def test_no_containment_has_no_tau1_after_a_detector_alert(detector_run):
+    """Under No containment the monitor decides but enforces nothing: its
+    convergence record is the fault burning out, not tau_1."""
+    decisions = [detector_decision("i1", "inv:att-A.t0", 2600, 2300), converged(9000)]
+    meta = {
+        "t0_ms": 0,
+        "t_end_ms": 20_000,
+        "status": "complete",
+        "alert": "detector",
+        "strategy": "none",
+    }
+    r = detector_run
+    row = M.evaluate(
+        r.spec, meta, r.events, r.ledger, decisions, boundary=DETECTOR_BOUNDARY
+    )
+    assert row["detected"] == 1 and row["detection_latency_ms"] == pytest.approx(490)
+    assert row["converged"] == 0 and math.isnan(row["tau1_s"])
+    assert math.isnan(row["tainted_after_tau1"])

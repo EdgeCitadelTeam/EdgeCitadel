@@ -2169,6 +2169,9 @@ neither is taken here:
   This changes what the fault classes mean, so the pre-registration is
   amended first.
 
+*Decided later the same day: the harness-only option, as two new fault
+classes beside the old ones. See "Boundary faults the detectors see" below.*
+
 **Alert mode.** `alerts: {"detector": {"event": "none"}}`
 (`AlertTrigger.by_detector`). The alert has no item, task, delay or count.
 For such a cell, whatever the strategy, the runner:
@@ -2243,7 +2246,9 @@ The content of a faulty invocation is labelled faulty for both classes
 (det-worker `CONTENT_FAULTS`). The lineage downstream is therefore tainted as
 in a `wrong_value` run.
 
-**Grid** `experiments/detect-boundary.json`: 42 runs.
+**Grid** `experiments/detect-boundary.json`: 42 runs. *(Superseded: the
+grid now runs the dispatch and deadline faults; see below. The effect-level
+workloads stay in `workloads/`.)*
 - Trace & quarantine, Firebreak and No containment.
 - 3 repetitions.
 - The oos workloads, plus a part with the runaway workloads. A no-fault
@@ -2403,3 +2408,142 @@ Firebreak's 48 runs include the 8 C2 freeze ablations.
 - From the event at its node to the monitor's receipt: median 132 ms, p90
   382 ms, max 1.16 s. The first alert per run: median 122 ms, p90 185 ms.
 - From receipt to the first decision: median 15 ms, max 85 ms.
+
+### Boundary faults the detectors see: `out_of_scope_dispatch` and `deadline_runaway` (decided 2026-10-22, harness only)
+
+**Decision.** The user chose the harness-only option (relayed by the
+coordinator, 2026-10-22):
+- two new fault classes;
+- `out_of_scope_effect` and `lease_runaway` unchanged in meaning;
+- no change to the monitor or agentd.
+
+**Realizations.** Both are in the det-worker and deterministic. The faulty
+invocation's content is faulty too, as for the other boundary faults.
+- **`out_of_scope_dispatch`** (`target_agent`).
+  - With its outputs, the faulty invocation also hands its result, as an
+    undeclared message, to an agent outside its grant.
+  - agentd refuses it at admission: `dispatch/denied permission_denied`
+    (reply `not_authorized`). The monitor's `admission_denied` reads it.
+  - The declared hand-offs go out as usual, so the faulty content is in
+    flight when the alert comes.
+- **`deadline_runaway`** (`deadline_factor` 1.5, `overrun_factor` 3).
+  - The dispatcher gives the faulty task a deadline of 1.5 × its planned
+    compute, counted from its start dispatch. This is `deadline_s` in
+    `compile_plan`. The pending creation fixes `deadline_at_ms` once, so a
+    resumed dispatch repeats the identical request.
+  - The task outputs and hands on its work on time, then does not return.
+    Left alone it would run to 3 × its compute.
+  - agentd's reconciler expires it at the deadline (`task/expired`, reason
+    `deadline_expired`, within about 1 s). The monitor's `lease_violation`
+    reads it.
+  - The runtime then cancels the handler. The worker event is `cancelled` and
+    there is no `end`, so such a run ends `quiescent`.
+- **Validation.**
+  - `target_agent` names an agent outside the origin's grant.
+  - A deadline runaway is a created task, with
+    1 < `deadline_factor` < `overrun_factor`.
+
+**Workloads**, on the main grid's faulty invocations, so the fault's lineage
+is lab-main's:
+
+| workload | faulty invocation | parameters |
+|---|---|---|
+| `c2-oos-dispatch` | `L1.a` (tars-l1; granted tars, tars-l1, tars-l2) | `target_agent: case-l2` (the other team's actuator agent) |
+| `c2-deadline` | `L1.a` | `deadline_factor: 1.5` (9 spec s), `overrun_factor: 3` |
+| `rand-n7-s1-oos-dispatch` | `a4.s0.t1` (a4; granted a1, a3, a4, a5, a6) | `target_agent: a2` (the other team's coordinator) |
+| `rand-n7-s1-deadline` | `a4.s0.t1` | `deadline_factor: 1.5` (14.1 spec s), `overrun_factor: 3` |
+
+**One scorer rule.** Under No containment, a detector-triggered run has no
+τ₁: `tau1_s` and `tainted_after_tau1` are NaN and `converged` is 0.
+- The monitor answers the alert but enforces nothing (`enforce: false`).
+- Its convergence record then marks the fault burning out (22–29 s after the
+  alert in the dry run), not containment.
+- An injected No-containment run has no τ₁ either.
+
+Injected runs are unaffected: the 462 pilot runs still re-score identically.
+
+**Dry run.**
+- **Setup.** Local, `dryrun-nats`, at 7d41b0e, scored by this commit's
+  scorer. 12 runs: each new workload under Trace & quarantine (T&Q),
+  Firebreak and No containment, 1 repetition.
+- **Every run was detected on the fault's lineage.** The first detector
+  alert named the faulty invocation itself in 12/12 runs (`root_correct` 1 in
+  12/12). No other detector incident opened inside any run.
+- **Testbed retries.** Two rand-n7-s1-deadline runs needed the harness's
+  testbed retry: worker slots lost agentd on this 2-vCPU VM, as before. Their
+  scored attempts are clean.
+
+| workload | strategy | detector (reason) | violation → alert | alert → decision | alert → τ₁ | clean after alert | tainted after τ₁ | kept (compute) | at risk |
+|---|---|---|---|---|---|---|---|---|---|
+| c2-oos-dispatch | T&Q | admission_denied (permission_denied) | 163 ms | 0.018 s | – | 1 | – | 87% | 6 |
+| c2-oos-dispatch | Firebreak | admission_denied (permission_denied) | 342 ms | 0.064 s | 0.54 s | 1 | 0 | 100% | 6 |
+| c2-oos-dispatch | None | admission_denied (permission_denied) | 314 ms | 0.062 s | – | 0 | – | 100% | 6 |
+| c2-deadline | T&Q | lease_violation (deadline_expired) | 54 ms | 0.048 s | – | 1 | – | 100% | 4 |
+| c2-deadline | Firebreak | lease_violation (deadline_expired) | 164 ms | 0.015 s | 1.04 s | 1 | 0 | 100% | 4 |
+| c2-deadline | None | lease_violation (deadline_expired) | 905 ms | 0.037 s | – | 0 | – | 100% | 4 |
+| rand-n7-s1-oos-dispatch | T&Q | admission_denied (permission_denied) | 504 ms | 0.067 s | – | 1 | – | 0% | 2 |
+| rand-n7-s1-oos-dispatch | Firebreak | admission_denied (permission_denied) | 466 ms | 0.158 s | 1.60 s | 1 | 0 | 37% | 3 |
+| rand-n7-s1-oos-dispatch | None | admission_denied (permission_denied) | 356 ms | 0.100 s | – | 0 | – | 100% | 2 |
+| rand-n7-s1-deadline | T&Q | lease_violation (deadline_expired) | 123 ms | 0.042 s | – | 1 | – | 0% | 1 |
+| rand-n7-s1-deadline | Firebreak | lease_violation (deadline_expired) | 168 ms | 0.027 s | 0.07 s | 1 | 0 | 0% | 1 |
+| rand-n7-s1-deadline | None | lease_violation (deadline_expired) | 893 ms | 0.031 s | – | 0 | – | 100% | 1 |
+
+- **Latency (violation → alert).**
+  - Range 54–905 ms, median 0.33 s.
+  - Dispatch: 163–504 ms, median 349 ms.
+  - Deadline: 54–905 ms, median 166 ms. Its two values near 0.9 s are both
+    No-containment runs.
+  - A deadline violation counts from agentd's expiry record, so the
+    reconciler's lag behind the deadline itself is not in it.
+- **Decision.** 15–158 ms after the alert.
+- **τ₁.** Firebreak's came 0.07–1.6 s after the alert. Trace & quarantine is
+  not a two-phase strategy and records none, as in the pilot.
+- **Containment.**
+  - `clean_after_alert`: Firebreak 4/4, T&Q 4/4, No containment 0/4 (2 tainted
+    protected commits each).
+  - Firebreak's `tainted_after_tau1` is 0 in 4/4.
+- **Kept work.** Firebreak ≥ T&Q in 4/4 matched runs.
+  - On rand-n7-s1 the detection comes 49–58 s into the run. Only 1–3 normal
+    tasks were still at risk, so its kept fractions are coarse.
+  - Under No containment nothing is stopped: 100 %.
+
+**Grid** `experiments/detect-boundary.json`, re-pointed.
+- **Instances.** `c2-oos-dispatch` and `rand-n7-s1-oos-dispatch`, with the
+  no-fault references. A part runs `c2-deadline` and `rand-n7-s1-deadline`
+  without references, which would repeat the same no-fault workloads.
+- **Settings.** Same strategies, 3 repetitions, lab-main's settings.
+- **Size.** 2 × 3 × 4 + 2 × 3 × 3 = **42 runs**.
+- **Lab time.** The dry run's attempt times are close to the pilot's: c2 87–97
+  s and rand 101–110 s per attempt here. At the pilot's c2 ≈ 100 s and
+  rand-n7-s1 ≈ 120 s, 21 × 100 + 21 × 120 s ≈ 77 min, about **1.3 h**, plus
+  retries.
+- **Effect-level workloads.** The four stay in `workloads/` but leave the
+  grid.
+
+**H13** (draft, rewritten for these classes):
+- **H13a**, detection on both boundaries: every faulted run is detected on
+  the faulty invocation. The median latency is ≤ 500 ms per class, and every
+  run is ≤ 1.5 s.
+- **H13b**, containment and safety after the detector alert: decision, τ₁,
+  `clean_after_alert`, `tainted_after_tau1`, kept work against T&Q, and root.
+- **H13c**, the effect-level limitation: blocked at the gateway, with no
+  incident. Stated, not tested.
+
+**Tests.**
+- `test_spec`:
+  - the new classes' validation;
+  - the dispatcher's deadline in the plan;
+  - the eight detector workloads.
+- `test_det_worker`:
+  - the out-of-scope hand-off goes out once, with the outputs, carrying
+    faulty content;
+  - the deadline runaway's start dispatch carries its deadline, fixed once;
+  - the task hands on its work, then runs until cancelled.
+- `test_det_worker_runtime`, on a real agentd:
+  - agentd refuses the hand-off (`not_authorized`) while the declared
+    hand-offs go out;
+  - agentd expires the runaway, which is cancelled between its deadline and
+    its runaway's end.
+- `test_groundtruth_metrics`: No containment has no τ₁ after a detector
+  alert.
+- `test_runner`: the grid's 42 runs are the two new classes.

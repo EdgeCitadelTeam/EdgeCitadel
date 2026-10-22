@@ -1,9 +1,9 @@
 {
   "name": "detect-boundary",
-  "note": "Detector-triggered runs (answers 'the alert is an oracle'): no alert is injected; the monitor's own boundary detectors (admission_denied, lease_violation) are the only alert source. One workload per boundary fault class on C2 and rand-n7-s1: out_of_scope_effect (the faulty invocation attempts an actuator class it was never granted) and, in the part, lease_runaway (an actuating invocation keeps actuating past its lease's effect quota). Trace & quarantine, Firebreak and No containment, 3 repetitions, plus one no-fault reference per base workload and repetition (a false-alarm control; the part's would repeat them): 2 x 3 x 4 + 2 x 3 x 3 = 42 runs, about 1.3 h at the pilot's per-run times (c2 about 100 s, rand-n7-s1 about 120 s). Profile, latency (native L = 400 ms), time scale, timeouts and root_wait_s as lab-main (root_wait_s has no effect here: no alert is posted). Scored by the same scorer: alert_source 'detector', detected, detection_latency_ms, and the decision and tau_1 timings from the detector alert.",
+  "note": "Detector-triggered runs (answers 'the alert is an oracle'): no alert is injected; the monitor's own boundary detectors are the only alert source. One workload per detectable boundary fault on C2 and rand-n7-s1, each on the main grid's faulty invocation (L1.a, a4.s0.t1): out_of_scope_dispatch (it also hands its result to an agent outside its grant: agentd denies it, permission_denied, read by admission_denied) and, in the part, deadline_runaway (it hands on its work, then runs past the 1.5 x compute deadline its dispatcher set: agentd expires it, deadline_expired, read by lease_violation). Trace & quarantine, Firebreak and No containment, 3 repetitions, plus one no-fault reference per base workload and repetition (a false-alarm control; the part would repeat them): 2 x 3 x 4 + 2 x 3 x 3 = 42 runs. Profile, latency (native L = 400 ms), time scale, timeouts and root_wait_s as lab-main (root_wait_s has no effect: no alert is posted). The effect-level variants (c2-oos, c2-runaway, rand-n7-s1-oos, rand-n7-s1-runaway) stay in workloads/ but not in this grid: their violations are refused at the gateway and open no incident (H13c). Scored by the same scorer: alert_source 'detector', detected, detection_latency_ms, and the decision and tau_1 timings from the detector alert.",
   "instances": [
-    "../workloads/c2-oos.json",
-    "../workloads/rand-n7-s1-oos.json"
+    "../workloads/c2-oos-dispatch.json",
+    "../workloads/rand-n7-s1-oos-dispatch.json"
   ],
   "strategies": [
     "trace_and_quarantine",
@@ -49,8 +49,8 @@
   "parts": [
     {
       "instances": [
-        "../workloads/c2-runaway.json",
-        "../workloads/rand-n7-s1-runaway.json"
+        "../workloads/c2-deadline.json",
+        "../workloads/rand-n7-s1-deadline.json"
       ],
       "reference": false
     }

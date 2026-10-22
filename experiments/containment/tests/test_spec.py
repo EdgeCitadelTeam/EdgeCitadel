@@ -220,14 +220,18 @@ def test_boundary_faults_must_reach_their_boundary(fault, message):
 
 
 def test_the_detector_workloads_reach_their_boundaries():
-    """The detect-boundary grid's workloads: alert left to the detectors, and
-    each fault reaches its boundary (validated on load)."""
+    """The detector workloads: alert left to the detectors, and each fault
+    reaches its boundary (validated on load)."""
     root = S.Path(__file__).resolve().parents[1] / "workloads"
     for name, cls in (
         ("c2-oos", "out_of_scope_effect"),
         ("rand-n7-s1-oos", "out_of_scope_effect"),
         ("c2-runaway", "lease_runaway"),
         ("rand-n7-s1-runaway", "lease_runaway"),
+        ("c2-oos-dispatch", "out_of_scope_dispatch"),
+        ("rand-n7-s1-oos-dispatch", "out_of_scope_dispatch"),
+        ("c2-deadline", "deadline_runaway"),
+        ("rand-n7-s1-deadline", "deadline_runaway"),
     ):
         spec = S.load(root / f"{name}.json")
         assert spec.fault.cls == cls and list(spec.alerts) == ["detector"]

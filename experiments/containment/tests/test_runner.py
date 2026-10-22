@@ -650,7 +650,7 @@ def test_only_a_detector_triggered_run_collects_the_boundary_records(tmp_path):
 
 def test_the_detector_grid_has_its_planned_size():
     """No alert injected: Trace & quarantine, Firebreak and No containment on
-    one workload per boundary fault class, 3 repetitions, one no-fault
+    one workload per detectable boundary fault, 3 repetitions, one no-fault
     reference per base workload and repetition; otherwise as lab-main."""
     root = runner.Path(__file__).resolve().parents[1] / "experiments"
     loaded = runner.Experiment.load(root / "detect-boundary.json")
@@ -658,6 +658,11 @@ def test_the_detector_grid_has_its_planned_size():
     assert len(cells) == 2 * 3 * 4 + 2 * 3 * 3 == 42
     faulted = [c for c in cells if c.strategy != "reference"]
     assert all(runner.detector_triggered(runner.cell_spec(c), c) for c in faulted)
+    # The boundary faults the detectors can see (not the effect-level ones).
+    assert {runner.cell_spec(c).fault.cls for c in faulted} == {
+        "out_of_scope_dispatch",
+        "deadline_runaway",
+    }
     assert {c.strategy for c in faulted} == {
         "firebreak",
         "trace_and_quarantine",
