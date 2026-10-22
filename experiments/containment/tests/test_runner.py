@@ -498,12 +498,41 @@ def test_the_main_and_comparison_grids_wait_for_the_root():
     # The pilot grids keep what the lab runs now (no wait).
     for name in ("regression", "svc-smoke", "lab-pilot", "svc-pilot"):
         assert runner.Experiment.load(root / f"{name}.json").root_wait_s == 0.0
-    sizes = {
-        name: len(runner.grid(runner.Experiment.load(root / f"{name}.json")))
-        for name in ("main-smoke", "svc-main")
+    # C2 early/late x 4 strategies and svc early/late x 2, once each.
+    smoke = runner.grid(runner.Experiment.load(root / "main-smoke.json"))
+    assert len(smoke) == 2 * 4 + 2 * 2 == 12
+
+
+def test_the_main_grids_have_the_decided_sizes_and_their_own_run_ids():
+    """Decided 2026-10-22 about 13:30 London: lab-main option C, svc-main 5
+    repetitions. Their run ids name the rogue rate, so they never share an id
+    with a pilot-chain run."""
+    root = runner.Path(__file__).resolve().parents[1] / "experiments"
+
+    def cells(name: str) -> list:
+        return runner.grid(runner.Experiment.load(root / f"{name}.json"))
+
+    lab, svc = cells("lab-main"), cells("svc-main")
+    # 7 instances x (reference + 2 alerts x 11 strategies) x 3 repetitions at
+    # rogue 0, plus C2 and rand-n7-s1 at rogue 0.3; svc-pilot's 23 cells x 5.
+    assert len(lab) == 7 * 23 * 3 + 2 * 23 * 3 == 621
+    assert {runner.Path(c.instance).stem for c in lab if c.rogue_rate == 0.3} == {
+        "c2",
+        "rand-n7-s1",
     }
-    # C2 early/late x 4 strategies and svc early/late x 2, once each; svc-main
-    # is svc-pilot's grid (23 cells) at its repetitions (set after the pilot).
-    assert sizes["main-smoke"] == 2 * 4 + 2 * 2 == 12
-    svc_main = runner.Experiment.load(root / "svc-main.json")
-    assert sizes["svc-main"] == 23 * svc_main.repetitions
+    assert len([c for c in lab if c.rogue_rate == 0.0]) == 483
+    assert len(svc) == 23 * 5 == 115
+    pilot_chain = {
+        c.run_id
+        for name in (
+            "regression",
+            "svc-smoke",
+            "lab-pilot",
+            "svc-pilot",
+            "handoff-chain",
+        )
+        for c in cells(name)
+    }
+    main = {c.run_id for c in lab + svc}
+    assert len(main) == len(lab) + len(svc) and not main & pilot_chain
+    assert all("__p0" in run_id for run_id in main)

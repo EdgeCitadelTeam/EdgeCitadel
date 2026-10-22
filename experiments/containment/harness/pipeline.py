@@ -385,19 +385,24 @@ def _control_latency(stage_dir: Path) -> dict[str, list[float]]:
 
 
 def planned_runs(experiment: str) -> dict[str, Any]:
-    """A stage's size from its file (relative to ``experiments/containment``):
-    runs and repetitions (and rogue rates), as the runner will grid it."""
+    """A stage's size from its file (relative to ``experiments/containment``),
+    as the runner will grid it: runs, repetitions and the runs per rogue rate
+    (``"own"``: the instance's own rate, no rate in the run id)."""
     from .runner import Experiment, grid
 
     path = Path(experiment)
     if not path.is_absolute() and not path.exists():
         path = Path(__file__).resolve().parents[1] / experiment
     loaded = Experiment.load(path)
+    cells = grid(loaded)
+    per_rate: dict[str, int] = {}
+    for cell in cells:
+        rate = "own" if cell.rogue_rate is None else f"{cell.rogue_rate:g}"
+        per_rate[rate] = per_rate.get(rate, 0) + 1
     return {
-        "runs": len(grid(loaded)),
+        "runs": len(cells),
         "repetitions": loaded.repetitions,
-        # None: each instance's own rogue rate.
-        "rogue_rates": list(loaded.rogue_rates) if loaded.rogue_rates else None,
+        "runs_per_rogue_rate": per_rate,
     }
 
 
@@ -448,7 +453,8 @@ def run_pipeline(
     for name, plan in planned.items():
         _say(
             f"{name}: {plan['runs']} runs planned after the gate "
-            f"({plan['repetitions']} repetitions, rogue rates {plan['rogue_rates']})"
+            f"({plan['repetitions']} repetitions; runs per rogue rate "
+            f"{plan['runs_per_rogue_rate']})"
         )
     gated: list[dict[str, Any]] = []
     for name, experiment in chain.gated:

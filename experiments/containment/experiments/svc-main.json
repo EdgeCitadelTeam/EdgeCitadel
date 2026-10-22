@@ -1,6 +1,6 @@
 {
   "name": "svc-main",
-  "note": "Main svc runs (H8/H9): every strategy x early/late plus the no-fault reference, deployed profile with the adaptive phase 1, request_value 1.0; 23 runs per repetition. The early alert fires on the schedule's produce event (amendment 2026-10-21); the alert waits up to 10 s for Core to know the faulty invocation (root_wait_s).",
+  "note": "Main svc runs (H8/H9): every strategy x early/late plus the no-fault reference, deployed profile with the adaptive phase 1, request_value 1.0; 23 runs per repetition, 5 repetitions: 115 runs. The early alert fires on the schedule's produce event (amendment 2026-10-21); the alert waits up to 10 s for Core to know the faulty invocation (root_wait_s). The explicit rogue rate 0.0 (svc's own) puts __p0 in every run id, so these runs never share an id with svc-pilot's.",
   "instances": [
     "../workloads/svc.json"
   ],
@@ -47,8 +47,11 @@
   "quiet_s": 8,
   "timeout_factor": 3.0,
   "timeout_extra_s": 90,
-  "repetitions": 3,
-  "repetitions_note": "SET AFTER THE PILOT (2026-10-22 about 16:00 London): repetitions per cell; 23 runs and about 0.8 h per repetition at the pilot's 123 s per svc run.",
+  "repetitions": 5,
+  "repetitions_note": "Decided by the user 2026-10-22 about 13:30 London (after the pilot's run times): 5 repetitions, 115 runs, about 3.9 h.",
+  "rogue_rates": [
+    0.0
+  ],
   "phase1_modes": [
     "adaptive"
   ],

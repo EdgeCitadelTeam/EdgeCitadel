@@ -2059,26 +2059,39 @@ svc-pilot).
 3. **`lab-main`, then `svc-main`**, each scored.
 
 `gate.json` also records `profile`, `control_stage` and
-`planned_after_gate`: the runs, repetitions and rogue rates the pipeline
+`planned_after_gate`: the runs, repetitions and runs per rogue rate the pipeline
 read from lab-main's and svc-main's files at its start (also printed).
 
-**Sizes are set after the pilot.** lab-main's and svc-main's `repetitions`
-(and lab-main's `rogue_rates`) are the settings to change. Each file marks
-them with a `repetitions_note` starting "SET AFTER THE PILOT". As committed:
-lab-main 3 repetitions × rogue 0 and 0.3 (966 runs); svc-main 3 repetitions
-(69 runs).
+**Sizes (decided by the user 2026-10-22, about 13:30 London).** The
+`repetitions` and `rogue_rates` in lab-main's and svc-main's files, with a
+`repetitions_note` recording the decision:
 
-**Proposed sizes** (from the pilot's mean attempt times: c2 99 s, c3 95,
-n2 80, n3 94, rand-n7-s1 119 (also used for s0 and s2), svc 123; lab-pilot
-averaged 92 s per run). One repetition at one rogue rate is 161 runs,
-about 4.1–4.6 h. Rogue 0.3 was not run in the pilot and may take longer.
+| grid | design | runs |
+|---|---|---|
+| main-smoke | unchanged (above) | 12 |
+| lab-main | option C: the full grid, 3 repetitions at rogue 0.0 (483), plus a `parts` entry with rogue 0.3 on C2 and rand-n7-s1, 3 repetitions (138) | 621 |
+| svc-main | svc-pilot's grid, 5 repetitions at svc's rogue 0.0 | 115 |
 
-| option | lab-main | lab-main h | + svc-main 3 reps (2.4 h) and smoke (0.4 h) |
-|---|---|---|---|
-| A: 3 reps, rogue 0 and 0.3 (as committed) | 966 runs | 25–28 | 28–31 h |
-| B: 3 reps, rogue 0 only | 483 runs | 12.3–13.9 | 15–17 h |
-| C: B plus rogue 0.3 on c2 and rand-n7-s1 (a `parts` entry) | 621 runs | 15.9–18.1 | 19–21 h |
-| D: 2 reps, rogue 0 and 0.3 | 644 runs | 16.5–18.5 | 19–21 h |
+Expected hours, from the pilot's mean attempt times (c2 99 s, c3 95, n2 80,
+n3 94, rand-n7-s1 119, also used for s0 and s2; svc 123; lab-pilot averaged
+92 s per run):
+- main-smoke about 0.4 h;
+- lab-main 15.9–18.1 h (rogue 0: 12.3–13.9 h; rogue 0.3: 3.5–4.2 h, which may
+  run longer, since the pilot did not run rogue 0.3);
+- svc-main about 3.9 h;
+- the whole chain about 20–22.5 h, plus scoring, and retries if any (the
+  pilot night needed none).
 
-svc-main at 5 repetitions is 115 runs, about 3.9 h. Retries add to all of
-these (the pilot night needed none).
+The other options considered, at the same rates (lab-main runs; whole chain
+with svc-main at 3 repetitions): A, 3 repetitions × rogue 0 and 0.3 (966;
+28–31 h); B, 3 repetitions at rogue 0 only (483; 15–17 h); D, 2 repetitions ×
+rogue 0 and 0.3 (644; 19–21 h).
+
+**Run ids.** Both main grids set their rogue rates explicitly (svc-main's
+0.0 is svc's own rate, so its specs are unchanged). Every run id then carries
+the rate (`c2__p0__early__…`, `c2__p0.3__…`, `svc__p0__…`), so no lab-main or
+svc-main run shares an id with a run of the pilot chain (regression,
+svc-smoke, lab-pilot, svc-pilot, handoff-chain), whose ids carry none.
+main-smoke is unchanged and shares its 12 ids with regression's C2 cells. It
+runs into its own directory, and the `experiment` column tells them apart in
+merged tables.

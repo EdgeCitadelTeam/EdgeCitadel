@@ -1,6 +1,6 @@
 {
   "name": "lab-main",
-  "note": "Main runs: the 7 workloads x 11 strategies x early/late plus the no-fault reference, at each rogue rate, deployed profile with the adaptive phase 1; the alert waits up to 10 s for Core to know the faulty invocation (root_wait_s). Repetitions and rogue rates are set after the pilot (see repetitions_note).",
+  "note": "Main runs: the 7 workloads x 11 strategies x early/late plus the no-fault reference, deployed profile with the adaptive phase 1, 3 repetitions at rogue rate 0.0; the part adds rogue rate 0.3 on C2 and rand-n7-s1 (3 repetitions). 483 + 138 = 621 runs. The alert waits up to 10 s for Core to know the faulty invocation (root_wait_s). The explicit rogue rates put __p0 / __p0.3 in every run id, so these runs never share an id with lab-pilot's.",
   "instances": [
     "../workloads/c2.json",
     "../workloads/n2.json",
@@ -36,11 +36,10 @@
     }
   ],
   "repetitions": 3,
-  "repetitions_note": "SET AFTER THE PILOT (2026-10-22 about 16:00 London): repetitions (and rogue_rates). 322 runs and about 9.3 h per repetition with rogue rates [0.0, 0.3] at the pilot's run times; 161 runs and about 4.6 h per repetition at rogue 0 only.",
+  "repetitions_note": "Decided by the user 2026-10-22 about 13:30 London (option C, after the pilot's run times): 3 repetitions at rogue 0.0 on the full grid, plus rogue 0.3 on C2 and rand-n7-s1 (parts), 621 runs, about 16-18 h.",
   "time_scale": 2.0,
   "rogue_rates": [
-    0.0,
-    0.3
+    0.0
   ],
   "reference": true,
   "quiet_s": 8,
@@ -61,5 +60,16 @@
   "receding_during_waits": [
     false
   ],
-  "root_wait_s": 10.0
+  "root_wait_s": 10.0,
+  "parts": [
+    {
+      "instances": [
+        "../workloads/c2.json",
+        "../workloads/rand-n7-s1.json"
+      ],
+      "rogue_rates": [
+        0.3
+      ]
+    }
+  ]
 }

@@ -410,11 +410,17 @@ def test_the_main_profile_gates_the_smoke_then_runs_lab_main_and_svc_main(
     assert verdict["tainted_after_tau1"] == "blocking"
     planned = verdict["planned_after_gate"]
     assert set(planned) == {"lab-main", "svc-main"}
-    # 7 instances x (reference + 2 alerts x 11 strategies) per repetition and
-    # rogue rate; svc-pilot's 23 cells per repetition.
-    lab, svc = planned["lab-main"], planned["svc-main"]
-    assert lab["runs"] == 7 * 23 * lab["repetitions"] * len(lab["rogue_rates"])
-    assert svc["runs"] == 23 * svc["repetitions"]
+    # The sizes decided 2026-10-22 (option C; svc-main 5 repetitions).
+    assert planned["lab-main"] == {
+        "runs": 621,
+        "repetitions": 3,
+        "runs_per_rogue_rate": {"0": 483, "0.3": 138},
+    }
+    assert planned["svc-main"] == {
+        "runs": 115,
+        "repetitions": 5,
+        "runs_per_rogue_rate": {"0": 115},
+    }
 
 
 def test_the_main_gate_blocks_on_tau1_and_control_latency(tmp_path, monkeypatch):
@@ -457,10 +463,6 @@ def test_the_main_smoke_and_the_main_grids_as_decided():
         "svc": {(s, a) for s in ("firebreak", "none") for a in ("early", "late")},
     }
     assert len(cells) == 12
-    # The repetitions are set after the pilot, in the files, clearly marked.
-    for name in ("lab-main", "svc-main"):
-        document = json.loads((root / "experiments" / f"{name}.json").read_text())
-        assert document["repetitions_note"].startswith("SET AFTER THE PILOT")
     assert [n for n, _ in pipeline.PROFILES["main"].after] == ["lab-main", "svc-main"]
 
 
