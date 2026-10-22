@@ -39,7 +39,7 @@ for a trigger without a reader) and the monitor's root-cause ranking picks.
 Latency settings that inject more than the measured LAN round trip between
 sites (``measured_rtt_ms``, 4 ms on the lab testbed), or plan with a control
 latency L above the measured bound on a control action's sent-to-confirmed
-time (``measured_control_ms``, 150 ms on the lab testbed: the native L of
+time (``measured_control_ms``, 400 ms on the lab testbed: the native L of
 every lab grid), are stress settings and must say so in their name;
 ``latency_regime`` records it per run.
 Collected into ``<out>/runs/<run_id>/``: ``run.json`` (identity, times,
@@ -92,12 +92,15 @@ SYMPTOM_LOOKUP_S = 5.0
 ROOT_MODES = ("given", "ranked")
 MEASURED_RTT_MS = netem.MEASURED_RTT_MS
 # The monitor's planning control latency L must bound a control action's
-# decide-to-enforced time (theory). Approved 2026-10-21: 150 ms for every site
-# in the native regime, over the pre-M7 lab's sent_to_confirmed (p50 18 ms,
-# p95 82 ms, max 124 ms); the pipeline's gate checks every site's p99 against
-# it on the regression stage. The earlier 4 ms (the LAN round trip) was below
-# all of them.
-MEASURED_CONTROL_MS = 150.0
+# decide-to-enforced time (theory). Decided 2026-10-22 12:23 London: 400 ms for
+# every site in the native regime, the measured upper bound with margin. The
+# first evaluation night's regression measured sent-to-confirmed per site at
+# p50 45-58 ms, p99 187 (core), 329 (edge-1), 307 (edge-2) and max 347 ms:
+# commands queued at one node apply one after another, about 50 ms each. That
+# night's runs (the pilot) planned with the earlier 150 ms (2026-10-21, over
+# the pre-M7 lab's p50 18, p95 82, max 124 ms); 4 ms before that. The
+# pipeline's gate checks every site's p99 against it.
+MEASURED_CONTROL_MS = 400.0
 
 
 @dataclass(frozen=True)

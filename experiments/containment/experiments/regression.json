@@ -27,7 +27,7 @@
     {
       "name": "native",
       "control_latency_ms": {
-        "*": 150
+        "*": 400
       }
     }
   ],

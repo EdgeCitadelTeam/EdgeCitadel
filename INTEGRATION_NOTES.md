@@ -1961,3 +1961,39 @@ A2A runs end as before (`test_only_the_langgraph_stack_can_be_busy`).
 `tests/test_langgraph.py`: the LangGraph venv (langgraph 1.2.16 and the
 CLI/API packages) is not installed here. The bundle's README reports 5
 passed in that venv at `93e12ab`.
+
+### Control latency L = 400 ms (decided 2026-10-22, before the main runs)
+
+**Decision** (the user, chat 2026-10-22 12:23 London): the native planning L
+is **400 ms** at every site in every experiment file. It replaces the 150 ms
+of 2026-10-21 and is the measured upper bound with margin.
+- `runner.MEASURED_CONTROL_MS` and `pipeline.GATE["max_control_p99_ms"]`
+  change with it.
+- The stress regimes (L = injected delay = 1000, 3000 or 4000 ms) are
+  unchanged.
+- The control-latency check stays blocking by default
+  (`pipeline --control-latency recorded` remains available).
+
+**Why.** The first evaluation night's regression measured sent→confirmed per
+site above 150 ms (the gate's own figures, 92 runs):
+
+| site | n | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| core | 89 | 45 | 146 | 187 | 187 ms |
+| edge-1 | 155 | 55 | 242 | 329 | 347 ms |
+| edge-2 | 258 | 58 | 257 | 307 | 321 ms |
+
+The tails are bursts: commands queued at one node apply one after another,
+about 50 ms each.
+
+**Pre-registration amendment (disclosed).**
+- L was raised from 150 to 400 ms after the first evaluation night's
+  measurements.
+- The runs of that night (regression, svc-smoke and the pilot) planned with
+  **L = 150 ms**. They are labelled so: every `run.json` and the scorer's
+  `control_latency_ms` column record it.
+- That night the control-latency check was recorded, not gated (7b29e36).
+- **Expected effect:** more conservative timeliness. The adaptive phase 1's
+  margin is now 2 rounds × 400 = 800 ms (300 ms at 150, 8 ms at 4), so the
+  freeze is added more often, possibly with a little less kept work. The
+  safety predictions are unchanged.

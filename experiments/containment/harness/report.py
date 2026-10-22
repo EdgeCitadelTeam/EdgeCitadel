@@ -585,7 +585,7 @@ METRICS = {
 }
 STRESS_NOTE = (
     "stress settings, above the measured control latency "
-    "(L 150 ms; LAN round trip 1.5-4 ms)"
+    "(L 400 ms; LAN round trip 1.5-4 ms)"
 )
 
 

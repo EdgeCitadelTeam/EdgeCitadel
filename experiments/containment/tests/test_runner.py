@@ -159,24 +159,24 @@ def test_latency_above_the_measured_round_trip_must_be_labelled_stress(tmp_path)
 def test_planned_L_is_measured_up_to_the_control_bound_injection_up_to_the_rtt(
     tmp_path,
 ):
-    # The native lab setting: L = 150 ms planned, nothing injected.
+    # The native lab setting: L = 400 ms planned, nothing injected.
     loaded = experiment(
-        tmp_path, latencies=[{"name": "native", "control_latency_ms": {"*": 150}}]
+        tmp_path, latencies=[{"name": "native", "control_latency_ms": {"*": 400}}]
     )
-    assert loaded.measured_control_ms == runner.MEASURED_CONTROL_MS == 150.0
+    assert loaded.measured_control_ms == runner.MEASURED_CONTROL_MS == 400.0
     assert loaded.latencies[0].regime(loaded.measured_rtt_ms) == "measured"
     for latency in (
-        {"name": "native", "control_latency_ms": {"*": 151}},
+        {"name": "native", "control_latency_ms": {"*": 401}},
         {
             "name": "native",
-            "control_latency_ms": {"*": 150},
+            "control_latency_ms": {"*": 400},
             "control_delay_ms": {"*": 5},
         },
     ):
         with pytest.raises(ValueError, match="stress"):
             experiment(tmp_path, latencies=[latency])
     # An unset site plans with the measured bound.
-    assert runner.Latency("x").per_node(["core"]) == {"core": 150.0}
+    assert runner.Latency("x").per_node(["core"]) == {"core": 400.0}
 
 
 def test_netem_profiles_above_the_measured_round_trip_must_be_labelled_stress():

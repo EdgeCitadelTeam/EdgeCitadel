@@ -16,8 +16,9 @@ or ``quiescent``; the scorer's integrity counts (``commits_unlabelled``,
 ``commits_unresolved``, ``commits_label_mismatch``) are 0; it had no testbed
 failure other than lost worker slots (``testbed_failure``); and of all of them
 together: Firebreak was clean after the alert in every faulted run and at most
-3 worker slots were lost. Control latency (approved 2026-10-21): the monitor
-plans with L = 150 ms at every site, which theory needs to bound a control
+3 worker slots were lost. Control latency (approved 2026-10-21; L = 400 ms
+since 2026-10-22, 150 ms before): the monitor plans with L at every site,
+which theory needs to bound a control
 action's decide-to-enforced time; from the regression stage's decision logs
 the gate records every site's sent-to-confirmed p50, p95, p99 and maximum
 (``control_sent_to_confirmed_ms``) and fails when a site's p99 is above L (or
@@ -77,7 +78,7 @@ GATE: dict[str, Any] = {
     "max_handoff_ratio": 3.0,
     # The native planning L (runner.MEASURED_CONTROL_MS): every site's p99
     # sent-to-confirmed on the regression stage must be at most this.
-    "max_control_p99_ms": 150.0,
+    "max_control_p99_ms": 400.0,
 }
 CONTROL_STAGE = "regression"
 HANDOFF_CHAIN = "experiments/handoff-chain.json"

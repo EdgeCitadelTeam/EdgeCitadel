@@ -72,8 +72,9 @@ or part.
 
 Latency settings and netem profiles that inject more than the measured LAN
 round trip (1.5-4 ms between sites), or plan with a control latency L above
-the measured bound on sent-to-confirmed (150 ms, the native L of every lab
-grid since 2026-10-21; the gate checks it), must be labelled ``stress``; the
+the measured bound on sent-to-confirmed (400 ms, the native L of every lab
+grid since 2026-10-22; 150 ms on 2026-10-21; the gate checks it), must be
+labelled ``stress``; the
 runner refuses unlabelled ones and records ``latency_regime`` per run.
 
 Dry run (everything on this machine; from ``experiments/containment``)::

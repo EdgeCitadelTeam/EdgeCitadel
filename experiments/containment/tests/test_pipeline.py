@@ -281,23 +281,23 @@ def test_control_latency_is_read_per_site_from_the_regression_decision_logs(
 
 
 def test_the_gate_fails_when_a_sites_p99_is_above_L():
-    fast = [float(ms) for ms in range(1, 100)] + [124.0]
+    fast = [float(ms) for ms in range(1, 100)] + [347.0]
     verdict = pipeline.gate([row()], {"core": fast, "edge-1": [30.0]})
     assert verdict["passed"]
-    assert verdict["control_latency_ms"] == 150.0
+    assert verdict["control_latency_ms"] == 400.0
     assert verdict["control_sent_to_confirmed_ms"]["core"] == {
         "n": 100,
         "p50": 50.0,
         "p95": 95.0,
         "p99": 99.0,
-        "max": 124.0,
+        "max": 347.0,
     }
-    slow = fast[:-2] + [151.0, 300.0]
+    slow = fast[:-2] + [401.0, 500.0]
     verdict = pipeline.gate([row()], {"core": [10.0], "edge-1": slow})
     assert not verdict["passed"]
     assert verdict["reasons"] == [
-        "control latency: sent-to-confirmed p99 above L = 150 ms at "
-        "{'edge-1': 151.0} (ms), so L is no longer an upper bound"
+        "control latency: sent-to-confirmed p99 above L = 400 ms at "
+        "{'edge-1': 401.0} (ms), so L is no longer an upper bound"
     ]
     verdict = pipeline.gate([row()], {})
     assert not verdict["passed"] and "unchecked" in verdict["reasons"][0]
@@ -305,7 +305,7 @@ def test_the_gate_fails_when_a_sites_p99_is_above_L():
 
 def test_a_control_latency_failure_skips_the_handoff_fallback(tmp_path, monkeypatch):
     ran = staged(monkeypatch, [60.0], [50.0])
-    monkeypatch.setattr(pipeline, "_control_latency", lambda out: {"core": [400.0]})
+    monkeypatch.setattr(pipeline, "_control_latency", lambda out: {"core": [450.0]})
     out = tmp_path / "out"
     assert pipeline.run_pipeline(tmp_path / "ec.json", out, tmp_path / "a.json") == 1
     assert [name for name, _ in ran] == ["regression", "svc-smoke"]
@@ -319,7 +319,7 @@ def test_a_control_latency_failure_skips_the_handoff_fallback(tmp_path, monkeypa
 def test_a_recorded_control_latency_check_lets_the_pilots_run(tmp_path, monkeypatch):
     # User decision 2026-10-22 00:25 London: tonight the check is recorded only.
     ran = staged(monkeypatch, [60.0], [50.0])
-    monkeypatch.setattr(pipeline, "_control_latency", lambda out: {"core": [400.0]})
+    monkeypatch.setattr(pipeline, "_control_latency", lambda out: {"core": [450.0]})
     monkeypatch.setattr(pipeline, "_handoff_fallback", lambda *a, **k: None)
     out = tmp_path / "out"
     code = pipeline.run_pipeline(
@@ -349,7 +349,7 @@ def test_a_recorded_control_latency_check_still_blocks_other_failures():
             "fault": "none",
         }
     ]
-    verdict = pipeline.gate(rows, {"core": [400.0]}, control_blocking=False)
+    verdict = pipeline.gate(rows, {"core": [450.0]}, control_blocking=False)
     assert not verdict["passed"]
     assert all(pipeline.CONTROL_REASON not in r for r in verdict["reasons"])
     assert not verdict["control_latency_verdict"]["passed"]
@@ -366,7 +366,7 @@ def test_every_native_lab_setting_plans_with_the_gated_L():
         for latency in loaded.latencies:
             if latency.name == "native":
                 native += 1
-                assert dict(latency.control_latency_ms) == {"*": 150}, path.name
+                assert dict(latency.control_latency_ms) == {"*": 400}, path.name
                 assert not latency.control_delay_ms, path.name
                 assert latency.regime(loaded.measured_rtt_ms) == "measured"
             else:
