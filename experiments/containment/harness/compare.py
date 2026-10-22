@@ -23,8 +23,12 @@ writes:
   re-executed LangGraph node; the ledger keeps one record per effect, so
   ``violations`` misses them), classified the same way and counted against
   ``clean`` (``clean_after_alert`` and no repeat leak), the rate H10 uses;
-  and ``reexecuted_relabelled``: re-executed tasks whose last execution
-  produced other labels than the first, which the scorer reads;
+  ``reexecuted_relabelled``: re-executed tasks whose last execution
+  produced other labels than the first, which the scorer reads; and
+  ``redone_kept`` / ``kept_cfrac_no_redo``: the at-risk tasks the scorer
+  counts as kept although they were started again after the alert (their
+  work was redone, a cost, not kept), and the compute-weighted kept share
+  without them (``metrics.evaluate``'s sets, same scorer);
 
 - ``compare_summary.csv``: ``report.summarize`` with ``system`` in the cell;
 - ``compare_paired.csv``: ``report.paired`` (Firebreak against every other
@@ -62,7 +66,15 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .groundtruth import fault_seeds, ledger_effects, protected_classes, read_records
+from .groundtruth import (
+    declared_closure,
+    expected_contents,
+    fault_seeds,
+    ledger_effects,
+    protected_classes,
+    read_records,
+)
+from .metrics import completion_times, correct_content
 from .report import paired, score, sign_flip_p, summarize
 from .spec import from_dict
 
@@ -78,6 +90,7 @@ EXTRA = (
     "reexecuted_tasks",
     "reexecuted_relabelled",
     "committed_by_later_attempt",
+    "redone_kept",
 )
 PARTS = {"content": lambda rate: rate == 0.0, "rogue": lambda rate: rate > 0.0}
 STOPS = {"cancelled", "paused"}
@@ -190,7 +203,42 @@ def leak_class(
     return "leak_at_source" if issuer in seeds else "leak_polluted_use"
 
 
-def extra_columns(run_dir: Path) -> dict[str, int]:
+def kept_without_redo(run_dir: Path) -> dict[str, Any]:
+    """``metrics.evaluate``'s kept set, less the tasks started again after the
+    alert: a re-executed task's work was redone, not kept."""
+    meta = json.loads((run_dir / "run.json").read_text())
+    t_alert = meta.get("t_alert_ms")
+    if meta.get("t0_ms") is None or t_alert is None:
+        return {"redone_kept": 0, "kept_cfrac_no_redo": math.nan}
+    spec = from_dict(json.loads((run_dir / "spec.json").read_text()))
+    records = read_records(
+        spec, _jsonl(run_dir / "events.jsonl"), _jsonl(run_dir / "ledger.jsonl")
+    )
+    horizon = float(t_alert)
+    early = {
+        t
+        for t, rec in records.tasks.items()
+        if rec.tainted_at is not None and rec.tainted_at <= horizon
+    }
+    seeds = fault_seeds(spec)
+    tainted = declared_closure(spec, seeds | early) if seeds or early else set()
+    normal = {t.id for t in spec.tasks} - tainted
+    done = completion_times(spec, records)
+    at_risk = {t for t in normal if done[t] is None or done[t] > horizon}
+    correct = correct_content(spec, records, expected_contents(spec))
+    kept = {t for t in at_risk if done[t] is not None and correct[t]}
+    redone = {
+        t
+        for t in kept
+        if len(records.tasks[t].starts) > 1 and max(records.tasks[t].starts) > horizon
+    }
+    weight = {t.id: t.compute for t in spec.tasks}
+    whole = sum(weight[t] for t in at_risk)
+    share = sum(weight[t] for t in kept - redone) / whole if whole else math.nan
+    return {"redone_kept": len(redone), "kept_cfrac_no_redo": share}
+
+
+def extra_columns(run_dir: Path) -> dict[str, Any]:
     starts: Counter[str] = Counter()
     produced: dict[str, dict[str, set[str]]] = defaultdict(dict)  # task -> rt -> labels
     repeats = 0
@@ -209,6 +257,7 @@ def extra_columns(run_dir: Path) -> dict[str, int]:
         "reexecuted_tasks": sum(1 for n in starts.values() if n > 1),
         "reexecuted_relabelled": relabelled,
         **leak_classes(run_dir),
+        **kept_without_redo(run_dir),
     }
 
 
@@ -326,6 +375,7 @@ def h10_table(runs: Any) -> Any:
                 "clean_rate": g[clean_column(g)].astype(float).mean(),
                 "kept_median": kept.median(),
                 "kept_q1": kept.quantile(0.25),
+                "kept_no_redo_median": _median(g, "kept_cfrac_no_redo"),
                 "makespan_median_s": _median(g, "makespan_s"),
                 "makespan_ratio_median": _median(g, "makespan_ratio"),
                 "consumed_at_alert_median": _median(g, "consumed_at_alert"),
