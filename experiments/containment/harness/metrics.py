@@ -649,7 +649,8 @@ def detection(
     Core's ``run/started`` records (``boundary``) to the worker invocation and
     its planned task. The violation is the lineage's first boundary record
     with a ``VIOLATION_REASONS`` reason before the run's end (later ones are
-    the teardown's), or the alert's own event when that is earlier.
+    the teardown's), or the alert's own event when that is earlier; agentd's
+    ``containment/alert`` repeats a lease denial and is not counted again.
     """
     events = list(events)
     boundary = list(boundary)
@@ -675,6 +676,8 @@ def detection(
             (at(b["node_id"], _occurred_ms(b["occurred_at"])), b)
             for b in boundary
             if b.get("reason") in VIOLATION_REASONS
+            # A containment/alert cites the denial it repeats: count that one.
+            and b["kind"] != "containment"
             and _lineage_task(invocations.get(str(b.get("task_id"))), lineage)
         ),
         key=lambda pair: pair[0],

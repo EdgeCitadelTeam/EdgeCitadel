@@ -2127,3 +2127,279 @@ Trace & quarantine is unchanged.
 - a refused push to normal work still leaves the producer incomplete.
 
 **Deployment.** The runner on jim-eq keeps the old scorer while lab-main and svc-main run. The lab session deploys this commit before the comparison grids start, then re-scores lab-pilot, svc-pilot, lab-main and svc-main.
+
+### Detector-triggered runs: grid `detect-boundary` (2026-10-22, harness only)
+
+**Question.** A reviewer says our alerts are an unrealistic oracle. In every
+pilot and main run the harness injects the operator alert at a workload event
+and names the faulty invocation. This grid injects no alert. Only the
+monitor's own boundary detectors can start containment:
+- `admission_denied` (the authority boundary);
+- `lease_violation` (the resource boundary).
+
+**Finding (local, checked first): neither detector fires for the two boundary
+fault classes.** The monitor and agentd are frozen, so this is reported and
+not fixed.
+
+| fault class | what agentd journals at the boundary | what the detector reads | local check (c2, No containment) |
+|---|---|---|---|
+| `out_of_scope_effect` | `effect/denied`, reason `outside_effect_scope` (the gateway's scope check) | `admission_denied`: only `dispatch/denied` with `outside_authority_scope` or `permission_denied` | 3 attempts, 3 denied; decision log empty |
+| `lease_runaway` | `effect/denied` `lease_exceeded`, plus a `containment/alert` (`lease_exceeded`). The invocation runs on and completes. | `lease_violation`: only a run or task that *ended* on a lease reason (session lost, deadline, quota), or a task `expired` | 2 runaway effects committed within the quota; 13 runaway and 2 declared effects denied; decision log empty |
+
+`detectors.detect` has no case for an `effect` event or a `containment/alert`.
+On the frozen design, every faulted `detect-boundary` run is therefore
+expected to be *not detected*. The grid measures exactly that (H13a of the
+draft pre-registration):
+- the detection rate;
+- the boundary violations that went unseen;
+- what each strategy then commits and keeps.
+
+Two ways to make a detector see these faults. Both are design decisions and
+neither is taken here:
+- **Monitor.** Read `effect/denied outside_effect_scope` as
+  `admission_denied`, and `containment/alert lease_exceeded` as
+  `lease_violation`. This changes frozen code.
+- **Harness only (det-worker).** Realize the faults where the detectors
+  already look:
+  - an out-of-scope *dispatch*: a recipient outside the grant gives
+    `dispatch/denied permission_denied`;
+  - a runaway bounded by a deadline: `deadline_at_ms` on its dispatch, which
+    agentd expires as `task/expired deadline_expired`.
+
+  This changes what the fault classes mean, so the pre-registration is
+  amended first.
+
+**Alert mode.** `alerts: {"detector": {"event": "none"}}`
+(`AlertTrigger.by_detector`). The alert has no item, task, delay or count.
+For such a cell, whatever the strategy, the runner:
+- posts no alert, marks no alert time and looks up no root;
+- under a strategy, polls the monitor's status from the start, so
+  `status_at_decision.json` is the snapshot at its first decision;
+- records `root_mode: detector`, because a detector's alert carries no root
+  and the monitor's ranking picks one;
+- after the run, collects `boundary.jsonl` (`python -m harness.coreq boundary`).
+  This file holds Core's `run/started` records, each invocation's attempt. It
+  also holds every denied dispatch or effect, every `containment/alert`, and
+  every run or task end that carries a reason, each on its node's clock.
+
+**Scoring** (`metrics.detection`, `detection_metrics`).
+- **The alert.** It is the first detector alert, in monitor receipt order,
+  whose subject is on the fault's lineage. The lineage is the declared closure
+  from the fault's seeds; a spawned or rogue invocation is on it by
+  construction. The subject is `inv:<attempt>` or `task:<runtime task>`. It
+  maps through `run/started` to the worker invocation and then to its planned
+  task; a pending creation or a delivery maps to its target.
+- **The alert time.** It is the decision's `t_received`, the monitor's clock,
+  which is the services' clock on the controller. The incident that decision
+  opened is the response. `decision_s`, `established`, `time_to_established_s`
+  and `tau1_s` are measured from it, and so are `clean_after_alert`,
+  `tainted_after_tau1` and kept work. Other detector incidents count in
+  `n_detector_decisions`.
+- **The violation.** It is the lineage's first boundary record whose reason is
+  in `VIOLATION_REASONS`, if earlier than the alert's own event:
+  - `outside_authority_scope`, `permission_denied`, `outside_effect_scope`;
+  - `lease_exceeded`, `session_unavailable`, `deadline_expired`,
+    `quota_exceeded`, `expired`.
+
+  Refusals by containment itself (holds, revocations, filters) are not
+  violations. agentd's `containment/alert` repeats the lease denial it cites
+  and is not counted again. Records after the run's end (teardown) are
+  dropped. The
+  violation is timed on its node's clock and shifted onto the services' clock
+  by that node's smallest `t_ms - t_local_ms` over its workers' reports (as
+  `_worker_clock` does per worker).
+- **New columns.** `alert_source` is `injected` or `detector`, on every row;
+  under No containment, `injected` means the harness marked the alert time.
+  `detection_latency_ms` runs from the violation to the alert at the monitor
+  (NaN for injected runs). Detector rows add `detected`, `detector_kind`,
+  `detector_reason`, `detector_task`, `t_violation_s`, `violation_reason`,
+  `violation_task`, `n_violations` and `detector_observed_s`.
+- **Not detected.** A run that no detector alert reached is `detected` 0. The
+  scorer does not fail on it: it scores the run from its start like a
+  reference. `t_alert_s`, `detection_latency_ms`, `clean_after_alert`,
+  `violations` (after the alert), `consumed_at_alert` and the decision and
+  τ₁ timings are NaN. `violations_total` and the violation columns are kept.
+
+**Fault validation.** The boundary faults must reach their boundary:
+- `out_of_scope_effect`: `target_class` is outside the origin agent's effect
+  grant.
+- `lease_runaway`:
+  - the origin is a created task, since only a dispatch carries a lease;
+  - its agent has a protected class to actuate.
+
+No existing workload used either class.
+
+**Workloads** (derived from c2 and rand-n7-s1; only the fault, the alerts and
+the name change):
+
+| workload | faulty invocation | parameters |
+|---|---|---|
+| `c2-oos` | `L1.a` (tars-l1, edge-2), the same invocation as C2's `wrong_value`; it attempts case-l2's actuator at each of its 3 step boundaries | `target_class: act_B2` |
+| `c2-runaway` | `N2` (case-l2, edge-1), an actuating task that keeps actuating while it computes | `rate_hz: 2`, `attempts: 20`, `max_effects: 2` (its subtree's declared effects, the default) |
+| `rand-n7-s1-oos` | `a4.s0.t1` (a4, edge-1), the same invocation as rand-n7-s1's `wrong_value`; it attempts sibling a3's actuator at each of its 5 step boundaries | `target_class: act_a3` |
+| `rand-n7-s1-runaway` | `a4.s2.t0` (a4, edge-1), the actuating task of a4 | `rate_hz: 2`, `attempts: 20`, `max_effects: 1` |
+
+The content of a faulty invocation is labelled faulty for both classes
+(det-worker `CONTENT_FAULTS`). The lineage downstream is therefore tainted as
+in a `wrong_value` run.
+
+**Grid** `experiments/detect-boundary.json`: 42 runs.
+- Trace & quarantine, Firebreak and No containment.
+- 3 repetitions.
+- The oos workloads, plus a part with the runaway workloads. A no-fault
+  reference runs per base workload and repetition only, as a false-alarm
+  control; the part would only repeat it.
+- 2 × 3 × 4 + 2 × 3 × 3 = 42.
+- Otherwise as lab-main: deployed profile, adaptive phase 1, native
+  L = 400 ms, time scale 2, the same quiet period and timeouts, and
+  `root_wait_s: 10`. The root wait has no effect, since no alert is posted.
+- Run ids carry `__p0__detector__`.
+- **Lab time.** At the pilot's mean attempt times (c2 about 100 s, rand-n7-s1
+  about 120 s), 21 × 100 s + 21 × 120 s ≈ 77 min, about **1.3 h**, plus
+  retries if any. The runs are as long as `none` runs, because nothing is
+  contained while nothing is detected.
+- **Run** with `python -m harness run --stack <lab stack> --experiment
+  experiments/detect-boundary.json --out <dir>`, then `python -m harness
+  score --out <dir>`.
+
+**Injected grids unchanged.** The runner changes nothing for a trigger other
+than `none`. The scorer scored all 462 pilot runs identically (lab-pilot,
+svc-pilot and svc-smoke, `PYTHONHASHSEED=0`, at 89a0506 and at this commit):
+same values, same actions rows, plus the two new columns. Without a fixed
+hash seed, kept-compute sums differ in the last bit between any two processes:
+set order changes the summation order.
+
+**Tests.**
+- `test_spec`: the detector alert round-trips and has no trigger; the
+  boundary-fault validation; the four workloads.
+- `test_groundtruth_metrics`, on the lineage:
+  - a detected run: alert time, mapped violation and latency, a normal task's
+    detector incident ignored, agentd's lease alert not counted twice,
+    decision and τ₁ from the alert, root correct;
+  - a not-detected run;
+  - a task-named subject;
+  - injected rows labelled and still requiring their alert time.
+- `test_runner`:
+  - the run loop of a detector-triggered cell (Firebreak and None) posts and
+    marks no alert and snapshots the first decision under a strategy;
+  - only such a run collects `boundary.jsonl`;
+  - `coreq.boundary_record`;
+  - the grid's size and its settings equal to lab-main.
+- `test_report`: a detector-triggered run without an alert time is scored, not
+  failed.
+- `test_pipeline`: 22 native settings, with this grid.
+
+**Dry run** (local).
+- **Setup.**
+  - Stack `dryrun-nats`, on one 2-vCPU VM.
+  - Runs at 01a9b3b, scored by this branch's scorer.
+  - 8 runs, 1 repetition: the C2 variants under all three strategies, the
+    rand-n7-s1 variants under Firebreak.
+- **Run health.** Every run completed, with 0 errors and 0 testbed failures.
+  A C2 run took 87–88 s and a rand run 109 s.
+- **Outputs.** In the session's scratch directory (`detect/dry/out`: `runs.csv`
+  and `runs/*`), not committed.
+
+| workload | strategies | detected | first lineage violation (s after t0) | lineage violations | tainted protected commits | effects denied | kept |
+|---|---|---|---|---|---|---|---|
+| c2-oos | T&Q, Firebreak, None | 0 / 3 | 10.8–12.0 (`outside_effect_scope`) | 3 | 2 | 3 | 100 % |
+| c2-runaway | T&Q, Firebreak, None | 0 / 3 | 9.6–10.5 (`lease_exceeded`) | 15 | 3 | 15 | 100 % |
+| rand-n7-s1-oos | Firebreak | 0 / 1 | 34.9 (`outside_effect_scope`) | 5 | 2 | 5 | 100 % |
+| rand-n7-s1-runaway | Firebreak | 0 / 1 | 25.8 (`lease_exceeded`) | 14 | 2 | 14 | 100 % |
+
+- **No detector alert, so no latency.** No run had a detector alert:
+  `decisions.jsonl` is empty in all 8, so no detection latency exists to
+  report.
+- **Nothing contained.** Firebreak and Trace & quarantine contained nothing,
+  and their outcome equals No containment's. Kept work is measured from the
+  run's start.
+- **What committed.**
+  - The out-of-scope attempts never commit.
+  - The tainted declared effects downstream do commit (`FINAL`, and an
+    actuation).
+  - The runaway's effects within its quota also commit.
+
+**Positive control of the scorer on real records** (scratch, not a grid).
+- **The run.** One C2 Firebreak run with the injected late alert, with Core
+  kept.
+- **Real alerts.** Its teardown raised three real `lease_violation` alerts
+  on held invocations.
+- **Re-scored as if detector-triggered,** over its whole decision log:
+  - The subjects mapped through Core's `run/started` records to
+    `deliver:r_N2->C.agg`, `create:C.agg` and `create:K.agg`, all on the
+    lineage.
+  - The first alert gave `detection_latency_ms` 52, from its own
+    `run/failed session_unavailable`.
+  - It gave `decision_s` 0.053 and `tau1_s` 0.092.
+- **Conclusion.** The mapping and timing path works on real records. What is
+  missing is a detector that fires during a run.
+
+### Side analysis: the pilot's detector incidents (read-only, 2026-10-22)
+
+**Data and method.**
+- **Runs:** lab-pilot, svc-pilot and svc-smoke, 462 runs.
+- **Logs:** each run's whole decision log, *not* cut at the run's end.
+- **Normal work:** the scorer at 89a0506 decides it (the tainted closure at
+  the operator alert).
+- **Actions:**
+  - A detector incident's action is *new* if the operator incident never
+    chose it (same op, kind, object and node).
+  - A task-level action is mapped through the workers' runtime task ids.
+  - An agent-level action covers every task of its agent. Agent-level
+    actions are credential, admission and grant revocations.
+  - 81 egress revocations name authorities, not tasks or agents. They are
+    counted as actions but cannot be mapped.
+- Script: `detect/side/detector_incidents.py` in the session's scratch
+  directory, not committed.
+
+**Findings.**
+- **Incidents.** 1486 `lease_violation` (`session_unavailable`) incidents in
+  277 runs. There were none under No containment and none in the no-fault
+  references.
+- **All of them come after the run's end.**
+  - The first detector decision of a run comes 0.58–9.0 s after `t_end_ms`
+    (median 1.6 s).
+  - The triggering events come 0.5–8.6 s after it.
+  - They are the teardown's. Stopping the workers ends the sessions of
+    invocations that containment left held. A run had them only if it ended
+    with a held or unfinished invocation (254 of the 277 had a held task or
+    pending creation).
+  - No run without such an invocation had one. That is 185 runs, including
+    all 36 No-containment runs.
+  - No incident opened inside any run, although holds lasted tens of
+    seconds. While its worker runs, a held invocation keeps its session.
+- **The monitor did issue additional actions.**
+  - There were 2256 new logical actions in 230 runs, and the nodes confirmed
+    all of them. The nodes were still up while the workers stopped.
+  - They touched normal work: 847 normal task instances in 144 runs, mostly
+    through agent-level admission revocations.
+  - 90 of those tasks were already incomplete at the run's end.
+- **No kept-work cost.**
+  - No normal task completed after a new action was confirmed.
+  - No task completed after `t_end_ms` in any run.
+  - So the cost is 0 tasks in every run and strategy.
+  - The scorer already drops decisions after `t_end_ms`, and so does the
+    control-latency gate.
+
+| strategy | runs | runs with detector incidents | incidents (inside the run) | new actions (confirmed) | runs whose new actions touch normal tasks | normal tasks touched (incomplete at the end) | kept-work cost |
+|---|---|---|---|---|---|---|---|
+| Firebreak | 48 | 40 | 181 (0) | 334 (334) | 34 | 216 (14) | 0 |
+| Trace & quarantine | 40 | 40 | 248 (0) | 213 (213) | 7 | 30 (3) | 0 |
+| Trace & stop | 40 | 40 | 258 (0) | 134 (134) | 9 | 32 (5) | 0 |
+| Greedy cut | 40 | 32 | 174 (0) | 267 (267) | 26 | 184 (9) | 0 |
+| Cut without deadlines | 40 | 30 | 157 (0) | 244 (244) | 26 | 151 (12) | 0 |
+| Stop downstream | 40 | 31 | 187 (0) | 833 (833) | 26 | 146 (40) | 0 |
+| Stop team | 40 | 30 | 155 (0) | 90 (90) | 4 | 20 (1) | 0 |
+| Reject source | 40 | 11 | 38 (0) | 44 (44) | 4 | 26 (0) | 0 |
+| Sink guard | 40 | 5 | 27 (0) | 38 (38) | 4 | 18 (4) | 0 |
+| G-Safeguard | 40 | 18 | 61 (0) | 59 (59) | 4 | 24 (2) | 0 |
+| No containment | 36 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Reference (no fault) | 18 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **all** | 462 | 277 | 1486 (0) | 2256 (2256) | 144 | 847 (90) | 0 |
+
+Firebreak's 48 runs include the 8 C2 freeze ablations.
+
+**Lab prior for H13** (the same 1486 alerts, lab clocks, teardown load):
+- From the event at its node to the monitor's receipt: median 132 ms, p90
+  382 ms, max 1.16 s. The first alert per run: median 122 ms, p90 185 ms.
+- From receipt to the first decision: median 15 ms, max 85 ms.

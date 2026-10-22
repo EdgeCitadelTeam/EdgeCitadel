@@ -635,6 +635,8 @@ DETECTOR_BOUNDARY = [
     boundary("run", "started", None, "B.n", "edge-2", 1100),
     # Containment's own refusal is not a violation, however early.
     boundary("effect", "denied", "execution_held", "A.t0", "edge-1", 1500),
+    # agentd's own lease alert repeats the denial it cites: not counted again.
+    boundary("containment", "alert", "lease_exceeded", "A.t0", "edge-1", 2000),
     # A violation by normal work is not the fault's.
     boundary("dispatch", "denied", "permission_denied", "B.n", "edge-2", 1800),
     boundary("effect", "denied", "outside_effect_scope", "A.t0", "edge-1", 2100),
