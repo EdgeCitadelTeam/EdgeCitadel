@@ -296,3 +296,82 @@ def test_gateway_refuses_effects_outside_the_derived_scope(tmp_path, node, servi
     assert tainted_declared and tainted_declared[0]["labels"] == [
         "fault:out_of_scope_effect:B.n"
     ]
+
+
+def run_mini(tmp_path, node, services, fault: dict, run_id: str, until) -> list:
+    """The mini workload on one real agentd with ``fault``, until ``until(run)``."""
+    run, url = services
+    spec = S.from_dict(mini_document(**fault))
+    spec = replace(spec, placement={site: "core" for site in spec.placement})
+    plan = S.compile_plan(spec, run_id=run_id, time_scale=SCALE)
+    nodectl.install(node, deploy.agent_records(spec)["core"])
+    nodectl.operator(node, ["r"])
+    workers = start_workers(spec, plan, node, url, tmp_path / "workers")
+    try:
+        body = {
+            "protocol": "det-worker.v1",
+            "run": run_id,
+            "t0_ms": int(time.time() * 1000),
+            "kind": "task",
+            "task": "R.plan",
+            "input": None,
+        }
+        submit(node, run, body)
+        until(run)
+    finally:
+        for proc in workers:
+            proc.terminate()
+        for proc in workers:
+            proc.wait(10)
+    return run.events_after(0, 100000)["events"]
+
+
+def test_agentd_denies_a_hand_off_outside_the_grant(tmp_path, node, services):
+    """out_of_scope_dispatch: B.t0 (agent b1, granted r only) also hands its
+    result to a1; agentd refuses it at admission (``permission_denied``,
+    which the monitor's admission_denied detector reads), and the declared
+    hand-offs still go out."""
+    fault = {
+        "class": "out_of_scope_dispatch",
+        "origin": "B.t0",
+        "params": {"target_agent": "a1"},
+    }
+    feed = run_mini(
+        tmp_path,
+        node,
+        services,
+        fault,
+        "it-3",
+        lambda run: wait_for(lambda: events(run, "end", "B.t0"), "B.t0 ended", 60),
+    )
+    sent = [e for e in feed if e["kind"] == "dispatch" and e["task"] == "B.t0"]
+    [refused] = [e for e in sent if e["purpose"] == "out_of_scope"]
+    assert (refused["recipient"], refused["code"]) == ("a1", "not_authorized")
+    assert all(e["code"] is None for e in sent if e["purpose"] != "out_of_scope")
+
+
+def test_agentd_expires_a_deadline_runaway_and_cancels_it(tmp_path, node, services):
+    """deadline_runaway: B.t0 outputs and hands on its work within the 1.5 x
+    compute deadline its dispatcher set, then does not return; agentd expires
+    it at the deadline (``deadline_expired``, which the monitor's
+    lease_violation detector reads) and the runtime cancels the handler."""
+    fault = {"class": "deadline_runaway", "origin": "B.t0"}
+    feed = run_mini(
+        tmp_path,
+        node,
+        services,
+        fault,
+        "it-4",
+        lambda run: wait_for(
+            lambda: events(run, "cancelled", "B.t0"), "B.t0 cancelled", 60
+        ),
+    )
+    by_kind = {e["kind"]: e for e in feed if e["task"] == "B.t0"}
+    assert {"produce", "overrun", "cancelled"} <= set(by_kind)
+    assert "end" not in by_kind
+    assert (
+        by_kind["cancelled"]["reason"] == "cancel" and by_kind["cancelled"]["produced"]
+    )
+    # Cancelled after its deadline (1.5 x 4 spec s), well before its runaway's end.
+    ran = (by_kind["cancelled"]["t_local_ms"] - by_kind["start"]["t_local_ms"]) / 1000
+    assert 1.5 * 4 * SCALE <= ran < 3 * 4 * SCALE

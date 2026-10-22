@@ -33,6 +33,14 @@ Effects are executed by agentd's effect gateway (``effect.execute``), which
 performs them on the run's sink (``det_worker.effects``). A tainted invocation (one whose inputs carry a fault
 label) takes the workload's undeclared in-scope actions at its step boundaries,
 drawn exactly as the simulator draws them.
+
+The faulty invocation of a boundary fault (``harness.spec.Fault``) also
+crosses a runtime boundary, deterministically: an effect class outside its
+grant at each step boundary (``out_of_scope_effect``), effects past its
+lease's quota while it computes (``lease_runaway``), a hand-off of its result
+to an agent outside its grant together with its outputs
+(``out_of_scope_dispatch``), or, its work handed on, no return until well past
+the deadline its dispatcher set (``deadline_runaway``).
 """
 
 from __future__ import annotations
@@ -70,7 +78,14 @@ TRANSPORT_ERRORS = ("agentd is unavailable", "agentd closed the connection")
 RPC_ATTEMPTS = 4
 RPC_RETRY_SECONDS = 0.5
 CONTENT_FAULTS = frozenset(
-    {"wrong_value", "stale_version", "out_of_scope_effect", "lease_runaway"}
+    {
+        "wrong_value",
+        "stale_version",
+        "out_of_scope_effect",
+        "lease_runaway",
+        "out_of_scope_dispatch",
+        "deadline_runaway",
+    }
 )
 
 
@@ -109,6 +124,7 @@ class Invocation:
     outputs: dict[str, Content] = field(default_factory=dict)
     ops: dict[str, Op] = field(default_factory=dict)
     running: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    overrunning: bool = False  # a deadline runaway past its handed-on work
 
 
 @dataclass
@@ -264,6 +280,8 @@ class DetWorker:
         if not inv.produced:
             await self._produce(inv, spec, t0)
         await self._finish_ops(inv, context)
+        if origin and self.fault["class"] == "deadline_runaway":
+            await self._overrun(inv, spec)
         self.state.finished.add(inv.task)
         await self.emit("end", inv, wasted_s=round(inv.wasted_s, 3))
         return {
@@ -395,6 +413,9 @@ class DetWorker:
                     },
                 )
         for child in spec["creates"]:
+            deadline = (
+                {"deadline_s": child["deadline_s"]} if "deadline_s" in child else {}
+            )
             self._add_op(
                 inv,
                 f"create:{child['task']}",
@@ -409,10 +430,35 @@ class DetWorker:
                         "kind": "create",
                         "task": child["task"],
                         "lease": child.get("lease"),
+                        **deadline,
                         "input": {
                             "item": child["item"],
                             "content": inv.outputs[child["item"]],
                         },
+                    },
+                },
+            )
+        if (
+            self.fault["class"] == "out_of_scope_dispatch"
+            and self.fault["origin"] == inv.task
+        ):
+            # The result also goes to an agent outside the grant: as an
+            # undeclared message, it would pollute a live task there.
+            target = str(self.fault["params"]["target_agent"])
+            self._add_op(
+                inv,
+                f"out_of_scope:{target}",
+                "dispatch",
+                {
+                    "recipient": target,
+                    "purpose": "out_of_scope",
+                    "target": target,
+                    "request": {
+                        **base,
+                        "kind": "rogue_msg",
+                        "msg": f"oos:{inv.task}",
+                        "labels": sorted(inv.labels),
+                        "choice": 0.0,
                     },
                 },
             )
@@ -509,6 +555,20 @@ class DetWorker:
                 "rogue", inv, k=k, action="spawn" if spawn else "message", to=target
             )
 
+    async def _overrun(self, inv: Invocation, spec: Mapping[str, Any]) -> None:
+        """Deadline runaway: its outputs, hand-offs and effects are out, but
+        the invocation does not return. Left alone it runs until
+        ``overrun_factor`` times its planned compute from its start (also
+        after a resume); agentd expires it at its deadline first, and the
+        runtime then cancels it."""
+        factor = float(self.fault["params"].get("overrun_factor", 3.0))
+        if not inv.overrunning:
+            inv.overrunning = True
+            await self.emit("overrun", inv, factor=factor)
+        await self._sleep_until(
+            inv.started_ms + factor * spec["compute"] * self.scale * 1000
+        )
+
     def _out_of_scope_attempt(self, inv: Invocation, k: int) -> None:
         target = str(self.fault["params"].get("target_class", "unauthorized"))
         effect_id = f"oos:{inv.task}:{k}"
@@ -589,6 +649,7 @@ class DetWorker:
                 "item": request["input"]["item"],
                 "target": task,
                 "lease": request.get("lease"),
+                "deadline_s": request.get("deadline_s"),
                 "request": {**body, "kind": "task"},
             },
         )
@@ -695,6 +756,12 @@ class DetWorker:
                 return
             p["reserved"] = True
         child = stable_uuid(self.run_id, inv.rt_task, op.key, "child")
+        if p.get("deadline_s") is not None:
+            # Fixed when first sent: a repeated dispatch (a resumed
+            # invocation) must carry the identical request.
+            p.setdefault(
+                "deadline_at_ms", now_ms() + int(p["deadline_s"] * self.scale * 1000)
+            )
         params: dict[str, Any] = {
             "schema_version": 1,
             "request_id": stable_uuid(self.run_id, inv.rt_task, op.key, "dispatch"),
@@ -703,7 +770,7 @@ class DetWorker:
             "recipient_id": p["recipient"],
             "request": json.dumps(p["request"], separators=(",", ":")),
             "skill_id": SKILL_ID,
-            "deadline_at_ms": None,
+            "deadline_at_ms": p.get("deadline_at_ms"),
         }
         if p.get("lease"):
             params["lease"] = p["lease"]

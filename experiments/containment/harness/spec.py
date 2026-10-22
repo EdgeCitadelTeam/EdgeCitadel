@@ -85,6 +85,8 @@ FAULT_CLASSES = (
     "stale_version",
     "out_of_scope_effect",
     "lease_runaway",
+    "out_of_scope_dispatch",
+    "deadline_runaway",
     "message_delay",
     "message_duplicate",
 )
@@ -171,7 +173,25 @@ class Fault:
     """``cls`` in FAULT_CLASSES; ``item`` for item faults, ``origin`` otherwise.
 
     ``params``: ``delay_s``/``stale_after_s`` (message_delay), ``rate_hz`` and
-    ``max_effects`` (lease_runaway), ``target_class`` (out_of_scope_effect).
+    ``max_effects`` (lease_runaway), ``target_class`` (out_of_scope_effect),
+    ``target_agent`` (out_of_scope_dispatch), ``deadline_factor`` and
+    ``overrun_factor`` (deadline_runaway).
+
+    The boundary faults, each by the faulty (origin) invocation, whose content
+    is faulty too:
+
+    - ``out_of_scope_effect``: attempts an effect class outside its grant at
+      every step boundary (agentd's gateway refuses it);
+    - ``lease_runaway``: actuates past its lease's effect quota (the gateway
+      refuses the excess);
+    - ``out_of_scope_dispatch``: with its outputs, also hands its result to
+      ``target_agent``, an agent outside its grant (agentd denies the
+      dispatch, ``permission_denied``);
+    - ``deadline_runaway``: its dispatcher gives it a deadline of
+      ``deadline_factor`` (1.5) times its planned compute; it hands on its
+      work on time but does not return, running on to ``overrun_factor`` (3)
+      times its compute, so agentd expires it at the deadline
+      (``deadline_expired``).
     """
 
     cls: str
@@ -758,16 +778,36 @@ def _validate_fault(spec: Spec, derived: Derived) -> None:
     # behaviour to detect: an attempted class outside the origin's grant, and
     # a lease (only a created task carries one) on an agent with a protected
     # class to actuate.
+    origin = str(fault.origin)
     if fault.cls == "out_of_scope_effect":
-        agent = spec.task(str(fault.origin)).agent
+        agent = spec.task(origin).agent
         if fault.params.get("target_class") in derived.effect_grant[agent]:
             raise SpecError("fault.params.target_class: inside the origin's scope")
-    if fault.cls == "lease_runaway":
-        origin = str(fault.origin)
+    if fault.cls == "out_of_scope_dispatch":
+        target = fault.params.get("target_agent")
+        if target not in {a.id for a in spec.agents}:
+            raise SpecError("fault.params.target_agent: must name an agent")
+        if target in derived.grants[spec.task(origin).agent]:
+            raise SpecError("fault.params.target_agent: inside the origin's grant")
+    if fault.cls in {"lease_runaway", "deadline_runaway"}:
+        # Only a dispatched task carries a lease or a deadline.
         if derived.creation[origin].dispatcher is None:
-            raise SpecError("fault.origin: a lease runaway needs a created task")
+            raise SpecError(f"fault.origin: a {fault.cls} needs a created task")
+    if fault.cls == "lease_runaway":
         if not derived.scope_classes[spec.task(origin).agent]:
             raise SpecError("fault.origin: its agent has no protected class to actuate")
+    if fault.cls == "deadline_runaway":
+        deadline = _number(
+            fault.params.get("deadline_factor", 1.5), "fault.params.deadline_factor"
+        )
+        overrun = _number(
+            fault.params.get("overrun_factor", 3.0), "fault.params.overrun_factor"
+        )
+        if not 1.0 < deadline < overrun:
+            raise SpecError(
+                "fault.params: need 1 < deadline_factor < overrun_factor "
+                "(the work fits its deadline, the runaway passes it)"
+            )
     if fault.cls == "message_delay":
         _number(fault.params.get("delay_s"), "fault.params.delay_s", positive=True)
 
@@ -1124,6 +1164,11 @@ def compile_plan(
                     "max_effects", _subtree_effects(derived, child)
                 )
                 entry["lease"] = {"max_effects": int(budget)}
+            if child == origin and fault.cls == "deadline_runaway":
+                # The dispatcher's deadline: a margin over the planned compute
+                # (spec seconds, from its start dispatch).
+                factor = float(fault.params.get("deadline_factor", 1.5))
+                entry["deadline_s"] = factor * spec.task(child).compute
             creates.append(entry)
         tasks[t.id] = {
             "agent": t.agent,

@@ -667,3 +667,78 @@ async def test_unprotected_classes_and_unmapped_classes_take_their_own_path(tmp_
         "network.http",
         "actuator://act_b/E_B",
     )
+
+
+@pytest.mark.asyncio
+async def test_an_out_of_scope_dispatch_goes_out_with_the_outputs(tmp_path):
+    """The faulty invocation hands its result to an agent outside its grant
+    (agentd denies it; this fake runtime only records it), once, together
+    with its declared hand-offs."""
+    spec = spec_with(
+        **{
+            "class": "out_of_scope_dispatch",
+            "origin": "B.t0",
+            "params": {"target_agent": "a1"},
+        }
+    )
+    expected = G.expected_contents(spec)
+    services = LocalServices(tmp_path)
+    worker = worker_for(spec, "b1", services)
+    await land_x(worker, expected["X@v1"])
+    runtime = FakeRuntime(services)
+    _, state = await worker.handle(
+        envelope("t-b", b_request(expected)), context(runtime)
+    )
+    assert state == "completed"
+    label = fault_label("out_of_scope_dispatch", "B.t0")
+    [sent] = [d for d in runtime.dispatches.values() if d["recipient_id"] == "a1"]
+    body = json.loads(sent["request"])
+    assert (body["kind"], body["labels"]) == ("rogue_msg", [label])
+    [event] = [e for e in services.events("dispatch") if e["purpose"] == "out_of_scope"]
+    assert event["target"] == "a1" and event["code"] is None
+    # Its own content is faulty, as for the other boundary faults.
+    assert {tuple(e["labels"]) for e in services.events("produce")} == {(label,)}
+
+
+@pytest.mark.asyncio
+async def test_a_deadline_runaway_hands_on_its_work_then_does_not_return(tmp_path):
+    """Its dispatcher's start dispatch carries the deadline (1.5 x its compute
+    by default, fixed once); the task outputs and hands on its work, then runs
+    on until the runtime cancels it (agentd expires it at the deadline)."""
+    spec = spec_with(**{"class": "deadline_runaway", "origin": "B.t0"})
+    expected = G.expected_contents(spec)
+    services = LocalServices(tmp_path)
+    worker = worker_for(spec, "b1", services)
+    [create] = [
+        c
+        for c in S.compile_plan(spec, run_id="run-1", time_scale=SCALE)["tasks"][
+            "R.plan"
+        ]["creates"]
+        if c["task"] == "B.t0"
+    ]
+    assert create["deadline_s"] == pytest.approx(1.5 * spec.task("B.t0").compute)
+    runtime = FakeRuntime(services)
+    given = {"item": "dB", "content": expected["dB"]}
+    body = request("create", task="B.t0", input=given, lease=None, deadline_s=6.0)
+    services.event({"kind": "delivered", "target": "B.t0", "item": "X@v1", "rt": "d"})
+    before = time.time() * 1000
+    _, state = await worker.handle(envelope("p-b", body), context(runtime))
+    assert state == "completed"
+    [started] = runtime.dispatches.values()
+    deadline = started["deadline_at_ms"]
+    assert before + 6.0 * SCALE * 1000 <= deadline <= time.time() * 1000 + 300
+    # The runaway itself: its work is out, then it keeps running.
+    await land_x(worker, expected["X@v1"])
+    ctx = context(runtime)
+    running = asyncio.create_task(
+        worker.handle(envelope("t-b", b_request(expected)), ctx)
+    )
+    await wait_for(lambda: services.events("overrun"))
+    assert services.events("produce") and not running.done()
+    assert any(d["recipient_id"] == "r" for d in runtime.dispatches.values())
+    ctx.interruption = "cancel"
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert [e["kind"] for e in services.events()][-1] == "cancelled"
+    assert all(e["task"] != "B.t0" for e in services.events("end"))

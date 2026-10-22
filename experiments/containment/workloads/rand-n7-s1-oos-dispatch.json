@@ -1,0 +1,837 @@
+{
+ "spec_version": 1,
+ "name": "rand-n7-s1-oos-dispatch",
+ "agents": [
+  {
+   "id": "r",
+   "parent": null,
+   "site": "s_R",
+   "label": "R"
+  },
+  {
+   "id": "a1",
+   "parent": "r",
+   "site": "s_a1",
+   "label": "a1"
+  },
+  {
+   "id": "a2",
+   "parent": "r",
+   "site": "s_a2",
+   "label": "a2"
+  },
+  {
+   "id": "a3",
+   "parent": "a1",
+   "site": "s_a3",
+   "label": "a3"
+  },
+  {
+   "id": "a4",
+   "parent": "a1",
+   "site": "s_a4",
+   "label": "a4"
+  },
+  {
+   "id": "a5",
+   "parent": "a2",
+   "site": "s_a5",
+   "label": "a5"
+  },
+  {
+   "id": "a6",
+   "parent": "a2",
+   "site": "s_a6",
+   "label": "a6"
+  }
+ ],
+ "placement": {
+  "s_R": "core",
+  "s_a1": "edge-1",
+  "s_a4": "edge-1",
+  "s_a3": "edge-1",
+  "s_a2": "edge-2",
+  "s_a6": "edge-2",
+  "s_a5": "edge-2"
+ },
+ "effect_classes": [
+  {
+   "id": "final",
+   "site": "s_R",
+   "min_delay": 0.2,
+   "protected": true
+  },
+  {
+   "id": "act_a3",
+   "site": "s_a3",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a4",
+   "site": "s_a4",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a5",
+   "site": "s_a5",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a6",
+   "site": "s_a6",
+   "min_delay": 0.5,
+   "protected": true
+  }
+ ],
+ "tasks": [
+  {
+   "id": "R.plan",
+   "agent": "r",
+   "session": "s:R",
+   "compute": 2.032350564895022,
+   "reads": [
+    "task"
+   ]
+  },
+  {
+   "id": "a1.plan",
+   "agent": "a1",
+   "session": "s:a1",
+   "compute": 1.4893687691857667
+  },
+  {
+   "id": "a2.plan",
+   "agent": "a2",
+   "session": "s:a2",
+   "compute": 2.7757437315704254
+  },
+  {
+   "id": "a3.s0.t0",
+   "agent": "a3",
+   "session": "a3:s0",
+   "compute": 4.534893889586638,
+   "reads": [
+    "in:a3.s0.t0"
+   ]
+  },
+  {
+   "id": "a3.s1.t0",
+   "agent": "a3",
+   "session": "a3:s1",
+   "compute": 6.286436502618193,
+   "reads": [
+    "in:a3.s1.t0",
+    "o:a5.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a3.s2.t0",
+   "agent": "a3",
+   "session": "a3:s2",
+   "compute": 8.963809136997634,
+   "reads": [
+    "in:a3.s2.t0",
+    "o:a5.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a3.s2.t1",
+   "agent": "a3",
+   "session": "a3:s2",
+   "compute": 4.390159754973285,
+   "reads": [
+    "o:a4.s1.t0@v1"
+   ]
+  },
+  {
+   "id": "a3.s2.t2",
+   "agent": "a3",
+   "session": "a3:s2",
+   "compute": 4.667549539204237
+  },
+  {
+   "id": "a4.s0.t0",
+   "agent": "a4",
+   "session": "a4:s0",
+   "compute": 5.358772669126606,
+   "reads": [
+    "in:a4.s0.t0"
+   ]
+  },
+  {
+   "id": "a4.s0.t1",
+   "agent": "a4",
+   "session": "a4:s0",
+   "compute": 9.431010943005578,
+   "reads": [
+    "o:a6.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a4.s1.t0",
+   "agent": "a4",
+   "session": "a4:s1",
+   "compute": 2.118594913179988,
+   "reads": [
+    "in:a4.s1.t0",
+    "o:a5.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a4.s2.t0",
+   "agent": "a4",
+   "session": "a4:s2",
+   "compute": 7.103903212641438,
+   "reads": [
+    "in:a4.s2.t0",
+    "o:a6.s1.t0@v1"
+   ]
+  },
+  {
+   "id": "a5.s0.t0",
+   "agent": "a5",
+   "session": "a5:s0",
+   "compute": 5.10570066870685,
+   "reads": [
+    "in:a5.s0.t0"
+   ]
+  },
+  {
+   "id": "a5.s0.t1",
+   "agent": "a5",
+   "session": "a5:s0",
+   "compute": 5.382432101266325,
+   "reads": [
+    "o:a5.s0.t0@v1",
+    "o:a3.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a5.s0.t2",
+   "agent": "a5",
+   "session": "a5:s0",
+   "compute": 3.4480089582168563,
+   "reads": [
+    "o:a3.s1.t0@v1"
+   ]
+  },
+  {
+   "id": "a5.s1.t0",
+   "agent": "a5",
+   "session": "a5:s1",
+   "compute": 9.112913489818196,
+   "reads": [
+    "in:a5.s1.t0"
+   ]
+  },
+  {
+   "id": "a5.s1.t1",
+   "agent": "a5",
+   "session": "a5:s1",
+   "compute": 5.411416537117694,
+   "reads": [
+    "o:a4.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a5.s2.t0",
+   "agent": "a5",
+   "session": "a5:s2",
+   "compute": 6.250877082625619,
+   "reads": [
+    "in:a5.s2.t0"
+   ]
+  },
+  {
+   "id": "a5.s2.t1",
+   "agent": "a5",
+   "session": "a5:s2",
+   "compute": 6.2533105273104495,
+   "reads": [
+    "o:a3.s2.t0@v1",
+    "o:a4.s0.t1@v1"
+   ]
+  },
+  {
+   "id": "a6.s0.t0",
+   "agent": "a6",
+   "session": "a6:s0",
+   "compute": 8.231693871556248,
+   "reads": [
+    "in:a6.s0.t0"
+   ]
+  },
+  {
+   "id": "a6.s1.t0",
+   "agent": "a6",
+   "session": "a6:s1",
+   "compute": 4.813284914019554,
+   "reads": [
+    "in:a6.s1.t0"
+   ]
+  },
+  {
+   "id": "a6.s2.t0",
+   "agent": "a6",
+   "session": "a6:s2",
+   "compute": 5.704457771030778,
+   "reads": [
+    "in:a6.s2.t0"
+   ]
+  },
+  {
+   "id": "a6.s2.t1",
+   "agent": "a6",
+   "session": "a6:s2",
+   "compute": 2.8330942717073673
+  },
+  {
+   "id": "a6.s2.t2",
+   "agent": "a6",
+   "session": "a6:s2",
+   "compute": 6.376841541999829,
+   "reads": [
+    "o:a4.s0.t1@v1"
+   ]
+  },
+  {
+   "id": "R.agg",
+   "agent": "r",
+   "session": "s:R",
+   "compute": 3.0286248506186837
+  },
+  {
+   "id": "a1.agg",
+   "agent": "a1",
+   "session": "s:a1",
+   "compute": 1.36910947429246
+  },
+  {
+   "id": "a2.agg",
+   "agent": "a2",
+   "session": "s:a2",
+   "compute": 3.0559693703562263
+  }
+ ],
+ "external_inputs": [
+  "task",
+  "in:a3.s0.t0",
+  "in:a3.s1.t0",
+  "in:a3.s2.t0",
+  "in:a4.s0.t0",
+  "in:a4.s1.t0",
+  "in:a4.s2.t0",
+  "in:a5.s0.t0",
+  "in:a5.s1.t0",
+  "in:a5.s2.t0",
+  "in:a6.s0.t0",
+  "in:a6.s1.t0",
+  "in:a6.s2.t0"
+ ],
+ "artifacts": [
+  {
+   "id": "o:a3.s0.t0@v1",
+   "producer": "a3.s0.t0"
+  },
+  {
+   "id": "o:a3.s1.t0@v1",
+   "producer": "a3.s1.t0"
+  },
+  {
+   "id": "o:a3.s2.t0@v1",
+   "producer": "a3.s2.t0"
+  },
+  {
+   "id": "o:a3.s2.t1@v1",
+   "producer": "a3.s2.t1"
+  },
+  {
+   "id": "o:a3.s2.t2@v1",
+   "producer": "a3.s2.t2"
+  },
+  {
+   "id": "o:a4.s0.t0@v1",
+   "producer": "a4.s0.t0"
+  },
+  {
+   "id": "o:a4.s0.t1@v1",
+   "producer": "a4.s0.t1"
+  },
+  {
+   "id": "o:a4.s1.t0@v1",
+   "producer": "a4.s1.t0"
+  },
+  {
+   "id": "o:a4.s2.t0@v1",
+   "producer": "a4.s2.t0"
+  },
+  {
+   "id": "o:a5.s0.t0@v1",
+   "producer": "a5.s0.t0"
+  },
+  {
+   "id": "o:a5.s0.t1@v1",
+   "producer": "a5.s0.t1"
+  },
+  {
+   "id": "o:a5.s0.t2@v1",
+   "producer": "a5.s0.t2"
+  },
+  {
+   "id": "o:a5.s1.t0@v1",
+   "producer": "a5.s1.t0"
+  },
+  {
+   "id": "o:a5.s1.t1@v1",
+   "producer": "a5.s1.t1"
+  },
+  {
+   "id": "o:a5.s2.t0@v1",
+   "producer": "a5.s2.t0"
+  },
+  {
+   "id": "o:a5.s2.t1@v1",
+   "producer": "a5.s2.t1"
+  },
+  {
+   "id": "o:a6.s0.t0@v1",
+   "producer": "a6.s0.t0"
+  },
+  {
+   "id": "o:a6.s1.t0@v1",
+   "producer": "a6.s1.t0"
+  },
+  {
+   "id": "o:a6.s2.t0@v1",
+   "producer": "a6.s2.t0"
+  },
+  {
+   "id": "o:a6.s2.t1@v1",
+   "producer": "a6.s2.t1"
+  },
+  {
+   "id": "o:a6.s2.t2@v1",
+   "producer": "a6.s2.t2"
+  }
+ ],
+ "messages": [
+  {
+   "id": "d:a1",
+   "sender": "R.plan",
+   "receiver": "a1.plan",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a2",
+   "sender": "R.plan",
+   "receiver": "a2.plan",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a3.s0.t0",
+   "sender": "a1.plan",
+   "receiver": "a3.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a3.s1.t0",
+   "sender": "a1.plan",
+   "receiver": "a3.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a3.s2.t0",
+   "sender": "a1.plan",
+   "receiver": "a3.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a4.s0.t0",
+   "sender": "a1.plan",
+   "receiver": "a4.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a4.s1.t0",
+   "sender": "a1.plan",
+   "receiver": "a4.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a4.s2.t0",
+   "sender": "a1.plan",
+   "receiver": "a4.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a5.s0.t0",
+   "sender": "a2.plan",
+   "receiver": "a5.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a5.s1.t0",
+   "sender": "a2.plan",
+   "receiver": "a5.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a5.s2.t0",
+   "sender": "a2.plan",
+   "receiver": "a5.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a6.s0.t0",
+   "sender": "a2.plan",
+   "receiver": "a6.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a6.s1.t0",
+   "sender": "a2.plan",
+   "receiver": "a6.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a6.s2.t0",
+   "sender": "a2.plan",
+   "receiver": "a6.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a3.s0.t0",
+   "sender": "a3.s0.t0",
+   "receiver": "a1.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a3.s1.t0",
+   "sender": "a3.s1.t0",
+   "receiver": "a1.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a3.s2.t2",
+   "sender": "a3.s2.t2",
+   "receiver": "a1.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a4.s0.t1",
+   "sender": "a4.s0.t1",
+   "receiver": "a1.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a4.s1.t0",
+   "sender": "a4.s1.t0",
+   "receiver": "a1.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a4.s2.t0",
+   "sender": "a4.s2.t0",
+   "receiver": "a1.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a5.s0.t2",
+   "sender": "a5.s0.t2",
+   "receiver": "a2.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a5.s1.t1",
+   "sender": "a5.s1.t1",
+   "receiver": "a2.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a5.s2.t1",
+   "sender": "a5.s2.t1",
+   "receiver": "a2.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a6.s0.t0",
+   "sender": "a6.s0.t0",
+   "receiver": "a2.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a6.s1.t0",
+   "sender": "a6.s1.t0",
+   "receiver": "a2.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a6.s2.t2",
+   "sender": "a6.s2.t2",
+   "receiver": "a2.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a1",
+   "sender": "a1.agg",
+   "receiver": "R.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a2",
+   "sender": "a2.agg",
+   "receiver": "R.agg",
+   "latency": 0.1
+  }
+ ],
+ "effects": [
+  {
+   "id": "E:a3.s0.t0",
+   "issuer": "a3.s0.t0",
+   "class": "act_a3",
+   "delay": 2.8223139888557807
+  },
+  {
+   "id": "E:a3.s2.t2",
+   "issuer": "a3.s2.t2",
+   "class": "act_a3",
+   "delay": 2.313662780951716
+  },
+  {
+   "id": "E:a4.s2.t0",
+   "issuer": "a4.s2.t0",
+   "class": "act_a4",
+   "delay": 3.1644532227498052
+  },
+  {
+   "id": "E:a5.s1.t1",
+   "issuer": "a5.s1.t1",
+   "class": "act_a5",
+   "delay": 3.3922127426629087
+  },
+  {
+   "id": "E:a6.s0.t0",
+   "issuer": "a6.s0.t0",
+   "class": "act_a6",
+   "delay": 2.469080561386775
+  },
+  {
+   "id": "E:a6.s2.t2",
+   "issuer": "a6.s2.t2",
+   "class": "act_a6",
+   "delay": 2.541314989562911
+  },
+  {
+   "id": "FINAL",
+   "issuer": "R.agg",
+   "class": "final",
+   "delay": 0.5
+  }
+ ],
+ "fault": {
+  "class": "out_of_scope_dispatch",
+  "origin": "a4.s0.t1",
+  "params": {
+   "target_agent": "a2"
+  }
+ },
+ "alerts": {
+  "detector": {
+   "event": "none"
+  }
+ },
+ "rogue": {
+  "rate": 0.0,
+  "p_eff": 0.5,
+  "extra_delay": 1.5,
+  "p_spawn": 1.0,
+  "seed": 0,
+  "dyn_steps": 3,
+  "dyn_step_len": 2.0,
+  "new_inv_step": 0.5,
+  "max_dyn": 200
+ },
+ "read_lat": 0.1,
+ "sim": {
+  "site_L": {
+   "s_R": 0.4454332631632198,
+   "s_a1": 0.6374299706714469,
+   "s_a2": 0.4038522378878968,
+   "s_a3": 0.9482360182262537,
+   "s_a4": 0.34682605198975813,
+   "s_a5": 0.293560570818662,
+   "s_a6": 0.3591187419284279
+  },
+  "net_lat": [
+   [
+    "r",
+    "r",
+    0.0
+   ],
+   [
+    "r",
+    "a1",
+    0.1
+   ],
+   [
+    "r",
+    "a2",
+    0.1
+   ],
+   [
+    "r",
+    "a3",
+    0.2
+   ],
+   [
+    "r",
+    "a4",
+    0.2
+   ],
+   [
+    "r",
+    "a5",
+    0.2
+   ],
+   [
+    "r",
+    "a6",
+    0.2
+   ],
+   [
+    "a1",
+    "r",
+    0.1
+   ],
+   [
+    "a1",
+    "a1",
+    0.0
+   ],
+   [
+    "a1",
+    "a3",
+    0.1
+   ],
+   [
+    "a1",
+    "a4",
+    0.1
+   ],
+   [
+    "a1",
+    "a5",
+    0.8
+   ],
+   [
+    "a1",
+    "a6",
+    0.8
+   ],
+   [
+    "a2",
+    "r",
+    0.1
+   ],
+   [
+    "a2",
+    "a2",
+    0.0
+   ],
+   [
+    "a2",
+    "a3",
+    0.8
+   ],
+   [
+    "a2",
+    "a4",
+    0.8
+   ],
+   [
+    "a2",
+    "a5",
+    0.1
+   ],
+   [
+    "a2",
+    "a6",
+    0.1
+   ],
+   [
+    "a3",
+    "a1",
+    0.1
+   ],
+   [
+    "a3",
+    "a5",
+    0.9
+   ],
+   [
+    "a4",
+    "a1",
+    0.1
+   ],
+   [
+    "a4",
+    "a3",
+    0.2
+   ],
+   [
+    "a4",
+    "a5",
+    0.9
+   ],
+   [
+    "a4",
+    "a6",
+    0.9
+   ],
+   [
+    "a5",
+    "a2",
+    0.1
+   ],
+   [
+    "a5",
+    "a3",
+    0.9
+   ],
+   [
+    "a5",
+    "a4",
+    0.9
+   ],
+   [
+    "a6",
+    "a2",
+    0.1
+   ],
+   [
+    "a6",
+    "a4",
+    0.9
+   ]
+  ],
+  "new_inv_step": 0.5,
+  "t_alert": 22.870799111027274,
+  "workflow": "rand-n7-p0.5-s0.5-seed1"
+ },
+ "source": {
+  "kind": "sim",
+  "scenario": "random",
+  "params": {
+   "n_agents": 7,
+   "seed": 1,
+   "p_share": 0.5,
+   "sigma": 0.5,
+   "consumed": 0.5,
+   "fault_seed": 1
+  },
+  "variant_of": "rand-n7-s1"
+ }
+}

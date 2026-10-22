@@ -245,3 +245,63 @@ def test_the_detector_workloads_reach_their_boundaries():
             assert create["lease"] == {
                 "max_effects": S._subtree_effects(S.derive(spec), origin)
             }
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        # b1 may hand off to r: that dispatch is inside its grant.
+        (
+            {
+                "class": "out_of_scope_dispatch",
+                "origin": "B.t0",
+                "params": {"target_agent": "r"},
+            },
+            "inside the origin's grant",
+        ),
+        (
+            {
+                "class": "out_of_scope_dispatch",
+                "origin": "B.t0",
+                "params": {"target_agent": "nobody"},
+            },
+            "must name an agent",
+        ),
+        ({"class": "deadline_runaway", "origin": "R.plan"}, "created task"),
+        (
+            {
+                "class": "deadline_runaway",
+                "origin": "B.t0",
+                "params": {"deadline_factor": 3.0, "overrun_factor": 2.0},
+            },
+            "deadline_factor < overrun_factor",
+        ),
+        (
+            {
+                "class": "deadline_runaway",
+                "origin": "B.t0",
+                "params": {"deadline_factor": 0.8},
+            },
+            "deadline_factor < overrun_factor",
+        ),
+    ],
+)
+def test_dispatch_and_deadline_faults_must_reach_their_boundary(fault, message):
+    with pytest.raises(S.SpecError, match=message):
+        load(mini_document(**fault))
+
+
+def test_a_deadline_runaway_gets_its_deadline_from_its_dispatcher():
+    spec = load(
+        mini_document(
+            **{
+                "class": "deadline_runaway",
+                "origin": "B.t0",
+                "params": {"deadline_factor": 2.0},
+            }
+        )
+    )
+    plan = S.compile_plan(spec, run_id="r1", time_scale=1.0)
+    creates = {c["task"]: c for c in plan["tasks"]["R.plan"]["creates"]}
+    assert creates["B.t0"]["deadline_s"] == 2.0 * 4.0
+    assert "deadline_s" not in creates["B.n"] and "lease" not in creates["B.t0"]
