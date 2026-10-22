@@ -41,5 +41,6 @@
       "time_scale": 1.0,
       "quiet_s": 4
     }
-  ]
+  ],
+  "root_wait_s": 10.0
 }

@@ -1997,3 +1997,36 @@ about 50 ms each.
   margin is now 2 rounds × 400 = 800 ms (300 ms at 150, 8 ms at 4), so the
   freeze is added more often, possibly with a little less kept work. The
   safety predictions are unchanged.
+
+### Root wait in the main and comparison grids (decided 2026-10-22, harness only)
+
+**Decision** (the user, chat 2026-10-22 12:23 London): every grid run after
+the pilot sets `root_wait_s: 10`. These are lab-main, svc-main, main-smoke,
+compare-ec, compare-a2a, overhead, compare-langgraph, timing-langgraph and
+dryrun-langgraph-c2. The pilot grids (regression, svc-smoke, lab-pilot,
+svc-pilot) keep what the lab is running (no wait).
+
+**What it does.** When the alert fires and Core does not know the faulty
+invocation yet (`stack.attempt_of` returns nothing), the alert looks it up
+again every 0.2 s (`ATTEMPT_LOOKUP_FAST_S`) for at most 10 s. It then posts
+the alert with the invocation, or names the task after the bound as before.
+- svc's on-receipt alert arms the services once the invocation is known.
+  Its fallback (arm with the task) moves from 5 s (`ARM_FALLBACK_S`) to
+  `root_wait_s`.
+- The wait is recorded per run as `alert_root_wait_ms` (in `run.json` and
+  as a scorer column): the time after the alert's first lookup (on-receipt:
+  armed minus triggered). It is 0 when Core already knew the root, and NaN
+  in a trigger-time run of a grid without the wait.
+- A2A and LangGraph name tasks directly, so their alerts never wait.
+
+**No delay when the root is known.** The first lookup is the same single
+lookup as before, so a run whose root Core knows at the alert gets no
+extra delay. Every lab run so far is such a run (262 faulted runs checked).
+
+**Why.** The monitor's taint starts from invocations. An alert that names
+only a task gives it no root to taint from: it decides "contained" with no
+action. The wait is the harness-side guard against that.
+
+**Limitation (disclosed).** The monitor is unchanged. An alert whose root
+Core has not ingested within 10 s is still closed as contained with no
+action; `alert_root_wait_ms` of 10 000 or more marks such a run.

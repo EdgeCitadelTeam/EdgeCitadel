@@ -434,3 +434,76 @@ def test_each_system_runs_only_its_own_controls():
     runner.check_system("langgraph_functional", {"none", "reference"})
     with pytest.raises(ValueError, match="cannot run"):
         runner.check_system("langgraph_functional", {"lg_cancel_run"})
+
+
+def test_the_root_wait_adds_nothing_when_core_knows_the_invocation(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(runner.time, "sleep", slept.append)
+
+    class Known:
+        def attempt_of(self, rt: str) -> str:
+            return f"attempt-of-{rt}"
+
+    meta: dict = {}
+    assert runner._wait_for_root(Known(), "rt-1", 10.0, meta) == "attempt-of-rt-1"
+    assert slept == [] and meta["alert_root_wait_ms"] == 0
+
+
+def test_the_root_wait_polls_until_core_knows_it_and_is_bounded(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    monkeypatch.setattr(runner.time, "sleep", sleep)
+
+    class Late:
+        def __init__(self, known_after_s: float) -> None:
+            self.known_after_s = known_after_s
+
+        def attempt_of(self, rt: str) -> str | None:
+            return "a-1" if clock[0] >= self.known_after_s else None
+
+    meta: dict = {}
+    assert runner._wait_for_root(Late(1.0), "rt-1", 10.0, meta) == "a-1"
+    assert (
+        1000 <= meta["alert_root_wait_ms"] < 1000 + 1000 * runner.ATTEMPT_LOOKUP_FAST_S
+    )
+    clock[0], meta = 0.0, {}
+    # Never known: the alert names the task after the bound.
+    assert runner._wait_for_root(Late(float("inf")), "rt-1", 10.0, meta) is None
+    assert (
+        10_000
+        <= meta["alert_root_wait_ms"]
+        < 10_000 + 1000 * runner.ATTEMPT_LOOKUP_FAST_S
+    )
+
+
+def test_the_main_and_comparison_grids_wait_for_the_root():
+    root = runner.Path(__file__).resolve().parents[1] / "experiments"
+    for name in (
+        "main-smoke",
+        "lab-main",
+        "svc-main",
+        "compare-ec",
+        "compare-a2a",
+        "overhead",
+        "compare-langgraph",
+        "timing-langgraph",
+        "dryrun-langgraph-c2",
+    ):
+        loaded = runner.Experiment.load(root / f"{name}.json")
+        assert loaded.root_wait_s == 10.0, name
+    # The pilot grids keep what the lab runs now (no wait).
+    for name in ("regression", "svc-smoke", "lab-pilot", "svc-pilot"):
+        assert runner.Experiment.load(root / f"{name}.json").root_wait_s == 0.0
+    sizes = {
+        name: len(runner.grid(runner.Experiment.load(root / f"{name}.json")))
+        for name in ("main-smoke", "svc-main")
+    }
+    # C2 early/late x 4 strategies and svc early/late x 2, once each; svc-main
+    # is svc-pilot's grid (23 cells) at its repetitions (set after the pilot).
+    assert sizes["main-smoke"] == 2 * 4 + 2 * 2 == 12
+    svc_main = runner.Experiment.load(root / "svc-main.json")
+    assert sizes["svc-main"] == 23 * svc_main.repetitions

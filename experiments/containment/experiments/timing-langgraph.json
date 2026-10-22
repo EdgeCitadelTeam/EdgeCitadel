@@ -28,5 +28,6 @@
   ],
   "quiet_s": 8,
   "timeout_factor": 3.0,
-  "timeout_extra_s": 90
+  "timeout_extra_s": 90,
+  "root_wait_s": 10.0
 }

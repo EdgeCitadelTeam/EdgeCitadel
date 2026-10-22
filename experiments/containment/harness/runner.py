@@ -169,6 +169,15 @@ class Experiment:
     receding_during_waits: tuple[bool, ...] = (False,)
     # The value of one future request of a service agent (svc scenario cost).
     request_value: float | None = None
+    # Seconds a fired alert waits for Core to know the faulty invocation before
+    # it names the task instead (0: one lookup, then the task, as before). The
+    # monitor's taint starts from invocations: an alert whose root Core has
+    # not ingested yet names a task the monitor cannot taint from, and the
+    # monitor closes it as contained with no action (a limitation, disclosed;
+    # the monitor is unchanged). With the root known at the alert, which
+    # every lab run so far had, the wait adds no delay: the same single
+    # lookup as before. Recorded per run as ``alert_root_wait_ms``.
+    root_wait_s: float = 0.0
     # The monitor's tainted_output_value per cell (a post-hoc cost ablation;
     # 1.0, the pre-registered model, keeps plain run ids and configs).
     tainted_output_values: tuple[float, ...] = (1.0,)
@@ -277,6 +286,7 @@ def _experiment_fields(document: Mapping[str, Any], base: Path) -> dict[str, Any
         ("keep_state", bool),
         ("infra_retries", int),
         ("request_value", float),
+        ("root_wait_s", float),
     ):
         if key in document:
             out[key] = kind(document[key])
@@ -752,10 +762,11 @@ def _drive(
             next_lookup = time.monotonic() + lookup_every
         now_ms = int(feed["t_ms"])
         if on_receipt and alert_due and not armed and origin_rt is not None:
+            fallback_s = experiment.root_wait_s or ARM_FALLBACK_S
             late = (
                 watch is not None
                 and watch.fire_at() is not None
-                and now_ms - watch.fire_at() > ARM_FALLBACK_S * 1000
+                and now_ms - watch.fire_at() > fallback_s * 1000
             )
             if origin_attempt is not None or late:
                 assert watch is not None and endpoint is not None
@@ -776,6 +787,13 @@ def _drive(
         ):
             meta["alert_trigger_ms"] = watch.fire_at()
             if alert_due and origin_rt is not None:
+                if experiment.root_wait_s > 0 and origin_attempt is None:
+                    origin_attempt = _wait_for_root(
+                        stack, origin_rt, experiment.root_wait_s, meta
+                    )
+                elif experiment.root_wait_s > 0:
+                    # Resolved ahead of the trigger: no wait.
+                    meta["alert_root_wait_ms"] = 0
                 _post_alert(stack, spec, cell, watch, origin_rt, origin_attempt, meta)
             elif not alert_due:
                 # Uncontained baseline: the alert time is still the reference point.
@@ -840,6 +858,22 @@ def _effects_settled(stack: RunStack) -> bool:
     return all(due + EFFECT_GRACE_MS <= pending["t_ms"] for due in pending["due_ms"])
 
 
+def _wait_for_root(
+    stack: RunStack, origin_rt: str, wait_s: float, meta: dict[str, Any]
+) -> str | None:
+    """The faulty invocation's attempt once Core knows it, looking it up again
+    every ``ATTEMPT_LOOKUP_FAST_S`` for at most ``wait_s``. The first lookup is
+    the one the alert made before; only the time after it counts as waiting
+    (``alert_root_wait_ms``, 0 when Core already knew the root)."""
+    attempt = stack.attempt_of(origin_rt)
+    started = time.monotonic()
+    while attempt is None and time.monotonic() - started < wait_s:
+        time.sleep(ATTEMPT_LOOKUP_FAST_S)
+        attempt = stack.attempt_of(origin_rt)
+    meta["alert_root_wait_ms"] = int((time.monotonic() - started) * 1000)
+    return attempt
+
+
 def _alert_on_receipt(
     stack: RunStack, meta: dict[str, Any], wait_s: float = 0.0
 ) -> None:
@@ -852,6 +886,11 @@ def _alert_on_receipt(
             meta["t_alert_ms"] = int(state["marked_ms"])
             meta["alert_trigger_ms"] = int(state["triggered_ms"])
             meta["alert_armed_ms"] = state.get("armed_ms")
+            if state.get("armed_ms") is not None:
+                # Armed after the trigger: the alert waited for its root.
+                meta["alert_root_wait_ms"] = max(
+                    0, int(state["armed_ms"]) - int(state["triggered_ms"])
+                )
         if state.get("done_ms") is not None or state.get("post") is False:
             if "alert_payload" in meta and "reply" not in meta["alert_payload"]:
                 meta["alert_payload"]["reply"] = state.get("reply")

@@ -1,6 +1,6 @@
 {
   "name": "lab-main",
-  "note": "DRAFT: the number of repetitions (and rogue rates) is set after the pilot.",
+  "note": "Main runs: the 7 workloads x 11 strategies x early/late plus the no-fault reference, at each rogue rate, deployed profile with the adaptive phase 1; the alert waits up to 10 s for Core to know the faulty invocation (root_wait_s). Repetitions and rogue rates are set after the pilot (see repetitions_note).",
   "instances": [
     "../workloads/c2.json",
     "../workloads/n2.json",
@@ -36,6 +36,7 @@
     }
   ],
   "repetitions": 3,
+  "repetitions_note": "SET AFTER THE PILOT (2026-10-22 about 16:00 London): repetitions (and rogue_rates). 322 runs and about 9.3 h per repetition with rogue rates [0.0, 0.3] at the pilot's run times; 161 runs and about 4.6 h per repetition at rogue 0 only.",
   "time_scale": 2.0,
   "rogue_rates": [
     0.0,
@@ -59,5 +60,6 @@
   ],
   "receding_during_waits": [
     false
-  ]
+  ],
+  "root_wait_s": 10.0
 }

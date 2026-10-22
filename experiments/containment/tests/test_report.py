@@ -156,3 +156,16 @@ def test_decisions_after_the_runs_end_are_not_scored(tmp_path):
     (run / "decisions.jsonl").write_text(json.dumps(decision) + "\n")
     [row] = report.score(tmp_path)
     assert row["n_decisions"] == 0
+
+
+def test_the_alerts_root_wait_is_a_column(tmp_path):
+    write_run(tmp_path, strategy="firebreak", rep=0, kept=True)
+    write_run(tmp_path, strategy="stop_team", rep=0, kept=False)
+    run = tmp_path / "runs" / "mini__late__native__r0__firebreak"
+    meta = json.loads((run / "run.json").read_text())
+    meta["alert_root_wait_ms"] = 0
+    (run / "run.json").write_text(json.dumps(meta))
+    by = {r["strategy_code"]: r for r in report.score(tmp_path)}
+    assert by["firebreak"]["alert_root_wait_ms"] == 0.0
+    # Not recorded (a grid without the wait): NaN, not 0.
+    assert math.isnan(by["stop_team"]["alert_root_wait_ms"])

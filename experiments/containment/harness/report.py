@@ -142,6 +142,16 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         else math.nan,
         "rep": meta.get("rep"),
         "time_scale": meta.get("time_scale"),
+        # How long the alert waited for Core to know the faulty invocation
+        # (root_wait_s; svc's on-receipt alert: armed minus triggered). NaN
+        # when not recorded (a trigger-time alert in a grid without the wait);
+        # at the grid's bound when Core never knew it and the alert named the
+        # task.
+        "alert_root_wait_ms": (
+            math.nan
+            if meta.get("alert_root_wait_ms") is None
+            else float(meta["alert_root_wait_ms"])
+        ),
         "n_errors": len(meta.get("errors", [])),
         "attempts": meta.get("attempts", 1),
         # A run whose last attempt still failed on the testbed stays in every

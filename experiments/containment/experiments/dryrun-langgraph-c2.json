@@ -27,5 +27,6 @@
   "reference": true,
   "phase1_modes": [
     "adaptive"
-  ]
+  ],
+  "root_wait_s": 10.0
 }

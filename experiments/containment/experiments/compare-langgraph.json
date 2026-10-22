@@ -55,5 +55,6 @@
       "repetitions": 5,
       "reference": false
     }
-  ]
+  ],
+  "root_wait_s": 10.0
 }

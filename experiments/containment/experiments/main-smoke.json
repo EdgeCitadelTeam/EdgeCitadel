@@ -1,0 +1,60 @@
+{
+  "name": "main-smoke",
+  "note": "Gated stage of the main profile (pipeline --profile main): a short smoke of the frozen code before lab-main and svc-main. C2 early/late x Firebreak, Trace & quarantine, G-Safeguard, No containment, and svc early/late x Firebreak, No containment, once each: 12 runs, about 20 min. The gate blocks on run status, scorer integrity, Firebreak clean, no tainted commit after tau_1, testbed failures and every site's sent-to-confirmed p99 <= L (400 ms); hand-offs are recorded only.",
+  "instances": [
+    "../workloads/c2.json"
+  ],
+  "strategies": [
+    "firebreak",
+    "trace_and_quarantine",
+    "gsafeguard",
+    "none"
+  ],
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 400
+      }
+    }
+  ],
+  "repetitions": 1,
+  "time_scale": 2.0,
+  "reference": false,
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "phase1_labels": [
+    "frontier"
+  ],
+  "receding_during_waits": [
+    false
+  ],
+  "root_modes": [
+    "given"
+  ],
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90,
+  "root_wait_s": 10.0,
+  "parts": [
+    {
+      "instances": [
+        "../workloads/svc.json"
+      ],
+      "strategies": [
+        "firebreak",
+        "none"
+      ],
+      "time_scale": 1.0,
+      "request_value": 1.0
+    }
+  ]
+}
