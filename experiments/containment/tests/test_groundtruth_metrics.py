@@ -168,6 +168,38 @@ def test_holding_normal_work_is_collateral(run):
     assert row["kept_cfrac"] == 0.0
 
 
+def refuse(r: Records, task: str, target: str, code: str = "ingress_filtered") -> None:
+    hits = [
+        e
+        for e in r.events
+        if e["kind"] == "dispatch" and e["task"] == task and e.get("target") == target
+    ]
+    assert hits, (task, target)
+    for e in hits:
+        e["code"] = code
+
+
+def test_a_refused_hand_off_into_the_tainted_closure_does_not_lose_the_work(run):
+    """Amendment of 2026-10-22: R.agg is in the tainted closure, so refusing
+    B.n's push to it (as an admission revocation does) keeps B.n's work."""
+    finish_b_n(run)
+    refuse(run, "B.n", "R.agg")
+    row = evaluate(run)
+    assert (row["n_at_risk"], row["n_kept"], row["n_collateral"]) == (1, 1, 0)
+    assert row["kept_cfrac"] == 1.0
+
+
+def test_a_refused_hand_off_to_normal_work_still_loses_the_producer(mini_spec):
+    """B.n is normal: R.plan's refused push to it leaves R.plan incomplete."""
+    r = Records(mini_spec)
+    r.compute("R.plan", 0)
+    r.produce("R.plan", 1000)
+    r.event("end", "R.plan", 1000)
+    refuse(r, "R.plan", "B.n")
+    done = M.completion_times(mini_spec, G.read_records(mini_spec, r.events, r.ledger))
+    assert done["R.plan"] is None
+
+
 def test_paused_then_resumed_work_is_kept_but_counted_as_interrupted(run):
     run.event("paused", "B.n", 6100)
     run.event("resumed", "B.n", 6500)

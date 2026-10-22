@@ -2095,3 +2095,35 @@ svc-smoke, lab-pilot, svc-pilot, handoff-chain), whose ids carry none.
 main-smoke is unchanged and shares its 12 ids with regression's C2 cells. It
 runs into its own directory, and the `experiment` column tells them apart in
 merged tables.
+
+### Kept-work amendment: hand-offs into the tainted closure (decided 2026-10-22, scorer only)
+
+**Rule change.** `metrics.completion_times` no longer requires a normal task's pushes or creations into the tainted closure (the `declared_closure` that `evaluate` already computes) to have been dispatched without error. The consumer's work is discarded anyway, so a refused hand-off to it loses none of the producer's work. Hand-offs to normal tasks are still required.
+
+**Why.** The old rule scored the same clean work two ways:
+- as lost under strategies that refuse at the receiving agent (Firebreak's admission revocations, the other cut strategies);
+- as kept under strategies that pause the consumer instead (Trace & quarantine, A2A's controls).
+
+In the lab pilot this rule explains about 40% of Firebreak's kept-work gap to Trace & quarantine. See `firebreak-review/notes/kept-gap-2026-10-22.md`.
+
+**Scope.**
+- Applies to every strategy and every grid, including the A2A and LangGraph comparisons.
+- Re-score only: run `harness.report.score` again on finished output directories; no run is repeated.
+- Disclosed as an amendment to the pre-registered kept-work metric.
+- Reference runs are unchanged, since their tainted set is empty.
+
+**Pilot effect** (Firebreak, deployed, mean of 2 repetitions, early / late):
+
+| Instance | Before | After |
+|---|---|---|
+| rand-n7-s0 | 15 / 24 % | 55 / 77 % |
+| c2 | 40 / 90 % | 71 / 100 % |
+| rand-n7-s2 | 35 / 39 % | 44 / 39 % |
+
+Trace & quarantine is unchanged.
+
+**Tests.** `tests/test_groundtruth_metrics.py`:
+- a refused push into the closure keeps the producer's work;
+- a refused push to normal work still leaves the producer incomplete.
+
+**Deployment.** The runner on jim-eq keeps the old scorer while lab-main and svc-main run. The lab session deploys this commit before the comparison grids start, then re-scores lab-pilot, svc-pilot, lab-main and svc-main.

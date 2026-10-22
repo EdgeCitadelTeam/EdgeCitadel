@@ -48,7 +48,7 @@ confirmation over the whole incident.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Set
 from typing import Any
 
 from .groundtruth import (
@@ -75,8 +75,15 @@ def _seconds(t_ms: float | None, t0_ms: float) -> float:
     return NAN if t_ms is None else (t_ms - t0_ms) / 1000
 
 
-def completion_times(spec: Spec, records: RunRecords) -> dict[str, int | None]:
-    """When each task's own work was complete (services clock), or None."""
+def completion_times(
+    spec: Spec, records: RunRecords, tainted: Set[str] = frozenset()
+) -> dict[str, int | None]:
+    """When each task's own work was complete (services clock), or None.
+
+    A push or creation whose target is in ``tainted`` (the declared closure)
+    is not an obligation: the target's work is discarded anyway, so refusing
+    that hand-off loses none of the producer's work (amendment of 2026-10-22).
+    """
     derived = derive(spec)
     effects = ledger_effects(records)
     done: dict[str, int | None] = {}
@@ -95,10 +102,12 @@ def completion_times(spec: Spec, records: RunRecords) -> dict[str, int | None]:
             pushed = [
                 rec.dispatches.get(("deliver", f"{d.item}->{d.target}"))
                 for d in derived.deliveries_out.get(t.id, ())
+                if d.target not in tainted
             ]
             created = [
                 rec.dispatches.get(("create", f"{derived.creation[c].item}->{c}"))
                 for c in derived.creates.get(t.id, ())
+                if c not in tainted
             ]
             sent = pushed + created
             if any(p is None or p[1] is not None for p in sent):
@@ -548,7 +557,7 @@ def evaluate(
         declared_closure(spec, seeds | early_taint) if seeds or early_taint else set()
     )
     normal = {t.id for t in spec.tasks} - tainted
-    done = completion_times(spec, records)
+    done = completion_times(spec, records, tainted)
     at_risk = {t for t in normal if done[t] is None or done[t] > horizon}
     correct = correct_content(spec, records, expected_contents(spec))
     kept = {t for t in at_risk if done[t] is not None and correct[t]}
