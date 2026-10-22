@@ -536,3 +536,185 @@ def test_the_main_grids_have_the_decided_sizes_and_their_own_run_ids():
     main = {c.run_id for c in lab + svc}
     assert len(main) == len(lab) + len(svc) and not main & pilot_chain
     assert all("__p0" in run_id for run_id in main)
+
+
+class DetectorRunStack:
+    """The run loop's view of a stack whose workers finish every task at once:
+    records what the loop asks of it."""
+
+    def __init__(self, spec: S.Spec) -> None:
+        self.spec = spec
+        self.calls: list[tuple] = []
+        self.now = 1_000_000
+
+    def services(self, method: str, path: str, data=None) -> dict:
+        self.calls.append((method, path, data))
+        self.now += 50
+        if path == "/clock":
+            return {"t_ms": self.now}
+        if path == "/mark":
+            return {"t_ms": self.now}
+        if path.startswith("/events"):
+            after = int(path.split("after=")[1])
+            events = [
+                {"kind": "end", "task": t.id, "rt": f"rt-{t.id}", "inv_kind": "task"}
+                for t in self.spec.tasks
+            ]
+            return {
+                "events": events if after == 0 else [],
+                "next": len(events),
+                "t_ms": self.now,
+            }
+        if path == "/effects/pending":
+            return {"due_ms": [], "t_ms": self.now}
+        raise AssertionError(path)
+
+    def schedule(self, node, entries) -> None:
+        self.calls.append(("schedule", node, None))
+
+    def monitor_status(self) -> dict:
+        self.calls.append(("status", "", None))
+        return {"last_decision": {"type": "decision"}}
+
+    def attempt_of(self, task_id):
+        raise AssertionError("a detector-triggered run resolves no root")
+
+    def post_alert(self, alert):
+        raise AssertionError("a detector-triggered run posts no alert")
+
+    def alert_endpoint(self):
+        return {"url": "http://monitor/alerts", "headers": {}}
+
+    def busy(self) -> bool:
+        return False
+
+
+@pytest.mark.parametrize("strategy", ["firebreak", "none"])
+def test_a_detector_triggered_run_posts_and_marks_no_alert(tmp_path, strategy):
+    loaded = experiment(
+        tmp_path,
+        alerts=["detector"],
+        strategies=[strategy],
+        repetitions=1,
+        rogue_rates=[0.0],
+        reference=False,
+        latencies=[{"name": "fast", "control_latency_ms": {"*": 2}}],
+        quiet_s=0.1,
+    )
+    document = mini_document()
+    document["alerts"] = {"detector": {"event": "none"}}
+    spec = S.from_dict(document)
+    (tmp_path / "mini.json").write_text(json.dumps(document))
+    [cell] = runner.grid(loaded)
+    assert runner.detector_triggered(runner.cell_spec(cell), cell)
+    plan = S.compile_plan(spec, run_id=cell.run_id, time_scale=1.0)
+    stack = DetectorRunStack(spec)
+    meta = {"t_alert_ms": None, "errors": [], "status": "failed_to_start"}
+    runner._drive(stack, spec, plan, cell, loaded, meta, tmp_path)  # type: ignore[arg-type]
+    assert meta["status"] == "complete" and meta["errors"] == []
+    assert meta["t_alert_ms"] is None and "alert_payload" not in meta
+    marks = [data["name"] for method, path, data in stack.calls if path == "/mark"]
+    assert marks == ["t0"]
+    # Under a strategy its monitor snapshot is taken at its first decision.
+    assert (tmp_path / "status_at_decision.json").exists() == (strategy != "none")
+
+
+def test_only_a_detector_triggered_run_collects_the_boundary_records(tmp_path):
+    queries = []
+
+    class Host:
+        def run(self, command, cwd=None):
+            queries.append(command[3])
+            return '{"kind": "run"}\n'
+
+        def glob(self, directory, patterns):
+            return []
+
+    stack = SimpleNamespace(
+        host_dir=lambda host: "/work",
+        fetch=lambda host, path: b"",
+        hosts={"c": Host()},
+    )
+    config = SimpleNamespace(
+        controller="c",
+        hosts={"c": SimpleNamespace(python="python", runtime_root="/rt")},
+        node_hosts={},
+    )
+    for detector, run_dir in ((False, tmp_path / "a"), (True, tmp_path / "b")):
+        run_dir.mkdir()
+        runner._collect(stack, config, run_dir, keep_state=True, boundary=detector)  # type: ignore[arg-type]
+        assert (run_dir / "boundary.jsonl").exists() == detector
+    assert queries == ["effects", "effects", "boundary"]
+    assert (tmp_path / "b" / "boundary.jsonl").read_text() == '{"kind": "run"}\n'
+
+
+def test_the_detector_grid_has_its_planned_size():
+    """No alert injected: Trace & quarantine, Firebreak and No containment on
+    one workload per boundary fault class, 3 repetitions, one no-fault
+    reference per base workload and repetition; otherwise as lab-main."""
+    root = runner.Path(__file__).resolve().parents[1] / "experiments"
+    loaded = runner.Experiment.load(root / "detect-boundary.json")
+    cells = runner.grid(loaded)
+    assert len(cells) == 2 * 3 * 4 + 2 * 3 * 3 == 42
+    faulted = [c for c in cells if c.strategy != "reference"]
+    assert all(runner.detector_triggered(runner.cell_spec(c), c) for c in faulted)
+    assert {c.strategy for c in faulted} == {
+        "firebreak",
+        "trace_and_quarantine",
+        "none",
+    }
+    main = runner.Experiment.load(root / "lab-main.json")
+    for field in (
+        "latencies",
+        "time_scale",
+        "profiles",
+        "phase1_modes",
+        "phase1_labels",
+        "receding_during_waits",
+        "root_wait_s",
+        "quiet_s",
+        "timeout_factor",
+        "timeout_extra_s",
+    ):
+        assert getattr(loaded, field) == getattr(main, field), field
+    assert {c.latency.per_node(["core"])["core"] for c in cells} == {400.0}
+
+
+def test_core_boundary_records_keep_attempts_denials_and_lease_ends():
+    from harness.coreq import boundary_record
+
+    def event(kind, phase, **attributes):
+        return {
+            "kind": kind,
+            "phase": phase,
+            "node_id": "edge-1",
+            "agent_id": "a1",
+            "task_id": "t1",
+            "execution_attempt_id": "x1",
+            "occurred_at": "2026-10-22T10:00:00.000Z",
+            "attributes": attributes,
+        }
+
+    kept = {
+        ("run", "started"): None,
+        ("effect", "denied"): "outside_effect_scope",
+        ("dispatch", "denied"): "permission_denied",
+        ("containment", "alert"): "lease_exceeded",
+        ("run", "failed"): "session_unavailable",
+        ("task", "expired"): "expired",
+    }
+    assert boundary_record(event("run", "started"))["attempt_id"] == "x1"
+    for (kind, phase), reason in kept.items():
+        attributes = {
+            "effect": {"reason": reason},
+            "dispatch": {"reason": reason},
+            "containment": {"alert": reason},
+            "run": {} if phase == "started" else {"reason": reason},
+            "task": {},
+        }[kind]
+        record = boundary_record(event(kind, phase, **attributes))
+        assert record is not None and record["reason"] == reason, (kind, phase)
+    # Not boundary records: a commit, a dispatch allowed, the sender's mirror.
+    assert boundary_record(event("effect", "committed")) is None
+    assert boundary_record(event("dispatch", "allowed")) is None
+    assert boundary_record(event("task", "expired", source_role="sender")) is None

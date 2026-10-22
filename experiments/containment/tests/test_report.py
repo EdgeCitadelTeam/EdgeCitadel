@@ -169,3 +169,32 @@ def test_the_alerts_root_wait_is_a_column(tmp_path):
     assert by["firebreak"]["alert_root_wait_ms"] == 0.0
     # Not recorded (a grid without the wait): NaN, not 0.
     assert math.isnan(by["stop_team"]["alert_root_wait_ms"])
+
+
+def test_a_detector_triggered_run_is_scored_without_an_injected_alert(tmp_path):
+    """No harness alert time: not a failed run. With no detector alert on the
+    fault's lineage it is a scored, not-detected run."""
+    write_run(tmp_path, strategy="firebreak", rep=0, kept=True)
+    run = tmp_path / "runs" / "mini__late__native__r0__firebreak"
+    document = mini_document(
+        **{
+            "class": "out_of_scope_effect",
+            "origin": "A.t0",
+            "params": {"target_class": "act_b"},
+        }
+    )
+    document["alerts"] = {"detector": {"event": "none"}}
+    (run / "spec.json").write_text(json.dumps(document))
+    meta = json.loads((run / "run.json").read_text())
+    meta.update(
+        alert="detector",
+        root_mode="detector",
+        fault="out_of_scope_effect",
+        t_alert_ms=None,
+        t_end_ms=20_000,
+    )
+    (run / "run.json").write_text(json.dumps(meta))
+    [row] = report.score(tmp_path)
+    assert row["status"] == "quiescent" and row["alert_source"] == "detector"
+    assert row["detected"] == 0 and row["root_mode"] == "detector"
+    assert math.isnan(row["clean_after_alert"]) and math.isnan(row["t_alert_s"])

@@ -36,6 +36,14 @@ as the root; in the smaller ``ranked`` mode the alert names only the symptom
 (the reader whose consumption tripped the trigger, or the faulty invocation
 for a trigger without a reader) and the monitor's root-cause ranking picks.
 
+An alert whose trigger is ``none`` (``AlertTrigger.by_detector``) makes a
+detector-triggered run: the harness posts no alert and marks no alert time,
+whatever the strategy; the monitor's own detectors are the only alert source,
+and their alerts carry no root (its ranking picks; ``root_mode`` is recorded
+as ``detector``). Such a run also collects Core's boundary records
+(``boundary.jsonl``: ``coreq boundary``), from which the scorer times the
+violation and maps the detector alert's subject to the fault's lineage.
+
 Latency settings that inject more than the measured LAN round trip between
 sites (``measured_rtt_ms``, 4 ms on the lab testbed), or plan with a control
 latency L above the measured bound on a control action's sent-to-confirmed
@@ -46,7 +54,8 @@ Collected into ``<out>/runs/<run_id>/``: ``run.json`` (identity, times,
 status, alert), ``spec.json``, ``plan.json``, ``events.jsonl``,
 ``ledger.jsonl``, ``marks.jsonl``, ``decisions.jsonl`` (the monitor's
 decision log), ``status.json`` and ``status_at_decision.json`` (monitor
-snapshots), and ``logs/``. A run whose ``run.json`` exists is not repeated.
+snapshots), ``boundary.jsonl`` (detector-triggered runs only), and ``logs/``.
+A run whose ``run.json`` exists is not repeated.
 """
 
 from __future__ import annotations
@@ -422,6 +431,13 @@ def cell_spec(cell: RunCell) -> Spec:
     return spec
 
 
+def detector_triggered(spec: Spec, cell: RunCell) -> bool:
+    """Whether the cell's alert is left to the monitor's detectors (``spec``
+    is the cell's own, so a reference run never is)."""
+    trigger = spec.alerts.get(cell.alert or "")
+    return trigger is not None and trigger.by_detector
+
+
 # ---------------------------------------------------------------------------
 # Alert triggers on the workers' events
 # ---------------------------------------------------------------------------
@@ -516,6 +532,7 @@ def run_cell(
     (run_dir / "spec.json").write_text(json.dumps(to_dict(spec), indent=1))
     (run_dir / "plan.json").write_text(json.dumps(plan))
     nodes = deploy.nodes(spec)
+    by_detector = detector_triggered(spec, cell)
     meta: dict[str, Any] = {
         "run_id": cell.run_id,
         "experiment": experiment.name,
@@ -530,7 +547,9 @@ def run_cell(
         "rogue_rate": spec.rogue.rate,
         "strategy": cell.strategy,
         "alert": cell.alert,
-        "root_mode": cell.root_mode if cell.alert else None,
+        "root_mode": ("detector" if by_detector else cell.root_mode)
+        if cell.alert
+        else None,
         "latency": cell.latency.name,
         "latency_regime": cell.latency.regime(
             experiment.measured_rtt_ms,
@@ -600,7 +619,13 @@ def run_cell(
             meta["errors"].append(f"processes exited early: {died}")
         if netem:
             stack.clear_netem()
-        _collect(stack, stack_config, run_dir, keep_state=experiment.keep_state)
+        _collect(
+            stack,
+            stack_config,
+            run_dir,
+            keep_state=experiment.keep_state,
+            boundary=by_detector,
+        )
         meta.update(testbed_counts(run_dir))
         meta.update(submitted_requests(run_dir))
         (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
@@ -694,7 +719,14 @@ def _drive(
     )
     if cell.alert and cell.strategy != "reference" and trigger is None:
         raise ValueError(f"instance has no alert '{cell.alert}'")
-    alert_due = cell.strategy not in {"reference", "none"}
+    by_detector = trigger is not None and trigger.by_detector
+    if by_detector:
+        # Nothing to watch, post or mark: the detectors raise the alert.
+        trigger = None
+    alert_due = cell.strategy not in {"reference", "none"} and not by_detector
+    # A detector-triggered run under a strategy has its first decision
+    # whenever a detector fires: its monitor snapshot is taken then.
+    watch_decisions = by_detector and cell.strategy in deploy.STRATEGIES
     # An alert posted on receipt: the services post it (or, uncontained, mark
     # its time) when the produce event reaches them. A stack without an HTTP
     # alert intake keeps the controller's path, with no delay either.
@@ -803,8 +835,7 @@ def _drive(
                     ]
                 )
         if (
-            meta["t_alert_ms"] is not None
-            and alert_due
+            (meta["t_alert_ms"] is not None and alert_due or watch_decisions)
             and not decision_seen
             and time.monotonic() >= next_status
         ):
@@ -974,8 +1005,15 @@ def _alert_payload(
 
 
 def _collect(
-    stack: RunStack, config: StackConfig, run_dir: Path, *, keep_state: bool
+    stack: RunStack,
+    config: StackConfig,
+    run_dir: Path,
+    *,
+    keep_state: bool,
+    boundary: bool = False,
 ) -> None:
+    """Fetch the run's records; ``boundary`` adds Core's boundary records
+    (a detector-triggered run)."""
     controller = config.controller
     base = stack.host_dir(controller)
     for name, target in (
@@ -986,21 +1024,25 @@ def _collect(
     ):
         data = stack.fetch(controller, f"{base}/{name}")
         (run_dir / target).write_bytes(data or b"")
-    try:  # the gateway's decisions, as Core collected them
-        effects = stack.hosts[controller].run(
-            [
-                config.hosts[controller].python,
-                "-m",
-                "harness.coreq",
-                "effects",
-                "--db",
-                f"{base}/core/openclaw.db",
-            ],
-            cwd=config.hosts[controller].runtime_root,
-        )
-    except (StackError, OSError):
-        effects = ""
-    (run_dir / "gateway_effects.jsonl").write_text(effects)
+    queries = [("effects", "gateway_effects.jsonl")]  # the gateway's decisions
+    if boundary:
+        queries.append(("boundary", "boundary.jsonl"))
+    for query, target in queries:
+        try:  # as Core collected them
+            records = stack.hosts[controller].run(
+                [
+                    config.hosts[controller].python,
+                    "-m",
+                    "harness.coreq",
+                    query,
+                    "--db",
+                    f"{base}/core/openclaw.db",
+                ],
+                cwd=config.hosts[controller].runtime_root,
+            )
+        except (StackError, OSError):
+            records = ""
+        (run_dir / target).write_text(records)
     logs = run_dir / "logs"
     logs.mkdir(exist_ok=True)
     for host in {controller, *config.node_hosts.values()}:

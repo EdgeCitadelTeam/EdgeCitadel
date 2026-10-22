@@ -543,3 +543,203 @@ def test_handoffs_leave_out_data_waits_and_report_delays():
     assert row["handoff_ms_max"] == 40.0
     assert json.loads(row["handoff_ms"]) == [10.0, 30.0, 40.0]
     assert row["n_task_handoffs"] == 1 and row["task_handoff_ms_median"] == 70.0
+
+
+# -- detector-triggered runs -------------------------------------------------------------
+OOS = "fault:out_of_scope_effect:A.t0"
+
+
+def iso(ms: int) -> str:
+    from datetime import UTC, datetime
+
+    moment = datetime.fromtimestamp(ms / 1000, UTC)
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def boundary(kind: str, phase: str, reason, task: str, node: str, ms: int) -> dict:
+    return {
+        "kind": kind,
+        "phase": phase,
+        "reason": reason,
+        "node_id": node,
+        "agent_id": None,
+        "task_id": f"rt-{task}",
+        "attempt_id": f"att-{task}",
+        "occurred_at": iso(ms),
+    }
+
+
+def detector_decision(incident: str, subject: str, received: int, observed: int):
+    return {
+        "type": "decision",
+        "incident_id": incident,
+        "alert": {
+            "kind": "admission_denied",
+            "origin": "detector",
+            "subject": subject,
+            "observed_at_ms": observed,
+            "detail": {"reason": "outside_authority_scope"},
+        },
+        "status": "contained",
+        "t_received": received,
+        "roots": [subject],
+        "phase1": [
+            {
+                "action": {
+                    "op": "hold",
+                    "kind": "task",
+                    "node_id": "edge-1",
+                    "object_id": incident,
+                },
+                "incident_id": incident,
+                "phase": 1,
+                "t_decision": received + 60,
+                "t_sent": received + 61,
+                "t_confirmed": received + 90,
+                "state": "in_force",
+            }
+        ],
+        "phase2": [],
+        "released": [],
+    }
+
+
+@pytest.fixture
+def detector_run() -> Records:
+    """A.t0 attempts an effect class it was never granted; no alert is
+    injected. Its worker on edge-1 reports 10 ms after its own clock."""
+    document = mini_document(
+        **{
+            "class": "out_of_scope_effect",
+            "origin": "A.t0",
+            "params": {"target_class": "act_b"},
+        }
+    )
+    document["alerts"] = {"detector": {"event": "none"}}
+    r = Records(S.from_dict(document))
+    r.compute("R.plan", 0)
+    r.produce("R.plan", 1000)
+    r.event("end", "R.plan", 1000)
+    r.compute("A.t0", 1100, (OOS,))
+    r.event("fault", "A.t0", 1110, node="edge-1", t_local_ms=1100)
+    r.produce("A.t0", 4100, (OOS,))
+    r.event("end", "A.t0", 4100)
+    r.compute("B.n", 1100)
+    r.compute("A.t1", 4200, (OOS,))
+    finish_b_n(r)
+    return r
+
+
+DETECTOR_BOUNDARY = [
+    boundary("run", "started", None, "A.t0", "edge-1", 1100),
+    boundary("run", "started", None, "B.n", "edge-2", 1100),
+    # Containment's own refusal is not a violation, however early.
+    boundary("effect", "denied", "execution_held", "A.t0", "edge-1", 1500),
+    # A violation by normal work is not the fault's.
+    boundary("dispatch", "denied", "permission_denied", "B.n", "edge-2", 1800),
+    boundary("effect", "denied", "outside_effect_scope", "A.t0", "edge-1", 2100),
+    boundary("effect", "denied", "outside_effect_scope", "A.t0", "edge-1", 4000),
+    # The teardown's interrupted session, after the run's end.
+    boundary("run", "failed", "session_unavailable", "A.t1", "edge-1", 30_000),
+]
+
+
+def evaluate_detector(r: Records, decisions: list[dict]) -> dict:
+    meta = {
+        "t0_ms": 0,
+        "t_alert_ms": None,
+        "t_end_ms": 20_000,
+        "status": "complete",
+        "alert": "detector",
+    }
+    return M.evaluate(
+        r.spec, meta, r.events, r.ledger, decisions, boundary=DETECTOR_BOUNDARY
+    )
+
+
+def test_a_detector_alert_on_the_lineage_starts_the_response(detector_run):
+    """The first detector alert whose subject is on the fault's lineage is the
+    alert: its receipt at the monitor is the alert time, every time is
+    measured from it, and the latency runs from the first violation."""
+    decisions = [
+        detector_decision("i0", "inv:att-B.n", 1900, 1800),  # normal work's
+        detector_decision("i1", "inv:att-A.t0", 2600, 2300),
+        converged(3000),
+    ]
+    row = evaluate_detector(detector_run, decisions)
+    assert (row["alert_source"], row["detected"], row["root_mode"]) == (
+        "detector",
+        1,
+        "detector",
+    )
+    assert (row["detector_kind"], row["detector_task"]) == ("admission_denied", "A.t0")
+    assert row["t_alert_s"] == pytest.approx(2.6)
+    # The first violation at edge-1's 2100 ms is 2110 on the services' clock.
+    assert (row["violation_reason"], row["violation_task"]) == (
+        "outside_effect_scope",
+        "A.t0",
+    )
+    assert row["t_violation_s"] == pytest.approx(2.11) and row["n_violations"] == 2
+    assert row["detector_observed_s"] == pytest.approx(2.31)
+    assert row["detection_latency_ms"] == pytest.approx(490)
+    assert row["decision_s"] == pytest.approx(0.06)
+    assert row["time_to_established_s"] == pytest.approx(0.09)
+    assert row["tau1_s"] == pytest.approx(0.4) and row["converged"] == 1
+    assert (row["n_decisions"], row["n_detector_decisions"]) == (1, 1)
+    assert row["root_correct"] == 1
+    assert row["clean_after_alert"] == 1 and row["violations"] == 0
+
+
+def test_a_run_no_detector_alert_reached_is_not_detected(detector_run):
+    """Not detected: nothing is measured from an alert, the violations are
+    still reported, and the run is scored from its start."""
+    row = evaluate_detector(
+        detector_run, [detector_decision("i0", "inv:att-B.n", 1900, 1800)]
+    )
+    assert (row["alert_source"], row["detected"]) == ("detector", 0)
+    for key in (
+        "t_alert_s",
+        "detection_latency_ms",
+        "clean_after_alert",
+        "violations",
+        "tau1_s",
+        "tainted_after_tau1",
+        "decision_s",
+    ):
+        assert math.isnan(row[key]), key
+    assert row["t_violation_s"] == pytest.approx(2.11) and row["n_violations"] == 2
+    assert row["decision_status"] == "none" and row["n_detector_decisions"] == 1
+    assert (row["n_at_risk"], row["n_kept"]) == (2, 2)  # R.plan and B.n
+    assert row["violations_total"] == 0
+
+
+def test_a_detector_alert_on_a_task_counts_from_its_own_event(detector_run):
+    """A subject named by its task (no attempt yet) maps directly; with no
+    earlier violation the alert's own event is the violation."""
+    alert = detector_decision("i1", "task:rt-A.t1", 2600, 1950)
+    alert["alert"]["kind"] = "lease_violation"
+    meta = {"t0_ms": 0, "t_end_ms": 20_000, "status": "complete", "alert": "detector"}
+    r = detector_run
+    row = M.evaluate(r.spec, meta, r.events, r.ledger, [alert], boundary=[])
+    assert (row["detected"], row["detector_task"]) == (1, "A.t1")
+    assert row["detection_latency_ms"] == pytest.approx(650)
+    assert row["n_violations"] == 0
+
+
+def test_injected_alerts_are_labelled_and_still_required(run):
+    row = M.evaluate(
+        run.spec,
+        {"t0_ms": 0, "t_alert_ms": ALERT, "status": "quiescent", "alert": "late"},
+        run.events,
+        run.ledger,
+        [decision()],
+    )
+    assert row["alert_source"] == "injected" and math.isnan(row["detection_latency_ms"])
+    assert "detected" not in row
+    with pytest.raises(ValueError, match="without an alert time"):
+        M.evaluate(
+            run.spec,
+            {"t0_ms": 0, "t_alert_ms": None, "alert": "late"},
+            run.events,
+            run.ledger,
+        )

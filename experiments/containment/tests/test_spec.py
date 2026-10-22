@@ -181,3 +181,67 @@ def test_an_alert_posted_on_receipt_round_trips_and_is_left_out_by_default():
     assert spec.alerts["early"].posted_on_receipt
     assert S.to_dict(spec)["alerts"]["early"]["posted_on_receipt"] is True
     assert "posted_on_receipt" not in S.to_dict(spec)["alerts"]["late"]
+
+
+def test_an_alert_left_to_the_detectors_has_no_trigger_and_round_trips():
+    document = copy.deepcopy(mini_document())
+    document["alerts"] = {"detector": {"event": "none"}}
+    spec = load(document)
+    assert spec.alerts["detector"].by_detector
+    assert not load(mini_document()).alerts["early"].by_detector
+    assert S.to_dict(spec)["alerts"] == {"detector": {"event": "none"}}
+    for extra in ({"item": "X@v1"}, {"task": "A.t0"}, {"delay_s": 1}, {"count": 2}):
+        document["alerts"] = {"detector": {"event": "none", **extra}}
+        with pytest.raises(S.SpecError, match="no trigger"):
+            load(document)
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        # b1 is granted act_b: attempting it is not out of scope.
+        (
+            {
+                "class": "out_of_scope_effect",
+                "origin": "B.n",
+                "params": {"target_class": "act_b"},
+            },
+            "inside the origin's scope",
+        ),
+        # The harness submits R.plan: no dispatch, so no lease to exceed.
+        ({"class": "lease_runaway", "origin": "R.plan"}, "created task"),
+        # a1 has no protected class to actuate: the runaway would do nothing.
+        ({"class": "lease_runaway", "origin": "A.t1"}, "no protected class"),
+    ],
+)
+def test_boundary_faults_must_reach_their_boundary(fault, message):
+    with pytest.raises(S.SpecError, match=message):
+        load(mini_document(**fault))
+
+
+def test_the_detector_workloads_reach_their_boundaries():
+    """The detect-boundary grid's workloads: alert left to the detectors, and
+    each fault reaches its boundary (validated on load)."""
+    root = S.Path(__file__).resolve().parents[1] / "workloads"
+    for name, cls in (
+        ("c2-oos", "out_of_scope_effect"),
+        ("rand-n7-s1-oos", "out_of_scope_effect"),
+        ("c2-runaway", "lease_runaway"),
+        ("rand-n7-s1-runaway", "lease_runaway"),
+    ):
+        spec = S.load(root / f"{name}.json")
+        assert spec.fault.cls == cls and list(spec.alerts) == ["detector"]
+        assert spec.alerts["detector"].by_detector
+        if cls == "lease_runaway":
+            # Its lease fits exactly the declared effects of the work it creates.
+            origin = spec.fault.origin
+            plan = S.compile_plan(spec, run_id="r", time_scale=2.0)
+            [create] = [
+                c
+                for t in plan["tasks"].values()
+                for c in t["creates"]
+                if c["task"] == origin
+            ]
+            assert create["lease"] == {
+                "max_effects": S._subtree_effects(S.derive(spec), origin)
+            }

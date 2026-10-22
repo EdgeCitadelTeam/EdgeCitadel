@@ -43,12 +43,24 @@ Every run stays in every denominator. Control accounting per run (logical
 actions, control messages per node, confirmations) comes from the decision
 log; ``first_action_s`` / ``last_action_s`` are the first and last
 confirmation over the whole incident.
+
+``alert_source`` says who raised the alert: the harness at its trigger
+(``injected``) or, in a detector-triggered run (the alert's trigger is
+``none``), the monitor's own detectors (``detection``). There the alert time
+is the monitor's receipt of the first detector alert on the fault's lineage,
+and the incident it opened is the response; ``detection_latency_ms`` runs
+from the lineage's first boundary violation (node clock mapped onto the
+services' clock) to that alert, and every time above is measured from it. A
+run no detector alert reached is ``detected`` 0: scored from its start, with
+NaN alert-relative outcomes.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Set
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
 
 from .groundtruth import (
@@ -62,7 +74,7 @@ from .groundtruth import (
     read_records,
     runtime_tasks,
 )
-from .spec import Spec, derive
+from .spec import Spec, derive, fault_origin
 
 NAN = float("nan")
 # Action states (the monitor's ActionRecord) that leave an action not in force:
@@ -134,39 +146,46 @@ def correct_content(
     return out
 
 
-def _operator_responses(
-    decisions: list[Mapping[str, Any]],
-) -> tuple[list[Mapping[str, Any]], int]:
-    """The operator alert's decision and re-solve records, and how many
-    incidents the monitor's own detectors opened."""
-    opened = [d for d in decisions if d.get("type") == "decision"]
-    operator = {
-        d.get("incident_id")
-        for d in opened
-        if (d.get("alert") or {}).get("kind") == "operator"
-    }
-    responses = [
-        d
-        for d in decisions
-        if d.get("type") in {"decision", "resolve"} and d.get("incident_id") in operator
-    ]
-    return responses, sum(1 for d in opened if d.get("incident_id") not in operator)
-
-
-def tau1_ms(decisions: Iterable[Mapping[str, Any]]) -> float | None:
-    """tau_1 of the operator alert's incident: its first ``converged`` record
-    (None: phase 1 never converged)."""
-    decisions = list(decisions)
-    operator = {
-        d.get("incident_id")
+def operator_incidents(decisions: Iterable[Mapping[str, Any]]) -> set[str]:
+    """The incidents the harness's operator alert opened (or joined)."""
+    return {
+        str(d.get("incident_id"))
         for d in decisions
         if d.get("type") == "decision"
         and (d.get("alert") or {}).get("kind") == "operator"
     }
+
+
+def _responses(
+    decisions: list[Mapping[str, Any]], incidents: Set[str]
+) -> tuple[list[Mapping[str, Any]], int]:
+    """The decision and re-solve records of the response's ``incidents``, and
+    how many other incidents the monitor's own detectors opened."""
+    opened = [d for d in decisions if d.get("type") == "decision"]
+    responses = [
+        d
+        for d in decisions
+        if d.get("type") in {"decision", "resolve"}
+        and str(d.get("incident_id")) in incidents
+    ]
+    return responses, sum(
+        1 for d in opened if str(d.get("incident_id")) not in incidents
+    )
+
+
+def tau1_ms(
+    decisions: Iterable[Mapping[str, Any]], incidents: Set[str] | None = None
+) -> float | None:
+    """tau_1 of the response: the first ``converged`` record of its
+    ``incidents`` (default: the operator alert's), None if phase 1 never
+    converged."""
+    decisions = list(decisions)
+    if incidents is None:
+        incidents = operator_incidents(decisions)
     times = [
         float(d["tau1"])
         for d in decisions
-        if d.get("type") == "converged" and d.get("incident_id") in operator
+        if d.get("type") == "converged" and str(d.get("incident_id")) in incidents
     ]
     return min(times) if times else None
 
@@ -252,13 +271,17 @@ def control_accounting(responses: list[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def decision_metrics(
-    decisions: list[Mapping[str, Any]], t_alert_ms: float
+    decisions: list[Mapping[str, Any]],
+    t_alert_ms: float,
+    incidents: Set[str] | None = None,
 ) -> dict[str, Any]:
     """The monitor's response, from its decision log.
 
-    Only the incidents the harness's operator alert opened (or joined) are the
-    strategy's response. Incidents the monitor's own detectors opened (for
-    example a lease violation when a worker loses its session) are counted in
+    Only the response's ``incidents`` are the strategy's response: by default
+    those the harness's operator alert opened (or joined); in a
+    detector-triggered run the one its detection opened (``detection``).
+    Incidents the monitor's own detectors opened otherwise (for example a
+    lease violation when a worker loses its session) are counted in
     ``n_detector_decisions`` and otherwise left out.
 
     The monitor re-solves on every taint advance (``resolve`` records) for
@@ -271,7 +294,9 @@ def decision_metrics(
     and ``infeasible`` (the strategy's solver found no cut, or the applied cut
     did not verify).
     """
-    responses, detector = _operator_responses(decisions)
+    if incidents is None:
+        incidents = operator_incidents(decisions)
+    responses, detector = _responses(decisions, incidents)
     row: dict[str, Any] = {
         "n_decisions": sum(1 for d in responses if d["type"] == "decision"),
         "n_resolves": sum(1 for d in responses if d["type"] == "resolve"),
@@ -525,6 +550,219 @@ def _action_label(action: Mapping[str, Any]) -> str:
     return f"{action['op']}:{action['kind']}:{action['object_id']}@{action['node_id']}"
 
 
+# ---------------------------------------------------------------------------
+# Detector-triggered runs
+# ---------------------------------------------------------------------------
+# What agentd refuses or ends at a boundary (``coreq boundary``'s reasons): a
+# dispatch or effect outside the grant or the scope the task inherited (the
+# authority boundary); a lease's effect quota or wall time used up, a session
+# lease lost, a deadline passed (the resource boundary). Refusals that are
+# containment's own doing (holds, revocations, filters) are not violations.
+VIOLATION_REASONS = frozenset(
+    {
+        "outside_authority_scope",
+        "permission_denied",
+        "outside_effect_scope",
+        "lease_exceeded",
+        "session_unavailable",
+        "deadline_expired",
+        "quota_exceeded",
+        "expired",
+    }
+)
+
+
+@dataclass(frozen=True)
+class Detection:
+    """A detector-triggered run's alert: the first detector alert whose
+    subject is on the fault's lineage, and the first boundary violation there.
+
+    ``t_alert_ms`` is when the monitor's response to the alert began (the
+    decision's ``t_received``), the alert's time at the monitor; None when no
+    detector alert reached the lineage (not detected). ``observed_ms`` (the
+    alert's triggering event) and ``t_violation_ms`` are node times mapped
+    onto the services' clock (``_node_offsets``); the monitor shares the
+    services' host and clock.
+    """
+
+    incident_id: str | None = None
+    t_alert_ms: float | None = None
+    kind: str | None = None
+    reason: str | None = None
+    subject_task: str | None = None
+    observed_ms: float | None = None
+    t_violation_ms: float | None = None
+    violation_reason: str | None = None
+    violation_task: str | None = None
+    n_violations: int = 0
+    origin_attempt: str | None = None
+
+
+def _node_offsets(events: Iterable[Mapping[str, Any]]) -> dict[str, float]:
+    """Per node, its clock onto the services' clock: the smallest
+    ``t_ms - t_local_ms`` of the events its workers reported (as
+    ``_worker_clock`` per worker). A node without such events gets 0: its
+    clock is taken as the services' (as for the gateway's commit times)."""
+    offset: dict[str, float] = {}
+    for e in events:
+        if e.get("t_local_ms") is not None and e.get("node") is not None:
+            gap = float(e["t_ms"]) - float(e["t_local_ms"])
+            node = str(e["node"])
+            offset[node] = min(offset.get(node, gap), gap)
+    return offset
+
+
+def _occurred_ms(value: str) -> float:
+    """An event time of the trace contract (UTC ISO 8601, ms), in epoch ms."""
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000
+
+
+def _lineage_task(invocation: tuple[str, str] | None, lineage: Set[str]) -> str | None:
+    """The planned task a worker invocation ``(inv_kind, name)`` serves, if it
+    is on the fault's ``lineage``. A pending creation and a delivery serve
+    their target task; an undeclared (spawned or rogue) invocation exists
+    only because a tainted one made it, so it is on the lineage."""
+    if invocation is None:
+        return None
+    kind, name = invocation
+    if kind in {"rogue", "rogue_msg"}:
+        return name
+    if kind == "create":
+        name = name.removeprefix("create:")
+    elif kind == "deliver":
+        name = name.split("->", 1)[-1]
+    return name if name in lineage else None
+
+
+def detection(
+    spec: Spec,
+    events: Iterable[Mapping[str, Any]],
+    decisions: Iterable[Mapping[str, Any]],
+    boundary: Iterable[Mapping[str, Any]],
+    t_end_ms: float | None = None,
+) -> Detection:
+    """The alert of a detector-triggered run (``spec.AlertTrigger.by_detector``).
+
+    The fault's lineage is its declared closure from its seeds (the faulty
+    invocation and every task that depends on it). A detector alert's
+    subject (``inv:<attempt>`` or ``task:<runtime task>``) is mapped through
+    Core's ``run/started`` records (``boundary``) to the worker invocation and
+    its planned task. The violation is the lineage's first boundary record
+    with a ``VIOLATION_REASONS`` reason before the run's end (later ones are
+    the teardown's), or the alert's own event when that is earlier.
+    """
+    events = list(events)
+    boundary = list(boundary)
+    lineage = declared_closure(spec, fault_seeds(spec))
+    invocations: dict[str, tuple[str, str]] = {}
+    for e in events:
+        if e.get("rt"):
+            invocations.setdefault(
+                str(e["rt"]), (str(e.get("inv_kind")), str(e["task"]))
+            )
+    started = {
+        str(b["attempt_id"]): b
+        for b in boundary
+        if b["kind"] == "run" and b["phase"] == "started" and b.get("attempt_id")
+    }
+    offsets = _node_offsets(events)
+
+    def at(node: Any, t_ms: float) -> float:
+        return t_ms + offsets.get(str(node), 0.0)
+
+    violations = sorted(
+        (
+            (at(b["node_id"], _occurred_ms(b["occurred_at"])), b)
+            for b in boundary
+            if b.get("reason") in VIOLATION_REASONS
+            and _lineage_task(invocations.get(str(b.get("task_id"))), lineage)
+        ),
+        key=lambda pair: pair[0],
+    )
+    if t_end_ms is not None:
+        violations = [(t, b) for t, b in violations if t <= t_end_ms]
+    origin = fault_origin(spec)
+    origin_attempt = next(
+        (
+            attempt
+            for attempt, b in started.items()
+            if invocations.get(str(b.get("task_id"))) == ("task", origin)
+        ),
+        None,
+    )
+    first = violations[0] if violations else None
+    found = Detection(
+        t_violation_ms=first[0] if first else None,
+        violation_reason=first[1]["reason"] if first else None,
+        violation_task=_lineage_task(
+            invocations.get(str(first[1].get("task_id"))), lineage
+        )
+        if first
+        else None,
+        n_violations=len(violations),
+        origin_attempt=origin_attempt,
+    )
+    alerts = sorted(
+        (
+            d
+            for d in decisions
+            if d.get("type") == "decision"
+            and (d.get("alert") or {}).get("origin") == "detector"
+        ),
+        key=lambda d: float(d["t_received"]),
+    )
+    for d in alerts:
+        alert = d["alert"]
+        prefix, _, identity = str(alert.get("subject")).partition(":")
+        rt, node = None, None
+        if prefix == "inv" and identity in started:
+            rt, node = started[identity].get("task_id"), started[identity]["node_id"]
+        elif prefix == "task":
+            rt = identity
+        task = _lineage_task(invocations.get(str(rt)), lineage)
+        if task is None:
+            continue
+        observed = at(node, float(alert["observed_at_ms"]))
+        t_violation = (
+            observed
+            if found.t_violation_ms is None
+            else min(observed, found.t_violation_ms)
+        )
+        return replace(
+            found,
+            incident_id=str(d["incident_id"]),
+            t_alert_ms=float(d["t_received"]),
+            kind=alert.get("kind"),
+            reason=(alert.get("detail") or {}).get("reason"),
+            subject_task=task,
+            observed_ms=observed,
+            t_violation_ms=t_violation,
+        )
+    return found
+
+
+def detection_metrics(found: Detection, t0_ms: float) -> dict[str, Any]:
+    """The detection's columns (times in seconds from the run's start)."""
+    detected = found.t_alert_ms is not None
+    return {
+        "detected": int(detected),
+        "detector_kind": found.kind or "",
+        "detector_reason": found.reason or "",
+        "detector_task": found.subject_task or "",
+        "t_violation_s": _seconds(found.t_violation_ms, t0_ms),
+        "violation_reason": found.violation_reason or "",
+        "violation_task": found.violation_task or "",
+        "n_violations": found.n_violations,
+        "detector_observed_s": _seconds(found.observed_ms, t0_ms),
+        # Violation to the alert at the monitor (the decision's t_received).
+        "detection_latency_ms": (
+            found.t_alert_ms - found.t_violation_ms
+            if detected and found.t_violation_ms is not None
+            else NAN
+        ),
+    }
+
+
 def evaluate(
     spec: Spec,
     meta: Mapping[str, Any],
@@ -534,18 +772,35 @@ def evaluate(
     status: Mapping[str, Any] | None = None,
     gateway: Iterable[Mapping[str, Any]] = (),
     marks: Iterable[Mapping[str, Any]] = (),
+    boundary: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """One row for one run. ``meta`` holds ``t0_ms``, ``t_alert_ms`` (None for a
     no-fault reference run, where every task is at risk from the start) and
     ``status`` (complete / quiescent / timeout); ``gateway`` is Core's record
-    of the gateway's effects and ``marks`` the harness's request marks."""
+    of the gateway's effects and ``marks`` the harness's request marks.
+
+    A run whose alert (``meta["alert"]``) is left to the detectors takes its
+    alert time and response incident from ``detection`` (``boundary``: Core's
+    boundary records); undetected, it is scored from its start like a
+    reference run, and the alert-relative outcomes are NaN.
+    """
     records = read_records(spec, events, ledger)
     gateway = list(gateway or ())
     derived = derive(spec)
     t0 = float(meta["t0_ms"])
-    t_alert = meta.get("t_alert_ms")
-    if t_alert is None and spec.fault.cls != "none":
-        raise ValueError("a faulted run without an alert time cannot be scored")
+    trigger = spec.alerts.get(meta.get("alert") or "")
+    found = None
+    if trigger is not None and trigger.by_detector:
+        found = detection(
+            spec, records.events, decisions or [], boundary, meta.get("t_end_ms")
+        )
+        t_alert = found.t_alert_ms
+        incidents = {found.incident_id} if found.incident_id else set()
+    else:
+        t_alert = meta.get("t_alert_ms")
+        incidents = operator_incidents(decisions or [])
+        if t_alert is None and spec.fault.cls != "none":
+            raise ValueError("a faulted run without an alert time cannot be scored")
     horizon = t0 if t_alert is None else float(t_alert)
     seeds = fault_seeds(spec)
     early_taint = {
@@ -614,8 +869,12 @@ def evaluate(
     violation_ids = {
         effect_id for effect_id, e in effects.items() if any(e is v for v in violations)
     }
-    tau1 = tau1_ms(decisions or []) if t_alert is not None else None
-    decision = decision_metrics(decisions or [], horizon) if t_alert is not None else {}
+    tau1 = tau1_ms(decisions or [], incidents) if t_alert is not None else None
+    decision = (
+        decision_metrics(decisions or [], horizon, incidents)
+        if t_alert is not None or found is not None
+        else {}
+    )
     t_established = decision.get("t_established_ms")
     after_alert = [e for e in violations if e["t_committed"] > horizon]
     timed_out = meta.get("status") == "timeout"
@@ -631,6 +890,12 @@ def evaluate(
         "status": meta.get("status"),
         "timeout": int(timed_out),
         "t_alert_s": _seconds(t_alert, t0),
+        # Who raised the alert: the harness at its trigger ("injected"; under
+        # No containment only its time is marked) or the monitor's detectors.
+        "alert_source": "detector"
+        if found is not None
+        else ("injected" if trigger is not None else ""),
+        "detection_latency_ms": NAN,
         "consumed_at_alert": share(len(consumed_by_alert), len(readers))
         if readers
         else NAN,
@@ -711,10 +976,25 @@ def evaluate(
     row.update(handoff_metrics(records))
     row.pop("t_established_ms", None)
     origin = meta.get("origin_attempt")
+    if found is not None:
+        row.update(detection_metrics(found, t0))
+        origin = found.origin_attempt
+        if t_alert is None:  # not detected: no alert to measure from
+            for key in (
+                "clean_after_alert",
+                "violations",
+                "viol_declared",
+                "viol_undeclared",
+                "consumed_at_alert",
+            ):
+                row[key] = NAN
     roots = json.loads(row.get("roots") or "[]")
     # Whether the response started from the faulty source: always when the
-    # harness names it (root mode "given"), the ranking's pick otherwise.
-    row["root_mode"] = meta.get("root_mode", "given")
+    # harness names it (root mode "given"), the ranking's pick otherwise (a
+    # detector's alert names no root either).
+    row["root_mode"] = (
+        "detector" if found is not None else meta.get("root_mode", "given")
+    )
     row["root_correct"] = (
         int(any(origin in str(r) for r in roots)) if origin and roots else NAN
     )

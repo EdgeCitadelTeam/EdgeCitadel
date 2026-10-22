@@ -92,7 +92,9 @@ FAULT_CLASSES = (
 ITEM_FAULTS = frozenset(
     {"wrong_value", "stale_version", "message_delay", "message_duplicate"}
 )
-ALERT_EVENTS = ("produce", "consume", "start", "end", "fault", "at")
+ALERT_EVENTS = ("produce", "consume", "start", "end", "fault", "at", "none")
+# The trigger of a detector-triggered run: the harness raises no alert.
+NO_ALERT = "none"
 # Runtime effect class of a workload effect class; the spec class is the target.
 RUNTIME_EFFECT_CLASS = "device.command"  # protected: an actuation
 UNPROTECTED_EFFECT_CLASS = "network.http"  # unprotected: e.g. a reply to a user
@@ -186,6 +188,9 @@ class AlertTrigger:
     ``fault`` (the fault's first visible action) or ``at`` (``delay_s`` after
     run start); fires ``delay_s`` (spec seconds) after the ``count``-th match.
     ``consume`` counts reader tasks that started computing with the item.
+    ``none``: the harness raises no alert at all; the monitor's own detectors
+    are the only alert source (a detector-triggered run, scored from the
+    first detector alert on the fault's lineage: ``metrics.detection``).
     ``sim_t`` is the simulator's alert time for this instance, when known.
     ``posted_on_receipt`` (``produce`` with no delay only): the run's services
     post the alert themselves when they receive the matching produce event,
@@ -205,6 +210,11 @@ class AlertTrigger:
     designate_root: bool = True
     sim_t: float | None = None
     posted_on_receipt: bool = False
+
+    @property
+    def by_detector(self) -> bool:
+        """No harness alert: the monitor's detectors raise it, if anything does."""
+        return self.event == NO_ALERT
 
 
 @dataclass(frozen=True)
@@ -555,6 +565,8 @@ def to_dict(spec: Spec) -> dict[str, Any]:
         return out
 
     def alert(a: AlertTrigger) -> dict[str, Any]:
+        if a.by_detector:
+            return {"event": a.event}
         out = {k: v for k, v in asdict(a).items() if v is not None}
         if out.get("count") == 1:
             del out["count"]
@@ -721,6 +733,10 @@ def validate(spec: Spec) -> None:
             raise SpecError(
                 f"{where}.posted_on_receipt: only for a produce event with no delay"
             )
+        if alert.by_detector and (
+            alert.item or alert.task or alert.delay_s or alert.count != 1
+        ):
+            raise SpecError(f"{where}: an alert left to the detectors has no trigger")
 
 
 def _validate_fault(spec: Spec, derived: Derived) -> None:
@@ -738,6 +754,20 @@ def _validate_fault(spec: Spec, derived: Derived) -> None:
             raise SpecError("fault.item: a transport fault needs a pushed item")
     elif fault.origin not in {t.id for t in spec.tasks}:
         raise SpecError("fault.origin: must name a task")
+    # The boundary faults must reach their boundary, or the run has no fault
+    # behaviour to detect: an attempted class outside the origin's grant, and
+    # a lease (only a created task carries one) on an agent with a protected
+    # class to actuate.
+    if fault.cls == "out_of_scope_effect":
+        agent = spec.task(str(fault.origin)).agent
+        if fault.params.get("target_class") in derived.effect_grant[agent]:
+            raise SpecError("fault.params.target_class: inside the origin's scope")
+    if fault.cls == "lease_runaway":
+        origin = str(fault.origin)
+        if derived.creation[origin].dispatcher is None:
+            raise SpecError("fault.origin: a lease runaway needs a created task")
+        if not derived.scope_classes[spec.task(origin).agent]:
+            raise SpecError("fault.origin: its agent has no protected class to actuate")
     if fault.cls == "message_delay":
         _number(fault.params.get("delay_s"), "fault.params.delay_s", positive=True)
 

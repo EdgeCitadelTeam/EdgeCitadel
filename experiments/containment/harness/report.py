@@ -169,8 +169,15 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         or "",
     }
     actions: list[dict[str, Any]] = []
+    spec_path = run_dir / "spec.json"
+    spec = from_dict(json.loads(spec_path.read_text())) if spec_path.exists() else None
+    trigger = spec.alerts.get(meta.get("alert") or "") if spec else None
+    # A detector-triggered run has no harness alert time; its scorer finds one.
+    by_detector = trigger is not None and trigger.by_detector
     if meta.get("t0_ms") is None or (
-        meta.get("fault") != "none" and meta.get("t_alert_ms") is None
+        meta.get("fault") != "none"
+        and meta.get("t_alert_ms") is None
+        and not by_detector
     ):
         # Failed to start, or its alert never fired: kept as a failed run.
         row["status"] = meta.get("status", "failed_to_start")
@@ -178,7 +185,7 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         row["clean_after_alert"] = 0
         row["established"] = 0
         return row, actions
-    spec = from_dict(json.loads((run_dir / "spec.json").read_text()))
+    spec = spec or from_dict(json.loads(spec_path.read_text()))
     decisions = _jsonl(run_dir / "decisions.jsonl")
     t_end = meta.get("t_end_ms")
     if t_end is not None:
@@ -194,12 +201,22 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     gateway = _jsonl(run_dir / "gateway_effects.jsonl")
     row.update(
         evaluate(
-            spec, meta, events, ledger, decisions, status, gateway=gateway, marks=marks
+            spec,
+            meta,
+            events,
+            ledger,
+            decisions,
+            status,
+            gateway=gateway,
+            marks=marks,
+            boundary=_jsonl(run_dir / "boundary.jsonl"),
         )
     )
     if spec.service and meta.get("t_alert_ms") is not None:
         row.update(svc.metrics(spec, meta, ledger, marks, events, gateway))
     t_alert = meta.get("t_alert_ms")
+    if by_detector and not math.isnan(row["t_alert_s"]):
+        t_alert = meta["t0_ms"] + row["t_alert_s"] * 1000
     for d in decisions:
         for record in [*d.get("phase1", ()), *d.get("phase2", ())]:
             a = record["action"]
