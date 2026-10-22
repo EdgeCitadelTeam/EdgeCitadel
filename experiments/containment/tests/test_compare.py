@@ -172,3 +172,20 @@ def test_makespan_ratio_is_against_the_same_systems_reference():
     ratio = with_makespan_ratio(runs)["makespan_ratio"].tolist()
     assert ratio[:3] == [1.0, 1.5, 1.0]
     assert ratio[3] != ratio[3]  # no A2A reference of n2
+
+
+def test_kept_work_leaves_out_tasks_redone_after_the_alert():
+    import pandas as pd
+    import pytest
+
+    from harness.compare import h10_table
+
+    rows = [_row("edgecitadel", "firebreak", r, 1, 0.9) for r in range(3)]
+    rows += [_row("langgraph", "lg_time_travel", r, 1, 1.0) for r in range(3)]
+    for row in rows:
+        row["kept_cfrac_no_redo"] = 0.9 if row["system"] == "edgecitadel" else 0.2
+    table = h10_table(pd.DataFrame(rows)).set_index("strategy_code")
+    tt = table.loc["lg_time_travel"]
+    assert tt.kept_median == pytest.approx(0.2)
+    assert tt.kept_scorer_median == pytest.approx(1.0)
+    assert tt.kept_diff_median == pytest.approx(0.7)

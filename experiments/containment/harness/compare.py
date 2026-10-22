@@ -35,8 +35,9 @@ writes:
   strategy on matched runs of the same system and mechanism settings);
 - ``h10.csv``: per strategy, the content-fault part (rogue rate 0), the rogue
   part (rate 0.3) and saturated rogue (1.0): runs, clean-after-alert rate
-  (also per alert), median and lower quartile of kept work (also without
-  redone tasks, and over clean runs only, safety first), makespan and its
+  (also per alert), median and lower quartile of kept work without tasks
+  redone after the alert (amended 2026-10-22; also over clean runs only,
+  safety first, and the scorer's own measure beside it), makespan and its
   ratio to the same system's reference of the workload (``makespan_ratio``,
   also per alert), the share of runs that re-executed a task, timeouts,
   consumed at alert, leaks by class, and the one-sided tests of H10 (b): exact McNemar on
@@ -341,6 +342,12 @@ def check_cells(runs: Any) -> None:
             )
 
 
+def kept_column(g: Any) -> str:
+    """Kept work without tasks redone after the alert (the H10-LG amendment of
+    2026-10-22), when loaded from result directories; the scorer's otherwise."""
+    return "kept_cfrac_no_redo" if "kept_cfrac_no_redo" in g else "kept_cfrac"
+
+
 def clean_column(g: Any) -> str:
     """``clean`` (no leak, repeats included) when loaded from result directories."""
     return "clean" if "clean" in g else "clean_after_alert"
@@ -367,24 +374,25 @@ def h10_table(runs: Any) -> Any:
         part = _part(runs, rate)
         fb = part[(part.strategy_code == FIREBREAK) & (part.system == EDGECITADEL)]
         for (system, code), g in part.groupby(["system", "strategy_code"]):
-            kept = g["kept_cfrac"].astype(float)
+            kcol = kept_column(g)
+            kept = g[kcol].astype(float)
+            clean_g = g[g[clean_column(g)].astype(bool)]
             row: dict[str, Any] = {
                 "part": label,
                 "system": system,
                 "strategy_code": code,
                 "runs": len(g),
                 "clean_rate": g[clean_column(g)].astype(float).mean(),
+                # Kept work as amended for H10-LG (2026-10-22): a task started
+                # again after the alert is redone, not kept.
                 "kept_median": kept.median(),
                 "kept_q1": kept.quantile(0.25),
-                "kept_no_redo_median": _median(g, "kept_cfrac_no_redo"),
                 # Kept work compared only where safety held: clean runs only.
-                "clean_runs": int(g[clean_column(g)].astype(bool).sum()),
-                "kept_median_clean_runs": _median(
-                    g[g[clean_column(g)].astype(bool)], "kept_cfrac"
-                ),
-                "kept_no_redo_median_clean_runs": _median(
-                    g[g[clean_column(g)].astype(bool)], "kept_cfrac_no_redo"
-                ),
+                "clean_runs": len(clean_g),
+                "kept_median_clean_runs": _median(clean_g, kcol),
+                # The scorer's own measure (redone tasks counted as kept).
+                "kept_scorer_median": _median(g, "kept_cfrac"),
+                "kept_scorer_median_clean_runs": _median(clean_g, "kept_cfrac"),
                 "makespan_median_s": _median(g, "makespan_s"),
                 "makespan_ratio_median": _median(g, "makespan_ratio"),
                 "consumed_at_alert_median": _median(g, "consumed_at_alert"),
@@ -411,7 +419,8 @@ def h10_table(runs: Any) -> Any:
                 a = joined[f"{col}_fb"].astype(bool)
                 o = joined[f"{col}_o"].astype(bool)
                 b, c = int((a & ~o).sum()), int((~a & o).sum())
-                diff = joined.kept_cfrac_fb.astype(float) - joined.kept_cfrac_o.astype(
+                kcol = kept_column(g)
+                diff = joined[f"{kcol}_fb"].astype(float) - joined[f"{kcol}_o"].astype(
                     float
                 )
                 row.update(
