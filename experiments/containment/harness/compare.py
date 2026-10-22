@@ -35,7 +35,8 @@ writes:
   strategy on matched runs of the same system and mechanism settings);
 - ``h10.csv``: per strategy, the content-fault part (rogue rate 0), the rogue
   part (rate 0.3) and saturated rogue (1.0): runs, clean-after-alert rate
-  (also per alert), median and lower quartile of kept work, makespan and its
+  (also per alert), median and lower quartile of kept work (also without
+  redone tasks, and over clean runs only, safety first), makespan and its
   ratio to the same system's reference of the workload (``makespan_ratio``,
   also per alert), the share of runs that re-executed a task, timeouts,
   consumed at alert, leaks by class, and the one-sided tests of H10 (b): exact McNemar on
@@ -376,6 +377,14 @@ def h10_table(runs: Any) -> Any:
                 "kept_median": kept.median(),
                 "kept_q1": kept.quantile(0.25),
                 "kept_no_redo_median": _median(g, "kept_cfrac_no_redo"),
+                # Kept work compared only where safety held: clean runs only.
+                "clean_runs": int(g[clean_column(g)].astype(bool).sum()),
+                "kept_median_clean_runs": _median(
+                    g[g[clean_column(g)].astype(bool)], "kept_cfrac"
+                ),
+                "kept_no_redo_median_clean_runs": _median(
+                    g[g[clean_column(g)].astype(bool)], "kept_cfrac_no_redo"
+                ),
                 "makespan_median_s": _median(g, "makespan_s"),
                 "makespan_ratio_median": _median(g, "makespan_ratio"),
                 "consumed_at_alert_median": _median(g, "consumed_at_alert"),
