@@ -69,6 +69,32 @@ def run_controller(tmp_path, strategy: str) -> tuple[list[dict], FakePeers]:
     return [json.loads(line) for line in path.read_text().splitlines()], peers
 
 
+def test_status_carries_what_the_runner_reads(tmp_path):
+    """runner.run_cell reads status["mechanisms"][strategy] and
+    status["phase1_mode"] for every strategy it deploys; a native controller
+    has no phase 1, so it reports None (a missing key failed every controlled
+    A2A run at start-up on 1e7ed9f)."""
+    loop = a2a_common.LoopThread("test")
+    controller = a2a_control.NativeController(
+        loop,
+        FakePeers(),  # type: ignore[arg-type]
+        strategy="a2a_cancel_agent",
+        agent_nodes={"a": "core"},
+        faulty_agent="a",
+        bad_item="A@v1",
+        decisions_path=tmp_path / "core" / "containment-decisions.jsonl",
+        operator_token="op",
+        incident_id="native:test",
+    )
+    try:
+        status = controller.status()
+        assert "a2a_cancel_agent" in status["mechanisms"]
+        assert "phase1_mode" in status and status["phase1_mode"] is None
+    finally:
+        controller.stop()
+        loop.close()
+
+
 def test_cancel_agent_sweeps_only_the_faulty_agent_and_scores_as_established(
     tmp_path,
 ):
