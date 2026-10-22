@@ -88,6 +88,9 @@ class NativeController:
             "strategy": self.strategy,
             "mechanisms": {self.strategy: mechanisms} if self.strategy else {},
             "last_decision": self._decided,
+            # No phase 1 here: the runner records the monitor's phase1_mode for
+            # every strategy run (since 33b4309), and native controls have none.
+            "phase1_mode": None,
         }
 
     def stop(self) -> None:

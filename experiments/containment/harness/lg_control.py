@@ -106,6 +106,9 @@ class LangGraphController:
             "last_decision": self._decided,
             "thread_id": self.thread_id,
             "run_id": self.run_id,
+            # No phase 1 here: the runner records the monitor's phase1_mode for
+            # every strategy run (since 33b4309), and native controls have none.
+            "phase1_mode": None,
         }
 
     def stop(self) -> None:
