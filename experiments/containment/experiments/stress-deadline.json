@@ -1,0 +1,58 @@
+{
+  "name": "stress-deadline",
+  "note": "Deadline ablation under added control delay, pre-registered as H14 (user decision 2026-10-23 17:55 London). C2 and N2, the deadline-using cut strategies (Firebreak, Cut without deadlines, Greedy cut) against Trace & quarantine and No containment, early and late alert, 3 repetitions, rogue 0. Every control command is delayed by 1 s or 4 s (control_delay_ms); L = the added delay + 400 ms (the native bound of the main runs), so the deadline masks see the delay. Main-run settings otherwise (deployed profile, adaptive phase 1, root wait 10 s, time scale 2).",
+  "instances": [
+    "../workloads/c2.json",
+    "../workloads/n2.json"
+  ],
+  "strategies": [
+    "firebreak",
+    "cut_without_deadlines",
+    "greedy_cut",
+    "trace_and_quarantine",
+    "none"
+  ],
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "stress-1s",
+      "control_latency_ms": {
+        "*": 1400
+      },
+      "control_delay_ms": {
+        "*": 1000
+      }
+    },
+    {
+      "name": "stress-4s",
+      "control_latency_ms": {
+        "*": 4400
+      },
+      "control_delay_ms": {
+        "*": 4000
+      }
+    }
+  ],
+  "repetitions": 3,
+  "time_scale": 2.0,
+  "rogue_rates": [
+    0.0
+  ],
+  "reference": true,
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90,
+  "root_modes": [
+    "given"
+  ],
+  "root_wait_s": 10.0
+}

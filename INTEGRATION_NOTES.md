@@ -2127,3 +2127,20 @@ Trace & quarantine is unchanged.
 - a refused push to normal work still leaves the producer incomplete.
 
 **Deployment.** The runner on jim-eq keeps the old scorer while lab-main and svc-main run. The lab session deploys this commit before the comparison grids start, then re-scores lab-pilot, svc-pilot, lab-main and svc-main.
+
+### Late grids: stress-deadline (H14) and compare-langgraph-reduced (decided 2026-10-23 17:55 London)
+
+**stress-deadline** (`experiments/stress-deadline.json`, 132 runs; harness only).
+- Purpose: the lab evidence for deadline awareness. At L = 400 ms the main runs show no separation between Firebreak, Cut without deadlines and Greedy cut.
+- Cells: C2 and N2 × {Firebreak, Cut without deadlines, Greedy cut, Trace & quarantine, No containment} × early/late × 3 repetitions, rogue 0, plus 12 references.
+- Two latency regimes. Every control command is delayed by `control_delay_ms` = 1,000 or 4,000 ms. The planning bound is `control_latency_ms` = the delay + 400 ms (the main runs' native bound), so the deadline masks see the delay.
+- Main-run settings otherwise: deployed profile, adaptive phase 1, root wait 10 s, time scale 2.
+- Replaces the 504-run `lab-stress.json`, which stays in the repository.
+- Pre-registration: H14 (spec session), before any run.
+
+**compare-langgraph-reduced** (`experiments/compare-langgraph-reduced.json`, 129 runs).
+- Cells: C2, C3 and rand-n7-s1 × the four LangGraph controls × early/late × 3 repetitions, plus C2 at rogue rates 0.3 and 1.0 × early/late × 3 repetitions. Settings as in `compare-langgraph.json`.
+- The comparison with compare-a2a and the EC rows is made only on these cells; this amends H10-LG's cells.
+- Run from a tree that has the A2A/LangGraph phase1_mode fix (this branch or a2a/precheck-fix).
+
+**Order after svc-main:** detect-boundary, overhead, scaled testbed (once H12 is registered), stress-deadline (once H14 is registered), compare-langgraph-reduced (once its venv, the D-97 scoring commits and the H10-LG amendment are in). Cut from the end.

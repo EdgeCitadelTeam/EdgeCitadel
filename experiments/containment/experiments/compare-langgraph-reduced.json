@@ -1,0 +1,56 @@
+{
+ "name": "compare-langgraph-reduced",
+ "note": "Reduced LangGraph comparison (user decision 2026-10-23 17:55 London; amends H10-LG's cells): C2, C3 and rand-n7-s1 x early/late x 3 repetitions, plus C2 at rogue rates 0.3 and 1.0 x early/late x 3 repetitions, with the same strategies and settings as compare-langgraph. Paired with compare-a2a and the EC rows only on these cells. Run on lab-langgraph (one host).",
+ "instances": [
+  "../workloads/c2.json",
+  "../workloads/c3.json",
+  "../workloads/rand-n7-s1.json"
+ ],
+ "strategies": [
+  "lg_block_resume",
+  "lg_time_travel",
+  "lg_cancel_run",
+  "none"
+ ],
+ "repetitions": 3,
+ "alerts": [
+  "early",
+  "late"
+ ],
+ "latencies": [
+  {
+   "name": "native",
+   "control_latency_ms": {
+    "*": 400
+   }
+  }
+ ],
+ "time_scale": 2.0,
+ "reference": true,
+ "profiles": [
+  "deployed"
+ ],
+ "phase1_modes": [
+  "adaptive"
+ ],
+ "quiet_s": 8,
+ "timeout_factor": 3.0,
+ "timeout_extra_s": 90,
+ "root_modes": [
+  "given"
+ ],
+ "parts": [
+  {
+   "instances": [
+    "../workloads/c2.json"
+   ],
+   "rogue_rates": [
+    0.3,
+    1.0
+   ],
+   "repetitions": 3,
+   "reference": false
+  }
+ ],
+ "root_wait_s": 10.0
+}
