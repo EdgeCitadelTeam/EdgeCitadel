@@ -2143,4 +2143,9 @@ Trace & quarantine is unchanged.
 - The comparison with compare-a2a and the EC rows is made only on these cells; this amends H10-LG's cells.
 - Run from a tree that has the A2A/LangGraph phase1_mode fix (this branch or a2a/precheck-fix).
 
-**Order after svc-main:** detect-boundary, overhead, scaled testbed (once H12 is registered), stress-deadline (once H14 is registered), compare-langgraph-reduced (once its venv, the D-97 scoring commits and the H10-LG amendment are in). Cut from the end.
+**compare-ec-tq** (`experiments/compare-ec-tq.json`, 20 runs; decided 2026-10-23 19:40 London).
+- Purpose: quarantine mode (Trace & quarantine) against cut mode (Firebreak) under rogue spread. compare-ec has no Trace & quarantine rows, and lab-main runs at rogue 0 only.
+- Cells: compare-ec's rogue part (C2 at rogue rates 0.3 and 1.0 × early/late × 5 repetitions, native L = 400 ms, deployed profile), Trace & quarantine only. Compared with compare-ec's Firebreak rows from the same runtime (1e7ed9f); rogue 1.0 is scored from the earliest alert, as compare-ec.
+- Pre-registration: H15 (spec session), before any run. Runs from this branch's tree (the EC eval tree at 1e7ed9f has no grid file).
+
+**Order after svc-main:** detect-boundary, compare-ec-tq (once H15 is registered), overhead, scaled testbed (once H12 is registered), stress-deadline (once H14 is registered), compare-langgraph-reduced (once its venv, the D-97 scoring commits and the H10-LG amendment are in). Cut from the end.

@@ -1,0 +1,43 @@
+{
+  "name": "compare-ec-tq",
+  "note": "Quarantine mode (Trace & quarantine) under rogue spread, pre-registered as H15 (user decision 2026-10-23 19:40 London). The same cells as compare-ec's rogue part (C2 at rogue rates 0.3 and 1.0 x early/late x 5 repetitions, native L = 400 ms, deployed profile), with Trace & quarantine only; it is compared with compare-ec's Firebreak rows from the same runtime (1e7ed9f). Rogue 1.0 is scored from the earliest alert, as compare-ec (harness score --earliest-alert). 20 runs.",
+  "instances": [
+    "../workloads/c2.json"
+  ],
+  "strategies": [
+    "trace_and_quarantine"
+  ],
+  "repetitions": 5,
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 400
+      }
+    }
+  ],
+  "time_scale": 2.0,
+  "reference": false,
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 90,
+  "root_modes": [
+    "given"
+  ],
+  "parts": [],
+  "rogue_rates": [
+    0.3,
+    1.0
+  ],
+  "root_wait_s": 10.0
+}
