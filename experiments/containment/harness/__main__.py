@@ -96,7 +96,7 @@ def _run(args: argparse.Namespace) -> None:
 def _score(args: argparse.Namespace) -> None:
     from .report import score
 
-    rows = score(args.out)
+    rows = score(args.out, earliest_alert=args.earliest_alert)
     print(f"{len(rows)} runs scored -> {args.out / 'runs.csv'}")
 
 
@@ -219,6 +219,9 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(handler=_run)
     p = sub.add_parser("score")
     p.add_argument("--out", required=True, type=Path)
+    # Time each injected-alert run from the earlier of its injected alert and
+    # the first detector alert on the fault's lineage (metrics.evaluate).
+    p.add_argument("--earliest-alert", action="store_true")
     p.set_defaults(handler=_score)
     p = sub.add_parser("sim")
     p.add_argument("--experiment", required=True, type=Path)

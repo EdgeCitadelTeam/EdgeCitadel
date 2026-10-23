@@ -198,3 +198,36 @@ def test_a_detector_triggered_run_is_scored_without_an_injected_alert(tmp_path):
     assert row["status"] == "quiescent" and row["alert_source"] == "detector"
     assert row["detected"] == 0 and row["root_mode"] == "detector"
     assert math.isnan(row["clean_after_alert"]) and math.isnan(row["t_alert_s"])
+
+
+def test_earliest_alert_scores_a_run_whose_injected_alert_never_fired(tmp_path):
+    """Failed by default; with earliest_alert timed from the detector alert."""
+    write_run(tmp_path, strategy="stop_team", rep=0, kept=False)
+    run = tmp_path / "runs" / "mini__late__native__r0__stop_team"
+    meta = json.loads((run / "run.json").read_text())
+    meta.update(t_alert_ms=None, t_end_ms=20_000, errors=["alert trigger never fired"])
+    (run / "run.json").write_text(json.dumps(meta))
+    start = {"kind": "start", "task": "A.t0", "rt": "rt-A.t0", "inv_kind": "task"}
+    with (run / "events.jsonl").open("a") as handle:
+        handle.write(json.dumps({**start, "t_ms": 1090}) + "\n")
+    alert = {
+        "type": "decision",
+        "incident_id": "i1",
+        "alert": {
+            "kind": "admission_denied",
+            "origin": "detector",
+            "subject": "inv:att-A.t0",
+            "observed_at_ms": 2000,
+        },
+        "t_received": 2100,
+        "ranking": [{"node": "inv:att-A.t0", "path": ["task:rt-A.t0", "inv:att-A.t0"]}],
+        "phase1": [],
+        "phase2": [],
+    }
+    (run / "decisions.jsonl").write_text(json.dumps(alert) + "\n")
+    [row] = report.score(tmp_path)
+    assert row["clean_after_alert"] == 0 and "t_alert_s" not in row
+    [row] = report.score(tmp_path, earliest_alert=True)
+    assert (row["alert_source"], row["t_alert_s"]) == ("detector", 2.1)
+    assert row["detection_latency_ms"] == pytest.approx(100)
+    assert math.isnan(row["t_injected_alert_s"])

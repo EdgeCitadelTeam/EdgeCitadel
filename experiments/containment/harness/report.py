@@ -108,7 +108,12 @@ def _decision_time(record: Mapping[str, Any]) -> float:
     return -math.inf
 
 
-def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def score_run(
+    run_dir: Path, *, earliest_alert: bool = False
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """One run's row and control actions; ``earliest_alert`` as
+    ``metrics.evaluate`` (a run whose injected alert never fired is then
+    scored from its detector alert, or as not detected, not as failed)."""
     meta = json.loads((run_dir / "run.json").read_text())
     code = meta["strategy"]
     latency = meta.get("control_latency_ms") or {}
@@ -178,6 +183,7 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         meta.get("fault") != "none"
         and meta.get("t_alert_ms") is None
         and not by_detector
+        and not earliest_alert
     ):
         # Failed to start, or its alert never fired: kept as a failed run.
         row["status"] = meta.get("status", "failed_to_start")
@@ -210,12 +216,13 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             gateway=gateway,
             marks=marks,
             boundary=_jsonl(run_dir / "boundary.jsonl"),
+            earliest_alert=earliest_alert,
         )
     )
     if spec.service and meta.get("t_alert_ms") is not None:
         row.update(svc.metrics(spec, meta, ledger, marks, events, gateway))
     t_alert = meta.get("t_alert_ms")
-    if by_detector and not math.isnan(row["t_alert_s"]):
+    if (by_detector or earliest_alert) and not math.isnan(row["t_alert_s"]):
         t_alert = meta["t0_ms"] + row["t_alert_s"] * 1000
     for d in decisions:
         for record in [*d.get("phase1", ()), *d.get("phase2", ())]:
@@ -281,13 +288,13 @@ def control_latency(out: Path) -> dict[str, list[float]]:
     return per_site
 
 
-def score(out: Path) -> list[dict[str, Any]]:
+def score(out: Path, *, earliest_alert: bool = False) -> list[dict[str, Any]]:
     rows, actions = [], []
     # Failed testbed attempts (<run_id>.infraN) are kept for inspection only.
     for run_dir in sorted((out / "runs").glob("*/run.json")):
         if ".infra" in run_dir.parent.name:
             continue
-        row, acts = score_run(run_dir.parent)
+        row, acts = score_run(run_dir.parent, earliest_alert=earliest_alert)
         rows.append(row)
         actions += acts
     svc.added_latency(rows, [k for k in PAIR])

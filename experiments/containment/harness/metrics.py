@@ -53,6 +53,15 @@ from the lineage's first boundary violation (node clock mapped onto the
 services' clock) to that alert, and every time above is measured from it. A
 run no detector alert reached is ``detected`` 0: scored from its start, with
 NaN alert-relative outcomes.
+
+Scored with ``earliest_alert`` (``harness score --earliest-alert``), a run
+with an injected alert takes the **earlier** of its two alerts: the injected
+one, or the first detector alert on the fault's lineage (as above). Every time
+is measured from that alert, ``alert_source`` names it,
+``t_injected_alert_s`` keeps the injected one (NaN if it never fired) and the
+response is the incidents of both alerts. A run collected without Core's
+boundary records maps a detector alert's subject attempt through the
+monitor's own decision log (``decision_attempts``).
 """
 
 from __future__ import annotations
@@ -634,12 +643,46 @@ def _lineage_task(invocation: tuple[str, str] | None, lineage: Set[str]) -> str 
     return name if name in lineage else None
 
 
+def decision_attempts(
+    decisions: Iterable[Mapping[str, Any]], events: Iterable[Mapping[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Attempt -> ``{"task_id", "node_id"}`` from the monitor's decision log,
+    for a run collected without Core's ``run/started`` records: its admission
+    records name an attempt's task and node, and each ranking path's
+    ``task:<task>`` -> ``inv:<attempt>`` step is that attempt running that
+    task (on the node its worker reported from)."""
+    node_of: dict[str, Any] = {}
+    for e in events:
+        if e.get("rt") and e.get("node") is not None:
+            node_of.setdefault(str(e["rt"]), e["node"])
+    out: dict[str, dict[str, Any]] = {}
+    for d in decisions:
+        if d.get("type") == "admission" and d.get("attempt_id") and d.get("task_id"):
+            out.setdefault(
+                str(d["attempt_id"]),
+                {"task_id": d["task_id"], "node_id": d.get("node_id")},
+            )
+    for d in decisions:
+        for candidate in d.get("ranking") or ():
+            path = candidate.get("path") or () if isinstance(candidate, Mapping) else ()
+            for a, b in zip(path, path[1:]):
+                a, b = str(a), str(b)
+                if a.startswith("task:") and b.startswith("inv:"):
+                    task = a.removeprefix("task:")
+                    out.setdefault(
+                        b.removeprefix("inv:"),
+                        {"task_id": task, "node_id": node_of.get(task)},
+                    )
+    return out
+
+
 def detection(
     spec: Spec,
     events: Iterable[Mapping[str, Any]],
     decisions: Iterable[Mapping[str, Any]],
     boundary: Iterable[Mapping[str, Any]],
     t_end_ms: float | None = None,
+    attempts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Detection:
     """The alert of a detector-triggered run (``spec.AlertTrigger.by_detector``).
 
@@ -651,6 +694,8 @@ def detection(
     with a ``VIOLATION_REASONS`` reason before the run's end (later ones are
     the teardown's), or the alert's own event when that is earlier; agentd's
     ``containment/alert`` repeats a lease denial and is not counted again.
+    ``attempts`` (``decision_attempts``) maps the attempts no ``run/started``
+    record names.
     """
     events = list(events)
     boundary = list(boundary)
@@ -661,11 +706,13 @@ def detection(
             invocations.setdefault(
                 str(e["rt"]), (str(e.get("inv_kind")), str(e["task"]))
             )
-    started = {
+    started: dict[str, Mapping[str, Any]] = {
         str(b["attempt_id"]): b
         for b in boundary
         if b["kind"] == "run" and b["phase"] == "started" and b.get("attempt_id")
     }
+    for attempt, record in (attempts or {}).items():
+        started.setdefault(str(attempt), record)
     offsets = _node_offsets(events)
 
     def at(node: Any, t_ms: float) -> float:
@@ -776,6 +823,8 @@ def evaluate(
     gateway: Iterable[Mapping[str, Any]] = (),
     marks: Iterable[Mapping[str, Any]] = (),
     boundary: Iterable[Mapping[str, Any]] = (),
+    *,
+    earliest_alert: bool = False,
 ) -> dict[str, Any]:
     """One row for one run. ``meta`` holds ``t0_ms``, ``t_alert_ms`` (None for a
     no-fault reference run, where every task is at risk from the start) and
@@ -786,19 +835,51 @@ def evaluate(
     alert time and response incident from ``detection`` (``boundary``: Core's
     boundary records); undetected, it is scored from its start like a
     reference run, and the alert-relative outcomes are NaN.
+
+    ``earliest_alert``: a faulted run with an injected alert takes the earlier
+    of it and the first detector alert on the fault's lineage (module
+    docstring); a run with neither is scored as not detected.
     """
     records = read_records(spec, events, ledger)
     gateway = list(gateway or ())
+    boundary = list(boundary or ())
     derived = derive(spec)
     t0 = float(meta["t0_ms"])
     trigger = spec.alerts.get(meta.get("alert") or "")
     found = None
+    source = "injected" if trigger is not None else ""
+    injected = meta.get("t_alert_ms")
+    earliest = (
+        earliest_alert
+        and trigger is not None
+        and not trigger.by_detector
+        and spec.fault.cls != "none"
+    )
     if trigger is not None and trigger.by_detector:
         found = detection(
             spec, records.events, decisions or [], boundary, meta.get("t_end_ms")
         )
         t_alert = found.t_alert_ms
         incidents = {found.incident_id} if found.incident_id else set()
+        source = "detector"
+    elif earliest:
+        found = detection(
+            spec,
+            records.events,
+            decisions or [],
+            boundary,
+            meta.get("t_end_ms"),
+            attempts=decision_attempts(decisions or [], records.events),
+        )
+        incidents = operator_incidents(decisions or [])
+        if found.incident_id:
+            incidents.add(found.incident_id)
+        if found.t_alert_ms is not None and (
+            injected is None or found.t_alert_ms < float(injected)
+        ):
+            t_alert, source = found.t_alert_ms, "detector"
+        else:
+            t_alert = injected
     else:
         t_alert = meta.get("t_alert_ms")
         incidents = operator_incidents(decisions or [])
@@ -901,9 +982,7 @@ def evaluate(
         "t_alert_s": _seconds(t_alert, t0),
         # Who raised the alert: the harness at its trigger ("injected"; under
         # No containment only its time is marked) or the monitor's detectors.
-        "alert_source": "detector"
-        if found is not None
-        else ("injected" if trigger is not None else ""),
+        "alert_source": source,
         "detection_latency_ms": NAN,
         "consumed_at_alert": share(len(consumed_by_alert), len(readers))
         if readers
@@ -987,7 +1066,9 @@ def evaluate(
     origin = meta.get("origin_attempt")
     if found is not None:
         row.update(detection_metrics(found, t0))
-        origin = found.origin_attempt
+        origin = (origin if earliest else None) or found.origin_attempt
+        if earliest:
+            row["t_injected_alert_s"] = _seconds(injected, t0)
         if t_alert is None:  # not detected: no alert to measure from
             for key in (
                 "clean_after_alert",
@@ -1002,7 +1083,7 @@ def evaluate(
     # harness names it (root mode "given"), the ranking's pick otherwise (a
     # detector's alert names no root either).
     row["root_mode"] = (
-        "detector" if found is not None else meta.get("root_mode", "given")
+        "detector" if source == "detector" else meta.get("root_mode", "given")
     )
     row["root_correct"] = (
         int(any(origin in str(r) for r in roots)) if origin and roots else NAN

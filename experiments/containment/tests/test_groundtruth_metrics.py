@@ -765,3 +765,112 @@ def test_no_containment_has_no_tau1_after_a_detector_alert(detector_run):
     assert row["detected"] == 1 and row["detection_latency_ms"] == pytest.approx(490)
     assert row["converged"] == 0 and math.isnan(row["tau1_s"])
     assert math.isnan(row["tainted_after_tau1"])
+
+
+# -- earliest alert: an injected run timed from an earlier detector alert --------------
+def ranked(record: dict, *path: str) -> dict:
+    """A decision whose ranking reaches its subject along ``path``."""
+    record["ranking"] = [{"node": path[0], "path": list(path)}]
+    return record
+
+
+def evaluate_earliest(
+    r: Records,
+    decisions: list[dict],
+    *,
+    t_alert=ALERT,
+    earliest=True,
+    strategy="firebreak",
+) -> dict:
+    meta = {
+        "t0_ms": 0,
+        "t_alert_ms": t_alert,
+        "t_end_ms": 20_000,
+        "status": "quiescent",
+        "alert": "late",
+        "strategy": strategy,
+        "origin_attempt": "att-A.t0",
+    }
+    return M.evaluate(
+        r.spec, meta, r.events, r.ledger, decisions, earliest_alert=earliest
+    )
+
+
+def test_earliest_alert_takes_a_detector_alert_before_the_injected_one(run):
+    """No boundary records: the detector alerts' attempts map through the
+    decision log (an admission record; a ranking path's task -> inv step).
+    The one on normal work is not the fault's; the lineage's, 1 s before the
+    injected alert, becomes the alert, and both alerts' incidents respond."""
+    finish_b_n(run)
+    run.effect("E_B", "B.t0", 5500, (FAULT,))  # between the two alerts
+    decisions = [
+        {
+            "type": "admission",
+            "attempt_id": "att-B.n",
+            "task_id": "rt-B.n",
+            "node_id": "edge-2",
+        },
+        detector_decision("i0", "inv:att-B.n", 3000, 2900),
+        ranked(
+            detector_decision("i2", "inv:att-A.t0", 5000, 4800),
+            "inv:att-R",
+            "task:rt-A.t0",
+            "inv:att-A.t0",
+        ),
+        converged(5400, "i2"),
+        decision(),
+        converged(8000),
+    ]
+    standard = evaluate_earliest(run, decisions, earliest=False)
+    assert (standard["alert_source"], standard["t_alert_s"]) == ("injected", 6.0)
+    assert "detected" not in standard and "t_injected_alert_s" not in standard
+    assert standard["tau1_s"] == 2.0 and standard["n_detector_decisions"] == 2
+    assert standard["violations"] == 0 and standard["clean_after_alert"] == 1
+
+    row = evaluate_earliest(run, decisions)
+    assert (row["alert_source"], row["detected"], row["detector_task"]) == (
+        "detector",
+        1,
+        "A.t0",
+    )
+    assert (row["t_alert_s"], row["t_injected_alert_s"]) == (5.0, 6.0)
+    assert row["detection_latency_ms"] == pytest.approx(200)
+    assert row["decision_s"] == pytest.approx(0.06)
+    assert row["tau1_s"] == pytest.approx(0.4) and row["tainted_after_tau1"] == 1
+    assert row["violations"] == 1 and row["clean_after_alert"] == 0
+    assert (row["n_decisions"], row["n_detector_decisions"]) == (2, 1)
+    assert (row["root_mode"], row["root_correct"]) == ("detector", 1)
+    # No containment enforces nothing: still no tau_1 from the detector alert.
+    none = evaluate_earliest(run, decisions, strategy="none")
+    assert none["t_alert_s"] == 5.0 and none["converged"] == 0
+
+
+def test_earliest_alert_keeps_an_earlier_injected_alert(run):
+    lineage = ranked(
+        detector_decision("i2", "inv:att-A.t0", 7000, 6800),
+        "task:rt-A.t0",
+        "inv:att-A.t0",
+    )
+    row = evaluate_earliest(run, [decision(), lineage, converged(8000)])
+    assert (row["alert_source"], row["t_alert_s"], row["root_mode"]) == (
+        "injected",
+        6.0,
+        "given",
+    )
+    assert row["detected"] == 1 and row["detection_latency_ms"] == pytest.approx(200)
+    assert row["tau1_s"] == 2.0
+
+
+def test_earliest_alert_scores_a_run_whose_injected_alert_never_fired(run):
+    lineage = ranked(
+        detector_decision("i2", "inv:att-A.t0", 5000, 4800),
+        "task:rt-A.t0",
+        "inv:att-A.t0",
+    )
+    row = evaluate_earliest(run, [lineage, converged(5400, "i2")], t_alert=None)
+    assert (row["alert_source"], row["t_alert_s"]) == ("detector", 5.0)
+    assert math.isnan(row["t_injected_alert_s"]) and row["tau1_s"] == pytest.approx(0.4)
+    # Neither alert: not detected, nothing measured from an alert, no error.
+    row = evaluate_earliest(run, [], t_alert=None)
+    assert row["detected"] == 0 and math.isnan(row["t_alert_s"])
+    assert math.isnan(row["clean_after_alert"])
