@@ -13,6 +13,10 @@
 |                       |                             | every result delivered into a delegation root           |
 | gsafeguard            | G-Safeguard                 | flag the root's agent(s): revoke the egress of each of  |
 |                       |                             | its units and park their results, live and later        |
+| exit_guard            | Exit guard                  | per unit of Taint_est: hold every pending protected     |
+|                       |                             | effect it issued, revoke its protected effect classes   |
+|                       |                             | at its gateway, per agent (the finest the vocabulary    |
+|                       |                             | has: revoke:grant <agent>>fx:<class>)                   |
 | greedy_cut            | Greedy cut                  | greedy cover on the deadline-aware G_C                  |
 | cut_without_deadlines | Cut without deadlines       | exact cut on G_C with every element feasible            |
 | firebreak             | Firebreak                   | exact deadline-aware cut (gadget/enumeration/ILP)       |
@@ -51,6 +55,7 @@ from .model import (
     hold_effect,
     hold_egress,
     hold_task,
+    inv,
     revoke_egress,
     revoke_grant,
     split,
@@ -67,6 +72,7 @@ DISPLAY = {
     "trace_and_quarantine": "Trace & quarantine",
     "sink_guard": "Sink guard",
     "gsafeguard": "G-Safeguard",
+    "exit_guard": "Exit guard",
     "greedy_cut": "Greedy cut",
     "cut_without_deadlines": "Cut without deadlines",
     "firebreak": "Firebreak",
@@ -322,6 +328,56 @@ def gsafeguard(ctx: Context) -> StrategyResult:
     return _finish(ctx, "gsafeguard", actions, started)
 
 
+def exit_guard(ctx: Context) -> StrategyResult:
+    """Lineage-scoped exit guard: guard the protected effects of the units in
+    the taint estimate and nothing else. Our own baseline, inspired by
+    execution-boundary protection (the simulator's v6 ``exit_guard`` is the
+    reference); runtime-only, for the real-LLM application experiment.
+
+    Taint_est is ``cg.taint_est``: the units in the declared closure of the
+    sources plus every tainted unit. For each of them:
+
+    - every pending protected effect it issued is held at its gateway (the
+      issuing node). So is one whose issuer has ended but is tainted
+      (Taint_hist), which no live unit stands for;
+    - its protected effect classes (its effective scope) are revoked at its
+      gateway, so the gateway refuses its later effects of those classes.
+
+    Nothing is paused, no egress is revoked, no input is blocked and no result
+    is parked: the units keep running and their unprotected outputs flow.
+
+    Granularity: the action vocabulary revokes an effect class per agent only
+    (``revoke:grant <agent>>fx:<class>``, which agentd applies as a filter on
+    the agent's credential at its node); it has no per-invocation or
+    per-context form. The revocation therefore covers every invocation of that
+    agent at that gateway, normal ones included, and the gateway's commit
+    re-check refuses their already scheduled effects of the class too. Effect
+    holds are per effect, so only the Taint_est units' pending effects are
+    held.
+
+    Like every rule it is re-applied by the receding re-solve (actions are
+    only added): a unit that joins Taint_est later (tainted through G_P,
+    spawned by a tainted unit, a later turn of a tainted context) is guarded
+    at the next solve, unless its agent's classes are already revoked."""
+    started = time.perf_counter()
+    graph, cg = ctx.graph, ctx.cg
+    actions = [
+        hold_effect(effect.node_id, effect.effect_id)
+        for effect in graph.effects.values()
+        if effect.protected
+        and (effect.attempt_id in cg.taint_est or inv(effect.attempt_id) in graph.taint)
+    ]
+    for key in sorted(cg.taint_est):
+        unit = cg.units.get(key)
+        node = graph.node_of(unit.agent) if unit is not None else None
+        if node:
+            actions += [
+                revoke_grant(node, unit.agent, f"fx:{effect_class}")
+                for effect_class in sorted(unit.effects)
+            ]
+    return _finish(ctx, "exit_guard", actions, started)
+
+
 def best_effort(cg: ControlGraph, unavoidable) -> list[Action]:
     """c0-cost actions on the last hop into sinks judged unavoidable."""
     threshold = cg.cost.config.c0 + 1e-9 if cg.cost else 0.0
@@ -434,6 +490,7 @@ STRATEGIES: dict[str, Callable[[Context], StrategyResult]] = {
     "trace_and_quarantine": trace_and_quarantine,
     "sink_guard": sink_guard,
     "gsafeguard": gsafeguard,
+    "exit_guard": exit_guard,
     "greedy_cut": greedy_cut,
     "cut_without_deadlines": cut_without_deadlines,
     "firebreak": firebreak,

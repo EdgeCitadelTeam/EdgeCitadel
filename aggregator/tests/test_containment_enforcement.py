@@ -1433,6 +1433,144 @@ def test_gsafeguard_covers_a_later_unit_of_the_flagged_agent(tmp_path):
     harness.close()
 
 
+# ---------------------------------------------------------------------------
+# Exit guard (2026-10-23): runtime strategy for the real-LLM application only
+# ---------------------------------------------------------------------------
+def exit_guard_lineage(tmp_path):
+    """Root r delegates to a (tainted) and b (healthy); both schedule a
+    protected actuator command. a may delegate on to d, which may command
+    the actuator too. Returns the harness, the trace (to continue it), a's
+    attempt and the ids."""
+    from aggregator.containment_monitor.config import MonitorConfig
+    from containment_support import TraceBuilder
+
+    command = frozenset({"device.command"})
+    config = MonitorConfig(
+        # A child's scope is bounded by its dispatcher's: r's covers d and
+        # the command, so a may delegate to d and both may command.
+        grants={
+            "r": frozenset({"a", "b", "d"}),
+            "a": frozenset({"d"}),
+            "b": frozenset(),
+            "d": frozenset(),
+        },
+        effect_scopes={"r": command, "a": command, "b": command, "d": command},
+        protected_effect_classes=command,
+        agent_nodes={"r": "n0", "a": "n1", "b": "n2", "d": "n3"},
+        session_isolated_agents=frozenset({"r", "a", "b", "d"}),
+    )
+    trace = TraceBuilder()
+    root = trace.start(trace.root("r", "n0", 0), 1)
+    task_a = trace.dispatch(root, "a", "n1", 2)
+    task_b = trace.dispatch(root, "b", "n2", 2)
+    for task_id in (task_a, task_b):
+        trace.arrive(task_id, 3)
+    a, b = (trace.start(t, 4) for t in (task_a, task_b))
+    effect_a = trace.effect(a, "device.command", "requested", 5, scheduled=10_000)
+    effect_b = trace.effect(b, "device.command", "requested", 5, scheduled=10_000)
+    harness = Harness(tmp_path, config, FakeControlClient())
+    harness.feed(trace.events)
+    harness.at(20)
+    ids = {
+        "a": task_a,
+        "b": task_b,
+        "effect_a": effect_a["attributes"]["effect_id"],
+        "effect_b": effect_b["attributes"]["effect_id"],
+    }
+    return harness, trace, a, ids
+
+
+def test_exit_guard_guards_only_the_effects_of_the_taint_estimate(tmp_path):
+    """At the alert, Taint_est is a (tainted) and r (a's result reaches it).
+    a's pending protected effect is held at its gateway, and the protected
+    class of each is revoked at its gateway, per agent. The healthy b keeps
+    its pending effect and its class. Nothing is paused, parked or
+    egress-revoked, and the rule is applied directly (no phase 1)."""
+    harness, _, a, ids = exit_guard_lineage(tmp_path)
+    root = inv(a)
+    decision = harness.monitor.respond(
+        operator_alert(root, harness.now), strategy="exit_guard", roots=[root]
+    )
+    assert decision.status == "applied" and decision.phase1 == []
+    assert decision.solve["solver"] == "rule"
+    assert phase_two(decision) == {
+        f"hold:effect:{ids['effect_a']}@n1",
+        "revoke:grant:a>fx:device.command@n1",
+        "revoke:grant:r>fx:device.command@n0",
+    }
+    harness.close()
+
+
+def test_exit_guard_holds_the_pending_effect_of_an_ended_tainted_invocation(
+    tmp_path,
+):
+    """a ended before the alert, leaving its command scheduled at the
+    gateway: no live unit stands for it, but the effect is held. a's class
+    is not revoked (it can request nothing more) and nothing else is
+    touched."""
+    harness, trace, a, ids = exit_guard_lineage(tmp_path)
+    before = len(trace.events)
+    trace.end(a, 10)
+    harness.feed(trace.events[before:])
+    root = inv(a)
+    decision = harness.monitor.respond(
+        operator_alert(root, harness.now), strategy="exit_guard", roots=[root]
+    )
+    assert phase_two(decision) == {f"hold:effect:{ids['effect_a']}@n1"}
+    harness.close()
+
+
+def test_exit_guard_guards_a_unit_that_joins_the_taint_later(tmp_path):
+    """The tainted a keeps running (no pause, no egress revocation) and
+    delegates to d after the alert. The new task is a frontier advance: the
+    receding re-solve revokes d's protected class at its gateway (n3), and
+    the next one holds the effect d schedules once it runs. Across all three
+    solves only effect holds and effect-class revocations are issued, and
+    the healthy b's effect and class are never touched."""
+    harness, trace, a, ids = exit_guard_lineage(tmp_path)
+    root = inv(a)
+    first = harness.monitor.respond(
+        operator_alert(root, harness.now), strategy="exit_guard", roots=[root]
+    )
+    before = len(trace.events)
+    task_d = trace.dispatch(a, "d", "n3", 30)
+    harness.feed(trace.events[before:])
+    assert harness.monitor.graph.frontier_advanced
+    harness.at(100)
+    delegated = harness.monitor.resolve_frontier()
+    assert delegated is not None and delegated.strategy == "exit_guard"
+    assert {r.action.label() for r in delegated.phase2} == {
+        "revoke:grant:d>fx:device.command@n3"
+    }
+    before = len(trace.events)
+    trace.arrive(task_d, 101)
+    d = trace.start(task_d, 102)
+    effect_d = trace.effect(d, "device.command", "requested", 103, scheduled=10_000)
+    harness.feed(trace.events[before:])
+    assert harness.monitor.graph.frontier_advanced
+    harness.at(200)
+    scheduled = harness.monitor.resolve_frontier()
+    assert scheduled is not None
+    assert {r.action.label() for r in scheduled.phase2} == {
+        f"hold:effect:{effect_d['attributes']['effect_id']}@n3"
+    }
+    issued = {
+        r.action.label()
+        for decision in (first, delegated, scheduled)
+        for r in decision.phase1 + decision.phase2
+    }
+    assert all(
+        label.startswith("hold:effect:")
+        or (label.startswith("revoke:grant:") and ">fx:" in label)
+        for label in issued
+    )
+    assert not any(
+        ids["b"] in label or ids["effect_b"] in label or ":b>" in label
+        for label in issued
+    )
+    harness.close()
+
+
 @pytest.mark.parametrize(
     "mode, labels",
     [

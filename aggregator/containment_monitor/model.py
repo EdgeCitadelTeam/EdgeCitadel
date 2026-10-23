@@ -202,6 +202,7 @@ STRATEGY_NAMES = (
     "trace_and_quarantine",
     "sink_guard",
     "gsafeguard",
+    "exit_guard",
     "greedy_cut",
     "cut_without_deadlines",
     "firebreak",

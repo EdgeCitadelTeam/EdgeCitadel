@@ -2158,3 +2158,44 @@ Every existing column keeps its name and meaning. They flow into `runs.csv` (and
 **Check.** svc-pilot (69 runs) re-scored offline: every pre-existing column of `runs.csv` and `actions.csv` is byte-identical to the scorer without this change. The kept-work float columns differ in the last digit between processes (set order follows `PYTHONHASHSEED`), so the comparison fixes the seed. In the pilot no strategy answers a request correctly after the late alert. After the early alert, Firebreak answers 15.3 of 45 correctly and Reject source all 45.
 
 **Tests.** `tests/test_svc.py`: a clean reply, a tainted reply and an unanswered request in the window, plus a tainted reply to a request asked before the alert.
+
+### exit_guard (2026-10-23): runtime strategy for the real-LLM application only; not used by any registered deterministic grid
+
+Branch `exitguard/runtime`, from `svc/correct-answers` at `93c923b` (the evaluation-freeze runtime `1e7ed9f` plus harness-only changes). The strategy is our own lineage-scoped baseline, inspired by execution-boundary protection. It is not a reproduction of any paper. The reference is the simulator's v6 `exit_guard` (`contain/strategies.py`, `contain/receding.py`; README "v6 (post-hoc): lineage-scoped exit guard").
+
+**Rule** (`strategies.exit_guard`, display "Exit guard"). At the alert, and again at every receding re-solve, it acts on each unit (invocation or queued task) of Taint_est. The re-solve fires on a frontier advance of the taint, the same trigger every strategy uses. Taint_est is `cg.taint_est`: the units in the declared closure of the sources, plus every tainted unit. For each such unit, the rule:
+- holds every pending protected effect the unit issued, at the issuing node's gateway. It also holds a pending protected effect whose issuer has ended but is tainted (the simulator's Taint_hist), since no live unit stands for it;
+- revokes the unit's protected effect classes (its effective scope) at its gateway.
+
+The rule does nothing else. It pauses nothing, revokes or labels no egress, blocks no input and parks no result, so the tainted units keep running and their unprotected outputs flow.
+
+It is a rule, not a cut (it is not in `CUT_STRATEGIES`):
+- Under the deployed profile it has no phase 1, no best-effort guard, no taint-aware admission and no deadline check. Its actions are issued directly and never released.
+- Under the shared ablation profile it gets every mechanism, like every other rule.
+- No profile, default or other strategy changed, and `config.py` is untouched.
+
+**Granularity: per agent, at the agent's gateway.** The monitor's action vocabulary has one way to revoke an effect class: `revoke:grant <agent>>fx:<class>`. agentd applies it as a filter on the agent's credential at the node that receives it (`containment_control._revocation_filter`). The vocabulary has no per-invocation or per-context form, so the finest available granularity is the agent. The rule sends the revocation to `graph.node_of(agent)`, the site that `sink_guard` and the projection's gate edge `A:a:fx:c -> K:a:c` use. Consequences:
+- **Collateral within the agent.** Every invocation of that agent at that node loses the class for the rest of the incident, normal invocations included, because a revocation is never released. The gateway's commit re-check also refuses their already scheduled effects of that class. Effect holds remain per effect, so only the Taint_est units' pending effects are held.
+- **Less kept work than the simulator.** The simulator's per-unit `deny_pot_eff` touches only the tainted unit. Runtime results can therefore keep less normal work than the simulator's EG when a tainted unit's agent also serves normal work, for example an assistant serving several sessions.
+- **The context rule.** The simulator guards the later turns of a tainted session at the solve. The runtime has no separate code path for this. A later turn of an agent whose classes are already revoked is covered by that revocation. Otherwise the turn joins Taint_est (through the tainted context's session edge, or as a tainted invocation once it starts) and is guarded at the next re-solve.
+- **A finer option, not taken.** agentd's `filter` command accepts a task authority (`{"task_id"}`: a delegation and its descendants) with an effect-class target. The monitor's `Action` vocabulary does not expose it, and adding it would change `model`, `control` and `projection`, which is outside this change.
+
+**Scope of the change.** `git diff 93c923b --stat` shows additions only, in these places:
+- `strategies.py`: the docstring table row, the `inv` import, `DISPLAY`, the rule itself and `STRATEGIES`;
+- `model.STRATEGY_NAMES`;
+- `experiments/containment/harness/names.CODE_NAME`;
+- the tests;
+- this section.
+
+No registered grid runs the strategy:
+- every experiment JSON lists its strategies explicitly;
+- the e2e C2 script's `--strategy` choices are unchanged;
+- it is not in `names.EXTRA` (not plotted, no family or colour) and has no `SIM_CODE`.
+
+**Tests** (`aggregator/tests/test_containment_enforcement.py`):
+- `test_exit_guard_guards_only_the_effects_of_the_taint_estimate`: at the alert, the tainted unit's pending protected effect is held, and the classes of the tainted unit and of its parent (in Taint_est) are revoked. The healthy sibling's pending effect and class are untouched, and the rule is applied directly.
+- `test_exit_guard_holds_the_pending_effect_of_an_ended_tainted_invocation`: the Taint_hist case.
+- `test_exit_guard_guards_a_unit_that_joins_the_taint_later`: the tainted unit delegates after the alert. The receding re-solve revokes the new unit's class, and the next re-solve holds the effect that unit schedules. Across all three solves the rule issues only effect holds and effect-class revocations, nothing that pauses, parks or blocks egress, and nothing for the healthy unit.
+- The strategy also runs in the existing every-strategy tests (deployed and shared profiles, 6 seeds each), which iterate over `strategies.STRATEGIES`.
+
+Not run: an end-to-end check on agentd or `jim-eq`.

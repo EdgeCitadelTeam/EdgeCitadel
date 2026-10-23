@@ -62,6 +62,9 @@ CODE_NAME = {
     "trace_and_quarantine": "Trace & quarantine",
     "sink_guard": "Sink guard",
     "gsafeguard": "G-Safeguard",
+    # Runtime-only (2026-10-23), for the real-LLM application experiment; no
+    # registered grid runs it and it is not plotted (names.EXTRA).
+    "exit_guard": "Exit guard",
     "a2a_block_input": "A2A: block bad input",
     "a2a_cancel_agent": "A2A: cancel faulty agent",
     "a2a_cancel_all": "A2A: cancel all",
