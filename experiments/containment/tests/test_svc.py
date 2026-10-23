@@ -64,28 +64,41 @@ def test_a_stopped_service_costs_its_expected_future_requests():
     assert svc.monitor_settings(other, "late", 1.0) == {}
 
 
+LABEL = ["fault:wrong_value:sched@v1"]
+
+
+def effect(effect_id, issuer, cls, phase, t, labels=()):
+    return {
+        "effect_id": effect_id,
+        "issuer": issuer,
+        "class": cls,
+        "declared": True,
+        "origin": "declared",
+        "labels": list(labels),
+        "value": "v",
+        "phase": phase,
+        "t_ms": t,
+    }
+
+
+def invocation(task, rt, t, labels=()):
+    """The runtime events of one invocation of ``task``; ``labels`` at its
+    compute start make it (and its commits, by lineage) tainted."""
+    return [
+        {"kind": kind, "task": task, "rt": rt, "inv_kind": "task", "t_ms": t + dt}
+        | ({"labels": list(labels)} if kind == "compute_start" and labels else {})
+        for kind, dt in (("start", 0), ("compute_start", 10))
+    ]
+
+
 def test_service_metrics_count_from_the_alert_on():
     spec = S.load(WORKLOAD)
     first, second, third = spec.service["requests"][:3]
-    label = ["fault:wrong_value:sched@v1"]
-
-    def effect(effect_id, issuer, cls, phase, t, labels=()):
-        return {
-            "effect_id": effect_id,
-            "issuer": issuer,
-            "class": cls,
-            "declared": True,
-            "origin": "declared",
-            "labels": list(labels),
-            "value": "v",
-            "phase": phase,
-            "t_ms": t,
-        }
 
     ledger = [
         effect(f"{first}.reply", first, "reply", "committed", 900),  # before
-        effect(f"{second}.reply", second, "reply", "committed", 2600, label),
-        effect(f"{second}.lamp", second, "dev_lamp", "committed", 2700, label),
+        effect(f"{second}.reply", second, "reply", "committed", 2600, LABEL),
+        effect(f"{second}.lamp", second, "dev_lamp", "committed", 2700, LABEL),
         effect(f"{third}.reply", third, "reply", "held", 3100),
         effect("M05.cmd", "M05", "dev_auto_1", "committed", 3200),
     ]
@@ -98,11 +111,7 @@ def test_service_metrics_count_from_the_alert_on():
     ]
     # The second request's invocation computed on the corrupted schedule (the
     # assistant's shared memory): its commits are tainted by lineage.
-    events = [
-        {"kind": kind, "task": second, "rt": "rt-2", "inv_kind": "task", "t_ms": t}
-        | ({"labels": label} if kind == "compute_start" else {})
-        for kind, t in (("start", 2190), ("compute_start", 2200))
-    ]
+    events = invocation(second, "rt-2", 2190, LABEL)
     row = svc.metrics(spec, {"t_alert_ms": 2000}, ledger, marks, events)
     assert (row["svc_requests"], row["svc_answered"], row["svc_refused"]) == (3, 1, 1)
     assert row["svc_tainted_replies"] == row["svc_tainted_device_commands"] == 1
@@ -119,6 +128,42 @@ def test_service_metrics_count_from_the_alert_on():
     svc.added_latency(rows, ["rep"])
     assert rows[1]["svc_added_latency_s"] == 0.25
     assert rows[1]["svc_added_latency_n"] == 1
+
+
+def test_a_tainted_reply_answers_a_request_but_not_correctly():
+    spec = S.load(WORKLOAD)
+    before, clean, tainted, unanswered = spec.service["requests"][:4]
+    ledger = [
+        # Asked before the alert, tainted reply after it: a tainted reply, but
+        # not a request of the window.
+        effect(f"{before}.reply", before, "reply", "committed", 2300, LABEL),
+        effect(f"{clean}.reply", clean, "reply", "committed", 2600),
+        effect(f"{tainted}.reply", tainted, "reply", "committed", 2900, LABEL),
+    ]
+    marks = [
+        {"name": "submitted", "task": before, "t_ms": 1800},
+        {"name": "submitted", "task": clean, "t_ms": 2100},
+        {"name": "submitted", "task": tainted, "t_ms": 2400},
+        {"name": "submitted", "task": unanswered, "t_ms": 3000},
+    ]
+    events = [
+        *invocation(before, "rt-0", 1810, LABEL),
+        *invocation(clean, "rt-1", 2110),
+        *invocation(tainted, "rt-2", 2410, LABEL),
+    ]
+    row = svc.metrics(spec, {"t_alert_ms": 2000}, ledger, marks, events)
+    # The registered columns count the tainted reply as an answer.
+    assert (row["svc_requests"], row["svc_answered"]) == (3, 2)
+    assert row["svc_answered_frac"] == 2 / 3
+    assert row["svc_tainted_replies"] == 2
+    # Only the clean reply is a correct answer; the wrong answers are the
+    # window's own tainted replies.
+    assert row["svc_answered_correct"] == 1
+    assert row["svc_answered_correct_frac"] == 1 / 3
+    assert row["svc_wrong_answers"] == 1
+    empty = svc.metrics(spec, {"t_alert_ms": 10**9}, ledger, marks, events)
+    assert (empty["svc_answered_correct"], empty["svc_wrong_answers"]) == (0, 0)
+    assert math.isnan(empty["svc_answered_correct_frac"])
 
 
 def test_the_svc_grids_have_their_planned_sizes():
