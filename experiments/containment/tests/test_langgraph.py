@@ -161,3 +161,53 @@ def test_the_edit_is_written_by_the_node_that_keeps_the_step_unduplicated(tmp_pa
     assert [a["state"] for a in cut_step] == ["confirmed", "confirmed"]
     assert between[0]["as_node"] == "worker"
     assert [a["state"] for a in ended] == ["noop"]
+
+
+def test_the_langgraph_stack_starts_every_root_from_the_request_schedule():
+    """The runner's per-node request schedule (EdgeCitadel's nodectl schedule
+    needs agentd): the first entry starts the one LangGraph run with every root,
+    and each entry is marked submitted (or refused) with the services."""
+    from harness.lg_stack import LangGraphRunStack
+
+    started = []
+
+    class Controller:
+        async def start(self, requests):
+            started.append([r["body"]["task"] for r in requests])
+            return "run-1"
+
+    stack = object.__new__(LangGraphRunStack)
+    stack.loop = LoopThread("test")
+    stack.controller = Controller()
+    stack.plan = {
+        "roots": ["R1", "R2"],
+        "tasks": {"R1": {"agent": "a"}, "R2": {"agent": "b"}},
+    }
+    stack.root_ids = {}
+    marks = []
+    stack.services = lambda method, path, data: marks.append(data)
+    body = {"protocol": "det-worker.v1", "t0_ms": 1, "kind": "task", "input": None}
+    stack.schedule(
+        "edge-1",
+        [
+            {
+                "at_ms": 20,
+                "recipient": "b",
+                "task": "R2",
+                "body": {**body, "task": "R2"},
+            },
+            {
+                "at_ms": 10,
+                "recipient": "a",
+                "task": "R1",
+                "body": {**body, "task": "R1"},
+            },
+        ],
+    )
+    stack.loop.close()
+    assert started == [["R1", "R2"]]  # one run, every root
+    assert [(m["task"], m["name"]) for m in marks] == [
+        ("R1", "submitted"),
+        ("R2", "submitted"),
+    ]
+    assert marks[0]["rt"] == stack.root_ids["R1"]
