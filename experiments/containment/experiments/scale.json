@@ -1,0 +1,71 @@
+{
+  "name": "scale",
+  "note": "Scaled testbed (H12 draft): the 63-agent random workflows on S agentd sites (configs/lab-scale.json; S is the workload's placement). Base: the comparison at S = 32 on rand-n63-s0-S32 (Firebreak, Trace & quarantine, Stop team, No containment x early/late x 3 repetitions, plus the no-fault reference). Parts: the rogue instance (rand-n63-s0-S32 at rogue rate 0.3, the same strategies, 2 repetitions) and the scale curve (rand-n63-s0 at S = 3, 8, 16: the reference and Firebreak early/late x 3 repetitions; its S = 32 point is the base's). 72 runs, about 5.7 h. A second instance's S = 32 comparison is in scale-extra.json.",
+  "instances": [
+    "../workloads/scale/rand-n63-s0-S32.json"
+  ],
+  "strategies": [
+    "firebreak",
+    "trace_and_quarantine",
+    "stop_team",
+    "none"
+  ],
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "repetitions": 3,
+  "rogue_rates": [
+    0.0
+  ],
+  "reference": true,
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 400
+      }
+    }
+  ],
+  "time_scale": 2.0,
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 120,
+  "root_modes": [
+    "given"
+  ],
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "phase1_labels": [
+    "frontier"
+  ],
+  "receding_during_waits": [
+    false
+  ],
+  "parts": [
+    {
+      "instances": [
+        "../workloads/scale/rand-n63-s0-S32.json"
+      ],
+      "rogue_rates": [
+        0.3
+      ],
+      "repetitions": 2
+    },
+    {
+      "instances": [
+        "../workloads/scale/rand-n63-s0-S3.json",
+        "../workloads/scale/rand-n63-s0-S8.json",
+        "../workloads/scale/rand-n63-s0-S16.json"
+      ],
+      "strategies": [
+        "firebreak"
+      ]
+    }
+  ],
+  "root_wait_s": 10.0
+}

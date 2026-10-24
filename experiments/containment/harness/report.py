@@ -35,6 +35,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from . import runstats
 from .metrics import evaluate, sent_to_confirmed
 from .names import CODE_NAME, COLOR, FAMILY, MARKER, PLOTTED_NAMES
 from . import svc
@@ -199,6 +200,7 @@ def score_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     )
     if spec.service and meta.get("t_alert_ms") is not None:
         row.update(svc.metrics(spec, meta, ledger, marks, events, gateway))
+    row.update(runstats.columns(run_dir, meta, decisions))
     t_alert = meta.get("t_alert_ms")
     for d in decisions:
         for record in [*d.get("phase1", ()), *d.get("phase2", ())]:

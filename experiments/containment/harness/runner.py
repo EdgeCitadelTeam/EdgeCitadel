@@ -600,7 +600,13 @@ def run_cell(
             meta["errors"].append(f"processes exited early: {died}")
         if netem:
             stack.clear_netem()
-        _collect(stack, stack_config, run_dir, keep_state=experiment.keep_state)
+        _collect(
+            stack,
+            stack_config,
+            run_dir,
+            keep_state=experiment.keep_state,
+            since_ms=meta.get("t0_ms"),
+        )
         meta.update(testbed_counts(run_dir))
         meta.update(submitted_requests(run_dir))
         (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
@@ -974,7 +980,12 @@ def _alert_payload(
 
 
 def _collect(
-    stack: RunStack, config: StackConfig, run_dir: Path, *, keep_state: bool
+    stack: RunStack,
+    config: StackConfig,
+    run_dir: Path,
+    *,
+    keep_state: bool,
+    since_ms: int | None = None,
 ) -> None:
     controller = config.controller
     base = stack.host_dir(controller)
@@ -1001,6 +1012,24 @@ def _collect(
     except (StackError, OSError):
         effects = ""
     (run_dir / "gateway_effects.jsonl").write_text(effects)
+    try:  # Core's ingest lag per node (harness.runstats)
+        lags = stack.hosts[controller].run(
+            [
+                config.hosts[controller].python,
+                "-m",
+                "harness.coreq",
+                "ingest",
+                "--db",
+                f"{base}/core/openclaw.db",
+                # The run's own events: start-up backlog is not ingest lag.
+                *(["--since-ms", str(since_ms)] if since_ms is not None else []),
+            ],
+            cwd=config.hosts[controller].runtime_root,
+        )
+    except (StackError, OSError):
+        lags = ""
+    if lags.strip():
+        (run_dir / "core_ingest.json").write_text(lags)
     logs = run_dir / "logs"
     logs.mkdir(exist_ok=True)
     for host in {controller, *config.node_hosts.values()}:

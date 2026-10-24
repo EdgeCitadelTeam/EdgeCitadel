@@ -1,0 +1,32 @@
+{
+  "mode": "dryrun",
+  "controller": "local",
+  "_note": "scale testbed dry run: 8 agentd sites on this machine",
+  "hosts": {
+    "local": {
+      "address": "127.0.0.1",
+      "python": "${HARNESS_PYTHON}",
+      "repo": "",
+      "runtime_root": "${HARNESS_RUNTIME_ROOT}",
+      "work_root": "${HARNESS_WORK_ROOT}",
+      "nats_server": "${HARNESS_NATS_SERVER}"
+    }
+  },
+  "node_hosts": {
+    "core": "local",
+    "edge-1": "local",
+    "edge-2": "local",
+    "edge-3": "local",
+    "edge-4": "local",
+    "edge-5": "local",
+    "edge-6": "local",
+    "edge-7": "local"
+  },
+  "tau_ms": 50,
+  "control_transport": "nats",
+  "effect_sink": {
+    "kind": "ledger"
+  },
+  "controller_lease_ms": 30000,
+  "procstat_interval_ms": 1000
+}

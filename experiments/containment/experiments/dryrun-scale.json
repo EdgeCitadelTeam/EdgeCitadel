@@ -1,0 +1,48 @@
+{
+  "name": "dryrun-scale",
+  "note": "Local end-to-end check of the scaled testbed (configs/dryrun-scale.json, 8 agentd sites on this machine) with a scaled-down workflow (rand-n15-s0-S8): the reference, Firebreak early/late and Trace & quarantine early/late once.",
+  "instances": [
+    "../workloads/scale/rand-n15-s0-S8.json"
+  ],
+  "strategies": [
+    "firebreak",
+    "trace_and_quarantine"
+  ],
+  "alerts": [
+    "early",
+    "late"
+  ],
+  "repetitions": 1,
+  "rogue_rates": [
+    0.0
+  ],
+  "reference": true,
+  "latencies": [
+    {
+      "name": "native",
+      "control_latency_ms": {
+        "*": 400
+      }
+    }
+  ],
+  "time_scale": 2.0,
+  "quiet_s": 8,
+  "timeout_factor": 3.0,
+  "timeout_extra_s": 120,
+  "root_modes": [
+    "given"
+  ],
+  "profiles": [
+    "deployed"
+  ],
+  "phase1_modes": [
+    "adaptive"
+  ],
+  "phase1_labels": [
+    "frontier"
+  ],
+  "receding_during_waits": [
+    false
+  ],
+  "root_wait_s": 10.0
+}

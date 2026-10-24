@@ -1,0 +1,1884 @@
+{
+ "spec_version": 1,
+ "name": "rand-n15-s0-S8",
+ "agents": [
+  {
+   "id": "r",
+   "parent": null,
+   "site": "s_R",
+   "label": "R"
+  },
+  {
+   "id": "a1",
+   "parent": "r",
+   "site": "s_a1",
+   "label": "a1"
+  },
+  {
+   "id": "a2",
+   "parent": "r",
+   "site": "s_a2",
+   "label": "a2"
+  },
+  {
+   "id": "a3",
+   "parent": "a1",
+   "site": "s_a3",
+   "label": "a3"
+  },
+  {
+   "id": "a4",
+   "parent": "a1",
+   "site": "s_a4",
+   "label": "a4"
+  },
+  {
+   "id": "a5",
+   "parent": "a2",
+   "site": "s_a5",
+   "label": "a5"
+  },
+  {
+   "id": "a6",
+   "parent": "a2",
+   "site": "s_a6",
+   "label": "a6"
+  },
+  {
+   "id": "a7",
+   "parent": "a3",
+   "site": "s_a7",
+   "label": "a7"
+  },
+  {
+   "id": "a8",
+   "parent": "a3",
+   "site": "s_a8",
+   "label": "a8"
+  },
+  {
+   "id": "a9",
+   "parent": "a4",
+   "site": "s_a9",
+   "label": "a9"
+  },
+  {
+   "id": "a10",
+   "parent": "a4",
+   "site": "s_a10",
+   "label": "a10"
+  },
+  {
+   "id": "a11",
+   "parent": "a5",
+   "site": "s_a11",
+   "label": "a11"
+  },
+  {
+   "id": "a12",
+   "parent": "a5",
+   "site": "s_a12",
+   "label": "a12"
+  },
+  {
+   "id": "a13",
+   "parent": "a6",
+   "site": "s_a13",
+   "label": "a13"
+  },
+  {
+   "id": "a14",
+   "parent": "a6",
+   "site": "s_a14",
+   "label": "a14"
+  }
+ ],
+ "placement": {
+  "s_R": "core",
+  "s_a2": "core",
+  "s_a1": "edge-1",
+  "s_a3": "edge-2",
+  "s_a7": "edge-2",
+  "s_a8": "edge-2",
+  "s_a4": "edge-3",
+  "s_a9": "edge-3",
+  "s_a5": "edge-4",
+  "s_a12": "edge-4",
+  "s_a6": "edge-5",
+  "s_a13": "edge-5",
+  "s_a14": "edge-5",
+  "s_a10": "edge-6",
+  "s_a11": "edge-7"
+ },
+ "effect_classes": [
+  {
+   "id": "final",
+   "site": "s_R",
+   "min_delay": 0.2,
+   "protected": true
+  },
+  {
+   "id": "act_a7",
+   "site": "s_a7",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a8",
+   "site": "s_a8",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a9",
+   "site": "s_a9",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a10",
+   "site": "s_a10",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a11",
+   "site": "s_a11",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a12",
+   "site": "s_a12",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a13",
+   "site": "s_a13",
+   "min_delay": 0.5,
+   "protected": true
+  },
+  {
+   "id": "act_a14",
+   "site": "s_a14",
+   "min_delay": 0.5,
+   "protected": true
+  }
+ ],
+ "tasks": [
+  {
+   "id": "R.plan",
+   "agent": "r",
+   "session": "s:R",
+   "compute": 1.3682478744521547,
+   "reads": [
+    "task"
+   ]
+  },
+  {
+   "id": "a1.plan",
+   "agent": "a1",
+   "session": "s:a1",
+   "compute": 1.5245772715468389
+  },
+  {
+   "id": "a2.plan",
+   "agent": "a2",
+   "session": "s:a2",
+   "compute": 2.1273540016411716
+  },
+  {
+   "id": "a3.plan",
+   "agent": "a3",
+   "session": "s:a3",
+   "compute": 1.4294377506620162
+  },
+  {
+   "id": "a4.plan",
+   "agent": "a4",
+   "session": "s:a4",
+   "compute": 3.041099121298302
+  },
+  {
+   "id": "a5.plan",
+   "agent": "a5",
+   "session": "s:a5",
+   "compute": 0.6970815822008114
+  },
+  {
+   "id": "a6.plan",
+   "agent": "a6",
+   "session": "s:a6",
+   "compute": 1.717609387414145
+  },
+  {
+   "id": "a7.s0.t0",
+   "agent": "a7",
+   "session": "a7:s0",
+   "compute": 8.244051050327938,
+   "reads": [
+    "in:a7.s0.t0"
+   ]
+  },
+  {
+   "id": "a7.s0.t1",
+   "agent": "a7",
+   "session": "a7:s0",
+   "compute": 6.742362191546667
+  },
+  {
+   "id": "a7.s0.t2",
+   "agent": "a7",
+   "session": "a7:s0",
+   "compute": 2.7295131295215223,
+   "reads": [
+    "o:a10.s0.t1@v1",
+    "o:a10.s1.t0@v1"
+   ]
+  },
+  {
+   "id": "a7.s1.t0",
+   "agent": "a7",
+   "session": "a7:s1",
+   "compute": 10.748065815426479,
+   "reads": [
+    "in:a7.s1.t0"
+   ]
+  },
+  {
+   "id": "a7.s2.t0",
+   "agent": "a7",
+   "session": "a7:s2",
+   "compute": 13.684198097867098,
+   "reads": [
+    "in:a7.s2.t0"
+   ]
+  },
+  {
+   "id": "a7.s2.t1",
+   "agent": "a7",
+   "session": "a7:s2",
+   "compute": 9.601412588318889,
+   "reads": [
+    "o:a11.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a8.s0.t0",
+   "agent": "a8",
+   "session": "a8:s0",
+   "compute": 3.6107344711289553,
+   "reads": [
+    "in:a8.s0.t0"
+   ]
+  },
+  {
+   "id": "a8.s0.t1",
+   "agent": "a8",
+   "session": "a8:s0",
+   "compute": 7.405866986207323,
+   "reads": [
+    "o:a7.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a8.s1.t0",
+   "agent": "a8",
+   "session": "a8:s1",
+   "compute": 6.772527350728845,
+   "reads": [
+    "in:a8.s1.t0"
+   ]
+  },
+  {
+   "id": "a8.s2.t0",
+   "agent": "a8",
+   "session": "a8:s2",
+   "compute": 2.945157905088446,
+   "reads": [
+    "in:a8.s2.t0",
+    "o:a14.s1.t0@v1"
+   ]
+  },
+  {
+   "id": "a9.s0.t0",
+   "agent": "a9",
+   "session": "a9:s0",
+   "compute": 2.368228494094365,
+   "reads": [
+    "in:a9.s0.t0"
+   ]
+  },
+  {
+   "id": "a9.s0.t1",
+   "agent": "a9",
+   "session": "a9:s0",
+   "compute": 7.396055567053969,
+   "reads": [
+    "o:a10.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a9.s1.t0",
+   "agent": "a9",
+   "session": "a9:s1",
+   "compute": 5.29260098774583,
+   "reads": [
+    "in:a9.s1.t0",
+    "o:a7.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a9.s1.t1",
+   "agent": "a9",
+   "session": "a9:s1",
+   "compute": 4.064847303004776,
+   "reads": [
+    "o:a10.s0.t1@v1"
+   ]
+  },
+  {
+   "id": "a9.s1.t2",
+   "agent": "a9",
+   "session": "a9:s1",
+   "compute": 4.008226192060176,
+   "reads": [
+    "o:a11.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a9.s2.t0",
+   "agent": "a9",
+   "session": "a9:s2",
+   "compute": 11.016473211967996,
+   "reads": [
+    "in:a9.s2.t0"
+   ]
+  },
+  {
+   "id": "a10.s0.t0",
+   "agent": "a10",
+   "session": "a10:s0",
+   "compute": 5.12374857718067,
+   "reads": [
+    "in:a10.s0.t0"
+   ]
+  },
+  {
+   "id": "a10.s0.t1",
+   "agent": "a10",
+   "session": "a10:s0",
+   "compute": 2.3332997436495218
+  },
+  {
+   "id": "a10.s1.t0",
+   "agent": "a10",
+   "session": "a10:s1",
+   "compute": 5.662442285807802,
+   "reads": [
+    "in:a10.s1.t0"
+   ]
+  },
+  {
+   "id": "a10.s1.t1",
+   "agent": "a10",
+   "session": "a10:s1",
+   "compute": 1.9824024278487997
+  },
+  {
+   "id": "a10.s2.t0",
+   "agent": "a10",
+   "session": "a10:s2",
+   "compute": 4.199279791954596,
+   "reads": [
+    "in:a10.s2.t0"
+   ]
+  },
+  {
+   "id": "a10.s2.t1",
+   "agent": "a10",
+   "session": "a10:s2",
+   "compute": 6.618854571394445,
+   "reads": [
+    "o:a9.s1.t1@v1",
+    "o:a8.s2.t0@v1"
+   ]
+  },
+  {
+   "id": "a10.s2.t2",
+   "agent": "a10",
+   "session": "a10:s2",
+   "compute": 3.055385642279231,
+   "reads": [
+    "o:a8.s0.t1@v1"
+   ]
+  },
+  {
+   "id": "a11.s0.t0",
+   "agent": "a11",
+   "session": "a11:s0",
+   "compute": 5.496322488645293,
+   "reads": [
+    "in:a11.s0.t0"
+   ]
+  },
+  {
+   "id": "a11.s0.t1",
+   "agent": "a11",
+   "session": "a11:s0",
+   "compute": 3.36174760037288
+  },
+  {
+   "id": "a11.s0.t2",
+   "agent": "a11",
+   "session": "a11:s0",
+   "compute": 6.896899904305621
+  },
+  {
+   "id": "a11.s1.t0",
+   "agent": "a11",
+   "session": "a11:s1",
+   "compute": 3.3226866236249224,
+   "reads": [
+    "in:a11.s1.t0"
+   ]
+  },
+  {
+   "id": "a11.s2.t0",
+   "agent": "a11",
+   "session": "a11:s2",
+   "compute": 2.4516848811342027,
+   "reads": [
+    "in:a11.s2.t0"
+   ]
+  },
+  {
+   "id": "a11.s2.t1",
+   "agent": "a11",
+   "session": "a11:s2",
+   "compute": 3.1505300976188537
+  },
+  {
+   "id": "a11.s2.t2",
+   "agent": "a11",
+   "session": "a11:s2",
+   "compute": 2.5375940555049596
+  },
+  {
+   "id": "a12.s0.t0",
+   "agent": "a12",
+   "session": "a12:s0",
+   "compute": 4.6625746460981805,
+   "reads": [
+    "in:a12.s0.t0"
+   ]
+  },
+  {
+   "id": "a12.s0.t1",
+   "agent": "a12",
+   "session": "a12:s0",
+   "compute": 6.6214063501043805
+  },
+  {
+   "id": "a12.s0.t2",
+   "agent": "a12",
+   "session": "a12:s0",
+   "compute": 3.8494771022224414,
+   "reads": [
+    "o:a9.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a12.s1.t0",
+   "agent": "a12",
+   "session": "a12:s1",
+   "compute": 7.845536860068341,
+   "reads": [
+    "in:a12.s1.t0",
+    "o:a8.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a12.s1.t1",
+   "agent": "a12",
+   "session": "a12:s1",
+   "compute": 2.941924107936107
+  },
+  {
+   "id": "a12.s1.t2",
+   "agent": "a12",
+   "session": "a12:s1",
+   "compute": 4.708993249291833,
+   "reads": [
+    "o:a7.s1.t0@v1"
+   ]
+  },
+  {
+   "id": "a12.s2.t0",
+   "agent": "a12",
+   "session": "a12:s2",
+   "compute": 13.867479525791587,
+   "reads": [
+    "in:a12.s2.t0",
+    "o:a11.s0.t1@v1",
+    "o:a8.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a12.s2.t1",
+   "agent": "a12",
+   "session": "a12:s2",
+   "compute": 3.7827704215098246,
+   "reads": [
+    "o:a10.s0.t1@v1"
+   ]
+  },
+  {
+   "id": "a13.s0.t0",
+   "agent": "a13",
+   "session": "a13:s0",
+   "compute": 6.830976529262058,
+   "reads": [
+    "in:a13.s0.t0"
+   ]
+  },
+  {
+   "id": "a13.s0.t1",
+   "agent": "a13",
+   "session": "a13:s0",
+   "compute": 2.9082276888292067
+  },
+  {
+   "id": "a13.s1.t0",
+   "agent": "a13",
+   "session": "a13:s1",
+   "compute": 6.677175501915454,
+   "reads": [
+    "in:a13.s1.t0"
+   ]
+  },
+  {
+   "id": "a13.s1.t1",
+   "agent": "a13",
+   "session": "a13:s1",
+   "compute": 10.237648713384996,
+   "reads": [
+    "o:a10.s0.t1@v1"
+   ]
+  },
+  {
+   "id": "a13.s2.t0",
+   "agent": "a13",
+   "session": "a13:s2",
+   "compute": 6.764261623494403,
+   "reads": [
+    "in:a13.s2.t0",
+    "o:a14.s0.t1@v1",
+    "o:a8.s0.t0@v1",
+    "o:a10.s0.t0@v1"
+   ]
+  },
+  {
+   "id": "a14.s0.t0",
+   "agent": "a14",
+   "session": "a14:s0",
+   "compute": 2.0592938850271123,
+   "reads": [
+    "in:a14.s0.t0"
+   ]
+  },
+  {
+   "id": "a14.s0.t1",
+   "agent": "a14",
+   "session": "a14:s0",
+   "compute": 6.124146417708164
+  },
+  {
+   "id": "a14.s0.t2",
+   "agent": "a14",
+   "session": "a14:s0",
+   "compute": 3.251279277434463
+  },
+  {
+   "id": "a14.s1.t0",
+   "agent": "a14",
+   "session": "a14:s1",
+   "compute": 5.52489657672807,
+   "reads": [
+    "in:a14.s1.t0"
+   ]
+  },
+  {
+   "id": "a14.s1.t1",
+   "agent": "a14",
+   "session": "a14:s1",
+   "compute": 3.7745606108459717,
+   "reads": [
+    "o:a9.s1.t0@v1"
+   ]
+  },
+  {
+   "id": "a14.s1.t2",
+   "agent": "a14",
+   "session": "a14:s1",
+   "compute": 4.062489437383405,
+   "reads": [
+    "o:a8.s1.t0@v1"
+   ]
+  },
+  {
+   "id": "a14.s2.t0",
+   "agent": "a14",
+   "session": "a14:s2",
+   "compute": 6.832242848129771,
+   "reads": [
+    "in:a14.s2.t0",
+    "o:a12.s0.t1@v1"
+   ]
+  },
+  {
+   "id": "a14.s2.t1",
+   "agent": "a14",
+   "session": "a14:s2",
+   "compute": 2.7806433111793356
+  },
+  {
+   "id": "R.agg",
+   "agent": "r",
+   "session": "s:R",
+   "compute": 1.640355017231636
+  },
+  {
+   "id": "a1.agg",
+   "agent": "a1",
+   "session": "s:a1",
+   "compute": 0.9018259182058984
+  },
+  {
+   "id": "a2.agg",
+   "agent": "a2",
+   "session": "s:a2",
+   "compute": 0.8383018038875842
+  },
+  {
+   "id": "a3.agg",
+   "agent": "a3",
+   "session": "s:a3",
+   "compute": 1.6882570039383786
+  },
+  {
+   "id": "a4.agg",
+   "agent": "a4",
+   "session": "s:a4",
+   "compute": 1.4184686079486233
+  },
+  {
+   "id": "a5.agg",
+   "agent": "a5",
+   "session": "s:a5",
+   "compute": 2.0518847039242765
+  },
+  {
+   "id": "a6.agg",
+   "agent": "a6",
+   "session": "s:a6",
+   "compute": 1.7623844052834958
+  }
+ ],
+ "external_inputs": [
+  "task",
+  "in:a7.s0.t0",
+  "in:a7.s1.t0",
+  "in:a7.s2.t0",
+  "in:a8.s0.t0",
+  "in:a8.s1.t0",
+  "in:a8.s2.t0",
+  "in:a9.s0.t0",
+  "in:a9.s1.t0",
+  "in:a9.s2.t0",
+  "in:a10.s0.t0",
+  "in:a10.s1.t0",
+  "in:a10.s2.t0",
+  "in:a11.s0.t0",
+  "in:a11.s1.t0",
+  "in:a11.s2.t0",
+  "in:a12.s0.t0",
+  "in:a12.s1.t0",
+  "in:a12.s2.t0",
+  "in:a13.s0.t0",
+  "in:a13.s1.t0",
+  "in:a13.s2.t0",
+  "in:a14.s0.t0",
+  "in:a14.s1.t0",
+  "in:a14.s2.t0"
+ ],
+ "artifacts": [
+  {
+   "id": "o:a7.s0.t0@v1",
+   "producer": "a7.s0.t0"
+  },
+  {
+   "id": "o:a7.s0.t1@v1",
+   "producer": "a7.s0.t1"
+  },
+  {
+   "id": "o:a7.s0.t2@v1",
+   "producer": "a7.s0.t2"
+  },
+  {
+   "id": "o:a7.s1.t0@v1",
+   "producer": "a7.s1.t0"
+  },
+  {
+   "id": "o:a7.s2.t0@v1",
+   "producer": "a7.s2.t0"
+  },
+  {
+   "id": "o:a7.s2.t1@v1",
+   "producer": "a7.s2.t1"
+  },
+  {
+   "id": "o:a8.s0.t0@v1",
+   "producer": "a8.s0.t0"
+  },
+  {
+   "id": "o:a8.s0.t1@v1",
+   "producer": "a8.s0.t1"
+  },
+  {
+   "id": "o:a8.s1.t0@v1",
+   "producer": "a8.s1.t0"
+  },
+  {
+   "id": "o:a8.s2.t0@v1",
+   "producer": "a8.s2.t0"
+  },
+  {
+   "id": "o:a9.s0.t0@v1",
+   "producer": "a9.s0.t0"
+  },
+  {
+   "id": "o:a9.s0.t1@v1",
+   "producer": "a9.s0.t1"
+  },
+  {
+   "id": "o:a9.s1.t0@v1",
+   "producer": "a9.s1.t0"
+  },
+  {
+   "id": "o:a9.s1.t1@v1",
+   "producer": "a9.s1.t1"
+  },
+  {
+   "id": "o:a9.s1.t2@v1",
+   "producer": "a9.s1.t2"
+  },
+  {
+   "id": "o:a9.s2.t0@v1",
+   "producer": "a9.s2.t0"
+  },
+  {
+   "id": "o:a10.s0.t0@v1",
+   "producer": "a10.s0.t0"
+  },
+  {
+   "id": "o:a10.s0.t1@v1",
+   "producer": "a10.s0.t1"
+  },
+  {
+   "id": "o:a10.s1.t0@v1",
+   "producer": "a10.s1.t0"
+  },
+  {
+   "id": "o:a10.s1.t1@v1",
+   "producer": "a10.s1.t1"
+  },
+  {
+   "id": "o:a10.s2.t0@v1",
+   "producer": "a10.s2.t0"
+  },
+  {
+   "id": "o:a10.s2.t1@v1",
+   "producer": "a10.s2.t1"
+  },
+  {
+   "id": "o:a10.s2.t2@v1",
+   "producer": "a10.s2.t2"
+  },
+  {
+   "id": "o:a11.s0.t0@v1",
+   "producer": "a11.s0.t0"
+  },
+  {
+   "id": "o:a11.s0.t1@v1",
+   "producer": "a11.s0.t1"
+  },
+  {
+   "id": "o:a11.s0.t2@v1",
+   "producer": "a11.s0.t2"
+  },
+  {
+   "id": "o:a11.s1.t0@v1",
+   "producer": "a11.s1.t0"
+  },
+  {
+   "id": "o:a11.s2.t0@v1",
+   "producer": "a11.s2.t0"
+  },
+  {
+   "id": "o:a11.s2.t1@v1",
+   "producer": "a11.s2.t1"
+  },
+  {
+   "id": "o:a11.s2.t2@v1",
+   "producer": "a11.s2.t2"
+  },
+  {
+   "id": "o:a12.s0.t0@v1",
+   "producer": "a12.s0.t0"
+  },
+  {
+   "id": "o:a12.s0.t1@v1",
+   "producer": "a12.s0.t1"
+  },
+  {
+   "id": "o:a12.s0.t2@v1",
+   "producer": "a12.s0.t2"
+  },
+  {
+   "id": "o:a12.s1.t0@v1",
+   "producer": "a12.s1.t0"
+  },
+  {
+   "id": "o:a12.s1.t1@v1",
+   "producer": "a12.s1.t1"
+  },
+  {
+   "id": "o:a12.s1.t2@v1",
+   "producer": "a12.s1.t2"
+  },
+  {
+   "id": "o:a12.s2.t0@v1",
+   "producer": "a12.s2.t0"
+  },
+  {
+   "id": "o:a12.s2.t1@v1",
+   "producer": "a12.s2.t1"
+  },
+  {
+   "id": "o:a13.s0.t0@v1",
+   "producer": "a13.s0.t0"
+  },
+  {
+   "id": "o:a13.s0.t1@v1",
+   "producer": "a13.s0.t1"
+  },
+  {
+   "id": "o:a13.s1.t0@v1",
+   "producer": "a13.s1.t0"
+  },
+  {
+   "id": "o:a13.s1.t1@v1",
+   "producer": "a13.s1.t1"
+  },
+  {
+   "id": "o:a13.s2.t0@v1",
+   "producer": "a13.s2.t0"
+  },
+  {
+   "id": "o:a14.s0.t0@v1",
+   "producer": "a14.s0.t0"
+  },
+  {
+   "id": "o:a14.s0.t1@v1",
+   "producer": "a14.s0.t1"
+  },
+  {
+   "id": "o:a14.s0.t2@v1",
+   "producer": "a14.s0.t2"
+  },
+  {
+   "id": "o:a14.s1.t0@v1",
+   "producer": "a14.s1.t0"
+  },
+  {
+   "id": "o:a14.s1.t1@v1",
+   "producer": "a14.s1.t1"
+  },
+  {
+   "id": "o:a14.s1.t2@v1",
+   "producer": "a14.s1.t2"
+  },
+  {
+   "id": "o:a14.s2.t0@v1",
+   "producer": "a14.s2.t0"
+  },
+  {
+   "id": "o:a14.s2.t1@v1",
+   "producer": "a14.s2.t1"
+  }
+ ],
+ "messages": [
+  {
+   "id": "d:a1",
+   "sender": "R.plan",
+   "receiver": "a1.plan",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a2",
+   "sender": "R.plan",
+   "receiver": "a2.plan",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a3",
+   "sender": "a1.plan",
+   "receiver": "a3.plan",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a4",
+   "sender": "a1.plan",
+   "receiver": "a4.plan",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a5",
+   "sender": "a2.plan",
+   "receiver": "a5.plan",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a6",
+   "sender": "a2.plan",
+   "receiver": "a6.plan",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a7.s0.t0",
+   "sender": "a3.plan",
+   "receiver": "a7.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a7.s1.t0",
+   "sender": "a3.plan",
+   "receiver": "a7.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a7.s2.t0",
+   "sender": "a3.plan",
+   "receiver": "a7.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a8.s0.t0",
+   "sender": "a3.plan",
+   "receiver": "a8.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a8.s1.t0",
+   "sender": "a3.plan",
+   "receiver": "a8.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a8.s2.t0",
+   "sender": "a3.plan",
+   "receiver": "a8.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a9.s0.t0",
+   "sender": "a4.plan",
+   "receiver": "a9.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a9.s1.t0",
+   "sender": "a4.plan",
+   "receiver": "a9.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a9.s2.t0",
+   "sender": "a4.plan",
+   "receiver": "a9.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a10.s0.t0",
+   "sender": "a4.plan",
+   "receiver": "a10.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a10.s1.t0",
+   "sender": "a4.plan",
+   "receiver": "a10.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a10.s2.t0",
+   "sender": "a4.plan",
+   "receiver": "a10.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a11.s0.t0",
+   "sender": "a5.plan",
+   "receiver": "a11.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a11.s1.t0",
+   "sender": "a5.plan",
+   "receiver": "a11.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a11.s2.t0",
+   "sender": "a5.plan",
+   "receiver": "a11.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a12.s0.t0",
+   "sender": "a5.plan",
+   "receiver": "a12.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a12.s1.t0",
+   "sender": "a5.plan",
+   "receiver": "a12.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a12.s2.t0",
+   "sender": "a5.plan",
+   "receiver": "a12.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a13.s0.t0",
+   "sender": "a6.plan",
+   "receiver": "a13.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a13.s1.t0",
+   "sender": "a6.plan",
+   "receiver": "a13.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a13.s2.t0",
+   "sender": "a6.plan",
+   "receiver": "a13.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a14.s0.t0",
+   "sender": "a6.plan",
+   "receiver": "a14.s0.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a14.s1.t0",
+   "sender": "a6.plan",
+   "receiver": "a14.s1.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "d:a14.s2.t0",
+   "sender": "a6.plan",
+   "receiver": "a14.s2.t0",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a7.s0.t2",
+   "sender": "a7.s0.t2",
+   "receiver": "a3.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a7.s1.t0",
+   "sender": "a7.s1.t0",
+   "receiver": "a3.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a7.s2.t1",
+   "sender": "a7.s2.t1",
+   "receiver": "a3.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a8.s0.t1",
+   "sender": "a8.s0.t1",
+   "receiver": "a3.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a8.s1.t0",
+   "sender": "a8.s1.t0",
+   "receiver": "a3.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a8.s2.t0",
+   "sender": "a8.s2.t0",
+   "receiver": "a3.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a9.s0.t1",
+   "sender": "a9.s0.t1",
+   "receiver": "a4.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a9.s1.t2",
+   "sender": "a9.s1.t2",
+   "receiver": "a4.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a9.s2.t0",
+   "sender": "a9.s2.t0",
+   "receiver": "a4.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a10.s0.t1",
+   "sender": "a10.s0.t1",
+   "receiver": "a4.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a10.s1.t1",
+   "sender": "a10.s1.t1",
+   "receiver": "a4.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a10.s2.t2",
+   "sender": "a10.s2.t2",
+   "receiver": "a4.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a11.s0.t2",
+   "sender": "a11.s0.t2",
+   "receiver": "a5.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a11.s1.t0",
+   "sender": "a11.s1.t0",
+   "receiver": "a5.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a11.s2.t2",
+   "sender": "a11.s2.t2",
+   "receiver": "a5.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a12.s0.t2",
+   "sender": "a12.s0.t2",
+   "receiver": "a5.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a12.s1.t2",
+   "sender": "a12.s1.t2",
+   "receiver": "a5.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a12.s2.t1",
+   "sender": "a12.s2.t1",
+   "receiver": "a5.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a13.s0.t1",
+   "sender": "a13.s0.t1",
+   "receiver": "a6.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a13.s1.t1",
+   "sender": "a13.s1.t1",
+   "receiver": "a6.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a13.s2.t0",
+   "sender": "a13.s2.t0",
+   "receiver": "a6.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a14.s0.t2",
+   "sender": "a14.s0.t2",
+   "receiver": "a6.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a14.s1.t2",
+   "sender": "a14.s1.t2",
+   "receiver": "a6.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a14.s2.t1",
+   "sender": "a14.s2.t1",
+   "receiver": "a6.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a1",
+   "sender": "a1.agg",
+   "receiver": "R.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a2",
+   "sender": "a2.agg",
+   "receiver": "R.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a3",
+   "sender": "a3.agg",
+   "receiver": "a1.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a4",
+   "sender": "a4.agg",
+   "receiver": "a1.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a5",
+   "sender": "a5.agg",
+   "receiver": "a2.agg",
+   "latency": 0.1
+  },
+  {
+   "id": "r:a6",
+   "sender": "a6.agg",
+   "receiver": "a2.agg",
+   "latency": 0.1
+  }
+ ],
+ "effects": [
+  {
+   "id": "E:a9.s2.t0",
+   "issuer": "a9.s2.t0",
+   "class": "act_a9",
+   "delay": 3.115850199563219
+  },
+  {
+   "id": "E:a10.s2.t2",
+   "issuer": "a10.s2.t2",
+   "class": "act_a10",
+   "delay": 3.349355529539849
+  },
+  {
+   "id": "E:a11.s0.t2",
+   "issuer": "a11.s0.t2",
+   "class": "act_a11",
+   "delay": 3.5015332917984567
+  },
+  {
+   "id": "E:a11.s2.t2",
+   "issuer": "a11.s2.t2",
+   "class": "act_a11",
+   "delay": 1.5409537045890636
+  },
+  {
+   "id": "E:a12.s2.t1",
+   "issuer": "a12.s2.t1",
+   "class": "act_a12",
+   "delay": 3.072468273619629
+  },
+  {
+   "id": "E:a13.s0.t1",
+   "issuer": "a13.s0.t1",
+   "class": "act_a13",
+   "delay": 3.8593880194833967
+  },
+  {
+   "id": "E:a14.s1.t2",
+   "issuer": "a14.s1.t2",
+   "class": "act_a14",
+   "delay": 2.3360565691564896
+  },
+  {
+   "id": "FINAL",
+   "issuer": "R.agg",
+   "class": "final",
+   "delay": 0.5
+  }
+ ],
+ "fault": {
+  "class": "wrong_value",
+  "item": "o:a10.s0.t1@v1"
+ },
+ "alerts": {
+  "early": {
+   "event": "produce",
+   "item": "o:a10.s0.t1@v1",
+   "delay_s": 0.4,
+   "designate_root": true
+  },
+  "late": {
+   "event": "consume",
+   "item": "o:a10.s0.t1@v1",
+   "count": 4,
+   "delay_s": 0.4,
+   "designate_root": true
+  },
+  "sim": {
+   "event": "consume",
+   "item": "o:a10.s0.t1@v1",
+   "count": 2,
+   "delay_s": 0.6748806019004192,
+   "designate_root": true,
+   "sim_t": 18.933795536635195
+  }
+ },
+ "rogue": {
+  "rate": 0.0,
+  "p_eff": 0.5,
+  "extra_delay": 1.5,
+  "p_spawn": 1.0,
+  "seed": 0,
+  "dyn_steps": 3,
+  "dyn_step_len": 2.0,
+  "new_inv_step": 0.5,
+  "max_dyn": 200
+ },
+ "read_lat": 0.1,
+ "sim": {
+  "site_L": {
+   "s_R": 0.5134650614919327,
+   "s_a1": 0.3845536598825097,
+   "s_a10": 1.7376128530957777,
+   "s_a11": 1.112329015345155,
+   "s_a12": 0.7531100393427972,
+   "s_a13": 0.602104890499839,
+   "s_a14": 0.3198280120878596,
+   "s_a2": 0.9901738789280222,
+   "s_a3": 0.2743265658962371,
+   "s_a4": 0.2420012515342443,
+   "s_a5": 0.3887078256395683,
+   "s_a6": 0.5218660763148871,
+   "s_a7": 0.21694952766523648,
+   "s_a8": 0.32062682928797875,
+   "s_a9": 0.4182316015802725
+  },
+  "net_lat": [
+   [
+    "r",
+    "r",
+    0.0
+   ],
+   [
+    "r",
+    "a1",
+    0.1
+   ],
+   [
+    "r",
+    "a10",
+    0.30000000000000004
+   ],
+   [
+    "r",
+    "a11",
+    0.30000000000000004
+   ],
+   [
+    "r",
+    "a12",
+    0.30000000000000004
+   ],
+   [
+    "r",
+    "a13",
+    0.30000000000000004
+   ],
+   [
+    "r",
+    "a14",
+    0.30000000000000004
+   ],
+   [
+    "r",
+    "a2",
+    0.1
+   ],
+   [
+    "r",
+    "a3",
+    0.2
+   ],
+   [
+    "r",
+    "a4",
+    0.2
+   ],
+   [
+    "r",
+    "a5",
+    0.2
+   ],
+   [
+    "r",
+    "a6",
+    0.2
+   ],
+   [
+    "r",
+    "a7",
+    0.30000000000000004
+   ],
+   [
+    "r",
+    "a8",
+    0.30000000000000004
+   ],
+   [
+    "r",
+    "a9",
+    0.30000000000000004
+   ],
+   [
+    "a1",
+    "r",
+    0.1
+   ],
+   [
+    "a1",
+    "a1",
+    0.0
+   ],
+   [
+    "a1",
+    "a10",
+    0.2
+   ],
+   [
+    "a1",
+    "a12",
+    0.9
+   ],
+   [
+    "a1",
+    "a13",
+    0.9
+   ],
+   [
+    "a1",
+    "a14",
+    0.9
+   ],
+   [
+    "a1",
+    "a3",
+    0.1
+   ],
+   [
+    "a1",
+    "a4",
+    0.1
+   ],
+   [
+    "a1",
+    "a7",
+    0.2
+   ],
+   [
+    "a1",
+    "a8",
+    0.2
+   ],
+   [
+    "a1",
+    "a9",
+    0.2
+   ],
+   [
+    "a2",
+    "r",
+    0.1
+   ],
+   [
+    "a2",
+    "a11",
+    0.2
+   ],
+   [
+    "a2",
+    "a12",
+    0.2
+   ],
+   [
+    "a2",
+    "a13",
+    0.2
+   ],
+   [
+    "a2",
+    "a14",
+    0.2
+   ],
+   [
+    "a2",
+    "a2",
+    0.0
+   ],
+   [
+    "a2",
+    "a5",
+    0.1
+   ],
+   [
+    "a2",
+    "a6",
+    0.1
+   ],
+   [
+    "a2",
+    "a7",
+    0.9
+   ],
+   [
+    "a2",
+    "a8",
+    0.9
+   ],
+   [
+    "a2",
+    "a9",
+    0.9
+   ],
+   [
+    "a3",
+    "a1",
+    0.1
+   ],
+   [
+    "a3",
+    "a10",
+    0.30000000000000004
+   ],
+   [
+    "a3",
+    "a12",
+    1.0
+   ],
+   [
+    "a3",
+    "a13",
+    1.0
+   ],
+   [
+    "a3",
+    "a14",
+    1.0
+   ],
+   [
+    "a3",
+    "a3",
+    0.0
+   ],
+   [
+    "a3",
+    "a7",
+    0.1
+   ],
+   [
+    "a3",
+    "a8",
+    0.1
+   ],
+   [
+    "a3",
+    "a9",
+    0.30000000000000004
+   ],
+   [
+    "a4",
+    "a1",
+    0.1
+   ],
+   [
+    "a4",
+    "a10",
+    0.1
+   ],
+   [
+    "a4",
+    "a12",
+    1.0
+   ],
+   [
+    "a4",
+    "a13",
+    1.0
+   ],
+   [
+    "a4",
+    "a14",
+    1.0
+   ],
+   [
+    "a4",
+    "a4",
+    0.0
+   ],
+   [
+    "a4",
+    "a7",
+    0.30000000000000004
+   ],
+   [
+    "a4",
+    "a9",
+    0.1
+   ],
+   [
+    "a5",
+    "a11",
+    0.1
+   ],
+   [
+    "a5",
+    "a12",
+    0.1
+   ],
+   [
+    "a5",
+    "a14",
+    0.30000000000000004
+   ],
+   [
+    "a5",
+    "a2",
+    0.1
+   ],
+   [
+    "a5",
+    "a5",
+    0.0
+   ],
+   [
+    "a5",
+    "a7",
+    1.0
+   ],
+   [
+    "a5",
+    "a9",
+    1.0
+   ],
+   [
+    "a6",
+    "a13",
+    0.1
+   ],
+   [
+    "a6",
+    "a14",
+    0.1
+   ],
+   [
+    "a6",
+    "a2",
+    0.1
+   ],
+   [
+    "a6",
+    "a6",
+    0.0
+   ],
+   [
+    "a6",
+    "a8",
+    1.0
+   ],
+   [
+    "a7",
+    "a12",
+    1.1
+   ],
+   [
+    "a7",
+    "a3",
+    0.1
+   ],
+   [
+    "a7",
+    "a8",
+    0.2
+   ],
+   [
+    "a7",
+    "a9",
+    0.4
+   ],
+   [
+    "a8",
+    "a10",
+    0.4
+   ],
+   [
+    "a8",
+    "a12",
+    1.1
+   ],
+   [
+    "a8",
+    "a13",
+    1.1
+   ],
+   [
+    "a8",
+    "a14",
+    1.1
+   ],
+   [
+    "a8",
+    "a3",
+    0.1
+   ],
+   [
+    "a9",
+    "a10",
+    0.2
+   ],
+   [
+    "a9",
+    "a12",
+    1.1
+   ],
+   [
+    "a9",
+    "a14",
+    1.1
+   ],
+   [
+    "a9",
+    "a4",
+    0.1
+   ],
+   [
+    "a10",
+    "a12",
+    1.1
+   ],
+   [
+    "a10",
+    "a13",
+    1.1
+   ],
+   [
+    "a10",
+    "a4",
+    0.1
+   ],
+   [
+    "a10",
+    "a7",
+    0.4
+   ],
+   [
+    "a10",
+    "a9",
+    0.2
+   ],
+   [
+    "a11",
+    "a12",
+    0.2
+   ],
+   [
+    "a11",
+    "a5",
+    0.1
+   ],
+   [
+    "a11",
+    "a7",
+    1.1
+   ],
+   [
+    "a11",
+    "a9",
+    1.1
+   ],
+   [
+    "a12",
+    "a14",
+    0.4
+   ],
+   [
+    "a12",
+    "a5",
+    0.1
+   ],
+   [
+    "a13",
+    "a6",
+    0.1
+   ],
+   [
+    "a14",
+    "a13",
+    0.2
+   ],
+   [
+    "a14",
+    "a6",
+    0.1
+   ],
+   [
+    "a14",
+    "a8",
+    1.1
+   ]
+  ],
+  "new_inv_step": 0.5,
+  "t_alert": 18.933795536635195,
+  "workflow": "rand-n15-p0.5-s0.5-seed0"
+ },
+ "source": {
+  "kind": "sim",
+  "scenario": "random",
+  "params": {
+   "n_agents": 15,
+   "seed": 0,
+   "p_share": 0.5,
+   "sigma": 0.5,
+   "consumed": 0.5,
+   "fault_seed": 0
+  },
+  "scale": {
+   "sites": 8,
+   "groups": "team_groups",
+   "base": "rand-n15-s0-c0.5"
+  }
+ }
+}

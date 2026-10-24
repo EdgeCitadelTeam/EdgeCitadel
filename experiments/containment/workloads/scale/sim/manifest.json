@@ -1,0 +1,306 @@
+{
+ "note": "Identical instances for the simulator: rebuild each with harness.simexport.to_sim(harness.spec.load(spec)) (control latency L = 400 ms at every site, as the native lab regime) and place its agents as in its sites file (agent and simulator site -> node -> host). The generator's parameters are in each spec's source.",
+ "control_latency_ms": 400,
+ "instances": {
+  "rand-n63-s0-S16": {
+   "spec": "../rand-n63-s0-S16.json",
+   "sites_file": "rand-n63-s0-S16.sites.json",
+   "sites": 16,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 0,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 0
+    },
+    "scale": {
+     "sites": 16,
+     "groups": "team_groups",
+     "base": "rand-n63-s0-c0.5"
+    }
+   },
+   "tasks": 252,
+   "agents": 63,
+   "nominal_makespan_s": 59.436
+  },
+  "rand-n63-s0-S3": {
+   "spec": "../rand-n63-s0-S3.json",
+   "sites_file": "rand-n63-s0-S3.sites.json",
+   "sites": 3,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 0,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 0
+    },
+    "scale": {
+     "sites": 3,
+     "groups": "team_groups",
+     "base": "rand-n63-s0-c0.5"
+    }
+   },
+   "tasks": 252,
+   "agents": 63,
+   "nominal_makespan_s": 59.436
+  },
+  "rand-n63-s0-S32": {
+   "spec": "../rand-n63-s0-S32.json",
+   "sites_file": "rand-n63-s0-S32.sites.json",
+   "sites": 32,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 0,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 0
+    },
+    "scale": {
+     "sites": 32,
+     "groups": "team_groups",
+     "base": "rand-n63-s0-c0.5"
+    }
+   },
+   "tasks": 252,
+   "agents": 63,
+   "nominal_makespan_s": 59.436
+  },
+  "rand-n63-s0-S8": {
+   "spec": "../rand-n63-s0-S8.json",
+   "sites_file": "rand-n63-s0-S8.sites.json",
+   "sites": 8,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 0,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 0
+    },
+    "scale": {
+     "sites": 8,
+     "groups": "team_groups",
+     "base": "rand-n63-s0-c0.5"
+    }
+   },
+   "tasks": 252,
+   "agents": 63,
+   "nominal_makespan_s": 59.436
+  },
+  "rand-n63-s2-S16": {
+   "spec": "../rand-n63-s2-S16.json",
+   "sites_file": "rand-n63-s2-S16.sites.json",
+   "sites": 16,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 2,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 2
+    },
+    "scale": {
+     "sites": 16,
+     "groups": "team_groups",
+     "base": "rand-n63-s2-c0.5"
+    }
+   },
+   "tasks": 244,
+   "agents": 63,
+   "nominal_makespan_s": 55.689
+  },
+  "rand-n63-s2-S3": {
+   "spec": "../rand-n63-s2-S3.json",
+   "sites_file": "rand-n63-s2-S3.sites.json",
+   "sites": 3,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 2,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 2
+    },
+    "scale": {
+     "sites": 3,
+     "groups": "team_groups",
+     "base": "rand-n63-s2-c0.5"
+    }
+   },
+   "tasks": 244,
+   "agents": 63,
+   "nominal_makespan_s": 55.689
+  },
+  "rand-n63-s2-S32": {
+   "spec": "../rand-n63-s2-S32.json",
+   "sites_file": "rand-n63-s2-S32.sites.json",
+   "sites": 32,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 2,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 2
+    },
+    "scale": {
+     "sites": 32,
+     "groups": "team_groups",
+     "base": "rand-n63-s2-c0.5"
+    }
+   },
+   "tasks": 244,
+   "agents": 63,
+   "nominal_makespan_s": 55.689
+  },
+  "rand-n63-s2-S8": {
+   "spec": "../rand-n63-s2-S8.json",
+   "sites_file": "rand-n63-s2-S8.sites.json",
+   "sites": 8,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 2,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 2
+    },
+    "scale": {
+     "sites": 8,
+     "groups": "team_groups",
+     "base": "rand-n63-s2-c0.5"
+    }
+   },
+   "tasks": 244,
+   "agents": 63,
+   "nominal_makespan_s": 55.689
+  },
+  "rand-n63-s3-S16": {
+   "spec": "../rand-n63-s3-S16.json",
+   "sites_file": "rand-n63-s3-S16.sites.json",
+   "sites": 16,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 3,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 3
+    },
+    "scale": {
+     "sites": 16,
+     "groups": "team_groups",
+     "base": "rand-n63-s3-c0.5"
+    }
+   },
+   "tasks": 257,
+   "agents": 63,
+   "nominal_makespan_s": 56.016
+  },
+  "rand-n63-s3-S3": {
+   "spec": "../rand-n63-s3-S3.json",
+   "sites_file": "rand-n63-s3-S3.sites.json",
+   "sites": 3,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 3,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 3
+    },
+    "scale": {
+     "sites": 3,
+     "groups": "team_groups",
+     "base": "rand-n63-s3-c0.5"
+    }
+   },
+   "tasks": 257,
+   "agents": 63,
+   "nominal_makespan_s": 56.016
+  },
+  "rand-n63-s3-S32": {
+   "spec": "../rand-n63-s3-S32.json",
+   "sites_file": "rand-n63-s3-S32.sites.json",
+   "sites": 32,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 3,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 3
+    },
+    "scale": {
+     "sites": 32,
+     "groups": "team_groups",
+     "base": "rand-n63-s3-c0.5"
+    }
+   },
+   "tasks": 257,
+   "agents": 63,
+   "nominal_makespan_s": 56.016
+  },
+  "rand-n63-s3-S8": {
+   "spec": "../rand-n63-s3-S8.json",
+   "sites_file": "rand-n63-s3-S8.sites.json",
+   "sites": 8,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 3,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 3
+    },
+    "scale": {
+     "sites": 8,
+     "groups": "team_groups",
+     "base": "rand-n63-s3-c0.5"
+    }
+   },
+   "tasks": 257,
+   "agents": 63,
+   "nominal_makespan_s": 56.016
+  }
+ }
+}
