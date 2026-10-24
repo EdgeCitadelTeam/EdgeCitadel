@@ -2149,3 +2149,17 @@ Trace & quarantine is unchanged.
 - Pre-registration: H15 (spec session), before any run. Runs from this branch's tree (the EC eval tree at 1e7ed9f has no grid file).
 
 **Order after svc-main:** detect-boundary, compare-ec-tq (once H15 is registered), overhead, scaled testbed (once H12 is registered), stress-deadline (once H14 is registered), compare-langgraph-reduced (once its venv, the D-97 scoring commits and the H10-LG amendment are in). Cut from the end.
+
+### svc correct answers (2026-10-23)
+
+Adds reported columns only, registered before svc-main is scored (harness only; the runtime is unchanged). `svc_answered` counts a request as answered when its reply committed, tainted or not, so a wrong answer counted as service. New columns in `harness/svc.py` `metrics`, over the same requests (submitted or refused at or after the alert):
+
+- `svc_answered_correct`: answered, and the reply's lineage is clean (`tainted is False`). Tainted or unresolved lineage is not clean, the convention of `svc_tainted_replies`.
+- `svc_answered_correct_frac`: `svc_answered_correct / svc_requests` (NaN without requests), as `svc_answered_frac`.
+- `svc_wrong_answers`: answered with a tainted (or unresolved) reply. Unlike `svc_tainted_replies`, which counts every tainted reply committed after the alert, it counts only the window's requests. `svc_answered = svc_answered_correct + svc_wrong_answers`.
+
+Every existing column keeps its name and meaning. They flow into `runs.csv` (and `compare_runs.csv`) like the other svc columns; `summary.csv` aggregates no svc column.
+
+**Check.** svc-pilot (69 runs) re-scored offline: every pre-existing column of `runs.csv` and `actions.csv` is byte-identical to the scorer without this change. The kept-work float columns differ in the last digit between processes (set order follows `PYTHONHASHSEED`), so the comparison fixes the seed. In the pilot no strategy answers a request correctly after the late alert. After the early alert, Firebreak answers 15.3 of 45 correctly and Reject source all 45.
+
+**Tests.** `tests/test_svc.py`: a clean reply, a tainted reply and an unanswered request in the window, plus a tainted reply to a request asked before the alert.

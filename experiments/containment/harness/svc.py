@@ -53,6 +53,13 @@ checks it in every run (the pipeline's gate reports it). The late alert is
 unchanged. ``future_requests`` follows the earlier nominal alert time
 (0.15 more expected requests).
 
+Added (2026-10-23, before svc-main is scored; reported columns only): of the
+requests from the alert on, those answered with a clean reply
+(``svc_answered_correct``, and its share ``svc_answered_correct_frac``) and
+those answered with a tainted or unresolved one (``svc_wrong_answers``), so
+that a wrong answer is not counted as service. The registered columns are
+unchanged.
+
 Generate (deterministic)::
 
   python -m harness.svc --out workloads/svc.json
@@ -333,7 +340,9 @@ def metrics(
     A request counts from the alert on when it was submitted (or refused) at or
     after the alert; it is answered when its reply committed. Latency: from its
     submission to its reply's commit. Tainted commits are classified by their
-    lineage (``groundtruth.commit_lineage``).
+    lineage (``groundtruth.commit_lineage``). An answered request is answered
+    correctly when its reply's lineage is clean and a wrong answer otherwise
+    (``svc_answered = svc_answered_correct + svc_wrong_answers``).
     """
     from .groundtruth import (
         commit_lineage,
@@ -375,11 +384,18 @@ def metrics(
     ]
     protected = protected_classes(spec)
     ordered = sorted(latency.values())
+    # Answered requests whose reply's lineage is clean. Tainted or unresolved
+    # (None) is not clean, the convention of svc_tainted_replies; the rest of
+    # the answered requests are wrong answers.
+    correct = sum(1 for r in latency if reply[r]["tainted"] is False)
     return {
         "svc_requests": len(requests),
         "svc_refused": sum(1 for r in requests if r in refused and r not in submitted),
         "svc_answered": len(latency),
         "svc_answered_frac": len(latency) / len(requests) if requests else math.nan,
+        "svc_answered_correct": correct,
+        "svc_answered_correct_frac": correct / len(requests) if requests else math.nan,
+        "svc_wrong_answers": len(latency) - correct,
         "svc_tainted_device_commands": sum(
             1
             for e in committed_after
