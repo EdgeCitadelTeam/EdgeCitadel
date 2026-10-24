@@ -9,8 +9,12 @@ the baseline compares, not the hosted product.
 
 - ``up`` starts the run's services and the server, with the compiled plan,
   the agents' slot counts and the sink's URL in the run's LangGraph folder;
-- ``submit`` starts the run with every root task (the runner submits roots
-  one by one; the first call starts them all with the same ``t0``);
+- ``submit`` starts the run with every root task (the first call starts them
+  all with the same ``t0``; later calls return the ids already assigned);
+  ``schedule`` (the runner's per-node request schedule, which on EdgeCitadel
+  is ``nodectl schedule`` through agentd) submits every entry at once and
+  marks each ``submitted`` or ``refused`` with the services: the workflow is
+  one LangGraph run, and each root's det-worker still waits for its release;
 - ``post_alert`` hands the alert to ``harness.lg_control``.
 """
 
@@ -154,6 +158,17 @@ class LangGraphRunStack(RunStack):
                 self.root_ids[root] = request_id
             self.loop.run(self.controller.start(requests))
         return self.root_ids.get(str(body.get("task")), "")
+
+    def schedule(self, node: str, entries: list[dict[str, Any]]) -> None:
+        for entry in sorted(entries, key=lambda e: (e["at_ms"], e["task"])):
+            mark: dict[str, Any] = {"task": entry["task"], "at_ms": entry["at_ms"]}
+            try:
+                rt = self.submit(node, entry["recipient"], entry["body"])
+            except Exception as error:  # noqa: BLE001 - recorded as refused
+                mark.update(name="refused", code=f"langgraph: {error}"[:200])
+            else:
+                mark.update(name="submitted", rt=rt)
+            self.services("POST", "/mark", mark)
 
     def attempt_of(self, task_id: str) -> str | None:
         return task_id

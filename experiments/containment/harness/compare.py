@@ -23,16 +23,24 @@ writes:
   re-executed LangGraph node; the ledger keeps one record per effect, so
   ``violations`` misses them), classified the same way and counted against
   ``clean`` (``clean_after_alert`` and no repeat leak), the rate H10 uses;
-  and ``reexecuted_relabelled``: re-executed tasks whose last execution
-  produced other labels than the first, which the scorer reads;
+  ``reexecuted_relabelled``: re-executed tasks whose last execution
+  produced other labels than the first, which the scorer reads; and
+  ``redone_kept`` / ``kept_cfrac_no_redo``: the at-risk tasks the scorer
+  counts as kept although they were started again after the alert (their
+  work was redone, a cost, not kept), and the compute-weighted kept share
+  without them (``metrics.evaluate``'s sets, same scorer);
 
 - ``compare_summary.csv``: ``report.summarize`` with ``system`` in the cell;
 - ``compare_paired.csv``: ``report.paired`` (Firebreak against every other
   strategy on matched runs of the same system and mechanism settings);
 - ``h10.csv``: per strategy, the content-fault part (rogue rate 0), the rogue
-  part (rate 0.3) and saturated rogue (1.0): runs, clean-after-alert rate,
-  median and lower quartile of kept work, makespan, timeouts, consumed at
-  alert, leaks by class, and the one-sided tests of H10 (b): exact McNemar on
+  part (rate 0.3) and saturated rogue (1.0): runs, clean-after-alert rate
+  (also per alert), median and lower quartile of kept work without tasks
+  redone after the alert (amended 2026-10-22; also over clean runs only,
+  safety first, and the scorer's own measure beside it), makespan and its
+  ratio to the same system's reference of the workload (``makespan_ratio``,
+  also per alert), the share of runs that re-executed a task, timeouts,
+  consumed at alert, leaks by class, and the one-sided tests of H10 (b): exact McNemar on
   content runs paired with Firebreak's, with the paired kept-work difference
   of (c), and Fisher exact at rate 0.3 against Firebreak's runs of the same
   cells. Saturated rogue is summarized, never tested.
@@ -60,7 +68,15 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .groundtruth import fault_seeds, ledger_effects, protected_classes, read_records
+from .groundtruth import (
+    declared_closure,
+    expected_contents,
+    fault_seeds,
+    ledger_effects,
+    protected_classes,
+    read_records,
+)
+from .metrics import completion_times, correct_content
 from .report import paired, score, sign_flip_p, summarize
 from .spec import from_dict
 
@@ -76,6 +92,7 @@ EXTRA = (
     "reexecuted_tasks",
     "reexecuted_relabelled",
     "committed_by_later_attempt",
+    "redone_kept",
 )
 PARTS = {"content": lambda rate: rate == 0.0, "rogue": lambda rate: rate > 0.0}
 STOPS = {"cancelled", "paused"}
@@ -188,7 +205,42 @@ def leak_class(
     return "leak_at_source" if issuer in seeds else "leak_polluted_use"
 
 
-def extra_columns(run_dir: Path) -> dict[str, int]:
+def kept_without_redo(run_dir: Path) -> dict[str, Any]:
+    """``metrics.evaluate``'s kept set, less the tasks started again after the
+    alert: a re-executed task's work was redone, not kept."""
+    meta = json.loads((run_dir / "run.json").read_text())
+    t_alert = meta.get("t_alert_ms")
+    if meta.get("t0_ms") is None or t_alert is None:
+        return {"redone_kept": 0, "kept_cfrac_no_redo": math.nan}
+    spec = from_dict(json.loads((run_dir / "spec.json").read_text()))
+    records = read_records(
+        spec, _jsonl(run_dir / "events.jsonl"), _jsonl(run_dir / "ledger.jsonl")
+    )
+    horizon = float(t_alert)
+    early = {
+        t
+        for t, rec in records.tasks.items()
+        if rec.tainted_at is not None and rec.tainted_at <= horizon
+    }
+    seeds = fault_seeds(spec)
+    tainted = declared_closure(spec, seeds | early) if seeds or early else set()
+    normal = {t.id for t in spec.tasks} - tainted
+    done = completion_times(spec, records)
+    at_risk = {t for t in normal if done[t] is None or done[t] > horizon}
+    correct = correct_content(spec, records, expected_contents(spec))
+    kept = {t for t in at_risk if done[t] is not None and correct[t]}
+    redone = {
+        t
+        for t in kept
+        if len(records.tasks[t].starts) > 1 and max(records.tasks[t].starts) > horizon
+    }
+    weight = {t.id: t.compute for t in spec.tasks}
+    whole = sum(weight[t] for t in at_risk)
+    share = sum(weight[t] for t in kept - redone) / whole if whole else math.nan
+    return {"redone_kept": len(redone), "kept_cfrac_no_redo": share}
+
+
+def extra_columns(run_dir: Path) -> dict[str, Any]:
     starts: Counter[str] = Counter()
     produced: dict[str, dict[str, set[str]]] = defaultdict(dict)  # task -> rt -> labels
     repeats = 0
@@ -207,6 +259,7 @@ def extra_columns(run_dir: Path) -> dict[str, int]:
         "reexecuted_tasks": sum(1 for n in starts.values() if n > 1),
         "reexecuted_relabelled": relabelled,
         **leak_classes(run_dir),
+        **kept_without_redo(run_dir),
     }
 
 
@@ -234,6 +287,24 @@ def load(outs: Iterable[Path]) -> Any:
     runs["clean"] = (
         runs["clean_after_alert"].fillna(0).astype(bool) & (runs["repeat_leaks"] == 0)
     ).astype(int)
+    return with_makespan_ratio(runs)
+
+
+def with_makespan_ratio(runs: Any) -> Any:
+    """``makespan_ratio``: a run's makespan over the median makespan of the same
+    system's reference runs of the same workload and time scale (NaN without one)."""
+    key = ["system", "instance", "time_scale"]
+    ref = (
+        runs[runs.strategy_code == "reference"]
+        .groupby(key, dropna=False)["makespan_s"]
+        .median()
+        .rename("reference_makespan_s")
+    )
+    runs = runs.drop(columns=["reference_makespan_s"], errors="ignore")
+    runs = runs.join(ref, on=key)
+    runs["makespan_ratio"] = runs["makespan_s"].astype(float) / runs[
+        "reference_makespan_s"
+    ].astype(float)
     return runs
 
 
@@ -271,6 +342,12 @@ def check_cells(runs: Any) -> None:
             )
 
 
+def kept_column(g: Any) -> str:
+    """Kept work without tasks redone after the alert (the H10-LG amendment of
+    2026-10-22), when loaded from result directories; the scorer's otherwise."""
+    return "kept_cfrac_no_redo" if "kept_cfrac_no_redo" in g else "kept_cfrac"
+
+
 def clean_column(g: Any) -> str:
     """``clean`` (no leak, repeats included) when loaded from result directories."""
     return "clean" if "clean" in g else "clean_after_alert"
@@ -297,22 +374,40 @@ def h10_table(runs: Any) -> Any:
         part = _part(runs, rate)
         fb = part[(part.strategy_code == FIREBREAK) & (part.system == EDGECITADEL)]
         for (system, code), g in part.groupby(["system", "strategy_code"]):
-            kept = g["kept_cfrac"].astype(float)
+            kcol = kept_column(g)
+            kept = g[kcol].astype(float)
+            clean_g = g[g[clean_column(g)].astype(bool)]
             row: dict[str, Any] = {
                 "part": label,
                 "system": system,
                 "strategy_code": code,
                 "runs": len(g),
                 "clean_rate": g[clean_column(g)].astype(float).mean(),
+                # Kept work as amended for H10-LG (2026-10-22): a task started
+                # again after the alert is redone, not kept.
                 "kept_median": kept.median(),
                 "kept_q1": kept.quantile(0.25),
+                # Kept work compared only where safety held: clean runs only.
+                "clean_runs": len(clean_g),
+                "kept_median_clean_runs": _median(clean_g, kcol),
+                # The scorer's own measure (redone tasks counted as kept).
+                "kept_scorer_median": _median(g, "kept_cfrac"),
+                "kept_scorer_median_clean_runs": _median(clean_g, "kept_cfrac"),
                 "makespan_median_s": _median(g, "makespan_s"),
+                "makespan_ratio_median": _median(g, "makespan_ratio"),
                 "consumed_at_alert_median": _median(g, "consumed_at_alert"),
                 "timeouts": int(g["timeout"].fillna(0).astype(int).sum()),
             }
             for column in (*EXTRA, *LEAK_CLASSES, "repeat_leaks"):
                 if column in g:
                     row[column] = int(g[column].sum())
+            if "reexecuted_tasks" in g:
+                row["reexecuting_runs_rate"] = float((g["reexecuted_tasks"] > 0).mean())
+            # Per alert: H10-LG (b) and (c) predict the late alert's clean rate and
+            # makespan ratio.
+            for alert, ga in g.groupby("alert"):
+                row[f"clean_rate_{alert}"] = ga[clean_column(ga)].astype(float).mean()
+                row[f"makespan_ratio_median_{alert}"] = _median(ga, "makespan_ratio")
             if code == FIREBREAK and system == EDGECITADEL:
                 rows.append(row)
                 continue
@@ -324,7 +419,8 @@ def h10_table(runs: Any) -> Any:
                 a = joined[f"{col}_fb"].astype(bool)
                 o = joined[f"{col}_o"].astype(bool)
                 b, c = int((a & ~o).sum()), int((~a & o).sum())
-                diff = joined.kept_cfrac_fb.astype(float) - joined.kept_cfrac_o.astype(
+                kcol = kept_column(g)
+                diff = joined[f"{kcol}_fb"].astype(float) - joined[f"{kcol}_o"].astype(
                     float
                 )
                 row.update(
