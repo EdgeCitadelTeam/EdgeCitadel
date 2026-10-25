@@ -15,7 +15,12 @@ the baseline compares, not the hosted product.
   is ``nodectl schedule`` through agentd) submits every entry at once and
   marks each ``submitted`` or ``refused`` with the services: the workflow is
   one LangGraph run, and each root's det-worker still waits for its release;
-- ``post_alert`` hands the alert to ``harness.lg_control``.
+- ``post_alert`` hands the alert to ``harness.lg_control``. The controller
+  runs in the runner, so it writes its decision log on the runner's machine:
+  in the run's directory on the LangGraph host when that is this machine (a
+  dry run), else under the runner's run directory (``controller/``), which
+  ``fetch`` serves where the runner collects the log from the controller
+  host (``core/containment-decisions.jsonl``).
 """
 
 from __future__ import annotations
@@ -31,7 +36,14 @@ from . import deploy
 from .lg_control import LangGraphController
 from .native import LoopThread
 from .spec import Spec, fault_origin
-from .stack import RunStack, StackError, free_port, http_json, wait_until
+from .stack import (
+    LocalHost,
+    RunStack,
+    StackError,
+    free_port,
+    http_json,
+    wait_until,
+)
 
 log = logging.getLogger(__name__)
 DECISIONS = "core/containment-decisions.jsonl"
@@ -52,6 +64,7 @@ class LangGraphRunStack(RunStack):
         self.plan: Mapping[str, Any] = {}
         self.root_ids: dict[str, str] = {}
         self.url = ""
+        self.decisions_file: Path | None = None
 
     def up(
         self,
@@ -133,11 +146,32 @@ class LangGraphRunStack(RunStack):
             faulty_task=origin,
             faulty_agent=spec.task(origin).agent if origin else None,
             bad_item=spec.fault.item,
-            decisions_path=Path(self.host_dir(host)) / DECISIONS,
+            decisions_path=self._decisions_file(host),
             incident_id=f"native:{self.run_id}",
             run_config={"recursion_limit": RECURSION_LIMIT},
         )
         self.start_procstat()
+
+    def _decisions_file(self, host: str) -> Path:
+        """Where the controller (in the runner's process) writes its decision log:
+        the LangGraph host's run directory only when that host is this machine."""
+        if isinstance(self.hosts[host], LocalHost):
+            self.decisions_file = Path(self.host_dir(host)) / DECISIONS
+        else:
+            self.decisions_file = self.run_dir / "controller" / Path(DECISIONS).name
+        return self.decisions_file
+
+    def fetch(self, host: str, path: str) -> bytes | None:
+        """The runner collects the decision log from the controller host's run
+        directory; it is on this machine (``_decisions_file``)."""
+        local = self.decisions_file
+        if (
+            local is not None
+            and host == self.config.controller
+            and path == f"{self.host_dir(host)}/{DECISIONS}"
+        ):
+            return local.read_bytes() if local.exists() else None
+        return super().fetch(host, path)
 
     def submit(self, node: str, recipient: str, body: Mapping[str, Any]) -> str:
         """The first root starts the run with every root; later calls return
