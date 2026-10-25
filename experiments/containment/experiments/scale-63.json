@@ -1,0 +1,47 @@
+{
+ "name": "scale-63",
+ "note": "Scaled testbed, one agent per site (D-113 amendment, H12-A1): rand-n63-s0 at S = 63 (configs/lab-scale-63.json; the 63 agents are a complete binary tree, so each site is one node of the delegation tree). The reference and Firebreak early/late x 3 repetitions, settings as scale.json's curve. 9 runs. Into the same output root as scale.json.",
+ "instances": [
+  "../workloads/scale/rand-n63-s0-S63.json"
+ ],
+ "strategies": [
+  "firebreak"
+ ],
+ "alerts": [
+  "early",
+  "late"
+ ],
+ "repetitions": 3,
+ "rogue_rates": [
+  0.0
+ ],
+ "reference": true,
+ "latencies": [
+  {
+   "name": "native",
+   "control_latency_ms": {
+    "*": 400
+   }
+  }
+ ],
+ "time_scale": 2.0,
+ "quiet_s": 8,
+ "timeout_factor": 3.0,
+ "timeout_extra_s": 120,
+ "root_modes": [
+  "given"
+ ],
+ "profiles": [
+  "deployed"
+ ],
+ "phase1_modes": [
+  "adaptive"
+ ],
+ "phase1_labels": [
+  "frontier"
+ ],
+ "receding_during_waits": [
+  false
+ ],
+ "root_wait_s": 10.0
+}

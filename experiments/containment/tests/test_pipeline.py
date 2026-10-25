@@ -373,8 +373,9 @@ def test_every_native_lab_setting_plans_with_the_gated_L():
                 assert latency.regime(loaded.measured_rtt_ms) == "stress", path.name
     # With main-smoke and svc-main (2026-10-22), compare-langgraph-reduced and
     # compare-ec-tq (2026-10-23), and the three scale grids scale, scale-extra and
-    # dryrun-scale (scale/testbed, merged 2026-10-24).
-    assert native == 26
+    # dryrun-scale (scale/testbed, merged 2026-10-24), and the amended curve's
+    # scale-s16, scale-63 and scale-63-smoke (D-113, 2026-10-25).
+    assert native == 29
 
 
 def test_a_tainted_commit_after_tau1_is_recorded_and_blocks_in_the_main_gate():

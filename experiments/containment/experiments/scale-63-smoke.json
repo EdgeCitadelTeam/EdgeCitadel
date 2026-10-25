@@ -1,0 +1,46 @@
+{
+ "name": "scale-63-smoke",
+ "note": "Unscored smoke before scale-63 (own output root): the S = 63 reference and one Firebreak late attempt. Checks the 62-site stack start on Endurance, core_ingest.json and both hosts' procstat files, and measures stack start and per-process load.",
+ "instances": [
+  "../workloads/scale/rand-n63-s0-S63.json"
+ ],
+ "strategies": [
+  "firebreak"
+ ],
+ "alerts": [
+  "late"
+ ],
+ "repetitions": 1,
+ "rogue_rates": [
+  0.0
+ ],
+ "reference": true,
+ "latencies": [
+  {
+   "name": "native",
+   "control_latency_ms": {
+    "*": 400
+   }
+  }
+ ],
+ "time_scale": 2.0,
+ "quiet_s": 8,
+ "timeout_factor": 3.0,
+ "timeout_extra_s": 120,
+ "root_modes": [
+  "given"
+ ],
+ "profiles": [
+  "deployed"
+ ],
+ "phase1_modes": [
+  "adaptive"
+ ],
+ "phase1_labels": [
+  "frontier"
+ ],
+ "receding_during_waits": [
+  false
+ ],
+ "root_wait_s": 10.0
+}

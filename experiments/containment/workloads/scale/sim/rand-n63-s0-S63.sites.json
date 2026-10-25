@@ -1,0 +1,763 @@
+{
+ "sites": 63,
+ "agents": {
+  "r": {
+   "sim_id": "R",
+   "sim_site": "s_R",
+   "node": "core",
+   "host": "jim-eq"
+  },
+  "a1": {
+   "sim_id": "a1",
+   "sim_site": "s_a1",
+   "node": "edge-1",
+   "host": "netsys-endurance"
+  },
+  "a2": {
+   "sim_id": "a2",
+   "sim_site": "s_a2",
+   "node": "edge-2",
+   "host": "netsys-endurance"
+  },
+  "a3": {
+   "sim_id": "a3",
+   "sim_site": "s_a3",
+   "node": "edge-3",
+   "host": "netsys-endurance"
+  },
+  "a4": {
+   "sim_id": "a4",
+   "sim_site": "s_a4",
+   "node": "edge-4",
+   "host": "netsys-endurance"
+  },
+  "a5": {
+   "sim_id": "a5",
+   "sim_site": "s_a5",
+   "node": "edge-5",
+   "host": "netsys-endurance"
+  },
+  "a6": {
+   "sim_id": "a6",
+   "sim_site": "s_a6",
+   "node": "edge-6",
+   "host": "netsys-endurance"
+  },
+  "a7": {
+   "sim_id": "a7",
+   "sim_site": "s_a7",
+   "node": "edge-7",
+   "host": "netsys-endurance"
+  },
+  "a8": {
+   "sim_id": "a8",
+   "sim_site": "s_a8",
+   "node": "edge-8",
+   "host": "netsys-endurance"
+  },
+  "a9": {
+   "sim_id": "a9",
+   "sim_site": "s_a9",
+   "node": "edge-10",
+   "host": "netsys-endurance"
+  },
+  "a10": {
+   "sim_id": "a10",
+   "sim_site": "s_a10",
+   "node": "edge-9",
+   "host": "netsys-endurance"
+  },
+  "a11": {
+   "sim_id": "a11",
+   "sim_site": "s_a11",
+   "node": "edge-11",
+   "host": "netsys-endurance"
+  },
+  "a12": {
+   "sim_id": "a12",
+   "sim_site": "s_a12",
+   "node": "edge-12",
+   "host": "netsys-endurance"
+  },
+  "a13": {
+   "sim_id": "a13",
+   "sim_site": "s_a13",
+   "node": "edge-13",
+   "host": "netsys-endurance"
+  },
+  "a14": {
+   "sim_id": "a14",
+   "sim_site": "s_a14",
+   "node": "edge-14",
+   "host": "netsys-endurance"
+  },
+  "a15": {
+   "sim_id": "a15",
+   "sim_site": "s_a15",
+   "node": "edge-15",
+   "host": "netsys-endurance"
+  },
+  "a16": {
+   "sim_id": "a16",
+   "sim_site": "s_a16",
+   "node": "edge-16",
+   "host": "netsys-endurance"
+  },
+  "a17": {
+   "sim_id": "a17",
+   "sim_site": "s_a17",
+   "node": "edge-17",
+   "host": "netsys-endurance"
+  },
+  "a18": {
+   "sim_id": "a18",
+   "sim_site": "s_a18",
+   "node": "edge-18",
+   "host": "netsys-endurance"
+  },
+  "a19": {
+   "sim_id": "a19",
+   "sim_site": "s_a19",
+   "node": "edge-21",
+   "host": "netsys-endurance"
+  },
+  "a20": {
+   "sim_id": "a20",
+   "sim_site": "s_a20",
+   "node": "edge-22",
+   "host": "netsys-endurance"
+  },
+  "a21": {
+   "sim_id": "a21",
+   "sim_site": "s_a21",
+   "node": "edge-19",
+   "host": "netsys-endurance"
+  },
+  "a22": {
+   "sim_id": "a22",
+   "sim_site": "s_a22",
+   "node": "edge-20",
+   "host": "netsys-endurance"
+  },
+  "a23": {
+   "sim_id": "a23",
+   "sim_site": "s_a23",
+   "node": "edge-23",
+   "host": "netsys-endurance"
+  },
+  "a24": {
+   "sim_id": "a24",
+   "sim_site": "s_a24",
+   "node": "edge-24",
+   "host": "netsys-endurance"
+  },
+  "a25": {
+   "sim_id": "a25",
+   "sim_site": "s_a25",
+   "node": "edge-25",
+   "host": "netsys-endurance"
+  },
+  "a26": {
+   "sim_id": "a26",
+   "sim_site": "s_a26",
+   "node": "edge-26",
+   "host": "netsys-endurance"
+  },
+  "a27": {
+   "sim_id": "a27",
+   "sim_site": "s_a27",
+   "node": "edge-27",
+   "host": "netsys-endurance"
+  },
+  "a28": {
+   "sim_id": "a28",
+   "sim_site": "s_a28",
+   "node": "edge-28",
+   "host": "netsys-endurance"
+  },
+  "a29": {
+   "sim_id": "a29",
+   "sim_site": "s_a29",
+   "node": "edge-29",
+   "host": "netsys-endurance"
+  },
+  "a30": {
+   "sim_id": "a30",
+   "sim_site": "s_a30",
+   "node": "edge-30",
+   "host": "netsys-endurance"
+  },
+  "a31": {
+   "sim_id": "a31",
+   "sim_site": "s_a31",
+   "node": "edge-31",
+   "host": "netsys-endurance"
+  },
+  "a32": {
+   "sim_id": "a32",
+   "sim_site": "s_a32",
+   "node": "edge-32",
+   "host": "netsys-endurance"
+  },
+  "a33": {
+   "sim_id": "a33",
+   "sim_site": "s_a33",
+   "node": "edge-33",
+   "host": "netsys-endurance"
+  },
+  "a34": {
+   "sim_id": "a34",
+   "sim_site": "s_a34",
+   "node": "edge-34",
+   "host": "netsys-endurance"
+  },
+  "a35": {
+   "sim_id": "a35",
+   "sim_site": "s_a35",
+   "node": "edge-35",
+   "host": "netsys-endurance"
+  },
+  "a36": {
+   "sim_id": "a36",
+   "sim_site": "s_a36",
+   "node": "edge-36",
+   "host": "netsys-endurance"
+  },
+  "a37": {
+   "sim_id": "a37",
+   "sim_site": "s_a37",
+   "node": "edge-37",
+   "host": "netsys-endurance"
+  },
+  "a38": {
+   "sim_id": "a38",
+   "sim_site": "s_a38",
+   "node": "edge-38",
+   "host": "netsys-endurance"
+  },
+  "a39": {
+   "sim_id": "a39",
+   "sim_site": "s_a39",
+   "node": "edge-43",
+   "host": "netsys-endurance"
+  },
+  "a40": {
+   "sim_id": "a40",
+   "sim_site": "s_a40",
+   "node": "edge-44",
+   "host": "netsys-endurance"
+  },
+  "a41": {
+   "sim_id": "a41",
+   "sim_site": "s_a41",
+   "node": "edge-45",
+   "host": "netsys-endurance"
+  },
+  "a42": {
+   "sim_id": "a42",
+   "sim_site": "s_a42",
+   "node": "edge-46",
+   "host": "netsys-endurance"
+  },
+  "a43": {
+   "sim_id": "a43",
+   "sim_site": "s_a43",
+   "node": "edge-39",
+   "host": "netsys-endurance"
+  },
+  "a44": {
+   "sim_id": "a44",
+   "sim_site": "s_a44",
+   "node": "edge-40",
+   "host": "netsys-endurance"
+  },
+  "a45": {
+   "sim_id": "a45",
+   "sim_site": "s_a45",
+   "node": "edge-41",
+   "host": "netsys-endurance"
+  },
+  "a46": {
+   "sim_id": "a46",
+   "sim_site": "s_a46",
+   "node": "edge-42",
+   "host": "netsys-endurance"
+  },
+  "a47": {
+   "sim_id": "a47",
+   "sim_site": "s_a47",
+   "node": "edge-47",
+   "host": "netsys-endurance"
+  },
+  "a48": {
+   "sim_id": "a48",
+   "sim_site": "s_a48",
+   "node": "edge-48",
+   "host": "netsys-endurance"
+  },
+  "a49": {
+   "sim_id": "a49",
+   "sim_site": "s_a49",
+   "node": "edge-49",
+   "host": "netsys-endurance"
+  },
+  "a50": {
+   "sim_id": "a50",
+   "sim_site": "s_a50",
+   "node": "edge-50",
+   "host": "netsys-endurance"
+  },
+  "a51": {
+   "sim_id": "a51",
+   "sim_site": "s_a51",
+   "node": "edge-51",
+   "host": "netsys-endurance"
+  },
+  "a52": {
+   "sim_id": "a52",
+   "sim_site": "s_a52",
+   "node": "edge-52",
+   "host": "netsys-endurance"
+  },
+  "a53": {
+   "sim_id": "a53",
+   "sim_site": "s_a53",
+   "node": "edge-53",
+   "host": "netsys-endurance"
+  },
+  "a54": {
+   "sim_id": "a54",
+   "sim_site": "s_a54",
+   "node": "edge-54",
+   "host": "netsys-endurance"
+  },
+  "a55": {
+   "sim_id": "a55",
+   "sim_site": "s_a55",
+   "node": "edge-55",
+   "host": "netsys-endurance"
+  },
+  "a56": {
+   "sim_id": "a56",
+   "sim_site": "s_a56",
+   "node": "edge-56",
+   "host": "netsys-endurance"
+  },
+  "a57": {
+   "sim_id": "a57",
+   "sim_site": "s_a57",
+   "node": "edge-57",
+   "host": "netsys-endurance"
+  },
+  "a58": {
+   "sim_id": "a58",
+   "sim_site": "s_a58",
+   "node": "edge-58",
+   "host": "netsys-endurance"
+  },
+  "a59": {
+   "sim_id": "a59",
+   "sim_site": "s_a59",
+   "node": "edge-59",
+   "host": "netsys-endurance"
+  },
+  "a60": {
+   "sim_id": "a60",
+   "sim_site": "s_a60",
+   "node": "edge-60",
+   "host": "netsys-endurance"
+  },
+  "a61": {
+   "sim_id": "a61",
+   "sim_site": "s_a61",
+   "node": "edge-61",
+   "host": "netsys-endurance"
+  },
+  "a62": {
+   "sim_id": "a62",
+   "sim_site": "s_a62",
+   "node": "edge-62",
+   "host": "netsys-endurance"
+  }
+ },
+ "nodes": {
+  "core": {
+   "host": "jim-eq",
+   "agents": [
+    "r"
+   ]
+  },
+  "edge-1": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a1"
+   ]
+  },
+  "edge-10": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a9"
+   ]
+  },
+  "edge-11": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a11"
+   ]
+  },
+  "edge-12": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a12"
+   ]
+  },
+  "edge-13": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a13"
+   ]
+  },
+  "edge-14": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a14"
+   ]
+  },
+  "edge-15": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a15"
+   ]
+  },
+  "edge-16": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a16"
+   ]
+  },
+  "edge-17": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a17"
+   ]
+  },
+  "edge-18": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a18"
+   ]
+  },
+  "edge-19": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a21"
+   ]
+  },
+  "edge-2": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a2"
+   ]
+  },
+  "edge-20": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a22"
+   ]
+  },
+  "edge-21": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a19"
+   ]
+  },
+  "edge-22": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a20"
+   ]
+  },
+  "edge-23": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a23"
+   ]
+  },
+  "edge-24": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a24"
+   ]
+  },
+  "edge-25": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a25"
+   ]
+  },
+  "edge-26": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a26"
+   ]
+  },
+  "edge-27": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a27"
+   ]
+  },
+  "edge-28": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a28"
+   ]
+  },
+  "edge-29": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a29"
+   ]
+  },
+  "edge-3": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a3"
+   ]
+  },
+  "edge-30": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a30"
+   ]
+  },
+  "edge-31": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a31"
+   ]
+  },
+  "edge-32": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a32"
+   ]
+  },
+  "edge-33": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a33"
+   ]
+  },
+  "edge-34": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a34"
+   ]
+  },
+  "edge-35": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a35"
+   ]
+  },
+  "edge-36": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a36"
+   ]
+  },
+  "edge-37": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a37"
+   ]
+  },
+  "edge-38": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a38"
+   ]
+  },
+  "edge-39": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a43"
+   ]
+  },
+  "edge-4": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a4"
+   ]
+  },
+  "edge-40": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a44"
+   ]
+  },
+  "edge-41": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a45"
+   ]
+  },
+  "edge-42": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a46"
+   ]
+  },
+  "edge-43": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a39"
+   ]
+  },
+  "edge-44": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a40"
+   ]
+  },
+  "edge-45": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a41"
+   ]
+  },
+  "edge-46": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a42"
+   ]
+  },
+  "edge-47": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a47"
+   ]
+  },
+  "edge-48": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a48"
+   ]
+  },
+  "edge-49": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a49"
+   ]
+  },
+  "edge-5": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a5"
+   ]
+  },
+  "edge-50": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a50"
+   ]
+  },
+  "edge-51": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a51"
+   ]
+  },
+  "edge-52": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a52"
+   ]
+  },
+  "edge-53": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a53"
+   ]
+  },
+  "edge-54": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a54"
+   ]
+  },
+  "edge-55": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a55"
+   ]
+  },
+  "edge-56": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a56"
+   ]
+  },
+  "edge-57": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a57"
+   ]
+  },
+  "edge-58": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a58"
+   ]
+  },
+  "edge-59": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a59"
+   ]
+  },
+  "edge-6": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a6"
+   ]
+  },
+  "edge-60": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a60"
+   ]
+  },
+  "edge-61": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a61"
+   ]
+  },
+  "edge-62": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a62"
+   ]
+  },
+  "edge-7": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a7"
+   ]
+  },
+  "edge-8": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a8"
+   ]
+  },
+  "edge-9": {
+   "host": "netsys-endurance",
+   "agents": [
+    "a10"
+   ]
+  }
+ }
+}

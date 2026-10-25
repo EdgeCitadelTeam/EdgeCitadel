@@ -77,6 +77,31 @@
    "agents": 63,
    "nominal_makespan_s": 59.436
   },
+  "rand-n63-s0-S63": {
+   "spec": "../rand-n63-s0-S63.json",
+   "sites_file": "rand-n63-s0-S63.sites.json",
+   "sites": 63,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 0,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 0
+    },
+    "scale": {
+     "sites": 63,
+     "groups": "team_groups",
+     "base": "rand-n63-s0-c0.5"
+    }
+   },
+   "tasks": 252,
+   "agents": 63,
+   "nominal_makespan_s": 59.436
+  },
   "rand-n63-s0-S8": {
    "spec": "../rand-n63-s0-S8.json",
    "sites_file": "rand-n63-s0-S8.sites.json",
@@ -177,6 +202,31 @@
    "agents": 63,
    "nominal_makespan_s": 55.689
   },
+  "rand-n63-s2-S63": {
+   "spec": "../rand-n63-s2-S63.json",
+   "sites_file": "rand-n63-s2-S63.sites.json",
+   "sites": 63,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 2,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 2
+    },
+    "scale": {
+     "sites": 63,
+     "groups": "team_groups",
+     "base": "rand-n63-s2-c0.5"
+    }
+   },
+   "tasks": 244,
+   "agents": 63,
+   "nominal_makespan_s": 55.689
+  },
   "rand-n63-s2-S8": {
    "spec": "../rand-n63-s2-S8.json",
    "sites_file": "rand-n63-s2-S8.sites.json",
@@ -269,6 +319,31 @@
     },
     "scale": {
      "sites": 32,
+     "groups": "team_groups",
+     "base": "rand-n63-s3-c0.5"
+    }
+   },
+   "tasks": 257,
+   "agents": 63,
+   "nominal_makespan_s": 56.016
+  },
+  "rand-n63-s3-S63": {
+   "spec": "../rand-n63-s3-S63.json",
+   "sites_file": "rand-n63-s3-S63.sites.json",
+   "sites": 63,
+   "source": {
+    "kind": "sim",
+    "scenario": "random",
+    "params": {
+     "n_agents": 63,
+     "seed": 3,
+     "p_share": 0.5,
+     "sigma": 0.5,
+     "consumed": 0.5,
+     "fault_seed": 3
+    },
+    "scale": {
+     "sites": 63,
      "groups": "team_groups",
      "base": "rand-n63-s3-c0.5"
     }

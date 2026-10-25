@@ -310,3 +310,61 @@ def test_an_alert_waits_a_bounded_time_for_core_to_know_its_root(monkeypatch):
     loaded = runner.Experiment.load(ROOT / "experiments" / "scale.json")
     assert loaded.root_wait_s == 10.0
     assert all(part.root_wait_s == 10.0 for part in loaded.parts)
+
+
+def test_s63_puts_one_agent_on_each_site_of_the_binary_delegation_tree():
+    # D-113 amendment (H12-A1): the 63 agents are a complete binary tree, so at
+    # S = 63 every site holds one agent and the site tree is the agent tree.
+    for seed in scale.SEEDS:
+        spec = load(f"rand-n63-s{seed}-S63")
+        children: dict[str | None, list[str]] = {}
+        for agent in spec.agents:
+            children.setdefault(agent.parent, []).append(agent.id)
+        assert len(children[None]) == 1
+        fanout = sorted(len(children.get(a.id, [])) for a in spec.agents)
+        assert fanout == [0] * 32 + [2] * 31
+        nodes = [spec.placement[a.site] for a in spec.agents]
+        assert len(set(nodes)) == 63 == len(nodes)
+        assert scale.summary(spec)["agents_per_site"] == [1] * 63
+
+
+def test_the_63_site_stack_only_adds_edge_sites():
+    path = ROOT / "configs" / "lab-scale-63.json"
+    big = json.loads(path.read_text())
+    assert big == scale.stack_document(63)
+    small = json.loads((ROOT / "configs" / "lab-scale.json").read_text())
+    assert {k: v for k, v in big.items() if k not in ("_note", "node_hosts")} == {
+        k: v for k, v in small.items() if k not in ("_note", "node_hosts")
+    }
+    assert {n: h for n, h in big["node_hosts"].items() if n in small["node_hosts"]} == (
+        small["node_hosts"]
+    )
+    edges = [h for n, h in big["node_hosts"].items() if n != "core"]
+    assert len(edges) == 62 and set(edges) == {"netsys-endurance"}
+
+
+def test_the_amended_curve_grids():
+    def cells(name):
+        return runner.grid(
+            runner.Experiment.load(ROOT / "experiments" / f"{name}.json")
+        )
+
+    full = cells("scale")
+    registered = {c.run_id: c for c in full if c.instance.stem.endswith("-S16")}
+    tail = {c.run_id: c for c in cells("scale-s16")}
+    # scale-s16 is exactly scale.json's S = 16 cells, so it resumes that root.
+    assert tail.keys() == registered.keys() and len(tail) == 9
+    for run_id, cell in tail.items():
+        other = registered[run_id]
+        assert cell.instance.resolve() == other.instance.resolve()
+        assert {k: v for k, v in vars(cell).items() if k != "instance"} == {
+            k: v for k, v in vars(other).items() if k != "instance"
+        }
+    s63 = cells("scale-63")
+    assert len(s63) == 9
+    assert {c.strategy for c in s63} == {"firebreak", "reference"}
+    assert all(c.instance.stem == "rand-n63-s0-S63" for c in s63)
+    others = {c.run_id for c in full} | {c.run_id for c in cells("scale-extra")}
+    assert not {c.run_id for c in s63} & others
+    smoke = cells("scale-63-smoke")
+    assert {c.strategy for c in smoke} == {"firebreak", "reference"} and len(smoke) == 2

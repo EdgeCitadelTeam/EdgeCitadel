@@ -1,0 +1,47 @@
+{
+ "name": "scale-s16",
+ "note": "The rest of scale.json's curve without S = 3 and 8 (D-113 amendment): rand-n63-s0 at S = 16, the reference and Firebreak early/late x 3 repetitions. Its cells are exactly scale.json's S = 16 cells (same run ids), so it resumes scale.json's output root and skips finished runs.",
+ "instances": [
+  "../workloads/scale/rand-n63-s0-S16.json"
+ ],
+ "strategies": [
+  "firebreak"
+ ],
+ "alerts": [
+  "early",
+  "late"
+ ],
+ "repetitions": 3,
+ "rogue_rates": [
+  0.0
+ ],
+ "reference": true,
+ "latencies": [
+  {
+   "name": "native",
+   "control_latency_ms": {
+    "*": 400
+   }
+  }
+ ],
+ "time_scale": 2.0,
+ "quiet_s": 8,
+ "timeout_factor": 3.0,
+ "timeout_extra_s": 120,
+ "root_modes": [
+  "given"
+ ],
+ "profiles": [
+  "deployed"
+ ],
+ "phase1_modes": [
+  "adaptive"
+ ],
+ "phase1_labels": [
+  "frontier"
+ ],
+ "receding_during_waits": [
+  false
+ ],
+ "root_wait_s": 10.0
+}

@@ -5,8 +5,8 @@ monitor, the det-workers) with more agentd nodes. Core, NATS, the services and
 the monitor run on jim-eq with the root's site (node ``core``); every other
 site is an agentd node on NetSys-Endurance (``edge-1`` .. ``edge-<S-1>``). The
 stack starts only the nodes a workload's placement uses, so one stack file
-(``configs/lab-scale.json``, up to 32 sites) serves every S, and S is the
-workload's.
+(``configs/lab-scale.json``, up to 32 sites; ``configs/lab-scale-63.json``, up
+to 63) serves every S, and S is the workload's.
 
 Workloads (``workloads``): random workflows from the simulator's generator
 (``random_workflow`` builds complete binary trees, so ``n_agents`` is 2^d-1:
@@ -26,7 +26,18 @@ evaluation stack, and process sampling on (``procstat_interval_ms``).
 Grids: ``experiments/scale.json`` (72 runs, about 5.7 h: the S = 32
 comparison and rogue cell on rand-n63-s0, and the scale curve at S = 3, 8, 16)
 and the optional ``experiments/scale-extra.json`` (27 runs, about 2.3 h: the
-S = 32 comparison on rand-n63-s2), both into one output root. Run them on
+S = 32 comparison on rand-n63-s2), both into one output root.
+
+Amendment of 25 Oct (D-113, H12-A1): S = 3 and 8 are dropped (with 7-31
+agents per site the testbed lost worker slots and the no-fault reference did
+not complete), and the curve gains S = 63, one agent per site: the 63 agents
+are a complete binary tree, so at S = 63 each site is one node of the
+delegation tree. ``experiments/scale-s16.json`` is scale.json's S = 16 cells
+exactly (same run ids; it resumes scale.json's output root and skips finished
+runs). ``experiments/scale-63.json`` (9 runs) uses ``configs/lab-scale-63.json``
+(62 edge sites on Endurance; otherwise identical to lab-scale.json) and goes
+into the same output root; ``experiments/scale-63-smoke.json`` (2 unscored
+runs, own output root) checks the 62-site stack first. Run them on
 jim-eq after the evaluation pipeline, never beside it (shared CPUs and disks
 would confound both), as their own runner unit::
 
@@ -52,7 +63,7 @@ from typing import Any
 
 from .spec import Spec, derive, load, makespan, save, validate
 
-SITES = (3, 8, 16, 32)
+SITES = (3, 8, 16, 32, 63)
 SEEDS = (0, 2, 3)
 N_AGENTS = 63
 # random_workflow / random_fault parameters of every rand-nN-sY workload.
@@ -384,7 +395,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     p.add_argument("--sites", type=int, default=32)
     p.add_argument("--dryrun", action="store_true")
     p = sub.add_parser("sim-export")
-    p.add_argument("--stack", type=Path, default=Path("configs/lab-scale.json"))
+    p.add_argument("--stack", type=Path, default=Path("configs/lab-scale-63.json"))
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("specs", type=Path, nargs="+")
     args = parser.parse_args(argv)
