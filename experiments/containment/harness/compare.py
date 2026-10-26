@@ -225,7 +225,11 @@ def kept_without_redo(run_dir: Path) -> dict[str, Any]:
     seeds = fault_seeds(spec)
     tainted = declared_closure(spec, seeds | early) if seeds or early else set()
     normal = {t.id for t in spec.tasks} - tainted
-    done = completion_times(spec, records)
+    # The scorer's own completion rule (metrics.evaluate, amendment 89a0506 of
+    # 2026-10-22): a refused hand-off into the tainted closure loses none of
+    # the producer's work. Without ``tainted`` here, runs that start no task
+    # again scored below kept_cfrac.
+    done = completion_times(spec, records, tainted)
     at_risk = {t for t in normal if done[t] is None or done[t] > horizon}
     correct = correct_content(spec, records, expected_contents(spec))
     kept = {t for t in at_risk if done[t] is not None and correct[t]}

@@ -189,3 +189,29 @@ def test_kept_work_leaves_out_tasks_redone_after_the_alert():
     assert tt.kept_median == pytest.approx(0.2)
     assert tt.kept_scorer_median == pytest.approx(1.0)
     assert tt.kept_diff_median == pytest.approx(0.7)
+
+
+def test_kept_without_redo_uses_the_scorers_completion_rule(tmp_path, monkeypatch):
+    """With no task started again, kept_cfrac_no_redo is the scorer's kept_cfrac:
+    both judge completion with the tainted closure (amendment 89a0506), so a
+    refused hand-off into it costs the producer nothing in either."""
+    from test_report import write_run
+
+    from harness import compare, report
+
+    real = compare.completion_times
+    seen: list[set] = []
+
+    def spy(spec, records, tainted=frozenset()):
+        seen.append(set(tainted))
+        return real(spec, records, tainted)
+
+    monkeypatch.setattr(compare, "completion_times", spy)
+    write_run(tmp_path, strategy="firebreak", rep=0, kept=True)
+    out = compare.kept_without_redo(
+        tmp_path / "runs" / "mini__late__native__r0__firebreak"
+    )
+    assert seen and seen[0], "called without the tainted closure"
+    [row] = report.score(tmp_path)
+    assert out["redone_kept"] == 0
+    assert out["kept_cfrac_no_redo"] == row["kept_cfrac"]
