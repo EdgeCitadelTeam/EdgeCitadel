@@ -215,3 +215,25 @@ def test_kept_without_redo_uses_the_scorers_completion_rule(tmp_path, monkeypatc
     [row] = report.score(tmp_path)
     assert out["redone_kept"] == 0
     assert out["kept_cfrac_no_redo"] == row["kept_cfrac"]
+
+
+def test_kept_without_redo_must_match_the_scorer_where_nothing_was_redone():
+    """The copy of the scorer's kept set drifted once (it missed the 2026-10-22
+    amendment's tainted closure); the comparison now stops on any such drift."""
+    import pandas as pd
+    import pytest
+
+    from harness.compare import check_kept_without_redo
+
+    runs = pd.DataFrame(
+        {
+            "run_id": ["fb", "tt", "ref"],
+            "kept_cfrac": [1.0, 1.0, 1.0],
+            "kept_cfrac_no_redo": [1.0, 0.16, float("nan")],
+            "redone_kept": [0, 5, 0],
+        }
+    )
+    check_kept_without_redo(runs)  # a redone run may differ; a reference has none
+    runs.loc[0, "kept_cfrac_no_redo"] = 0.873
+    with pytest.raises(ValueError, match="no task redone in 1 runs"):
+        check_kept_without_redo(runs)

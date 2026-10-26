@@ -225,10 +225,7 @@ def kept_without_redo(run_dir: Path) -> dict[str, Any]:
     seeds = fault_seeds(spec)
     tainted = declared_closure(spec, seeds | early) if seeds or early else set()
     normal = {t.id for t in spec.tasks} - tainted
-    # The scorer's own completion rule (metrics.evaluate, amendment 89a0506 of
-    # 2026-10-22): a refused hand-off into the tainted closure loses none of
-    # the producer's work. Without ``tainted`` here, runs that start no task
-    # again scored below kept_cfrac.
+    # As metrics.evaluate: a hand-off into the tainted closure is no obligation.
     done = completion_times(spec, records, tainted)
     at_risk = {t for t in normal if done[t] is None or done[t] > horizon}
     correct = correct_content(spec, records, expected_contents(spec))
@@ -288,6 +285,7 @@ def load(outs: Iterable[Path]) -> Any:
     if (leaks != scored).any():
         bad = runs.loc[leaks != scored, "run_id"].tolist()
         raise ValueError(f"leak classes do not add up to violations in {bad[:5]}")
+    check_kept_without_redo(runs)
     runs["clean"] = (
         runs["clean_after_alert"].fillna(0).astype(bool) & (runs["repeat_leaks"] == 0)
     ).astype(int)
@@ -310,6 +308,23 @@ def with_makespan_ratio(runs: Any) -> Any:
         "reference_makespan_s"
     ].astype(float)
     return runs
+
+
+def check_kept_without_redo(runs: Any) -> None:
+    """``kept_cfrac_no_redo`` recomputes the scorer's kept set; where no kept
+    task was redone it must equal the scorer's ``kept_cfrac``, or the copy has
+    drifted from ``metrics.evaluate`` and the comparison stops."""
+    redone = runs["redone_kept"].fillna(0).astype(int)
+    ours = runs["kept_cfrac_no_redo"].astype(float)
+    scorer = runs["kept_cfrac"].astype(float)
+    both = ours.notna() & scorer.notna()
+    drift = both & (redone == 0) & ((ours - scorer).abs() > 1e-9)
+    if drift.any():
+        bad = runs.loc[drift, "run_id"].tolist()
+        raise ValueError(
+            f"kept_cfrac_no_redo differs from the scorer's kept_cfrac with no task "
+            f"redone in {len(bad)} runs, e.g. {bad[:3]}"
+        )
 
 
 def select_edgecitadel(runs: Any, where: Iterable[tuple[str | None, str, str]]) -> Any:
